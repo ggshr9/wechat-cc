@@ -18,7 +18,7 @@ import { z } from 'zod'
 import { randomBytes } from 'crypto'
 import {
   readFileSync, writeFileSync, mkdirSync,
-  renameSync, chmodSync,
+  renameSync, chmodSync, readdirSync, existsSync,
 } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
@@ -26,19 +26,7 @@ import { join } from 'path'
 // ── Paths ──────────────────────────────────────────────────────────────────
 const STATE_DIR = process.env.WECHAT_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'wechat')
 const ACCESS_FILE = join(STATE_DIR, 'access.json')
-const ACCOUNT_FILE = join(STATE_DIR, 'account.json')
-const ENV_FILE = join(STATE_DIR, '.env')
-const SYNC_BUF_FILE = join(STATE_DIR, 'sync_buf')
-
-
-// ── .env loading ───────────────────────────────────────────────────────────
-try {
-  chmodSync(ENV_FILE, 0o600)
-  for (const line of readFileSync(ENV_FILE, 'utf8').split('\n')) {
-    const m = line.match(/^(\w+)=(.*)$/)
-    if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2]
-  }
-} catch {}
+const ACCOUNTS_DIR = join(STATE_DIR, 'accounts')
 
 // ── ilink constants ────────────────────────────────────────────────────────
 const ILINK_BASE_URL = 'https://ilinkai.weixin.qq.com'
@@ -48,8 +36,6 @@ const ILINK_CLIENT_VERSION = '65547' // 1.0.11 → 0x0001000B
 const LONG_POLL_TIMEOUT_MS = 35_000
 const API_TIMEOUT_MS = 15_000
 const MAX_TEXT_CHUNK = 4000
-
-const BOT_TOKEN = process.env.WECHAT_BOT_TOKEN ?? ''
 
 // ── ilink types ────────────────────────────────────────────────────────────
 interface WeixinMessage {
@@ -231,7 +217,7 @@ function assertAllowedChat(chat_id: string): void {
   }
 }
 
-// ── Account state ──────────────────────────────────────────────────────────
+// ── Multi-account state ────────────────────────────────────────────────────
 
 interface Account {
   baseUrl: string
@@ -239,38 +225,74 @@ interface Account {
   botId: string   // ilink_bot_id
 }
 
-function readAccount(): Account | null {
-  try {
-    return JSON.parse(readFileSync(ACCOUNT_FILE, 'utf8')) as Account
-  } catch {
-    return null
+interface AccountEntry {
+  id: string        // directory name (sanitized botId)
+  token: string
+  account: Account
+  syncBufPath: string
+}
+
+function loadAllAccounts(): AccountEntry[] {
+  const entries: AccountEntry[] = []
+
+  // Multi-account: scan accounts/ directory
+  if (existsSync(ACCOUNTS_DIR)) {
+    try {
+      for (const id of readdirSync(ACCOUNTS_DIR)) {
+        const dir = join(ACCOUNTS_DIR, id)
+        try {
+          const token = readFileSync(join(dir, 'token'), 'utf8').trim()
+          const account = JSON.parse(readFileSync(join(dir, 'account.json'), 'utf8')) as Account
+          if (token && account.botId) {
+            entries.push({ id, token, account, syncBufPath: join(dir, 'sync_buf') })
+          }
+        } catch {
+          process.stderr.write(`wechat channel: skipping invalid account ${id}\n`)
+        }
+      }
+    } catch {}
   }
+
+  // Backward compat: single-account .env + account.json at root
+  if (entries.length === 0) {
+    const envFile = join(STATE_DIR, '.env')
+    const accountFile = join(STATE_DIR, 'account.json')
+    try {
+      let token = ''
+      for (const line of readFileSync(envFile, 'utf8').split('\n')) {
+        const m = line.match(/^WECHAT_BOT_TOKEN=(.*)$/)
+        if (m) token = m[1]
+      }
+      const account = JSON.parse(readFileSync(accountFile, 'utf8')) as Account
+      if (token && account.botId) {
+        entries.push({
+          id: account.botId.replace(/[^a-zA-Z0-9_-]/g, '-'),
+          token,
+          account,
+          syncBufPath: join(STATE_DIR, 'sync_buf'),
+        })
+      }
+    } catch {}
+  }
+
+  return entries
 }
 
-function saveAccount(account: Account): void {
-  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
-  const tmp = ACCOUNT_FILE + '.tmp'
-  writeFileSync(tmp, JSON.stringify(account, null, 2) + '\n', { mode: 0o600 })
-  renameSync(tmp, ACCOUNT_FILE)
+function loadSyncBuf(path: string): string {
+  try { return readFileSync(path, 'utf8') } catch { return '' }
 }
 
-// ── Sync buf (getupdates cursor) ───────────────────────────────────────────
-
-function loadSyncBuf(): string {
-  try { return readFileSync(SYNC_BUF_FILE, 'utf8') } catch { return '' }
+function saveSyncBuf(path: string, buf: string): void {
+  writeFileSync(path, buf, { mode: 0o600 })
 }
 
-function saveSyncBuf(buf: string): void {
-  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
-  writeFileSync(SYNC_BUF_FILE, buf, { mode: 0o600 })
-}
-
-// ── Context tokens ─────────────────────────────────────────────────────────
-// ilink requires context_token from the latest inbound message when sending replies.
-// Store per user_id in memory — these don't survive restarts, but getupdates
-// will deliver new messages with fresh tokens.
+// ── Context tokens & account routing ───────────────────────────────────────
+// Track which account handles which user, and store context tokens per user.
 
 const contextTokens = new Map<string, string>()
+
+// Maps user_id → AccountEntry for routing replies to the correct bot
+const userAccountMap = new Map<string, AccountEntry>()
 
 // ── Gate ────────────────────────────────────────────────────────────────────
 
@@ -285,155 +307,7 @@ function gate(fromUserId: string): GateResult {
   return { action: 'drop' }
 }
 
-// ── QR login ───────────────────────────────────────────────────────────────
-
 const SESSION_EXPIRED_ERRCODE = -14
-
-interface QrStartResult {
-  qrcodeUrl?: string
-  qrcode?: string
-  message: string
-}
-
-interface QrWaitResult {
-  connected: boolean
-  botToken?: string
-  botId?: string
-  baseUrl?: string
-  userId?: string
-  message: string
-}
-
-async function startQrLogin(): Promise<QrStartResult> {
-  try {
-    const raw = await ilinkGet(ILINK_BASE_URL, `ilink/bot/get_bot_qrcode?bot_type=${ILINK_BOT_TYPE}`)
-    const data = JSON.parse(raw) as { qrcode?: string; qrcode_img_content?: string }
-    if (!data.qrcode_img_content) {
-      return { message: 'Failed to get QR code from server.' }
-    }
-    return {
-      qrcodeUrl: data.qrcode_img_content,
-      qrcode: data.qrcode,
-      message: '使用微信扫描以下二维码，以完成连接。',
-    }
-  } catch (err) {
-    return { message: `Login failed: ${err}` }
-  }
-}
-
-async function waitForQrLogin(qrcode: string, timeoutMs = 480_000): Promise<QrWaitResult> {
-  const deadline = Date.now() + timeoutMs
-  let currentBaseUrl = ILINK_BASE_URL
-  let scannedPrinted = false
-
-  while (Date.now() < deadline) {
-    try {
-      const raw = await ilinkGet(
-        currentBaseUrl,
-        `ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(qrcode)}`,
-        LONG_POLL_TIMEOUT_MS,
-      )
-      const status = JSON.parse(raw) as {
-        status: string
-        bot_token?: string
-        ilink_bot_id?: string
-        baseurl?: string
-        ilink_user_id?: string
-        redirect_host?: string
-      }
-
-      switch (status.status) {
-        case 'wait':
-          break
-        case 'scaned':
-          if (!scannedPrinted) {
-            process.stderr.write('\n👀 已扫码，在微信继续操作...\n')
-            scannedPrinted = true
-          }
-          break
-        case 'scaned_but_redirect':
-          if (status.redirect_host) {
-            currentBaseUrl = `https://${status.redirect_host}`
-            process.stderr.write(`wechat channel: IDC redirect → ${status.redirect_host}\n`)
-          }
-          break
-        case 'expired':
-          return { connected: false, message: '二维码已过期，请重新运行 /wechat:configure。' }
-        case 'confirmed':
-          if (!status.ilink_bot_id) {
-            return { connected: false, message: '登录失败：服务器未返回 bot ID。' }
-          }
-          return {
-            connected: true,
-            botToken: status.bot_token,
-            botId: status.ilink_bot_id,
-            baseUrl: status.baseurl ?? currentBaseUrl,
-            userId: status.ilink_user_id,
-            message: '✅ 与微信连接成功！',
-          }
-      }
-    } catch (err) {
-      // Timeout on long-poll is normal, just retry
-      if (err instanceof Error && err.name === 'AbortError') continue
-      return { connected: false, message: `Login error: ${err}` }
-    }
-
-    await new Promise(r => setTimeout(r, 1000))
-  }
-
-  return { connected: false, message: '登录超时，请重试。' }
-}
-
-async function runInteractiveLogin(): Promise<{ token: string; account: Account } | null> {
-  process.stderr.write('wechat channel: no token configured, starting QR login...\n')
-
-  const start = await startQrLogin()
-  if (!start.qrcodeUrl || !start.qrcode) {
-    process.stderr.write(`wechat channel: ${start.message}\n`)
-    return null
-  }
-
-  process.stderr.write('\n使用微信扫描以下二维码：\n\n')
-  try {
-    const qrt = await import('qrcode-terminal')
-    qrt.default.generate(start.qrcodeUrl, { small: true }, (qr: string) => {
-      process.stderr.write(qr + '\n')
-    })
-  } catch {
-    process.stderr.write(`二维码链接：${start.qrcodeUrl}\n`)
-  }
-  process.stderr.write('等待扫码...\n')
-
-  const result = await waitForQrLogin(start.qrcode)
-  process.stderr.write(`wechat channel: ${result.message}\n`)
-
-  if (!result.connected || !result.botToken || !result.botId) return null
-
-  const account: Account = {
-    baseUrl: result.baseUrl ?? ILINK_BASE_URL,
-    userId: result.userId ?? '',
-    botId: result.botId,
-  }
-
-  // Save token
-  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
-  writeFileSync(ENV_FILE, `WECHAT_BOT_TOKEN=${result.botToken}\n`, { mode: 0o600 })
-
-  // Save account info
-  saveAccount(account)
-
-  // Auto-add scanner to allowlist
-  if (result.userId) {
-    const access = loadAccess()
-    if (!access.allowFrom.includes(result.userId)) {
-      access.allowFrom.push(result.userId)
-      saveAccess(access)
-      process.stderr.write(`wechat channel: added ${result.userId} to allowlist\n`)
-    }
-  }
-
-  return { token: result.botToken, account }
-}
 
 // ── Text chunking ──────────────────────────────────────────────────────────
 
@@ -500,15 +374,13 @@ mcp.setNotificationHandler(
   async ({ params }) => {
     const { request_id, tool_name } = params
     const access = loadAccess()
-    const account = readAccount()
-    if (!account) return
-    const token = BOT_TOKEN || process.env.WECHAT_BOT_TOKEN || ''
-    if (!token) return
 
     const text = `🔐 Permission: ${tool_name}\nReply: yes ${request_id} / no ${request_id}`
     for (const userId of access.allowFrom) {
+      const entry = userAccountMap.get(userId)
+      if (!entry) continue
       try {
-        await ilinkSendMessage(account.baseUrl, token, {
+        await ilinkSendMessage(entry.account.baseUrl, entry.token, {
           to_user_id: userId,
           message_type: 2,
           message_state: 2,
@@ -558,17 +430,17 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 // ── Tool handlers ──────────────────────────────────────────────────────────
 
+function resolveAccountForUser(chat_id: string): { baseUrl: string; token: string } {
+  const entry = userAccountMap.get(chat_id)
+  if (entry) return { baseUrl: entry.account.baseUrl, token: entry.token }
+  // Fallback: use the first account (single-account compat)
+  const all = loadAllAccounts()
+  if (all.length > 0) return { baseUrl: all[0].account.baseUrl, token: all[0].token }
+  throw new Error('no accounts configured — run: bun ~/.claude/plugins/local/wechat/setup.ts')
+}
+
 mcp.setRequestHandler(CallToolRequestSchema, async req => {
   const args = (req.params.arguments ?? {}) as Record<string, unknown>
-  const account = readAccount()
-  const token = BOT_TOKEN || process.env.WECHAT_BOT_TOKEN || ''
-
-  if (!account || !token) {
-    return {
-      content: [{ type: 'text', text: 'wechat not configured — run /wechat:configure' }],
-      isError: true,
-    }
-  }
 
   try {
     switch (req.params.name) {
@@ -576,11 +448,12 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         const chat_id = args.chat_id as string
         const text = args.text as string
         assertAllowedChat(chat_id)
+        const { baseUrl, token } = resolveAccountForUser(chat_id)
 
         const chunks = chunk(text, MAX_TEXT_CHUNK)
         let sentCount = 0
         for (const part of chunks) {
-          await ilinkSendMessage(account.baseUrl, token, {
+          await ilinkSendMessage(baseUrl, token, {
             to_user_id: chat_id,
             message_type: 2,
             message_state: 2,
@@ -600,8 +473,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         const message_id = Number(args.message_id)
         const text = args.text as string
         assertAllowedChat(chat_id)
+        const { baseUrl, token } = resolveAccountForUser(chat_id)
 
-        await ilinkSendMessage(account.baseUrl, token, {
+        await ilinkSendMessage(baseUrl, token, {
           to_user_id: chat_id,
           message_id,
           message_type: 2,
@@ -638,7 +512,7 @@ process.on('uncaughtException', err => {
 
 // ── Inbound handling ───────────────────────────────────────────────────────
 
-function handleInbound(msg: WeixinMessage): void {
+function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
   // Only process user messages (type=1) that are finished (state=2)
   if (msg.message_type !== 1) return
   if (msg.message_state !== undefined && msg.message_state !== 2) return
@@ -649,10 +523,11 @@ function handleInbound(msg: WeixinMessage): void {
   const result = gate(fromUserId)
   if (result.action === 'drop') return
 
-  // Store context token for replies
+  // Store context token and account routing for replies
   if (msg.context_token) {
     contextTokens.set(fromUserId, msg.context_token)
   }
+  userAccountMap.set(fromUserId, entry)
 
   // Extract text content
   const textParts: string[] = []
@@ -707,16 +582,17 @@ const MAX_CONSECUTIVE_FAILURES = 3
 const BACKOFF_DELAY_MS = 30_000
 const RETRY_DELAY_MS = 2_000
 
-async function pollLoop(baseUrl: string, token: string, signal: AbortSignal): Promise<void> {
-  let getUpdatesBuf = loadSyncBuf()
+async function pollLoop(entry: AccountEntry, signal: AbortSignal): Promise<void> {
+  const { account, token, syncBufPath } = entry
+  let getUpdatesBuf = loadSyncBuf(syncBufPath)
   let consecutiveFailures = 0
   let nextTimeoutMs = LONG_POLL_TIMEOUT_MS
 
-  process.stderr.write(`wechat channel: poll loop started (${baseUrl})\n`)
+  process.stderr.write(`wechat channel: poll loop started for ${entry.id} (${account.baseUrl})\n`)
 
   while (!signal.aborted) {
     try {
-      const resp = await ilinkGetUpdates(baseUrl, token, getUpdatesBuf)
+      const resp = await ilinkGetUpdates(account.baseUrl, token, getUpdatesBuf)
 
       if (resp.longpolling_timeout_ms && resp.longpolling_timeout_ms > 0) {
         nextTimeoutMs = resp.longpolling_timeout_ms
@@ -749,12 +625,12 @@ async function pollLoop(baseUrl: string, token: string, signal: AbortSignal): Pr
       consecutiveFailures = 0
 
       if (resp.get_updates_buf) {
-        saveSyncBuf(resp.get_updates_buf)
+        saveSyncBuf(syncBufPath, resp.get_updates_buf)
         getUpdatesBuf = resp.get_updates_buf
       }
 
       for (const msg of resp.msgs ?? []) {
-        handleInbound(msg)
+        handleInbound(msg, entry)
       }
     } catch (err) {
       if (signal.aborted) return
@@ -801,17 +677,21 @@ process.on('SIGINT', shutdown)
 // Connect MCP transport
 await mcp.connect(new StdioServerTransport())
 
-// Resolve token and account — no interactive login in MCP mode (stdin is MCP transport).
-// Run `bun setup.ts` separately first.
-const activeToken = BOT_TOKEN || process.env.WECHAT_BOT_TOKEN || ''
-const activeAccount = readAccount()
+// Load all accounts and start poll loops — one per account.
+// Run `bun setup.ts` to add accounts.
+const accounts = loadAllAccounts()
 
-if (activeToken && activeAccount) {
-  process.stderr.write(`wechat channel: connected as bot ${activeAccount.botId}\n`)
-  void pollLoop(activeAccount.baseUrl, activeToken, abortController.signal)
-} else {
+if (accounts.length === 0) {
   process.stderr.write(
-    'wechat channel: no token configured.\n' +
+    'wechat channel: no accounts configured.\n' +
     '  Run: bun ~/.claude/plugins/local/wechat/setup.ts\n',
   )
+} else {
+  process.stderr.write(`wechat channel: ${accounts.length} account(s) loaded\n`)
+  for (const entry of accounts) {
+    process.stderr.write(`  → ${entry.id} (${entry.account.userId})\n`)
+    // Pre-register scanner's userId for reply routing
+    userAccountMap.set(entry.account.userId, entry)
+    void pollLoop(entry, abortController.signal)
+  }
 }

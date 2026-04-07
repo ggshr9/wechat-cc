@@ -12,9 +12,8 @@ import { homedir } from 'os'
 import { join } from 'path'
 
 const STATE_DIR = join(homedir(), '.claude', 'channels', 'wechat')
+const ACCOUNTS_DIR = join(STATE_DIR, 'accounts')
 const ACCESS_FILE = join(STATE_DIR, 'access.json')
-const ACCOUNT_FILE = join(STATE_DIR, 'account.json')
-const ENV_FILE = join(STATE_DIR, '.env')
 
 const ILINK_BASE_URL = 'https://ilinkai.weixin.qq.com'
 const ILINK_APP_ID = 'bot'
@@ -121,21 +120,23 @@ while (Date.now() < deadline) {
 
         console.log('\n✅ 与微信连接成功！\n')
 
-        // Save token
-        mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
-        writeFileSync(ENV_FILE, `WECHAT_BOT_TOKEN=${status.bot_token}\n`, { mode: 0o600 })
-        console.log(`Token 已保存到 ${ENV_FILE}`)
+        // Save to accounts/<id>/ directory
+        const accountId = status.ilink_bot_id.replace(/[^a-zA-Z0-9_-]/g, '-')
+        const accountDir = join(ACCOUNTS_DIR, accountId)
+        mkdirSync(accountDir, { recursive: true, mode: 0o700 })
 
-        // Save account
+        writeFileSync(join(accountDir, 'token'), status.bot_token, { mode: 0o600 })
+        console.log(`Token 已保存到 ${join(accountDir, 'token')}`)
+
         const account: Account = {
           baseUrl: status.baseurl ?? currentBaseUrl,
           userId: status.ilink_user_id ?? '',
           botId: status.ilink_bot_id,
         }
-        const tmpAccount = ACCOUNT_FILE + '.tmp'
+        const tmpAccount = join(accountDir, 'account.json.tmp')
         writeFileSync(tmpAccount, JSON.stringify(account, null, 2) + '\n', { mode: 0o600 })
-        renameSync(tmpAccount, ACCOUNT_FILE)
-        console.log(`账号信息已保存到 ${ACCOUNT_FILE}`)
+        renameSync(tmpAccount, join(accountDir, 'account.json'))
+        console.log(`账号信息已保存到 ${join(accountDir, 'account.json')}`)
 
         // Auto-add to allowlist
         if (status.ilink_user_id) {
