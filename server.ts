@@ -702,7 +702,7 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
 
   // /users — list all known users
   if (text.trim() === '/users') {
-    log('CMD', `[${displayName}] (via ${entry.id}) /users`)
+    log('CMD', `[${displayName}] /users`)
     const lines: string[] = ['在线用户：']
     for (const [uid, name] of userNames) {
       const hasToken = contextTokens.has(uid)
@@ -719,7 +719,7 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
   // @all 消息 — broadcast from WeChat side
   const allMatch = text.match(/^@all\s+(.+)$/s)
   if (allMatch) {
-    log('CMD', `[${displayName}] (via ${entry.id}) @all ${allMatch[1]}`)
+    log('CMD', `[${displayName}] @all ${allMatch[1]}`)
     const broadcastText = `[${displayName}] ${allMatch[1]}`
     const recipients: string[] = []
     for (const [uid, targetEntry] of userAccountMap) {
@@ -785,7 +785,7 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
 
   // Check if this is a new user — if so, prefix the message to prompt Claude to ask their name
   const isNewUser = !userNames.has(fromUserId)
-  log('INBOUND', `[${displayName}] (via ${entry.id}) ${text}`)
+  log('INBOUND', `[${displayName}] ${text}`)
   const contentForClaude = isNewUser
     ? `[新用户 chat_id=${fromUserId}，请用 reply 工具问对方怎么称呼，得到名字后调用 set_user_name 工具]\n${text}`
     : `[${displayName}] ${text}`
