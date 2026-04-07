@@ -656,13 +656,11 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
   if (msg.message_type !== 1) return
   if (msg.message_state !== undefined && msg.message_state !== 2) return
 
-  // Dedup by message_id + account
-  const msgKey = `${entry.id}:${msg.from_user_id}:${msg.message_id}`
-  if (seenMessageIds.has(msgKey)) {
-    log('DEDUP', `dropped duplicate: ${msgKey}`)
-    return
-  }
-  seenMessageIds.add(msgKey)
+  // Dedup by from_user_id + create_time_ms — same message redelivered has same timestamp,
+  // but two genuinely different messages (even with same text) have different timestamps
+  const dedupKey = `${msg.from_user_id}:${msg.create_time_ms}`
+  if (seenMessageIds.has(dedupKey)) return
+  seenMessageIds.add(dedupKey)
   if (seenMessageIds.size > MAX_SEEN) {
     const first = seenMessageIds.values().next().value
     if (first) seenMessageIds.delete(first)
@@ -699,15 +697,6 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
   }
 
   const text = textParts.join('\n') || '(non-text message)'
-
-  // Content-based dedup: ilink uses at-least-once delivery and may redeliver
-  // the same message indefinitely with different message_ids
-  const contentKey = `content:${fromUserId}:${text}`
-  if (seenMessageIds.has(contentKey)) {
-    log('DEDUP', `dropped duplicate from [${displayName}]: ${text.slice(0, 30)}`)
-    return
-  }
-  seenMessageIds.add(contentKey)
 
   // ── WeChat-side commands (handled directly, not forwarded to Claude) ──
 
