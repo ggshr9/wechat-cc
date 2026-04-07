@@ -706,7 +706,6 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
   if (allMatch) {
     const broadcastText = `[${displayName}] ${allMatch[1]}`
     for (const [uid, targetEntry] of userAccountMap) {
-      if (uid === fromUserId) continue // don't send back to sender
       const ct = contextTokens.get(uid)
       if (!ct) continue
       ilinkSendMessage(targetEntry.account.baseUrl, targetEntry.token, {
