@@ -151,9 +151,17 @@ async function ilinkGetUpdates(baseUrl: string, token: string, buf: string): Pro
   }
 }
 
+function generateClientId(): string {
+  return `claude-code-wechat:${Date.now()}-${randomBytes(4).toString('hex')}`
+}
+
 async function ilinkSendMessage(baseUrl: string, token: string, msg: WeixinMessage): Promise<void> {
   await ilinkPost(baseUrl, 'ilink/bot/sendmessage', {
-    msg,
+    msg: {
+      from_user_id: '',
+      client_id: generateClientId(),
+      ...msg,
+    },
     base_info: { channel_version: '0.0.1' },
   }, token)
 }
