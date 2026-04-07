@@ -287,9 +287,26 @@ function saveSyncBuf(path: string, buf: string): void {
 }
 
 // ── Context tokens & account routing ───────────────────────────────────────
-// Track which account handles which user, and store context tokens per user.
+// ilink requires a valid context_token for message delivery. Persist to disk
+// so broadcasts and proactive messages work after restart.
 
-const contextTokens = new Map<string, string>()
+const CONTEXT_TOKENS_FILE = join(STATE_DIR, 'context_tokens.json')
+
+function loadContextTokens(): Map<string, string> {
+  try {
+    const data = JSON.parse(readFileSync(CONTEXT_TOKENS_FILE, 'utf8')) as Record<string, string>
+    return new Map(Object.entries(data))
+  } catch {
+    return new Map()
+  }
+}
+
+function saveContextTokens(tokens: Map<string, string>): void {
+  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
+  writeFileSync(CONTEXT_TOKENS_FILE, JSON.stringify(Object.fromEntries(tokens), null, 2) + '\n', { mode: 0o600 })
+}
+
+const contextTokens = loadContextTokens()
 
 // Maps user_id → AccountEntry for routing replies to the correct bot
 const userAccountMap = new Map<string, AccountEntry>()
@@ -595,6 +612,7 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
   // Store context token and account routing for replies
   if (msg.context_token) {
     contextTokens.set(fromUserId, msg.context_token)
+    saveContextTokens(contextTokens)
   }
   userAccountMap.set(fromUserId, entry)
 
