@@ -705,9 +705,12 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
   const allMatch = text.match(/^@all\s+(.+)$/s)
   if (allMatch) {
     const broadcastText = `[${displayName}] ${allMatch[1]}`
+    const recipients: string[] = []
     for (const [uid, targetEntry] of userAccountMap) {
+      if (uid === fromUserId) continue
       const ct = contextTokens.get(uid)
       if (!ct) continue
+      const name = userNames.get(uid) ?? uid
       ilinkSendMessage(targetEntry.account.baseUrl, targetEntry.token, {
         to_user_id: uid,
         message_type: 2,
@@ -715,7 +718,19 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
         item_list: [{ type: 1, text_item: { text: broadcastText } }],
         context_token: ct,
       }).catch(err => process.stderr.write(`wechat channel: @all send to ${uid} failed: ${err}\n`))
+      recipients.push(name)
     }
+    // Send receipt to sender
+    const receipt = recipients.length > 0
+      ? `已发送给: ${recipients.join('、')}`
+      : '没有可发送的在线用户'
+    ilinkSendMessage(entry.account.baseUrl, entry.token, {
+      to_user_id: fromUserId,
+      message_type: 2,
+      message_state: 2,
+      item_list: [{ type: 1, text_item: { text: receipt } }],
+      context_token: contextTokens.get(fromUserId),
+    }).catch(() => {})
     // Also forward to Claude so it knows
     // fall through to normal handling below
   }
