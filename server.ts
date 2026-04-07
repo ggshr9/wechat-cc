@@ -680,6 +680,82 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
 
   const text = textParts.join('\n') || '(non-text message)'
 
+  // ── WeChat-side commands (handled directly, not forwarded to Claude) ──
+
+  // /users — list all known users
+  if (text.trim() === '/users') {
+    const lines: string[] = ['在线用户：']
+    for (const [uid, name] of userNames) {
+      const hasToken = contextTokens.has(uid)
+      const isSelf = uid === fromUserId
+      lines.push(`${isSelf ? '→ ' : '  '}${name}${hasToken ? '' : ' (离线)'}`)
+    }
+    const replyText = lines.join('\n')
+    ilinkSendMessage(entry.account.baseUrl, entry.token, {
+      to_user_id: fromUserId,
+      message_type: 2,
+      message_state: 2,
+      item_list: [{ type: 1, text_item: { text: replyText } }],
+      context_token: contextTokens.get(fromUserId),
+    }).catch(err => process.stderr.write(`wechat channel: /users reply failed: ${err}\n`))
+    return
+  }
+
+  // @all 消息 — broadcast from WeChat side
+  const allMatch = text.match(/^@all\s+(.+)$/s)
+  if (allMatch) {
+    const broadcastText = `[${displayName}] ${allMatch[1]}`
+    for (const [uid, targetEntry] of userAccountMap) {
+      if (uid === fromUserId) continue // don't send back to sender
+      const ct = contextTokens.get(uid)
+      if (!ct) continue
+      ilinkSendMessage(targetEntry.account.baseUrl, targetEntry.token, {
+        to_user_id: uid,
+        message_type: 2,
+        message_state: 2,
+        item_list: [{ type: 1, text_item: { text: broadcastText } }],
+        context_token: ct,
+      }).catch(err => process.stderr.write(`wechat channel: @all send to ${uid} failed: ${err}\n`))
+    }
+    // Also forward to Claude so it knows
+    // fall through to normal handling below
+  }
+
+  // @名字 消息 — forward to specific user from WeChat side
+  const atMatch = text.match(/^@(\S+)\s+(.+)$/s)
+  if (atMatch && !allMatch) {
+    const targetName = atMatch[1]
+    const forwardText = `[${displayName}] ${atMatch[2]}`
+    // Find user by name
+    let targetUserId: string | null = null
+    for (const [uid, name] of userNames) {
+      if (name === targetName) { targetUserId = uid; break }
+    }
+    if (targetUserId && targetUserId !== fromUserId) {
+      const targetEntry = userAccountMap.get(targetUserId)
+      const ct = contextTokens.get(targetUserId)
+      if (targetEntry && ct) {
+        ilinkSendMessage(targetEntry.account.baseUrl, targetEntry.token, {
+          to_user_id: targetUserId,
+          message_type: 2,
+          message_state: 2,
+          item_list: [{ type: 1, text_item: { text: forwardText } }],
+          context_token: ct,
+        }).catch(err => process.stderr.write(`wechat channel: @${targetName} send failed: ${err}\n`))
+        // Confirm to sender
+        ilinkSendMessage(entry.account.baseUrl, entry.token, {
+          to_user_id: fromUserId,
+          message_type: 2,
+          message_state: 2,
+          item_list: [{ type: 1, text_item: { text: `已转发给${targetName}` } }],
+          context_token: contextTokens.get(fromUserId),
+        }).catch(() => {})
+        return
+      }
+    }
+    // If target not found, fall through to Claude (maybe it's a Claude command)
+  }
+
   // Permission-reply intercept
   const permMatch = PERMISSION_REPLY_RE.exec(text)
   if (permMatch) {
