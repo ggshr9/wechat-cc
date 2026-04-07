@@ -17,7 +17,7 @@ import {
 import { z } from 'zod'
 import { randomBytes } from 'crypto'
 import {
-  readFileSync, writeFileSync, mkdirSync,
+  readFileSync, writeFileSync, mkdirSync, appendFileSync,
   renameSync, chmodSync, readdirSync, existsSync,
 } from 'fs'
 import { homedir } from 'os'
@@ -27,6 +27,16 @@ import { join } from 'path'
 const STATE_DIR = process.env.WECHAT_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'wechat')
 const ACCESS_FILE = join(STATE_DIR, 'access.json')
 const ACCOUNTS_DIR = join(STATE_DIR, 'accounts')
+const LOG_FILE = join(STATE_DIR, 'channel.log')
+
+function log(tag: string, msg: string): void {
+  const line = `${new Date().toISOString()} [${tag}] ${msg}\n`
+  process.stderr.write(`wechat channel: ${line}`)
+  try {
+    mkdirSync(STATE_DIR, { recursive: true })
+    appendFileSync(LOG_FILE, line)
+  } catch {}
+}
 
 // ── ilink constants ────────────────────────────────────────────────────────
 const ILINK_BASE_URL = 'https://ilinkai.weixin.qq.com'
@@ -535,6 +545,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         const text = args.text as string
         assertAllowedChat(chat_id)
         const { baseUrl, token } = resolveAccountForUser(chat_id)
+        log('OUTBOUND', `→ [${userNames.get(chat_id) ?? chat_id}] ${text.slice(0, 100)}${text.length > 100 ? '...' : ''}`)
 
         const chunks = chunk(text, MAX_TEXT_CHUNK)
         let sentCount = 0
@@ -684,6 +695,7 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
 
   // /users — list all known users
   if (text.trim() === '/users') {
+    log('CMD', `[${displayName}] /users`)
     const lines: string[] = ['在线用户：']
     for (const [uid, name] of userNames) {
       const hasToken = contextTokens.has(uid)
@@ -704,6 +716,7 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
   // @all 消息 — broadcast from WeChat side
   const allMatch = text.match(/^@all\s+(.+)$/s)
   if (allMatch) {
+    log('CMD', `[${displayName}] @all ${allMatch[1]}`)
     const broadcastText = `[${displayName}] ${allMatch[1]}`
     const recipients: string[] = []
     for (const [uid, targetEntry] of userAccountMap) {
@@ -786,6 +799,7 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
   // Check if this is a new user — if so, prefix the message to prompt Claude to ask their name
   const isNewUser = !userNames.has(fromUserId)
   const displayName = userNames.get(fromUserId) ?? fromUserId
+  log('INBOUND', `[${displayName}] ${text}`)
   const contentForClaude = isNewUser
     ? `[新用户，请先问对方怎么称呼，得到名字后用 "记住用户: chat_id=xxx 名字=yyy" 格式告诉我]\n${text}`
     : `[${displayName}] ${text}`

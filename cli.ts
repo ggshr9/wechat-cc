@@ -137,6 +137,8 @@ function help() {
     run --dangerously    跳过所有权限确认
     run --dangerously --continue  两者兼得
     list                 列出已绑定账号
+    logs                 打开日志监控页面 (默认端口 3456)
+    logs <port>          指定端口
     install              在当前目录生成 .mcp.json
     start                启动 MCP channel server（由 .mcp.json 调用）
     help                 显示帮助
@@ -162,6 +164,12 @@ switch (command) {
   case 'list':
     listAccounts()
     break
+  case 'logs': {
+    const bun = getBunPath()
+    const port = process.argv[3] ?? '3456'
+    const result = spawnSync(bun, [resolve(PLUGIN_DIR, 'log-viewer.ts'), port], { stdio: 'inherit' })
+    process.exit(result.status ?? 1)
+  }
   case 'install':
     install()
     break
