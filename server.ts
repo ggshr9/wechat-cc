@@ -274,3 +274,153 @@ function gate(fromUserId: string): GateResult {
   if (access.allowFrom.includes(fromUserId)) return { action: 'deliver' }
   return { action: 'drop' }
 }
+
+// ── QR login ───────────────────────────────────────────────────────────────
+
+const SESSION_EXPIRED_ERRCODE = -14
+
+interface QrStartResult {
+  qrcodeUrl?: string
+  qrcode?: string
+  message: string
+}
+
+interface QrWaitResult {
+  connected: boolean
+  botToken?: string
+  botId?: string
+  baseUrl?: string
+  userId?: string
+  message: string
+}
+
+async function startQrLogin(): Promise<QrStartResult> {
+  try {
+    const raw = await ilinkGet(ILINK_BASE_URL, `ilink/bot/get_bot_qrcode?bot_type=${ILINK_BOT_TYPE}`)
+    const data = JSON.parse(raw) as { qrcode?: string; qrcode_img_content?: string }
+    if (!data.qrcode_img_content) {
+      return { message: 'Failed to get QR code from server.' }
+    }
+    return {
+      qrcodeUrl: data.qrcode_img_content,
+      qrcode: data.qrcode,
+      message: '使用微信扫描以下二维码，以完成连接。',
+    }
+  } catch (err) {
+    return { message: `Login failed: ${err}` }
+  }
+}
+
+async function waitForQrLogin(qrcode: string, timeoutMs = 480_000): Promise<QrWaitResult> {
+  const deadline = Date.now() + timeoutMs
+  let currentBaseUrl = ILINK_BASE_URL
+  let scannedPrinted = false
+
+  while (Date.now() < deadline) {
+    try {
+      const raw = await ilinkGet(
+        currentBaseUrl,
+        `ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(qrcode)}`,
+        LONG_POLL_TIMEOUT_MS,
+      )
+      const status = JSON.parse(raw) as {
+        status: string
+        bot_token?: string
+        ilink_bot_id?: string
+        baseurl?: string
+        ilink_user_id?: string
+        redirect_host?: string
+      }
+
+      switch (status.status) {
+        case 'wait':
+          break
+        case 'scaned':
+          if (!scannedPrinted) {
+            process.stderr.write('\n👀 已扫码，在微信继续操作...\n')
+            scannedPrinted = true
+          }
+          break
+        case 'scaned_but_redirect':
+          if (status.redirect_host) {
+            currentBaseUrl = `https://${status.redirect_host}`
+            process.stderr.write(`wechat channel: IDC redirect → ${status.redirect_host}\n`)
+          }
+          break
+        case 'expired':
+          return { connected: false, message: '二维码已过期，请重新运行 /wechat:configure。' }
+        case 'confirmed':
+          if (!status.ilink_bot_id) {
+            return { connected: false, message: '登录失败：服务器未返回 bot ID。' }
+          }
+          return {
+            connected: true,
+            botToken: status.bot_token,
+            botId: status.ilink_bot_id,
+            baseUrl: status.baseurl ?? currentBaseUrl,
+            userId: status.ilink_user_id,
+            message: '✅ 与微信连接成功！',
+          }
+      }
+    } catch (err) {
+      // Timeout on long-poll is normal, just retry
+      if (err instanceof Error && err.name === 'AbortError') continue
+      return { connected: false, message: `Login error: ${err}` }
+    }
+
+    await new Promise(r => setTimeout(r, 1000))
+  }
+
+  return { connected: false, message: '登录超时，请重试。' }
+}
+
+async function runInteractiveLogin(): Promise<{ token: string; account: Account } | null> {
+  process.stderr.write('wechat channel: no token configured, starting QR login...\n')
+
+  const start = await startQrLogin()
+  if (!start.qrcodeUrl || !start.qrcode) {
+    process.stderr.write(`wechat channel: ${start.message}\n`)
+    return null
+  }
+
+  process.stderr.write('\n使用微信扫描以下二维码：\n\n')
+  try {
+    const qrt = await import('qrcode-terminal')
+    qrt.default.generate(start.qrcodeUrl, { small: true }, (qr: string) => {
+      process.stderr.write(qr + '\n')
+    })
+  } catch {
+    process.stderr.write(`二维码链接：${start.qrcodeUrl}\n`)
+  }
+  process.stderr.write('等待扫码...\n')
+
+  const result = await waitForQrLogin(start.qrcode)
+  process.stderr.write(`wechat channel: ${result.message}\n`)
+
+  if (!result.connected || !result.botToken || !result.botId) return null
+
+  const account: Account = {
+    baseUrl: result.baseUrl ?? ILINK_BASE_URL,
+    userId: result.userId ?? '',
+    botId: result.botId,
+  }
+
+  // Save token
+  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
+  writeFileSync(ENV_FILE, `WECHAT_BOT_TOKEN=${result.botToken}\n`, { mode: 0o600 })
+
+  // Save account info
+  saveAccount(account)
+
+  // Auto-add scanner to allowlist
+  if (result.userId) {
+    const access = loadAccess()
+    if (!access.allowFrom.includes(result.userId)) {
+      access.allowFrom.push(result.userId)
+      saveAccess(access)
+      process.stderr.write(`wechat channel: added ${result.userId} to allowlist\n`)
+    }
+  }
+
+  return { token: result.botToken, account }
+}
