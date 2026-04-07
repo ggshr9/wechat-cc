@@ -2,5 +2,6 @@
   "name": "wechat",
   "description": "WeChat channel for Claude Code — messaging bridge via ilink API with built-in access control.",
   "version": "0.0.1",
-  "keywords": ["wechat", "weixin", "messaging", "channel", "mcp"]
+  "keywords": ["wechat", "weixin", "messaging", "channel", "mcp"],
+  "channels": [{ "server": "wechat" }]
 }

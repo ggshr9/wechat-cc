@@ -781,26 +781,17 @@ process.on('SIGINT', shutdown)
 // Connect MCP transport
 await mcp.connect(new StdioServerTransport())
 
-// Resolve token and account
-let activeToken = BOT_TOKEN
-let activeAccount = readAccount()
-
-if (!activeToken) {
-  const loginResult = await runInteractiveLogin()
-  if (loginResult) {
-    activeToken = loginResult.token
-    activeAccount = loginResult.account
-  } else {
-    process.stderr.write(
-      'wechat channel: no token and login failed. Run /wechat:configure to set up.\n' +
-      'Server will stay alive for tool access but cannot receive messages.\n',
-    )
-  }
-}
+// Resolve token and account — no interactive login in MCP mode (stdin is MCP transport).
+// Run `bun setup.ts` separately first.
+const activeToken = BOT_TOKEN || process.env.WECHAT_BOT_TOKEN || ''
+const activeAccount = readAccount()
 
 if (activeToken && activeAccount) {
   process.stderr.write(`wechat channel: connected as bot ${activeAccount.botId}\n`)
   void pollLoop(activeAccount.baseUrl, activeToken, abortController.signal)
 } else {
-  process.stderr.write('wechat channel: waiting for configuration via /wechat:configure\n')
+  process.stderr.write(
+    'wechat channel: no token configured.\n' +
+    '  Run: bun ~/.claude/plugins/local/wechat/setup.ts\n',
+  )
 }
