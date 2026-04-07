@@ -548,8 +548,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         }
 
         let sent = 0
+        const skipped: string[] = []
         const errors: string[] = []
         for (const [userId, entry] of targets) {
+          const ct = contextTokens.get(userId)
+          if (!ct) {
+            skipped.push(userId)
+            continue
+          }
           try {
             const chunks = chunk(text, MAX_TEXT_CHUNK)
             for (const part of chunks) {
@@ -558,7 +564,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
                 message_type: 2,
                 message_state: 2,
                 item_list: [{ type: 1, text_item: { text: part } }],
-                context_token: contextTokens.get(userId),
+                context_token: ct,
               })
             }
             sent++
@@ -567,9 +573,10 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           }
         }
 
-        const result = `broadcast sent to ${sent}/${targets.length} user(s)` +
-          (errors.length > 0 ? `\nfailed: ${errors.join(', ')}` : '')
-        return { content: [{ type: 'text', text: result }] }
+        const parts = [`broadcast: ${sent} sent`]
+        if (skipped.length > 0) parts.push(`${skipped.length} skipped (no context_token — they need to send a message first)`)
+        if (errors.length > 0) parts.push(`${errors.length} failed: ${errors.join(', ')}`)
+        return { content: [{ type: 'text', text: parts.join(', ') }] }
       }
 
       default:

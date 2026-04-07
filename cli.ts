@@ -103,16 +103,22 @@ function run() {
     },
   })
 
-  // --dangerously flag enables --dangerously-skip-permissions
+  // Parse our custom flags
   const extraArgs = process.argv.slice(3)
+
   const dangerousIdx = extraArgs.indexOf('--dangerously')
   const skipPermissions = dangerousIdx !== -1
   if (dangerousIdx !== -1) extraArgs.splice(dangerousIdx, 1)
+
+  const continueIdx = extraArgs.indexOf('--continue')
+  const continueSession = continueIdx !== -1
+  if (continueIdx !== -1) extraArgs.splice(continueIdx, 1)
 
   const args = [
     '--mcp-config', mcpConfig,
     '--dangerously-load-development-channels', 'server:wechat',
     ...(skipPermissions ? ['--dangerously-skip-permissions'] : []),
+    ...(continueSession ? ['--continue'] : []),
     ...extraArgs,
   ]
 
@@ -127,7 +133,9 @@ function help() {
   命令:
     setup                微信扫码绑定（可多次运行添加多人）
     run                  启动 Claude Code + WeChat channel
-    run --dangerously    同上，跳过所有权限确认
+    run --continue       恢复上次会话（保留聊天记录）
+    run --dangerously    跳过所有权限确认
+    run --dangerously --continue  两者兼得
     list                 列出已绑定账号
     install              在当前目录生成 .mcp.json
     start                启动 MCP channel server（由 .mcp.json 调用）
