@@ -364,6 +364,10 @@ const mcp = new Server(
       '',
       'For simple messages (greetings, short questions), always reply directly and quickly.',
       '',
+      '## Broadcast',
+      '',
+      'When the user (in the terminal, not WeChat) says @all or asks to notify everyone, use the broadcast tool to send to all connected WeChat users.',
+      '',
       '## Response Style',
       '',
       'Respond in Chinese unless the user writes in another language. Keep replies concise — WeChat is a chat app, not an essay platform.',
@@ -446,6 +450,18 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['chat_id', 'message_id', 'text'],
       },
     },
+    {
+      name: 'broadcast',
+      description:
+        'Send a message to ALL connected WeChat users. Use when the user says @all or asks to notify everyone. Only reaches users who have previously messaged the bot (active connections).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'Message to broadcast to all users' },
+        },
+        required: ['text'],
+      },
+    },
   ],
 }))
 
@@ -505,6 +521,38 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           context_token: contextTokens.get(chat_id),
         })
         return { content: [{ type: 'text', text: 'edited' }] }
+      }
+
+      case 'broadcast': {
+        const text = args.text as string
+        const targets = [...userAccountMap.entries()]
+        if (targets.length === 0) {
+          return { content: [{ type: 'text', text: 'no active users to broadcast to' }], isError: true }
+        }
+
+        let sent = 0
+        const errors: string[] = []
+        for (const [userId, entry] of targets) {
+          try {
+            const chunks = chunk(text, MAX_TEXT_CHUNK)
+            for (const part of chunks) {
+              await ilinkSendMessage(entry.account.baseUrl, entry.token, {
+                to_user_id: userId,
+                message_type: 2,
+                message_state: 2,
+                item_list: [{ type: 1, text_item: { text: part } }],
+                context_token: contextTokens.get(userId),
+              })
+            }
+            sent++
+          } catch (err) {
+            errors.push(`${userId}: ${err instanceof Error ? err.message : err}`)
+          }
+        }
+
+        const result = `broadcast sent to ${sent}/${targets.length} user(s)` +
+          (errors.length > 0 ? `\nfailed: ${errors.join(', ')}` : '')
+        return { content: [{ type: 'text', text: result }] }
       }
 
       default:
