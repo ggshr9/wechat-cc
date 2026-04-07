@@ -103,11 +103,18 @@ function run() {
     },
   })
 
+  // --dangerously flag enables --dangerously-skip-permissions
+  const extraArgs = process.argv.slice(3)
+  const dangerousIdx = extraArgs.indexOf('--dangerously')
+  const skipPermissions = dangerousIdx !== -1
+  if (dangerousIdx !== -1) extraArgs.splice(dangerousIdx, 1)
+
   const args = [
     '--mcp-config', mcpConfig,
     '--dangerously-load-development-channels', 'server:wechat',
     '--channels', 'server:wechat',
-    ...process.argv.slice(3), // pass through extra flags
+    ...(skipPermissions ? ['--dangerously-skip-permissions'] : []),
+    ...extraArgs,
   ]
 
   const result = spawnSync('claude', args, { stdio: 'inherit' })
@@ -119,12 +126,13 @@ function help() {
   wechat-cc — WeChat channel for Claude Code
 
   命令:
-    setup     微信扫码绑定（可多次运行添加多人）
-    start     启动 MCP channel server（由 .mcp.json 调用）
-    run       启动 Claude Code + WeChat channel
-    list      列出已绑定账号
-    install   在当前目录生成 .mcp.json
-    help      显示帮助
+    setup                微信扫码绑定（可多次运行添加多人）
+    run                  启动 Claude Code + WeChat channel
+    run --dangerously    同上，跳过所有权限确认
+    list                 列出已绑定账号
+    install              在当前目录生成 .mcp.json
+    start                启动 MCP channel server（由 .mcp.json 调用）
+    help                 显示帮助
 `)
 }
 
