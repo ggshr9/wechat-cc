@@ -1,0 +1,162 @@
+#!/usr/bin/env bun
+/**
+ * wechat-cc — WeChat channel for Claude Code
+ *
+ * Usage:
+ *   wechat-cc setup     — 微信扫码绑定（可多次运行添加多人）
+ *   wechat-cc start     — 启动 MCP channel server（.mcp.json 调用）
+ *   wechat-cc run       — 启动 Claude Code + WeChat channel（一键启动）
+ *   wechat-cc list      — 列出已绑定账号
+ *   wechat-cc install   — 在当前目录生成 .mcp.json
+ */
+
+import { execSync, spawnSync } from 'child_process'
+import { existsSync, readFileSync, writeFileSync, readdirSync } from 'fs'
+import { resolve, dirname } from 'path'
+import { homedir } from 'os'
+import { join } from 'path'
+
+const PLUGIN_DIR = dirname(new URL(import.meta.url).pathname)
+const STATE_DIR = join(homedir(), '.claude', 'channels', 'wechat')
+const ACCOUNTS_DIR = join(STATE_DIR, 'accounts')
+
+function getBunPath(): string {
+  try {
+    return execSync('which bun', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+  } catch {
+    return join(homedir(), '.bun', 'bin', 'bun')
+  }
+}
+
+function listAccounts() {
+  if (!existsSync(ACCOUNTS_DIR)) {
+    console.log('没有已绑定的账号。运行 wechat-cc setup 来扫码绑定。')
+    return
+  }
+  const dirs = readdirSync(ACCOUNTS_DIR)
+  if (dirs.length === 0) {
+    console.log('没有已绑定的账号。运行 wechat-cc setup 来扫码绑定。')
+    return
+  }
+  console.log(`已绑定 ${dirs.length} 个账号：\n`)
+  for (const id of dirs) {
+    try {
+      const account = JSON.parse(readFileSync(join(ACCOUNTS_DIR, id, 'account.json'), 'utf8'))
+      console.log(`  ${id}`)
+      console.log(`    botId:  ${account.botId}`)
+      console.log(`    userId: ${account.userId}`)
+      console.log(`    base:   ${account.baseUrl}`)
+      console.log()
+    } catch {
+      console.log(`  ${id} (无法读取)`)
+    }
+  }
+}
+
+function install() {
+  const bun = getBunPath()
+  const mcpConfig = {
+    mcpServers: {
+      wechat: {
+        command: bun,
+        args: ['run', '--cwd', PLUGIN_DIR, '--silent', 'start'],
+      },
+    },
+  }
+
+  const mcpPath = resolve(process.cwd(), '.mcp.json')
+  if (existsSync(mcpPath)) {
+    try {
+      const existing = JSON.parse(readFileSync(mcpPath, 'utf-8'))
+      existing.mcpServers = existing.mcpServers || {}
+      existing.mcpServers.wechat = mcpConfig.mcpServers.wechat
+      writeFileSync(mcpPath, JSON.stringify(existing, null, 2) + '\n', 'utf-8')
+      console.log(`已更新: ${mcpPath}`)
+    } catch {
+      writeFileSync(mcpPath, JSON.stringify(mcpConfig, null, 2) + '\n', 'utf-8')
+      console.log(`已创建: ${mcpPath}`)
+    }
+  } else {
+    writeFileSync(mcpPath, JSON.stringify(mcpConfig, null, 2) + '\n', 'utf-8')
+    console.log(`已创建: ${mcpPath}`)
+  }
+  console.log('\n下一步: wechat-cc run')
+}
+
+function run() {
+  // Check accounts exist
+  if (!existsSync(ACCOUNTS_DIR) || readdirSync(ACCOUNTS_DIR).length === 0) {
+    // Check old format too
+    if (!existsSync(join(STATE_DIR, '.env'))) {
+      console.log('没有已绑定的账号。先运行: wechat-cc setup')
+      process.exit(1)
+    }
+  }
+
+  const bun = getBunPath()
+  const mcpConfig = JSON.stringify({
+    mcpServers: {
+      wechat: {
+        command: bun,
+        args: ['run', '--cwd', PLUGIN_DIR, '--silent', 'start'],
+      },
+    },
+  })
+
+  const args = [
+    '--mcp-config', mcpConfig,
+    '--dangerously-load-development-channels', 'server:wechat',
+    '--channels', 'server:wechat',
+    ...process.argv.slice(3), // pass through extra flags
+  ]
+
+  const result = spawnSync('claude', args, { stdio: 'inherit' })
+  process.exit(result.status ?? 1)
+}
+
+function help() {
+  console.log(`
+  wechat-cc — WeChat channel for Claude Code
+
+  命令:
+    setup     微信扫码绑定（可多次运行添加多人）
+    start     启动 MCP channel server（由 .mcp.json 调用）
+    run       启动 Claude Code + WeChat channel
+    list      列出已绑定账号
+    install   在当前目录生成 .mcp.json
+    help      显示帮助
+`)
+}
+
+const command = process.argv[2]
+
+switch (command) {
+  case 'setup': {
+    const bun = getBunPath()
+    const result = spawnSync(bun, [resolve(PLUGIN_DIR, 'setup.ts')], { stdio: 'inherit' })
+    process.exit(result.status ?? 1)
+  }
+  case 'start': {
+    const bun = getBunPath()
+    const result = spawnSync(bun, [resolve(PLUGIN_DIR, 'server.ts')], { stdio: 'inherit' })
+    process.exit(result.status ?? 1)
+  }
+  case 'run':
+    run()
+    break
+  case 'list':
+    listAccounts()
+    break
+  case 'install':
+    install()
+    break
+  case 'help':
+  case '--help':
+  case '-h':
+    help()
+    break
+  default:
+    if (command) console.error(`未知命令: ${command}`)
+    help()
+    process.exit(command ? 1 : 0)
+}
