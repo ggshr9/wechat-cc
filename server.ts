@@ -15,13 +15,13 @@ import {
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
-import { randomBytes, randomUUID } from 'crypto'
+import { randomBytes } from 'crypto'
 import {
-  readFileSync, writeFileSync, mkdirSync, readdirSync,
-  rmSync, statSync, renameSync, realpathSync, chmodSync, existsSync,
+  readFileSync, writeFileSync, mkdirSync,
+  renameSync, chmodSync,
 } from 'fs'
 import { homedir } from 'os'
-import { join, sep } from 'path'
+import { join } from 'path'
 
 // ── Paths ──────────────────────────────────────────────────────────────────
 const STATE_DIR = process.env.WECHAT_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'wechat')
@@ -29,7 +29,7 @@ const ACCESS_FILE = join(STATE_DIR, 'access.json')
 const ACCOUNT_FILE = join(STATE_DIR, 'account.json')
 const ENV_FILE = join(STATE_DIR, '.env')
 const SYNC_BUF_FILE = join(STATE_DIR, 'sync_buf')
-const INBOX_DIR = join(STATE_DIR, 'inbox')
+
 
 // ── .env loading ───────────────────────────────────────────────────────────
 try {
@@ -583,12 +583,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
 
       case 'edit_message': {
         const chat_id = args.chat_id as string
+        const message_id = Number(args.message_id)
         const text = args.text as string
         assertAllowedChat(chat_id)
 
-        // ilink edit: send with same structure, message_state=2
         await ilinkSendMessage(account.baseUrl, token, {
           to_user_id: chat_id,
+          message_id,
           message_type: 2,
           message_state: 2,
           item_list: [{ type: 1, text_item: { text } }],
