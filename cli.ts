@@ -112,7 +112,6 @@ function run() {
   const args = [
     '--mcp-config', mcpConfig,
     '--dangerously-load-development-channels', 'server:wechat',
-    '--channels', 'server:wechat',
     ...(skipPermissions ? ['--dangerously-skip-permissions'] : []),
     ...extraArgs,
   ]
