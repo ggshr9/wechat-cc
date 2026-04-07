@@ -175,3 +175,102 @@ async function ilinkGetConfig(baseUrl: string, token: string, userId: string, co
   }, token)
   return JSON.parse(raw)
 }
+
+// ── Access control ─────────────────────────────────────────────────────────
+
+interface Access {
+  dmPolicy: 'allowlist' | 'disabled'
+  allowFrom: string[]
+}
+
+function defaultAccess(): Access {
+  return { dmPolicy: 'allowlist', allowFrom: [] }
+}
+
+function readAccessFile(): Access {
+  try {
+    const raw = readFileSync(ACCESS_FILE, 'utf8')
+    const parsed = JSON.parse(raw) as Partial<Access>
+    return {
+      dmPolicy: parsed.dmPolicy ?? 'allowlist',
+      allowFrom: parsed.allowFrom ?? [],
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return defaultAccess()
+    try { renameSync(ACCESS_FILE, `${ACCESS_FILE}.corrupt-${Date.now()}`) } catch {}
+    process.stderr.write(`wechat channel: access.json corrupt, moved aside. Starting fresh.\n`)
+    return defaultAccess()
+  }
+}
+
+function saveAccess(a: Access): void {
+  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
+  const tmp = ACCESS_FILE + '.tmp'
+  writeFileSync(tmp, JSON.stringify(a, null, 2) + '\n', { mode: 0o600 })
+  renameSync(tmp, ACCESS_FILE)
+}
+
+function loadAccess(): Access {
+  return readAccessFile()
+}
+
+function assertAllowedChat(chat_id: string): void {
+  const access = loadAccess()
+  if (!access.allowFrom.includes(chat_id)) {
+    throw new Error(`chat ${chat_id} is not allowlisted — add via /wechat:access`)
+  }
+}
+
+// ── Account state ──────────────────────────────────────────────────────────
+
+interface Account {
+  baseUrl: string
+  userId: string  // ilink_user_id of the person who scanned
+  botId: string   // ilink_bot_id
+}
+
+function readAccount(): Account | null {
+  try {
+    return JSON.parse(readFileSync(ACCOUNT_FILE, 'utf8')) as Account
+  } catch {
+    return null
+  }
+}
+
+function saveAccount(account: Account): void {
+  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
+  const tmp = ACCOUNT_FILE + '.tmp'
+  writeFileSync(tmp, JSON.stringify(account, null, 2) + '\n', { mode: 0o600 })
+  renameSync(tmp, ACCOUNT_FILE)
+}
+
+// ── Sync buf (getupdates cursor) ───────────────────────────────────────────
+
+function loadSyncBuf(): string {
+  try { return readFileSync(SYNC_BUF_FILE, 'utf8') } catch { return '' }
+}
+
+function saveSyncBuf(buf: string): void {
+  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
+  writeFileSync(SYNC_BUF_FILE, buf, { mode: 0o600 })
+}
+
+// ── Context tokens ─────────────────────────────────────────────────────────
+// ilink requires context_token from the latest inbound message when sending replies.
+// Store per user_id in memory — these don't survive restarts, but getupdates
+// will deliver new messages with fresh tokens.
+
+const contextTokens = new Map<string, string>()
+
+// ── Gate ────────────────────────────────────────────────────────────────────
+
+type GateResult =
+  | { action: 'deliver' }
+  | { action: 'drop' }
+
+function gate(fromUserId: string): GateResult {
+  const access = loadAccess()
+  if (access.dmPolicy === 'disabled') return { action: 'drop' }
+  if (access.allowFrom.includes(fromUserId)) return { action: 'deliver' }
+  return { action: 'drop' }
+}
