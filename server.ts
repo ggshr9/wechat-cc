@@ -291,6 +291,7 @@ function saveSyncBuf(path: string, buf: string): void {
 // so broadcasts and proactive messages work after restart.
 
 const CONTEXT_TOKENS_FILE = join(STATE_DIR, 'context_tokens.json')
+const USER_NAMES_FILE = join(STATE_DIR, 'user_names.json')
 
 function loadContextTokens(): Map<string, string> {
   try {
@@ -307,6 +308,24 @@ function saveContextTokens(tokens: Map<string, string>): void {
 }
 
 const contextTokens = loadContextTokens()
+
+// ── User names (persistent) ───────────────────────────────────────────────
+
+function loadUserNames(): Map<string, string> {
+  try {
+    const data = JSON.parse(readFileSync(USER_NAMES_FILE, 'utf8')) as Record<string, string>
+    return new Map(Object.entries(data))
+  } catch {
+    return new Map()
+  }
+}
+
+function saveUserNames(names: Map<string, string>): void {
+  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
+  writeFileSync(USER_NAMES_FILE, JSON.stringify(Object.fromEntries(names), null, 2) + '\n', { mode: 0o600 })
+}
+
+const userNames = loadUserNames()
 
 // Maps user_id → AccountEntry for routing replies to the correct bot
 const userAccountMap = new Map<string, AccountEntry>()
@@ -368,7 +387,7 @@ const mcp = new Server(
       '',
       '## Identity',
       '',
-      'Each user is identified by chat_id (e.g. xxx@im.wechat). When you see a chat_id for the first time, use the reply tool to ask: "你好！我该怎么称呼你？" Once they answer, remember their name using your memory system (save to memory with the chat_id → name mapping). In all subsequent messages, refer to them by name.',
+      'Messages from known users are prefixed with [名字]. Messages from new users are prefixed with [新用户]. When you see [新用户], immediately reply asking "你好！我该怎么称呼你？" Once they answer, call the set_user_name tool with their chat_id and name. After that, their messages will show their name.',
       '',
       '## Handling Messages While Busy',
       '',
@@ -468,6 +487,19 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'set_user_name',
+      description:
+        'Register a display name for a WeChat user. Use when you learn a user\'s name (e.g. they introduce themselves). This persists across restarts.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          chat_id: { type: 'string', description: 'The user_id (xxx@im.wechat)' },
+          name: { type: 'string', description: 'Display name to use for this user' },
+        },
+        required: ['chat_id', 'name'],
+      },
+    },
+    {
       name: 'broadcast',
       description:
         'Send a message to ALL connected WeChat users. Use when the user says @all or asks to notify everyone. Only reaches users who have previously messaged the bot (active connections).',
@@ -538,6 +570,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           context_token: contextTokens.get(chat_id),
         })
         return { content: [{ type: 'text', text: 'edited' }] }
+      }
+
+      case 'set_user_name': {
+        const chat_id = args.chat_id as string
+        const name = args.name as string
+        userNames.set(chat_id, name)
+        saveUserNames(userNames)
+        return { content: [{ type: 'text', text: `registered: ${chat_id} → ${name}` }] }
       }
 
       case 'broadcast': {
@@ -653,15 +693,22 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
     return
   }
 
+  // Check if this is a new user — if so, prefix the message to prompt Claude to ask their name
+  const isNewUser = !userNames.has(fromUserId)
+  const displayName = userNames.get(fromUserId) ?? fromUserId
+  const contentForClaude = isNewUser
+    ? `[新用户，请先问对方怎么称呼，得到名字后用 "记住用户: chat_id=xxx 名字=yyy" 格式告诉我]\n${text}`
+    : `[${displayName}] ${text}`
+
   // Forward to Claude
   mcp.notification({
     method: 'notifications/claude/channel',
     params: {
-      content: text,
+      content: contentForClaude,
       meta: {
         chat_id: fromUserId,
         message_id: String(msg.message_id ?? ''),
-        user: fromUserId,
+        user: displayName,
         ts: new Date(msg.create_time_ms ?? 0).toISOString(),
       },
     },
