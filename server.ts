@@ -674,6 +674,8 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
   }
   userAccountMap.set(fromUserId, entry)
 
+  const displayName = userNames.get(fromUserId) ?? fromUserId
+
   // Extract text content
   const textParts: string[] = []
   for (const item of msg.item_list ?? []) {
@@ -798,7 +800,6 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
 
   // Check if this is a new user — if so, prefix the message to prompt Claude to ask their name
   const isNewUser = !userNames.has(fromUserId)
-  const displayName = userNames.get(fromUserId) ?? fromUserId
   log('INBOUND', `[${displayName}] ${text}`)
   const contentForClaude = isNewUser
     ? `[新用户，请先问对方怎么称呼，得到名字后用 "记住用户: chat_id=xxx 名字=yyy" 格式告诉我]\n${text}`
