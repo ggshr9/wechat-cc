@@ -656,10 +656,23 @@ process.on('uncaughtException', err => {
 
 // ── Inbound handling ───────────────────────────────────────────────────────
 
+// Dedup: ilink may deliver the same message multiple times
+const seenMessageIds = new Set<string>()
+const MAX_SEEN = 500
+
 function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
   // Only process user messages (type=1) that are finished (state=2)
   if (msg.message_type !== 1) return
   if (msg.message_state !== undefined && msg.message_state !== 2) return
+
+  // Dedup by message_id
+  const msgKey = `${msg.from_user_id}:${msg.message_id}`
+  if (seenMessageIds.has(msgKey)) return
+  seenMessageIds.add(msgKey)
+  if (seenMessageIds.size > MAX_SEEN) {
+    const first = seenMessageIds.values().next().value
+    if (first) seenMessageIds.delete(first)
+  }
 
   const fromUserId = msg.from_user_id ?? ''
   if (!fromUserId) return
