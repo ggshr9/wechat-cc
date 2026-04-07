@@ -611,3 +611,195 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
     }
   }
 })
+
+// ── Process safety ─────────────────────────────────────────────────────────
+
+process.on('unhandledRejection', err => {
+  process.stderr.write(`wechat channel: unhandled rejection: ${err}\n`)
+})
+process.on('uncaughtException', err => {
+  process.stderr.write(`wechat channel: uncaught exception: ${err}\n`)
+})
+
+// ── Inbound handling ───────────────────────────────────────────────────────
+
+function handleInbound(msg: WeixinMessage): void {
+  // Only process user messages (type=1) that are finished (state=2)
+  if (msg.message_type !== 1) return
+  if (msg.message_state !== undefined && msg.message_state !== 2) return
+
+  const fromUserId = msg.from_user_id ?? ''
+  if (!fromUserId) return
+
+  const result = gate(fromUserId)
+  if (result.action === 'drop') return
+
+  // Store context token for replies
+  if (msg.context_token) {
+    contextTokens.set(fromUserId, msg.context_token)
+  }
+
+  // Extract text content
+  const textParts: string[] = []
+  for (const item of msg.item_list ?? []) {
+    if (item.type === 1 && item.text_item?.text) {
+      textParts.push(item.text_item.text)
+    }
+    // v2: handle image, voice, file, video types
+  }
+
+  const text = textParts.join('\n') || '(non-text message)'
+
+  // Permission-reply intercept
+  const permMatch = PERMISSION_REPLY_RE.exec(text)
+  if (permMatch) {
+    void mcp.notification({
+      method: 'notifications/claude/channel/permission',
+      params: {
+        request_id: permMatch[2]!.toLowerCase(),
+        behavior: permMatch[1]!.toLowerCase().startsWith('y') ? 'allow' : 'deny',
+      },
+    })
+    return
+  }
+
+  // Forward to Claude
+  mcp.notification({
+    method: 'notifications/claude/channel',
+    params: {
+      content: text,
+      meta: {
+        chat_id: fromUserId,
+        message_id: String(msg.message_id ?? ''),
+        user: fromUserId,
+        ts: new Date(msg.create_time_ms ?? 0).toISOString(),
+      },
+    },
+  }).catch(err => {
+    process.stderr.write(`wechat channel: failed to deliver inbound to Claude: ${err}\n`)
+  })
+}
+
+// ── Long-poll loop ─────────────────────────────────────────────────────────
+
+const MAX_CONSECUTIVE_FAILURES = 3
+const BACKOFF_DELAY_MS = 30_000
+const RETRY_DELAY_MS = 2_000
+
+async function pollLoop(baseUrl: string, token: string, signal: AbortSignal): Promise<void> {
+  let getUpdatesBuf = loadSyncBuf()
+  let consecutiveFailures = 0
+  let nextTimeoutMs = LONG_POLL_TIMEOUT_MS
+
+  process.stderr.write(`wechat channel: poll loop started (${baseUrl})\n`)
+
+  while (!signal.aborted) {
+    try {
+      const resp = await ilinkGetUpdates(baseUrl, token, getUpdatesBuf)
+
+      if (resp.longpolling_timeout_ms && resp.longpolling_timeout_ms > 0) {
+        nextTimeoutMs = resp.longpolling_timeout_ms
+      }
+
+      const isApiError = (resp.ret !== undefined && resp.ret !== 0) ||
+                          (resp.errcode !== undefined && resp.errcode !== 0)
+
+      if (isApiError) {
+        if (resp.errcode === SESSION_EXPIRED_ERRCODE || resp.ret === SESSION_EXPIRED_ERRCODE) {
+          process.stderr.write('wechat channel: session expired — restart and re-login required\n')
+          // Pause for 5 minutes, then keep trying (user may re-login via /wechat:configure)
+          await sleep(5 * 60_000, signal)
+          continue
+        }
+
+        consecutiveFailures++
+        process.stderr.write(
+          `wechat channel: getupdates failed: ret=${resp.ret} errcode=${resp.errcode} errmsg=${resp.errmsg ?? ''} (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES})\n`,
+        )
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          consecutiveFailures = 0
+          await sleep(BACKOFF_DELAY_MS, signal)
+        } else {
+          await sleep(RETRY_DELAY_MS, signal)
+        }
+        continue
+      }
+
+      consecutiveFailures = 0
+
+      if (resp.get_updates_buf) {
+        saveSyncBuf(resp.get_updates_buf)
+        getUpdatesBuf = resp.get_updates_buf
+      }
+
+      for (const msg of resp.msgs ?? []) {
+        handleInbound(msg)
+      }
+    } catch (err) {
+      if (signal.aborted) return
+      consecutiveFailures++
+      process.stderr.write(`wechat channel: getupdates error (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}): ${err}\n`)
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        consecutiveFailures = 0
+        await sleep(BACKOFF_DELAY_MS, signal)
+      } else {
+        await sleep(RETRY_DELAY_MS, signal)
+      }
+    }
+  }
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(resolve, ms)
+    signal?.addEventListener('abort', () => {
+      clearTimeout(t)
+      resolve() // resolve, not reject — we want clean shutdown
+    }, { once: true })
+  })
+}
+
+// ── Startup ────────────────────────────────────────────────────────────────
+
+const abortController = new AbortController()
+
+// Shutdown on stdin EOF or signals (same pattern as Telegram plugin)
+let shuttingDown = false
+function shutdown(): void {
+  if (shuttingDown) return
+  shuttingDown = true
+  process.stderr.write('wechat channel: shutting down\n')
+  abortController.abort()
+  setTimeout(() => process.exit(0), 2000)
+}
+process.stdin.on('end', shutdown)
+process.stdin.on('close', shutdown)
+process.on('SIGTERM', shutdown)
+process.on('SIGINT', shutdown)
+
+// Connect MCP transport
+await mcp.connect(new StdioServerTransport())
+
+// Resolve token and account
+let activeToken = BOT_TOKEN
+let activeAccount = readAccount()
+
+if (!activeToken) {
+  const loginResult = await runInteractiveLogin()
+  if (loginResult) {
+    activeToken = loginResult.token
+    activeAccount = loginResult.account
+  } else {
+    process.stderr.write(
+      'wechat channel: no token and login failed. Run /wechat:configure to set up.\n' +
+      'Server will stay alive for tool access but cannot receive messages.\n',
+    )
+  }
+}
+
+if (activeToken && activeAccount) {
+  process.stderr.write(`wechat channel: connected as bot ${activeAccount.botId}\n`)
+  void pollLoop(activeAccount.baseUrl, activeToken, abortController.signal)
+} else {
+  process.stderr.write('wechat channel: waiting for configuration via /wechat:configure\n')
+}
