@@ -700,15 +700,15 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
 
   const text = textParts.join('\n') || '(non-text message)'
 
-  // Cross-account dedup: same user + same text within 2s = duplicate from another bot's poll
-  const contentKey = `${fromUserId}:${text}`
+  // Content-based dedup: same user + same text within 5s = duplicate delivery
+  // ilink uses at-least-once semantics and may assign different message_ids to the same user message
+  const contentKey = `content:${fromUserId}:${text}`
   if (seenMessageIds.has(contentKey)) {
-    log('DEDUP', `dropped cross-account duplicate from [${displayName}]`)
+    log('DEDUP', `dropped duplicate from [${displayName}]: ${text.slice(0, 30)}`)
     return
   }
   seenMessageIds.add(contentKey)
-  // Remove content key after 2s so the same text can be sent again later
-  setTimeout(() => seenMessageIds.delete(contentKey), 2000)
+  setTimeout(() => seenMessageIds.delete(contentKey), 5000)
 
   // ── WeChat-side commands (handled directly, not forwarded to Claude) ──
 
