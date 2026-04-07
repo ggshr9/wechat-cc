@@ -656,9 +656,12 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
   if (msg.message_type !== 1) return
   if (msg.message_state !== undefined && msg.message_state !== 2) return
 
-  // Dedup by message_id
-  const msgKey = `${msg.from_user_id}:${msg.message_id}`
-  if (seenMessageIds.has(msgKey)) return
+  // Dedup by message_id + account
+  const msgKey = `${entry.id}:${msg.from_user_id}:${msg.message_id}`
+  if (seenMessageIds.has(msgKey)) {
+    log('DEDUP', `dropped duplicate: ${msgKey}`)
+    return
+  }
   seenMessageIds.add(msgKey)
   if (seenMessageIds.size > MAX_SEEN) {
     const first = seenMessageIds.values().next().value
@@ -696,6 +699,16 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
   }
 
   const text = textParts.join('\n') || '(non-text message)'
+
+  // Cross-account dedup: same user + same text within 2s = duplicate from another bot's poll
+  const contentKey = `${fromUserId}:${text}`
+  if (seenMessageIds.has(contentKey)) {
+    log('DEDUP', `dropped cross-account duplicate from [${displayName}]`)
+    return
+  }
+  seenMessageIds.add(contentKey)
+  // Remove content key after 2s so the same text can be sent again later
+  setTimeout(() => seenMessageIds.delete(contentKey), 2000)
 
   // ── WeChat-side commands (handled directly, not forwarded to Claude) ──
 
