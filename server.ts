@@ -649,7 +649,7 @@ process.on('uncaughtException', err => {
 
 // Dedup: ilink may deliver the same message multiple times
 const seenMessageIds = new Set<string>()
-const MAX_SEEN = 500
+const MAX_SEEN = 2000
 
 function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
   // Only process user messages (type=1) that are finished (state=2)
@@ -700,15 +700,14 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
 
   const text = textParts.join('\n') || '(non-text message)'
 
-  // Content-based dedup: same user + same text within 5s = duplicate delivery
-  // ilink uses at-least-once semantics and may assign different message_ids to the same user message
+  // Content-based dedup: ilink uses at-least-once delivery and may redeliver
+  // the same message indefinitely with different message_ids
   const contentKey = `content:${fromUserId}:${text}`
   if (seenMessageIds.has(contentKey)) {
     log('DEDUP', `dropped duplicate from [${displayName}]: ${text.slice(0, 30)}`)
     return
   }
   seenMessageIds.add(contentKey)
-  setTimeout(() => seenMessageIds.delete(contentKey), 5000)
 
   // ── WeChat-side commands (handled directly, not forwarded to Claude) ──
 
