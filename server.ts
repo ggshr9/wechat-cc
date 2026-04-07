@@ -29,14 +29,16 @@ const ACCESS_FILE = join(STATE_DIR, 'access.json')
 const ACCOUNTS_DIR = join(STATE_DIR, 'accounts')
 const LOG_FILE = join(STATE_DIR, 'channel.log')
 
+// Ensure state dir exists once at load time
+mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
+
 function log(tag: string, msg: string): void {
   const line = `${new Date().toISOString()} [${tag}] ${msg}\n`
   process.stderr.write(`wechat channel: ${line}`)
-  try {
-    mkdirSync(STATE_DIR, { recursive: true })
-    appendFileSync(LOG_FILE, line)
-  } catch {}
+  try { appendFileSync(LOG_FILE, line) } catch {}
 }
+
+const ILINK_BASE_INFO = { channel_version: '0.0.1' } as const
 
 // ── ilink constants ────────────────────────────────────────────────────────
 const ILINK_BASE_URL = 'https://ilinkai.weixin.qq.com'
@@ -99,21 +101,6 @@ function buildHeaders(token?: string): Record<string, string> {
   return h
 }
 
-async function ilinkGet(baseUrl: string, endpoint: string, timeoutMs = API_TIMEOUT_MS): Promise<string> {
-  const url = new URL(endpoint, baseUrl.endsWith('/') ? baseUrl : baseUrl + '/')
-  const ctrl = new AbortController()
-  const t = setTimeout(() => ctrl.abort(), timeoutMs)
-  try {
-    const res = await fetch(url.toString(), {
-      method: 'GET',
-      headers: { 'iLink-App-Id': ILINK_APP_ID, 'iLink-App-ClientVersion': ILINK_CLIENT_VERSION },
-      signal: ctrl.signal,
-    })
-    if (!res.ok) throw new Error(`${endpoint} ${res.status}: ${await res.text()}`)
-    return await res.text()
-  } finally { clearTimeout(t) }
-}
-
 async function ilinkPost(baseUrl: string, endpoint: string, body: object, token?: string, timeoutMs = API_TIMEOUT_MS): Promise<string> {
   const url = new URL(endpoint, baseUrl.endsWith('/') ? baseUrl : baseUrl + '/')
   const json = JSON.stringify(body)
@@ -137,7 +124,7 @@ async function ilinkGetUpdates(baseUrl: string, token: string, buf: string): Pro
   try {
     const raw = await ilinkPost(baseUrl, 'ilink/bot/getupdates', {
       get_updates_buf: buf,
-      base_info: { channel_version: '0.0.1' },
+      base_info: ILINK_BASE_INFO,
     }, token, LONG_POLL_TIMEOUT_MS)
     return JSON.parse(raw) as GetUpdatesResp
   } catch (err) {
@@ -153,6 +140,16 @@ function generateClientId(): string {
   return `claude-code-wechat:${Date.now()}-${randomBytes(4).toString('hex')}`
 }
 
+function botTextMessage(toUserId: string, text: string, ctxToken?: string): WeixinMessage {
+  return {
+    to_user_id: toUserId,
+    message_type: 2,
+    message_state: 2,
+    item_list: [{ type: 1, text_item: { text } }],
+    context_token: ctxToken,
+  }
+}
+
 async function ilinkSendMessage(baseUrl: string, token: string, msg: WeixinMessage): Promise<void> {
   await ilinkPost(baseUrl, 'ilink/bot/sendmessage', {
     msg: {
@@ -160,7 +157,7 @@ async function ilinkSendMessage(baseUrl: string, token: string, msg: WeixinMessa
       client_id: generateClientId(),
       ...msg,
     },
-    base_info: { channel_version: '0.0.1' },
+    base_info: ILINK_BASE_INFO,
   }, token)
 }
 
@@ -169,7 +166,7 @@ async function ilinkSendTyping(baseUrl: string, token: string, userId: string, t
     ilink_user_id: userId,
     typing_ticket: ticket,
     status: 1,
-    base_info: { channel_version: '0.0.1' },
+    base_info: ILINK_BASE_INFO,
   }, token)
 }
 
@@ -177,7 +174,7 @@ async function ilinkGetConfig(baseUrl: string, token: string, userId: string, co
   const raw = await ilinkPost(baseUrl, 'ilink/bot/getconfig', {
     ilink_user_id: userId,
     context_token: contextToken,
-    base_info: { channel_version: '0.0.1' },
+    base_info: ILINK_BASE_INFO,
   }, token)
   return JSON.parse(raw)
 }
@@ -216,8 +213,15 @@ function saveAccess(a: Access): void {
   renameSync(tmp, ACCESS_FILE)
 }
 
+// Cache access in memory — re-read from disk every 5s max
+let _accessCache: Access | null = null
+let _accessCacheTime = 0
 function loadAccess(): Access {
-  return readAccessFile()
+  const now = Date.now()
+  if (_accessCache && now - _accessCacheTime < 5000) return _accessCache
+  _accessCache = readAccessFile()
+  _accessCacheTime = now
+  return _accessCache
 }
 
 function assertAllowedChat(chat_id: string): void {
@@ -312,9 +316,14 @@ function loadContextTokens(): Map<string, string> {
   }
 }
 
+let _ctSaveTimer: ReturnType<typeof setTimeout> | null = null
 function saveContextTokens(tokens: Map<string, string>): void {
-  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
-  writeFileSync(CONTEXT_TOKENS_FILE, JSON.stringify(Object.fromEntries(tokens), null, 2) + '\n', { mode: 0o600 })
+  // Debounce: flush at most every 3s to avoid disk thrashing on rapid messages
+  if (_ctSaveTimer) return
+  _ctSaveTimer = setTimeout(() => {
+    _ctSaveTimer = null
+    writeFileSync(CONTEXT_TOKENS_FILE, JSON.stringify(Object.fromEntries(tokens), null, 2) + '\n', { mode: 0o600 })
+  }, 3000)
 }
 
 const contextTokens = loadContextTokens()
@@ -451,13 +460,8 @@ mcp.setNotificationHandler(
       const entry = userAccountMap.get(userId)
       if (!entry) continue
       try {
-        await ilinkSendMessage(entry.account.baseUrl, entry.token, {
-          to_user_id: userId,
-          message_type: 2,
-          message_state: 2,
-          item_list: [{ type: 1, text_item: { text } }],
-          context_token: contextTokens.get(userId),
-        })
+        await ilinkSendMessage(entry.account.baseUrl, entry.token,
+          botTextMessage(userId, text, contextTokens.get(userId)))
       } catch (err) {
         process.stderr.write(`wechat channel: permission_request send to ${userId} failed: ${err}\n`)
       }
@@ -526,12 +530,13 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 // ── Tool handlers ──────────────────────────────────────────────────────────
 
+// Populated at startup, used as fallback when user not in userAccountMap
+let _startupAccounts: AccountEntry[] = []
+
 function resolveAccountForUser(chat_id: string): { baseUrl: string; token: string } {
   const entry = userAccountMap.get(chat_id)
   if (entry) return { baseUrl: entry.account.baseUrl, token: entry.token }
-  // Fallback: use the first account (single-account compat)
-  const all = loadAllAccounts()
-  if (all.length > 0) return { baseUrl: all[0].account.baseUrl, token: all[0].token }
+  if (_startupAccounts.length > 0) return { baseUrl: _startupAccounts[0].account.baseUrl, token: _startupAccounts[0].token }
   throw new Error('no accounts configured — run: bun ~/.claude/plugins/local/wechat/setup.ts')
 }
 
@@ -550,13 +555,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         const chunks = chunk(text, MAX_TEXT_CHUNK)
         let sentCount = 0
         for (const part of chunks) {
-          await ilinkSendMessage(baseUrl, token, {
-            to_user_id: chat_id,
-            message_type: 2,
-            message_state: 2,
-            item_list: [{ type: 1, text_item: { text: part } }],
-            context_token: contextTokens.get(chat_id),
-          })
+          await ilinkSendMessage(baseUrl, token,
+            botTextMessage(chat_id, part, contextTokens.get(chat_id)))
           sentCount++
         }
 
@@ -573,12 +573,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         const { baseUrl, token } = resolveAccountForUser(chat_id)
 
         await ilinkSendMessage(baseUrl, token, {
-          to_user_id: chat_id,
+          ...botTextMessage(chat_id, text, contextTokens.get(chat_id)),
           message_id,
-          message_type: 2,
-          message_state: 2,
-          item_list: [{ type: 1, text_item: { text } }],
-          context_token: contextTokens.get(chat_id),
         })
         return { content: [{ type: 'text', text: 'edited' }] }
       }
@@ -610,13 +606,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           try {
             const chunks = chunk(text, MAX_TEXT_CHUNK)
             for (const part of chunks) {
-              await ilinkSendMessage(entry.account.baseUrl, entry.token, {
-                to_user_id: userId,
-                message_type: 2,
-                message_state: 2,
-                item_list: [{ type: 1, text_item: { text: part } }],
-                context_token: ct,
-              })
+              await ilinkSendMessage(entry.account.baseUrl, entry.token,
+                botTextMessage(userId, part, ct))
             }
             sent++
           } catch (err) {
@@ -718,13 +709,9 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
       lines.push(`${isSelf ? '→ ' : '  '}${name}${hasToken ? '' : ' (离线)'}`)
     }
     const replyText = lines.join('\n')
-    ilinkSendMessage(entry.account.baseUrl, entry.token, {
-      to_user_id: fromUserId,
-      message_type: 2,
-      message_state: 2,
-      item_list: [{ type: 1, text_item: { text: replyText } }],
-      context_token: contextTokens.get(fromUserId),
-    }).catch(err => process.stderr.write(`wechat channel: /users reply failed: ${err}\n`))
+    ilinkSendMessage(entry.account.baseUrl, entry.token,
+      botTextMessage(fromUserId, replyText, contextTokens.get(fromUserId)),
+    ).catch(err => process.stderr.write(`wechat channel: /users reply failed: ${err}\n`))
     return
   }
 
@@ -739,26 +726,18 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
       const ct = contextTokens.get(uid)
       if (!ct) continue
       const name = userNames.get(uid) ?? uid
-      ilinkSendMessage(targetEntry.account.baseUrl, targetEntry.token, {
-        to_user_id: uid,
-        message_type: 2,
-        message_state: 2,
-        item_list: [{ type: 1, text_item: { text: broadcastText } }],
-        context_token: ct,
-      }).catch(err => process.stderr.write(`wechat channel: @all send to ${uid} failed: ${err}\n`))
+      ilinkSendMessage(targetEntry.account.baseUrl, targetEntry.token,
+        botTextMessage(uid, broadcastText, ct),
+      ).catch(err => process.stderr.write(`wechat channel: @all send to ${uid} failed: ${err}\n`))
       recipients.push(name)
     }
     // Send receipt to sender
     const receipt = recipients.length > 0
       ? `已发送给: ${recipients.join('、')}`
       : '没有可发送的在线用户'
-    ilinkSendMessage(entry.account.baseUrl, entry.token, {
-      to_user_id: fromUserId,
-      message_type: 2,
-      message_state: 2,
-      item_list: [{ type: 1, text_item: { text: receipt } }],
-      context_token: contextTokens.get(fromUserId),
-    }).catch(() => {})
+    ilinkSendMessage(entry.account.baseUrl, entry.token,
+      botTextMessage(fromUserId, receipt, contextTokens.get(fromUserId)),
+    ).catch(() => {})
     // Also forward to Claude so it knows
     // fall through to normal handling below
   }
@@ -777,21 +756,13 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
       const targetEntry = userAccountMap.get(targetUserId)
       const ct = contextTokens.get(targetUserId)
       if (targetEntry && ct) {
-        ilinkSendMessage(targetEntry.account.baseUrl, targetEntry.token, {
-          to_user_id: targetUserId,
-          message_type: 2,
-          message_state: 2,
-          item_list: [{ type: 1, text_item: { text: forwardText } }],
-          context_token: ct,
-        }).catch(err => process.stderr.write(`wechat channel: @${targetName} send failed: ${err}\n`))
+        ilinkSendMessage(targetEntry.account.baseUrl, targetEntry.token,
+          botTextMessage(targetUserId, forwardText, ct),
+        ).catch(err => process.stderr.write(`wechat channel: @${targetName} send failed: ${err}\n`))
         // Confirm to sender
-        ilinkSendMessage(entry.account.baseUrl, entry.token, {
-          to_user_id: fromUserId,
-          message_type: 2,
-          message_state: 2,
-          item_list: [{ type: 1, text_item: { text: `已转发给${targetName}` } }],
-          context_token: contextTokens.get(fromUserId),
-        }).catch(() => {})
+        ilinkSendMessage(entry.account.baseUrl, entry.token,
+          botTextMessage(fromUserId, `已转发给${targetName}`, contextTokens.get(fromUserId)),
+        ).catch(() => {})
         return
       }
     }
@@ -815,7 +786,7 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
   const isNewUser = !userNames.has(fromUserId)
   log('INBOUND', `[${displayName}] ${text}`)
   const contentForClaude = isNewUser
-    ? `[新用户，请先问对方怎么称呼，得到名字后用 "记住用户: chat_id=xxx 名字=yyy" 格式告诉我]\n${text}`
+    ? `[新用户 chat_id=${fromUserId}，请用 reply 工具问对方怎么称呼，得到名字后调用 set_user_name 工具]\n${text}`
     : `[${displayName}] ${text}`
 
   // Forward to Claude
@@ -938,7 +909,8 @@ await mcp.connect(new StdioServerTransport())
 
 // Load all accounts and start poll loops — one per account.
 // Run `bun setup.ts` to add accounts.
-const accounts = loadAllAccounts()
+_startupAccounts = loadAllAccounts()
+const accounts = _startupAccounts
 
 if (accounts.length === 0) {
   process.stderr.write(

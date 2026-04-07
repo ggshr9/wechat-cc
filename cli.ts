@@ -12,9 +12,8 @@
 
 import { execSync, spawnSync } from 'child_process'
 import { existsSync, readFileSync, writeFileSync, readdirSync } from 'fs'
-import { resolve, dirname } from 'path'
+import { resolve, dirname, join } from 'path'
 import { homedir } from 'os'
-import { join } from 'path'
 
 const PLUGIN_DIR = dirname(new URL(import.meta.url).pathname)
 const STATE_DIR = join(homedir(), '.claude', 'channels', 'wechat')
