@@ -553,6 +553,10 @@ const mcp = new Server(
       '',
       'For simple messages (greetings, short questions), always reply directly and quickly.',
       '',
+      '## Files',
+      '',
+      'Use the send_file tool to send files, images, or videos to WeChat users. Pass the absolute file path and chat_id. When a user sends media, it is downloaded to the inbox directory and the path is included in the message metadata — use Read to view images.',
+      '',
       '## Broadcast',
       '',
       'When the user (in the terminal, not WeChat) says @all or asks to notify everyone, use the broadcast tool to send to all connected WeChat users.',
@@ -648,6 +652,20 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'send_file',
+      description:
+        'Send a file or image to a WeChat user. Supports images (jpg/png), videos (mp4), PDFs, and other file types.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          chat_id: { type: 'string', description: 'from_user_id of the recipient' },
+          file_path: { type: 'string', description: 'Absolute path to the file to send' },
+          caption: { type: 'string', description: 'Optional text message to send alongside the file' },
+        },
+        required: ['chat_id', 'file_path'],
+      },
+    },
+    {
       name: 'broadcast',
       description:
         'Send a message to ALL connected WeChat users. Use when the user says @all or asks to notify everyone. Only reaches users who have previously messaged the bot (active connections).',
@@ -719,6 +737,53 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         userNames.set(chat_id, name)
         saveUserNames(userNames)
         return { content: [{ type: 'text', text: `registered: ${chat_id} → ${name}` }] }
+      }
+
+      case 'send_file': {
+        const chat_id = args.chat_id as string
+        const file_path = args.file_path as string
+        const caption = args.caption as string | undefined
+        assertAllowedChat(chat_id)
+        const { baseUrl, token } = resolveAccountForUser(chat_id)
+
+        const ext = file_path.split('.').pop()?.toLowerCase() ?? ''
+        const imageExts = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'])
+        const videoExts = new Set(['mp4', 'mov', 'avi', 'webm'])
+        const mediaType = imageExts.has(ext) ? UPLOAD_MEDIA_TYPE.IMAGE
+          : videoExts.has(ext) ? UPLOAD_MEDIA_TYPE.VIDEO
+          : UPLOAD_MEDIA_TYPE.FILE
+
+        log('OUTBOUND', `→ [${userNames.get(chat_id) ?? chat_id}] (file: ${file_path})`)
+
+        const uploaded = await uploadToCdn({ filePath: file_path, toUserId: chat_id, baseUrl, token, mediaType })
+
+        const aesKeyBase64 = Buffer.from(uploaded.aeskey, 'hex').toString('base64')
+        const mediaRef: CDNMedia = { encrypt_query_param: uploaded.downloadParam, aes_key: aesKeyBase64, encrypt_type: 1 }
+
+        let mediaItem: MessageItem
+        if (mediaType === UPLOAD_MEDIA_TYPE.IMAGE) {
+          mediaItem = { type: 2, image_item: { media: mediaRef, mid_size: uploaded.fileSizeCiphertext } }
+        } else if (mediaType === UPLOAD_MEDIA_TYPE.VIDEO) {
+          mediaItem = { type: 5, video_item: { media: mediaRef, video_size: uploaded.fileSizeCiphertext } }
+        } else {
+          const fileName = file_path.split('/').pop() ?? 'file'
+          mediaItem = { type: 4, file_item: { media: mediaRef, file_name: fileName, len: String(uploaded.fileSize) } }
+        }
+
+        if (caption) {
+          await ilinkSendMessage(baseUrl, token,
+            botTextMessage(chat_id, caption, contextTokens.get(chat_id)))
+        }
+
+        await ilinkSendMessage(baseUrl, token, {
+          to_user_id: chat_id,
+          message_type: 2,
+          message_state: 2,
+          item_list: [mediaItem],
+          context_token: contextTokens.get(chat_id),
+        })
+
+        return { content: [{ type: 'text', text: `file sent: ${file_path}` }] }
       }
 
       case 'broadcast': {
