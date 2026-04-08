@@ -39,16 +39,43 @@ function log(tag: string, msg: string): void {
   try { appendFileSync(LOG_FILE, line) } catch {}
 }
 
-const ILINK_BASE_INFO = { channel_version: '0.0.1' } as const
+const ILINK_BASE_INFO = { channel_version: '2.1.7' } as const
 
 // ── ilink constants ────────────────────────────────────────────────────────
 const ILINK_BASE_URL = 'https://ilinkai.weixin.qq.com'
 const ILINK_APP_ID = 'bot'
 const ILINK_BOT_TYPE = '3'
-const ILINK_CLIENT_VERSION = '65547' // 1.0.11 → 0x0001000B
+const ILINK_CLIENT_VERSION = '131335' // 2.1.7 → 0x00020107
 const LONG_POLL_TIMEOUT_MS = 35_000
 const API_TIMEOUT_MS = 30_000
 const MAX_TEXT_CHUNK = 4000
+
+// ── Message cache for quote resolution ─────────────────────────────────────
+// Key: create_time_ms (string), Value: text content
+// Used to resolve ref_msg when ilink returns type=8 (unsupported)
+const MSG_CACHE_MAX = 500
+const msgCache = new Map<string, string>()
+
+function cacheMsg(timeMs: number | undefined, text: string): void {
+  if (!timeMs || !text) return
+  const key = String(timeMs)
+  msgCache.set(key, text)
+  if (msgCache.size > MSG_CACHE_MAX) {
+    const oldest = msgCache.keys().next().value
+    if (oldest) msgCache.delete(oldest)
+  }
+}
+
+function lookupCache(timeMs: number): string | undefined {
+  // Exact match first
+  const exact = msgCache.get(String(timeMs))
+  if (exact) return exact
+  // Fuzzy match: within 3 seconds window
+  for (const [key, val] of msgCache) {
+    if (Math.abs(Number(key) - timeMs) <= 3000) return val
+  }
+  return undefined
+}
 
 // ── ilink types ────────────────────────────────────────────────────────────
 interface WeixinMessage {
@@ -77,7 +104,7 @@ interface MessageItem {
   msg_id?: string
   text_item?: { text?: string }
   voice_item?: { text?: string; media?: CDNMedia }
-  ref_msg?: { title?: string }
+  ref_msg?: { title?: string; message_item?: { type?: number; text_item?: { text?: string }; unsupported_item?: { text?: string } } }
   image_item?: { media?: CDNMedia; aeskey?: string; mid_size?: number; hd_size?: number }
   file_item?: { media?: CDNMedia; file_name?: string; md5?: string; len?: string }
   video_item?: { media?: CDNMedia; video_size?: number; thumb_media?: CDNMedia }
@@ -247,10 +274,12 @@ async function downloadCdnMedia(media: CDNMedia, aesKeyHexOverride?: string): Pr
   return decryptAesEcb(encrypted, key)
 }
 
-async function saveToInbox(buf: Buffer, filename: string): Promise<string> {
-  mkdirSync(INBOX_DIR, { recursive: true })
-  const safeName = `${Date.now()}-${filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`
-  const filePath = join(INBOX_DIR, safeName)
+async function saveToInbox(buf: Buffer, filename: string, userId?: string): Promise<string> {
+  const dir = userId ? join(INBOX_DIR, userId) : INBOX_DIR
+  mkdirSync(dir, { recursive: true })
+  // Sanitize only path separators and null bytes, preserve unicode (Chinese etc.)
+  const safeName = `${Date.now()}-${filename.replace(/[\x00/\\]/g, '_')}`
+  const filePath = join(dir, safeName)
   writeFileSync(filePath, buf)
   return filePath
 }
@@ -575,7 +604,7 @@ const mcp = new Server(
 )
 
 // ── Permission relay ───────────────────────────────────────────────────────
-// When Claude Code asks for tool permission, forward to all allowlisted WeChat users.
+// When Claude Code asks for tool permission, forward to admins only (not all users).
 
 const PERMISSION_REPLY_RE = /^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$/i
 
@@ -590,11 +619,17 @@ mcp.setNotificationHandler(
     }),
   }),
   async ({ params }) => {
-    const { request_id, tool_name } = params
+    const { request_id, tool_name, description, input_preview } = params
     const access = loadAccess()
 
-    const text = `🔐 Permission: ${tool_name}\nReply: yes ${request_id} / no ${request_id}`
-    for (const userId of access.allowFrom) {
+    log('PERMISSION', `${tool_name}: ${description}\n${input_preview}`)
+    const lines = [`🔐 Permission: ${tool_name}`]
+    if (description) lines.push(description)
+    if (input_preview) lines.push(input_preview)
+    lines.push(`\nReply: yes ${request_id} / no ${request_id}`)
+    const text = lines.join('\n')
+    const targets = (access as any).admins?.length ? (access as any).admins : access.allowFrom
+    for (const userId of targets) {
       const entry = userAccountMap.get(userId)
       if (!entry) continue
       try {
@@ -709,6 +744,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         for (const part of chunks) {
           await ilinkSendMessage(baseUrl, token,
             botTextMessage(chat_id, part, contextTokens.get(chat_id)))
+          // Cache with local timestamp for quote resolution (fuzzy matched via lookupCache)
+          cacheMsg(Math.floor(Date.now() / 1000) * 1000, part)
           sentCount++
         }
 
@@ -887,8 +924,13 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
   const textParts: string[] = []
   const mediaPaths: string[] = []
   for (const item of msg.item_list ?? []) {
-    if (item.ref_msg?.title) {
-      textParts.push(`[引用: ${item.ref_msg.title}]`)
+    if (item.ref_msg) {
+      const ref = item.ref_msg
+      const refTimeMs = ref.message_item?.create_time_ms
+      const refText = ref.title
+        ?? ref.message_item?.text_item?.text
+        ?? (refTimeMs ? lookupCache(refTimeMs) : undefined)
+      textParts.push(refText ? `[引用: ${refText}]` : '[引用]')
     }
     if (item.type === 1 && item.text_item?.text) {
       textParts.push(item.text_item.text)
@@ -897,7 +939,7 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
     } else if (item.type === 2 && item.image_item?.media) {
       try {
         const buf = await downloadCdnMedia(item.image_item.media, item.image_item.aeskey)
-        const path = await saveToInbox(buf, 'image.jpg')
+        const path = await saveToInbox(buf, 'image.jpg', fromUserId)
         mediaPaths.push(path)
         textParts.push(`[图片已下载: ${path}]`)
       } catch (err) {
@@ -908,7 +950,7 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
       try {
         const fileName = item.file_item.file_name ?? 'file.bin'
         const buf = await downloadCdnMedia(item.file_item.media)
-        const path = await saveToInbox(buf, fileName)
+        const path = await saveToInbox(buf, fileName, fromUserId)
         mediaPaths.push(path)
         textParts.push(`[文件已下载: ${path}] (${fileName})`)
       } catch (err) {
@@ -918,7 +960,7 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
     } else if (item.type === 5 && item.video_item?.media) {
       try {
         const buf = await downloadCdnMedia(item.video_item.media)
-        const path = await saveToInbox(buf, 'video.mp4')
+        const path = await saveToInbox(buf, 'video.mp4', fromUserId)
         mediaPaths.push(path)
         textParts.push(`[视频已下载: ${path}]`)
       } catch (err) {
@@ -929,6 +971,13 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
   }
 
   const text = textParts.join('\n') || '(non-text message)'
+
+  // Cache inbound message for quote resolution
+  for (const item of msg.item_list ?? []) {
+    if (item.type === 1 && item.text_item?.text && item.create_time_ms) {
+      cacheMsg(item.create_time_ms, item.text_item.text)
+    }
+  }
 
   // ── WeChat-side commands (handled directly, not forwarded to Claude) ──
 
