@@ -15,7 +15,7 @@ import {
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
-import { randomBytes } from 'crypto'
+import { randomBytes, createDecipheriv, createCipheriv, createHash } from 'crypto'
 import {
   readFileSync, writeFileSync, mkdirSync, appendFileSync,
   renameSync, chmodSync, readdirSync, existsSync, rmSync,
@@ -65,13 +65,22 @@ interface WeixinMessage {
   session_id?: string
 }
 
+interface CDNMedia {
+  encrypt_query_param?: string
+  aes_key?: string       // base64-encoded
+  encrypt_type?: number
+  full_url?: string
+}
+
 interface MessageItem {
   type?: number  // 1=text, 2=image, 3=voice, 4=file, 5=video
   msg_id?: string
   text_item?: { text?: string }
-  voice_item?: { text?: string }  // ASR transcript
-  ref_msg?: { title?: string }    // quoted message summary
-  // image_item, file_item, video_item — v2
+  voice_item?: { text?: string; media?: CDNMedia }
+  ref_msg?: { title?: string }
+  image_item?: { media?: CDNMedia; aeskey?: string; mid_size?: number; hd_size?: number }
+  file_item?: { media?: CDNMedia; file_name?: string; md5?: string; len?: string }
+  video_item?: { media?: CDNMedia; video_size?: number; thumb_media?: CDNMedia }
 }
 
 interface GetUpdatesResp {
@@ -186,6 +195,102 @@ async function ilinkGetConfig(baseUrl: string, token: string, userId: string, co
     base_info: ILINK_BASE_INFO,
   }, token)
   return JSON.parse(raw)
+}
+
+// ── CDN media ──────────────────────────────────────────────────────────────
+
+const CDN_BASE_URL = 'https://cdn.ilinkai.weixin.qq.com'
+const INBOX_DIR = join(STATE_DIR, 'inbox')
+
+function parseAesKey(aesKeyBase64: string): Buffer {
+  const decoded = Buffer.from(aesKeyBase64, 'base64')
+  if (decoded.length === 16) return decoded
+  if (decoded.length === 32 && /^[0-9a-fA-F]{32}$/.test(decoded.toString('ascii'))) {
+    return Buffer.from(decoded.toString('ascii'), 'hex')
+  }
+  throw new Error(`invalid aes_key: expected 16 raw or 32 hex bytes, got ${decoded.length}`)
+}
+
+function decryptAesEcb(ciphertext: Buffer, key: Buffer): Buffer {
+  const decipher = createDecipheriv('aes-128-ecb', key, null)
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()])
+}
+
+function encryptAesEcb(plaintext: Buffer, key: Buffer): Buffer {
+  const cipher = createCipheriv('aes-128-ecb', key, null)
+  return Buffer.concat([cipher.update(plaintext), cipher.final()])
+}
+
+function aesEcbPaddedSize(size: number): number {
+  return Math.ceil((size + 1) / 16) * 16
+}
+
+async function downloadCdnMedia(media: CDNMedia, aesKeyHexOverride?: string): Promise<Buffer> {
+  let url: string
+  if (media.full_url) {
+    url = media.full_url
+  } else if (media.encrypt_query_param) {
+    url = `${CDN_BASE_URL}/download?encrypted_query_param=${encodeURIComponent(media.encrypt_query_param)}`
+  } else {
+    throw new Error('no download URL: need full_url or encrypt_query_param')
+  }
+
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`CDN download ${res.status}: ${res.statusText}`)
+  const encrypted = Buffer.from(await res.arrayBuffer())
+
+  const key = aesKeyHexOverride
+    ? Buffer.from(aesKeyHexOverride, 'hex')
+    : media.aes_key ? parseAesKey(media.aes_key) : null
+
+  if (!key) return encrypted
+  return decryptAesEcb(encrypted, key)
+}
+
+async function saveToInbox(buf: Buffer, filename: string): Promise<string> {
+  mkdirSync(INBOX_DIR, { recursive: true })
+  const safeName = `${Date.now()}-${filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+  const filePath = join(INBOX_DIR, safeName)
+  writeFileSync(filePath, buf)
+  return filePath
+}
+
+const UPLOAD_MEDIA_TYPE = { IMAGE: 1, VIDEO: 2, FILE: 3 } as const
+
+async function uploadToCdn(params: {
+  filePath: string; toUserId: string; baseUrl: string; token: string; mediaType: number
+}): Promise<{ downloadParam: string; aeskey: string; fileSize: number; fileSizeCiphertext: number }> {
+  const plaintext = Buffer.from(await Bun.file(params.filePath).arrayBuffer())
+  const rawsize = plaintext.length
+  const rawfilemd5 = createHash('md5').update(plaintext).digest('hex')
+  const filesize = aesEcbPaddedSize(rawsize)
+  const filekey = randomBytes(16).toString('hex')
+  const aeskey = randomBytes(16)
+
+  const uploadResp = JSON.parse(await ilinkPost(params.baseUrl, 'ilink/bot/getuploadurl', {
+    filekey, media_type: params.mediaType, to_user_id: params.toUserId,
+    rawsize, rawfilemd5, filesize, no_need_thumb: true, aeskey: aeskey.toString('hex'),
+    base_info: ILINK_BASE_INFO,
+  }, params.token)) as { upload_full_url?: string; upload_param?: string }
+
+  const uploadUrl = uploadResp.upload_full_url?.trim()
+    || (uploadResp.upload_param
+      ? `${CDN_BASE_URL}/upload?encrypted_query_param=${encodeURIComponent(uploadResp.upload_param)}&filekey=${encodeURIComponent(filekey)}`
+      : null)
+  if (!uploadUrl) throw new Error('getuploadurl returned no upload URL')
+
+  const ciphertext = encryptAesEcb(plaintext, aeskey)
+  const cdnRes = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: new Uint8Array(ciphertext),
+  })
+  if (!cdnRes.ok) throw new Error(`CDN upload ${cdnRes.status}: ${await cdnRes.text()}`)
+
+  const downloadParam = cdnRes.headers.get('x-encrypted-param')
+  if (!downloadParam) throw new Error('CDN response missing x-encrypted-param header')
+
+  return { downloadParam, aeskey: aeskey.toString('hex'), fileSize: rawsize, fileSizeCiphertext: filesize }
 }
 
 // ── Access control ─────────────────────────────────────────────────────────
@@ -680,7 +785,7 @@ process.on('uncaughtException', err => {
 const seenMessageIds = new Set<string>()
 const MAX_SEEN = 2000
 
-function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
+async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<void> {
   // Only process user messages (type=1) that are finished (state=2)
   if (msg.message_type !== 1) return
   if (msg.message_state !== undefined && msg.message_state !== 2) return
@@ -713,10 +818,10 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
 
   const displayName = userNames.get(fromUserId) ?? fromUserId
 
-  // Extract text content
+  // Extract text content and download media
   const textParts: string[] = []
+  const mediaPaths: string[] = []
   for (const item of msg.item_list ?? []) {
-    // Quoted message context
     if (item.ref_msg?.title) {
       textParts.push(`[引用: ${item.ref_msg.title}]`)
     }
@@ -724,8 +829,38 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
       textParts.push(item.text_item.text)
     } else if (item.type === 3 && item.voice_item?.text) {
       textParts.push(`[语音] ${item.voice_item.text}`)
+    } else if (item.type === 2 && item.image_item?.media) {
+      try {
+        const buf = await downloadCdnMedia(item.image_item.media, item.image_item.aeskey)
+        const path = await saveToInbox(buf, 'image.jpg')
+        mediaPaths.push(path)
+        textParts.push(`[图片已下载: ${path}]`)
+      } catch (err) {
+        log('ERROR', `image download failed: ${err}`)
+        textParts.push('[图片下载失败]')
+      }
+    } else if (item.type === 4 && item.file_item?.media) {
+      try {
+        const fileName = item.file_item.file_name ?? 'file.bin'
+        const buf = await downloadCdnMedia(item.file_item.media)
+        const path = await saveToInbox(buf, fileName)
+        mediaPaths.push(path)
+        textParts.push(`[文件已下载: ${path}] (${fileName})`)
+      } catch (err) {
+        log('ERROR', `file download failed: ${err}`)
+        textParts.push('[文件下载失败]')
+      }
+    } else if (item.type === 5 && item.video_item?.media) {
+      try {
+        const buf = await downloadCdnMedia(item.video_item.media)
+        const path = await saveToInbox(buf, 'video.mp4')
+        mediaPaths.push(path)
+        textParts.push(`[视频已下载: ${path}]`)
+      } catch (err) {
+        log('ERROR', `video download failed: ${err}`)
+        textParts.push('[视频下载失败]')
+      }
     }
-    // image_item, file_item, video_item — v2
   }
 
   const text = textParts.join('\n') || '(non-text message)'
@@ -875,6 +1010,7 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
         message_id: String(msg.message_id ?? ''),
         user: displayName,
         ts: new Date(msg.create_time_ms ?? 0).toISOString(),
+        ...(mediaPaths.length > 0 ? { image_path: mediaPaths[0] } : {}),
       },
     },
   }).catch(err => {
