@@ -151,14 +151,22 @@ function botTextMessage(toUserId: string, text: string, ctxToken?: string): Weix
 }
 
 async function ilinkSendMessage(baseUrl: string, token: string, msg: WeixinMessage): Promise<void> {
-  await ilinkPost(baseUrl, 'ilink/bot/sendmessage', {
-    msg: {
-      from_user_id: '',
-      client_id: generateClientId(),
-      ...msg,
-    },
+  const body = {
+    msg: { from_user_id: '', client_id: generateClientId(), ...msg },
     base_info: ILINK_BASE_INFO,
-  }, token)
+  }
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await ilinkPost(baseUrl, 'ilink/bot/sendmessage', body, token)
+      return
+    } catch (err) {
+      const isRetryable = err instanceof Error &&
+        (err.name === 'AbortError' || /^ilink.*5\d\d/.test(err.message))
+      if (!isRetryable || attempt === 3) throw err
+      log('RETRY', `sendmessage attempt ${attempt} failed, retrying in 1s: ${err instanceof Error ? err.message : err}`)
+      await new Promise(r => setTimeout(r, 1000))
+    }
+  }
 }
 
 async function ilinkSendTyping(baseUrl: string, token: string, userId: string, ticket: string): Promise<void> {
