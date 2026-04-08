@@ -18,7 +18,7 @@ import { z } from 'zod'
 import { randomBytes } from 'crypto'
 import {
   readFileSync, writeFileSync, mkdirSync, appendFileSync,
-  renameSync, chmodSync, readdirSync, existsSync,
+  renameSync, chmodSync, readdirSync, existsSync, rmSync,
 } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
@@ -891,12 +891,40 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 const abortController = new AbortController()
 
+// ── PID lockfile ───────────────────────────────────────────────────────────
+const PID_FILE = join(STATE_DIR, 'server.pid')
+
+function acquirePidLock(): void {
+  try {
+    const existing = parseInt(readFileSync(PID_FILE, 'utf8').trim(), 10)
+    if (existing && existing !== process.pid) {
+      try {
+        process.kill(existing, 0)
+        process.stderr.write(
+          `wechat channel: another instance is running (PID ${existing}).\n` +
+          `  Kill it first: kill ${existing}\n`,
+        )
+        process.exit(1)
+      } catch {} // process doesn't exist, stale PID file
+    }
+  } catch {} // no PID file
+  writeFileSync(PID_FILE, String(process.pid), { mode: 0o600 })
+}
+
+function releasePidLock(): void {
+  try {
+    const pid = parseInt(readFileSync(PID_FILE, 'utf8').trim(), 10)
+    if (pid === process.pid) rmSync(PID_FILE, { force: true })
+  } catch {}
+}
+
 // Shutdown on stdin EOF or signals (same pattern as Telegram plugin)
 let shuttingDown = false
 function shutdown(): void {
   if (shuttingDown) return
   shuttingDown = true
   process.stderr.write('wechat channel: shutting down\n')
+  releasePidLock()
   abortController.abort()
   setTimeout(() => process.exit(0), 2000)
 }
@@ -905,7 +933,8 @@ process.stdin.on('close', shutdown)
 process.on('SIGTERM', shutdown)
 process.on('SIGINT', shutdown)
 
-// Connect MCP transport
+// Acquire lock and connect MCP
+acquirePidLock()
 await mcp.connect(new StdioServerTransport())
 
 // Load all accounts and start poll loops — one per account.
