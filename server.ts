@@ -31,6 +31,7 @@ const LOG_FILE = join(STATE_DIR, 'channel.log')
 
 // Ensure state dir exists once at load time
 mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
+const START_TIME = Date.now()
 
 function log(tag: string, msg: string): void {
   const line = `${new Date().toISOString()} [${tag}] ${msg}\n`
@@ -730,6 +731,49 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
   const text = textParts.join('\n') || '(non-text message)'
 
   // ── WeChat-side commands (handled directly, not forwarded to Claude) ──
+
+  // /ping — connectivity test
+  if (text.trim() === '/ping') {
+    ilinkSendMessage(entry.account.baseUrl, entry.token,
+      botTextMessage(fromUserId, 'pong', contextTokens.get(fromUserId)),
+    ).catch(() => {})
+    return
+  }
+
+  // /help — list available commands
+  if (text.trim() === '/help') {
+    const helpText = [
+      '可用命令：',
+      '/help    — 显示此帮助',
+      '/status  — 查看连接状态',
+      '/ping    — 测试 bot 是否在线',
+      '/users   — 查看在线用户',
+      '@all 消息 — 群发给所有人',
+      '@名字 消息 — 转发给指定人',
+      '其他消息 — 发给 AI 助手',
+    ].join('\n')
+    ilinkSendMessage(entry.account.baseUrl, entry.token,
+      botTextMessage(fromUserId, helpText, contextTokens.get(fromUserId)),
+    ).catch(() => {})
+    return
+  }
+
+  // /status — connection status
+  if (text.trim() === '/status') {
+    const uptimeMs = Date.now() - START_TIME
+    const hours = Math.floor(uptimeMs / 3600000)
+    const mins = Math.floor((uptimeMs % 3600000) / 60000)
+    const statusText = [
+      '连接状态：在线',
+      `运行时间：${hours}小时${mins}分`,
+      `已绑定账号：${_startupAccounts.length}`,
+      `活跃用户：${userAccountMap.size}`,
+    ].join('\n')
+    ilinkSendMessage(entry.account.baseUrl, entry.token,
+      botTextMessage(fromUserId, statusText, contextTokens.get(fromUserId)),
+    ).catch(() => {})
+    return
+  }
 
   // /users — list all known users
   if (text.trim() === '/users') {
