@@ -109,15 +109,18 @@ function run() {
   const skipPermissions = dangerousIdx !== -1
   if (dangerousIdx !== -1) extraArgs.splice(dangerousIdx, 1)
 
+  // --continue is default; --fresh overrides to start a new session
+  const freshIdx = extraArgs.indexOf('--fresh')
+  const freshSession = freshIdx !== -1
+  if (freshIdx !== -1) extraArgs.splice(freshIdx, 1)
   const continueIdx = extraArgs.indexOf('--continue')
-  const continueSession = continueIdx !== -1
   if (continueIdx !== -1) extraArgs.splice(continueIdx, 1)
 
   const args = [
     '--mcp-config', mcpConfig,
     '--dangerously-load-development-channels', 'server:wechat',
     ...(skipPermissions ? ['--dangerously-skip-permissions'] : []),
-    ...(continueSession ? ['--continue'] : []),
+    ...(freshSession ? [] : ['--continue']),
     ...extraArgs,
   ]
 
@@ -131,10 +134,9 @@ function help() {
 
   命令:
     setup                微信扫码绑定（可多次运行添加多人）
-    run                  启动 Claude Code + WeChat channel
-    run --continue       恢复上次会话（保留聊天记录）
+    run                  启动 Claude Code + WeChat（默认恢复上次会话）
+    run --fresh          开始全新会话
     run --dangerously    跳过所有权限确认
-    run --dangerously --continue  两者兼得
     list                 列出已绑定账号
     logs                 打开日志监控页面 (默认端口 3456)
     logs <port>          指定端口
