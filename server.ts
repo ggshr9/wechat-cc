@@ -357,6 +357,26 @@ const userNames = loadUserNames()
 // Maps user_id → AccountEntry for routing replies to the correct bot
 const userAccountMap = new Map<string, AccountEntry>()
 
+// ── Typing ticket cache ────────────────────────────────────────────────────
+const typingTickets = new Map<string, { ticket: string, ts: number }>()
+const TYPING_TICKET_TTL = 60_000
+
+async function sendTypingIndicator(entry: AccountEntry, userId: string): Promise<void> {
+  try {
+    let cached = typingTickets.get(userId)
+    if (!cached || Date.now() - cached.ts > TYPING_TICKET_TTL) {
+      const config = await ilinkGetConfig(entry.account.baseUrl, entry.token, userId, contextTokens.get(userId))
+      if (config.typing_ticket) {
+        cached = { ticket: config.typing_ticket, ts: Date.now() }
+        typingTickets.set(userId, cached)
+      }
+    }
+    if (cached) {
+      await ilinkSendTyping(entry.account.baseUrl, entry.token, userId, cached.ticket)
+    }
+  } catch {} // fire-and-forget
+}
+
 // ── Gate ────────────────────────────────────────────────────────────────────
 
 type GateResult =
@@ -686,6 +706,9 @@ function handleInbound(msg: WeixinMessage, entry: AccountEntry): void {
     saveContextTokens(contextTokens)
   }
   userAccountMap.set(fromUserId, entry)
+
+  // Send typing indicator (fire-and-forget)
+  void sendTypingIndicator(entry, fromUserId)
 
   const displayName = userNames.get(fromUserId) ?? fromUserId
 
