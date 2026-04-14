@@ -13,29 +13,28 @@ allowed-tools:
 
 Check status and guide login. Arguments passed: `$ARGUMENTS`
 
+State lives under `~/.claude/channels/wechat/`, with one sub-directory per bound account at `accounts/<bot_id>/` containing `token` (bot bearer token, 0600) and `account.json` (`botId`, `userId`, `baseUrl`).
+
 ---
 
 ## Status check (no args)
 
 Read state files and show status:
 
-1. **Token** — check `~/.claude/channels/wechat/.env` for `WECHAT_BOT_TOKEN`. Show set/not-set; if set, show first 10 chars masked.
+1. **Accounts** — list `~/.claude/channels/wechat/accounts/`. For each `<bot_id>/` sub-directory:
+   - Check that both `token` and `account.json` exist
+   - Read `account.json` and show `botId`, `userId`, `baseUrl`
+   - If `token` exists, show its first 10 chars masked (e.g. `abcdef1234…`)
 
-2. **Account** — read `~/.claude/channels/wechat/account.json`. Show botId, baseUrl, userId if present.
-
-3. **Access** — read `~/.claude/channels/wechat/access.json` (missing = defaults: allowlist, empty). Show:
-   - DM policy
+2. **Access** — read `~/.claude/channels/wechat/access.json` (missing = defaults: `allowlist`, empty). Show:
+   - DM policy (`allowlist` or `disabled`)
    - Allowed senders: count and list
 
-4. **What next** based on state:
-   - No token → *"Restart Claude Code with the channel flag to trigger QR login: `claude --channels plugin:wechat@local`"*
-   - Token set, nobody allowed → *"Token is set but no users in allowlist. The scanner should be auto-added on login. If not, add manually: `/wechat:access allow <user_id>`"*
-   - Token set, someone allowed → *"Ready. Messages from allowed users will reach this session."*
+3. **What next** based on state:
+   - No accounts → *"No accounts bound yet. Run `wechat-cc setup` in a terminal to scan the QR code."*
+   - Accounts bound, nobody allowed → *"Accounts are bound but the allowlist is empty. The scanner is normally auto-added on login; if not, add manually: `/wechat:access allow <user_id>`"*
+   - Accounts bound, allowlist populated → *"Ready. Messages from allowed users will reach this session. Start with `wechat-cc run`."*
 
-## Re-login
+## Re-login / add another account
 
-If user wants to re-login or token is expired:
-
-1. Delete `~/.claude/channels/wechat/.env`
-2. Tell user to restart: `claude --channels plugin:wechat@local`
-3. The server will trigger QR login on next start.
+Tell the user to run `wechat-cc setup` in a terminal. Each successful scan creates a new `accounts/<bot_id>/` directory — running setup again does **not** overwrite existing accounts, it appends. To remove a stale account, delete its `accounts/<bot_id>/` directory.

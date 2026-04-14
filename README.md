@@ -67,7 +67,8 @@ wechat-cc run --fresh
 wechat-cc list
 
 # Open the live log viewer in your browser
-wechat-cc logs    # http://localhost:3456
+wechat-cc logs          # http://localhost:3456
+wechat-cc logs 4567     # override port
 ```
 
 Behind the scenes `run` invokes `claude --dangerously-load-development-channels server:wechat` (or equivalent) so the MCP server is loaded at startup.
@@ -131,6 +132,26 @@ None of this is committed — it's all under `~/.claude/`, outside the repo.
 - Channel currently resets message history on server restart (no SQLite persistence)
 - Session expiry / unauthorized sender flows silently drop messages today
 - `cdn.ilinkai.weixin.qq.com` base URL is hardcoded — may need to be derived from account in the future
+
+## Uninstall
+
+```bash
+# 1. Remove the Claude Code plugin symlink
+rm ~/.claude/plugins/local/wechat
+
+# 2. Remove the CLI symlink (if you added one)
+rm ~/.local/bin/wechat-cc
+
+# 3. Wipe all bound accounts, tokens, logs and inbox
+rm -rf ~/.claude/channels/wechat
+
+# 4. Drop the wechat entry from any project's .mcp.json
+#    (edit the file and delete the "wechat" key under mcpServers)
+```
+
+## Disclaimer
+
+Unofficial plugin. Not affiliated with, endorsed by, or sponsored by Tencent or WeChat. The ilink bot protocol is a third-party interface — automated WeChat access may violate the WeChat Terms of Service and can result in account suspension. Use at your own risk.
 
 ## License
 

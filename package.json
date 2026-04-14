@@ -1,6 +1,24 @@
 {
   "name": "claude-channel-wechat",
   "version": "0.0.1",
+  "description": "WeChat channel plugin for Claude Code — bridge WeChat messages in and out of your Claude Code session via the ilink bot API.",
+  "keywords": [
+    "claude-code",
+    "claude-code-plugin",
+    "mcp",
+    "wechat",
+    "ilink",
+    "channel"
+  ],
+  "homepage": "https://github.com/ggshr9/wechat-cc#readme",
+  "bugs": {
+    "url": "https://github.com/ggshr9/wechat-cc/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ggshr9/wechat-cc.git"
+  },
+  "author": "ggshr9",
   "license": "MIT",
   "type": "module",
   "bin": {
