@@ -1,6 +1,19 @@
-# wechat-cc
+<h1 align="center">wechat-cc</h1>
 
-A Claude Code channel plugin that bridges **WeChat** into your Claude Code session via the WeChat ilink bot API. Reply, edit, broadcast, and send files to your WeChat contacts from inside Claude Code, and let them message Claude directly.
+<p align="center">
+  <b>A WeChat channel plugin for Claude Code — bridge WeChat messages in and out of your Claude Code session via the ilink bot API.</b>
+</p>
+
+<p align="center">
+  <img alt="version"  src="https://img.shields.io/badge/version-0.1.0-blue">
+  <img alt="platform" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey">
+  <img alt="runtime"  src="https://img.shields.io/badge/runtime-Bun-black">
+  <img alt="license"  src="https://img.shields.io/badge/license-MIT-green">
+</p>
+
+<p align="center">
+  English | <a href="./README.zh.md">中文</a>
+</p>
 
 > Unofficial. Built on the ilink bot protocol (`https://ilinkai.weixin.qq.com`). Each QR scan binds one 1:1 bot — this is an ilink limitation; group chat is not supported.
 
