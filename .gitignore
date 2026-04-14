@@ -1,1 +1,26 @@
 node_modules/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Runtime state — all channel data lives under ~/.claude/channels/wechat/,
+# not in the repo. These patterns defend against accidental local copies
+# landing inside the source tree.
+accounts/
+*.log
+*.pid
+.env
+.env.*
+access.json
+context_tokens.json
+user_names.json
+inbox/
+*@im.wechat/
+
+# Build artifacts
+dist/
+build/
+*.tsbuildinfo
