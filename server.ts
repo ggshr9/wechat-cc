@@ -28,6 +28,7 @@ const STATE_DIR = process.env.WECHAT_STATE_DIR ?? join(homedir(), '.claude', 'ch
 const ACCESS_FILE = join(STATE_DIR, 'access.json')
 const ACCOUNTS_DIR = join(STATE_DIR, 'accounts')
 const LOG_FILE = join(STATE_DIR, 'channel.log')
+const RESTART_FLAG_PATH = join(STATE_DIR, '.restart-flag')
 
 // Ensure state dir exists once at load time
 mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
@@ -438,6 +439,36 @@ function assertAllowedChat(chat_id: string): void {
   if (!access.allowFrom.includes(chat_id)) {
     throw new Error(`chat ${chat_id} is not allowlisted — add via /wechat:access`)
   }
+}
+
+function isAdmin(userId: string): boolean {
+  const access = loadAccess()
+  const admins = (access as any).admins as string[] | undefined
+  if (admins?.length) return admins.includes(userId)
+  return access.allowFrom.includes(userId)
+}
+
+// Walk the process tree looking for a `claude` ancestor. Linux /proc only.
+// Used by /restart to SIGTERM the Claude Code parent so cli.ts's supervisor
+// loop can respawn it.
+function findClaudeAncestor(): number | null {
+  let pid = process.ppid
+  for (let hop = 0; hop < 10; hop++) {
+    if (pid <= 1) return null
+    try {
+      const cmdline = readFileSync(`/proc/${pid}/cmdline`, 'utf8')
+      const argv0 = cmdline.split('\0')[0] ?? ''
+      const base = argv0.split('/').pop() ?? ''
+      if (base === 'claude') return pid
+      // stat format: "pid (comm) state ppid ..." — ppid is the 2nd field after ')'
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+      const after = stat.substring(stat.lastIndexOf(')') + 1).trim().split(/\s+/)
+      pid = parseInt(after[1] ?? '0', 10)
+    } catch {
+      return null
+    }
+  }
+  return null
 }
 
 // ── Multi-account state ────────────────────────────────────────────────────
@@ -1145,6 +1176,66 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
 
   // ── WeChat-side commands (handled directly, not forwarded to Claude) ──
 
+  // /restart [flags] — respawn wechat-cc via cli.ts supervisor loop.
+  // Writes .restart-flag (content = raw extra args), ACKs, then SIGTERMs the
+  // claude ancestor so spawnSync in cli.ts returns + re-reads the flag.
+  if (text.startsWith('/restart')) {
+    if (!isAdmin(fromUserId)) {
+      log('CMD', `[${displayName}] /restart (denied: not admin)`)
+      ilinkSendMessage(entry.account.baseUrl, entry.token,
+        botTextMessage(fromUserId, '仅管理员可用 /restart', contextTokens.get(fromUserId)),
+      ).catch(() => {})
+      return
+    }
+    const rest = text.slice('/restart'.length).trim()
+    if (rest === '--help' || rest === '-h') {
+      const usage = [
+        '/restart              — 用当前 flags 重启（最常用）',
+        '/restart --dangerously — 重启并启用跳过权限模式',
+        '/restart --fresh      — 重启并开始全新会话',
+      ].join('\n')
+      ilinkSendMessage(entry.account.baseUrl, entry.token,
+        botTextMessage(fromUserId, usage, contextTokens.get(fromUserId)),
+      ).catch(() => {})
+      return
+    }
+
+    log('CMD', `[${displayName}] /restart ${rest}`)
+
+    // Sync-write flag before any tear-down so cli.ts sees it after spawnSync returns
+    try {
+      writeFileSync(RESTART_FLAG_PATH, rest, 'utf8')
+    } catch (err) {
+      ilinkSendMessage(entry.account.baseUrl, entry.token,
+        botTextMessage(fromUserId, `重启失败: 无法写 flag (${err})`, contextTokens.get(fromUserId)),
+      ).catch(() => {})
+      return
+    }
+
+    // Ack BEFORE we kill anything (need the MCP channel to still be alive)
+    const ackText = `正在重启…${rest ? `（${rest}）` : ''}约 5 秒后重连`
+    try {
+      await ilinkSendMessage(entry.account.baseUrl, entry.token,
+        botTextMessage(fromUserId, ackText, contextTokens.get(fromUserId)))
+    } catch (err) {
+      log('RESTART', `ack send failed: ${err}`)
+    }
+
+    const claudePid = findClaudeAncestor()
+    if (claudePid == null) {
+      log('RESTART', 'warning: could not find claude ancestor; self-exiting only')
+      setTimeout(() => process.exit(0), 500)
+      return
+    }
+    log('RESTART', `sending SIGTERM to claude pid ${claudePid} (requested by ${fromUserId})`)
+    try { process.kill(claudePid, 'SIGTERM') } catch (err) {
+      log('RESTART', `kill failed: ${err}`)
+    }
+    // Safety net: die ourselves within 3s even if SIGTERM hangs on claude
+    setTimeout(() => process.exit(0), 3000)
+    return
+  }
+
   // /ping — connectivity test
   if (text.trim() === '/ping') {
     ilinkSendMessage(entry.account.baseUrl, entry.token,
@@ -1161,6 +1252,7 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
       '/status  — 查看连接状态',
       '/ping    — 测试 bot 是否在线',
       '/users   — 查看在线用户',
+      '/restart — 重启 wechat-cc（仅管理员）',
       '@all 消息 — 群发给所有人',
       '@名字 消息 — 转发给指定人',
       '其他消息 — 发给 AI 助手',
