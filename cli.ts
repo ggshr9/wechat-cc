@@ -94,7 +94,10 @@ interface RunFlags {
 }
 
 function parseRunArgs(raw: string[]): RunFlags {
-  const extra = [...raw]
+  // Normalize em/en dashes back to `--` — WeChat/iOS keyboards autocorrect
+  // `--` into `—` (U+2014), and we don't want that to silently break flag
+  // parsing when the args come from a `.restart-flag` written by server.ts.
+  const extra = raw.map(a => a.replace(/^[—–]/, '--'))
   const take = (flag: string): boolean => {
     const idx = extra.indexOf(flag)
     if (idx === -1) return false

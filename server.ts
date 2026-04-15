@@ -1187,7 +1187,11 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
       ).catch(() => {})
       return
     }
-    const rest = text.slice('/restart'.length).trim()
+    // Normalize em/en dash back to `--`. iOS/WeChat keyboards autocorrect
+    // double hyphens into an em dash (U+2014), which silently breaks flag
+    // parsing downstream — `/restart —dangerously` typed from a phone would
+    // otherwise end up as an unknown token passed through to claude.
+    const rest = text.slice('/restart'.length).trim().replace(/[—–]/g, '--')
     if (rest === '--help' || rest === '-h') {
       const usage = [
         '/restart              — 用当前 flags 重启（最常用）',
