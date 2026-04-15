@@ -29,6 +29,10 @@ const ACCESS_FILE = join(STATE_DIR, 'access.json')
 const ACCOUNTS_DIR = join(STATE_DIR, 'accounts')
 const LOG_FILE = join(STATE_DIR, 'channel.log')
 const RESTART_FLAG_PATH = join(STATE_DIR, '.restart-flag')
+// Marker written by the old server right before SIGTERM, so the newly spawned
+// server can tell this boot came from /restart and greet the requester with
+// "已重连" once its poll loops are back up.
+const RESTART_ACK_PATH = join(STATE_DIR, '.restart-ack')
 
 // Ensure state dir exists once at load time
 mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
@@ -1248,6 +1252,20 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
       return
     }
 
+    // Drop a marker so the newly-spawned server knows to greet the requester
+    // with "已重连" once it's back up. Best-effort — if the write fails the
+    // restart still proceeds, we just skip the post-restart ack.
+    try {
+      writeFileSync(RESTART_ACK_PATH, JSON.stringify({
+        chat_id: fromUserId,
+        account_id: entry.id,
+        flags: rest,
+        requested_at: Date.now(),
+      }), { mode: 0o600 })
+    } catch (err) {
+      log('RESTART', `ack marker write failed: ${err}`)
+    }
+
     // Ack BEFORE we kill anything (need the MCP channel to still be alive)
     const ackText = `正在重启…${rest ? `（${rest}）` : ''}约 5 秒后重连`
     try {
@@ -1608,4 +1626,33 @@ if (accounts.length === 0) {
     userAccountMap.set(entry.account.userId, entry)
     void pollLoop(entry, abortController.signal)
   }
+
+  // Post-restart greeting: if the previous server dropped a .restart-ack
+  // marker before SIGTERM, let the requester know we're back. Fire-and-forget;
+  // don't block startup.
+  void (async () => {
+    let marker: { chat_id: string; account_id: string; flags: string; requested_at: number } | null = null
+    try {
+      const raw = readFileSync(RESTART_ACK_PATH, 'utf8')
+      marker = JSON.parse(raw)
+    } catch {
+      return  // no marker → this wasn't a /restart boot
+    }
+    try { rmSync(RESTART_ACK_PATH) } catch {}
+    if (!marker?.chat_id) return
+
+    const entry = accounts.find(a => a.id === marker!.account_id) ?? accounts[0]
+    if (!entry) return
+
+    const elapsedSec = Math.max(1, Math.round((Date.now() - marker.requested_at) / 1000))
+    const flagSuffix = marker.flags ? `（${marker.flags}）` : ''
+    const greeting = `已重连${flagSuffix}，用时约 ${elapsedSec}s`
+    try {
+      await ilinkSendMessage(entry.account.baseUrl, entry.token,
+        botTextMessage(marker.chat_id, greeting, contextTokens.get(marker.chat_id)))
+      log('RESTART', `post-restart greeting sent to ${marker.chat_id} via ${entry.id}`)
+    } catch (err) {
+      log('RESTART', `post-restart greeting failed: ${err}`)
+    }
+  })()
 }

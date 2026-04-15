@@ -35,6 +35,14 @@ Requirements:
 - [Bun](https://bun.sh) (tested with 1.1+)
 - [Claude Code CLI](https://github.com/anthropics/claude-code)
 
+Optional:
+
+- `expect(1)` — lets WeChat-triggered `/restart` auto-confirm Claude Code's
+  `--dangerously-load-development-channels` dialog so nobody has to sit at the
+  terminal and press Enter. Without it, `/restart` will relaunch `claude`
+  normally but the session will stall on the dialog until a human intervenes.
+  Install with `apt install expect` / `brew install expect`.
+
 Clone the repo and install deps:
 
 ```bash

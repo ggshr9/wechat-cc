@@ -35,6 +35,13 @@
 - [Bun](https://bun.sh)（测试于 1.1+）
 - [Claude Code CLI](https://github.com/anthropics/claude-code)
 
+可选依赖：
+
+- `expect(1)` —— 让微信端触发的 `/restart` 自动确认 Claude Code 的
+  `--dangerously-load-development-channels` 对话框，不用你守在终端按回车。
+  没装也能跑，但 `/restart` 重启后 claude 会卡在对话框等人按回车。
+  安装：`apt install expect` / `brew install expect`。
+
 ```bash
 git clone https://github.com/ggshr9/wechat-cc.git
 cd wechat-cc
