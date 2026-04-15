@@ -120,10 +120,24 @@ wechat-cc logs 4567     # 指定端口
 | `@all 消息`               | 广播给所有已连接用户                                |
 | `@名字 消息`              | 转发给指定用户（名字来自 `set_user_name`）          |
 
-**`/restart` 原理：** `wechat-cc run` 现在跑的是一个 supervisor loop。管理员在
-微信发 `/restart`（可选带 flag）后，server 写入 flag 文件，向 `claude` 祖先发
-SIGTERM，CLI 包装器用新的 flag 重开 claude。除非带了 `--fresh`，Claude 会话会
-通过 `--continue` 恢复。
+**`/restart` 原理：** `wechat-cc run` 跑的是一个 supervisor loop。管理员在
+微信发 `/restart`（可选带 flag）后，server 依次：
+
+1. 写入 `.restart-flag`（裸 flag 字符串），让 `cli.ts` 知道要怎么重开
+2. 写入 `.restart-ack`，内容 `{chat_id, account_id, flags, requested_at}`，
+   让**下一次**启动的 server 知道该去通知谁"已重连"
+3. 通过原来的 bot 发送"正在重启…约 5 秒后重连"
+4. 向 `claude` 祖先发 SIGTERM
+
+CLI supervisor 捕获 claude 退出 → 重新读 `.restart-flag` → 走 `expect(1)`
+包装再次启动 claude；expect 用三个 `after` 定时器（800ms / 2000ms / 4000ms）
+盲送回车，自动过 `--dangerously-load-development-channels` 的确认对话框，
+无需人守在终端。没装 expect 也能跑，只是会卡在对话框等人按回车
+（`wechat-cc run` 启动时会打印一行软提醒）。
+
+新 server 的 pollLoop 起来之后，读 `.restart-ack`、定位到当初收到 `/restart`
+的那个账号 entry，发"已重连（flags）用时约 Ns"回给请求人，然后删除标记。
+Claude 会话本体除非带 `--fresh`，否则通过 `--continue` 恢复上下文。
 
 ## 运行时目录
 
@@ -134,6 +148,8 @@ SIGTERM，CLI 包装器用新的 flag 重开 claude。除非带了 `--fresh`，C
 ├── user_names.json        # chat_id → 显示名
 ├── channel.log            # 滚动日志
 ├── server.pid             # 单实例锁
+├── .restart-flag          # 临时：/restart 时传给 cli.ts 的裸 flag
+├── .restart-ack           # 临时：下一次启动发"已重连"的标记
 ├── inbox/                 # 下载的媒体文件
 └── accounts/
     └── <bot_id>/

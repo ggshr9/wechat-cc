@@ -124,10 +124,27 @@ Access mutations **must only come from requests typed in the terminal**. The `ac
 | `@名字 msg`             | Forward to a specific user (name from `set_user_name`)          |
 
 **How `/restart` works:** `wechat-cc run` runs a supervisor loop. When an
-admin sends `/restart` (optionally with flags), the server writes a flag
-file, SIGTERMs the `claude` ancestor, and the CLI wrapper respawns claude
-with the requested flags. The Claude session resumes via `--continue`
-unless `--fresh` is passed.
+admin sends `/restart` (optionally with flags), the server:
+
+1. Writes `.restart-flag` (raw flag string) so `cli.ts` knows how to respawn.
+2. Writes `.restart-ack` with `{chat_id, account_id, flags, requested_at}`
+   so the *next* server boot knows to greet the requester.
+3. Sends "正在重启…约 5 秒后重连" through the same bot.
+4. SIGTERMs the `claude` ancestor.
+
+The CLI supervisor catches `claude`'s exit, re-reads `.restart-flag`, and
+respawns. On the relaunch path, `claude` is wrapped in `expect(1)` which
+sprays `\r` via three `after` timers (800ms / 2000ms / 4000ms) to
+auto-confirm the `--dangerously-load-development-channels` dialog — no
+human needs to be at the terminal. If `expect` is not installed the
+respawn still works but will stall on that dialog until someone presses
+Enter (a soft warning is printed at `wechat-cc run` startup).
+
+Once the new server's poll loops are up, it reads `.restart-ack`, finds
+the account that originally handled the `/restart`, and sends
+"已重连（flags）用时约 Ns" back to the requester, then deletes the
+marker. The Claude session itself resumes via `--continue` unless
+`--fresh` was passed.
 
 ## State layout
 
@@ -138,6 +155,8 @@ unless `--fresh` is passed.
 ├── user_names.json        # chat_id → display name
 ├── channel.log            # rolling log
 ├── server.pid             # single-instance lock
+├── .restart-flag          # transient: raw flags for cli.ts on /restart
+├── .restart-ack           # transient: next-boot greeting marker
 ├── inbox/                 # downloaded media
 └── accounts/
     └── <bot_id>/
