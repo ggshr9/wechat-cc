@@ -20,8 +20,9 @@
 ## Features
 
 - QR-code login, multi-account (each scanner = one independent bot, one `accounts/<bot_id>/` dir)
-- MCP server exposing channel tools: `reply`, `edit_message`, `broadcast`, `send_file`, `set_user_name`, `share_doc`
-- `share_doc` publishes long markdown (plans, specs, review docs) to a public cloudflared quick-tunnel URL so the WeChat user can tap and read rendered content on their phone — no GitHub account, no hosting, no config
+- MCP server exposing channel tools: `reply`, `edit_message`, `broadcast`, `send_file`, `set_user_name`, `share_page`, `resurface_page`
+- `share_page` publishes long markdown (plans, specs, review docs) to a public cloudflared quick-tunnel URL so the WeChat user can tap and read rendered content on their phone. Rendered pages include an approve/reject form so you can forward the URL to non-Claude stakeholders (e.g. a supervisor) for sign-off — decisions arrive back as MCP notifications
+- `resurface_page` re-opens a previously shared document on the current tunnel when its original URL has died (tunnel URLs are per-run)
 - Text, image, file and video delivery (CDN upload/download + AES-128-ECB encryption)
 - Inbox directory for incoming media (paths surfaced in message metadata)
 - Allowlist-based access control (persisted to `~/.claude/channels/wechat/access.json`)
@@ -43,7 +44,7 @@ Optional:
   terminal and press Enter. Without it, `/restart` will relaunch `claude`
   normally but the session will stall on the dialog until a human intervenes.
   Install with `apt install expect` / `brew install expect`.
-- `cloudflared` — used by the `share_doc` tool to expose rendered markdown
+- `cloudflared` — used by the `share_page` tool to expose rendered markdown
   pages through a public quick tunnel (`*.trycloudflare.com`). **You don't
   need to install this yourself** — wechat-cc auto-downloads the matching
   static binary into `~/.claude/channels/wechat/bin/cloudflared` on first
@@ -154,20 +155,21 @@ the account that originally handled the `/restart`, and sends
 marker. The Claude session itself resumes via `--continue` unless
 `--fresh` was passed.
 
-## Sharing long docs (`share_doc`)
+## Sharing long docs (`share_page` / `resurface_page`)
 
 WeChat text messages can't render markdown — code blocks, tables, and
 nested lists collapse into a wall of text that's unusable on a phone.
-The `share_doc` MCP tool solves this by publishing a markdown document
+The `share_page` MCP tool solves this by publishing a markdown document
 to a short-lived URL that renders properly in the user's phone browser.
 
 **How it works:**
 
-1. Claude calls `share_doc({ title, content, chat_id? })`.
+1. Claude calls `share_page({ title, content, chat_id? })`.
 2. The content is written to `~/.claude/channels/wechat/docs/<slug>.md`.
 3. wechat-cc spawns a local `Bun.serve` on an ephemeral port that
    renders `/docs/<slug>` via `marked` with a clean desktop+mobile
-   stylesheet.
+   stylesheet plus an **approve / reject form** at the bottom of every
+   page.
 4. On the first call, `cloudflared` is started as a subprocess with
    `tunnel --url http://localhost:<port>` — no Cloudflare account or
    domain needed. wechat-cc parses the assigned
@@ -175,29 +177,57 @@ to a short-lived URL that renders properly in the user's phone browser.
    for the session. If `cloudflared` isn't on `PATH`, wechat-cc
    auto-downloads the matching static binary to
    `~/.claude/channels/wechat/bin/cloudflared` (30 MB, one-time).
-5. `share_doc` returns `https://<tunnel>.trycloudflare.com/docs/<slug>`.
-   If `chat_id` is provided, it auto-sends a WeChat message containing
-   the title, a short preview, and the URL — one tool call covers
-   publish + notify.
+5. `share_page` returns `https://<tunnel>.trycloudflare.com/docs/<slug>`.
+   If `chat_id` is provided it auto-sends a WeChat message with
+   title + preview + URL. If omitted, defaults to the first admin
+   from `access.json` so "share this with me" from a terminal context
+   just works.
 
-**Claude uses it for:** plans, specs, design proposals, long review
-documents, anything multi-paragraph with structured content (code,
-tables, lists). The system prompt (see `server.ts` instructions block)
-tells Claude when to pick `share_doc` over plain `reply`.
+**Approve / reject:** The embedded form is aimed at stakeholders
+*outside* the Claude session. Workflow: Claude generates a plan,
+shares it, you forward the URL to your supervisor via WeChat/email/
+whatever. The supervisor taps the URL, reads the plan, optionally types
+a comment, and clicks Approve or Reject. The click POSTs back through
+the same tunnel to wechat-cc's local server, which writes a per-slug
+`.decision.json` and fires an MCP notification so Claude sees the
+review result as inbound channel feedback (tagged
+`share_page:<slug>`). The page then shows a persistent
+"Approved ✓" / "Rejected ✗" banner on subsequent visits. No
+authentication beyond the random URL — adequate for personal /
+small-team sign-off, not for access-controlled workflows.
+
+**`share_page` is a publishing step, not an approval gate.** It doesn't
+block Claude's execution. If you need an explicit y/n gate, that still
+goes through the normal permission-request flow (🔐 prompts in WeChat).
+The two mechanisms are deliberately separate.
+
+**Resurface:** cloudflared quick-tunnel URLs only live for one
+wechat-cc run. When you reference a plan from yesterday whose URL no
+longer resolves, ask Claude to reopen it — Claude calls
+`resurface_page({ slug? , title_fragment? })` and gets a fresh working
+URL on the current tunnel for the same underlying `.md` file.
+
+**Retention:** shared `.md` files (and their `.decision.json` siblings)
+are auto-deleted after 7 days. If you need to archive a plan
+long-term, copy it somewhere else yourself — wechat-cc is a transport,
+not an archive store.
 
 **Caveats:**
 
 - The URL is publicly reachable by anyone who gets it. Do **not** put
-  secrets (credentials, API keys, internal strategy) in a shared doc.
+  secrets (credentials, API keys, internal strategy) in a shared page.
   The slug is random enough (4-word subdomain + timestamp suffix) to
   resist brute force but is not an authorization control.
+- Anyone with the URL can also submit approve/reject — that's by
+  design (external-reviewer use case) but means the URL itself is
+  your trust boundary. Treat it as a bearer credential.
 - URLs are ephemeral: when `wechat-cc run` exits, cloudflared dies and
-  the URL stops resolving. The underlying `.md` file stays on disk, so
-  Claude can re-share it on the next run and get a new URL.
+  the URL stops resolving. Use `resurface_page` to re-expose old pages
+  on a new tunnel.
 - Cloudflare's quick tunnels are officially labeled non-production —
   fine for personal/small-team use, not suitable for high traffic.
 - Content does transit through Cloudflare's edge. If that's a problem
-  you can either (a) only use `share_doc` for non-sensitive content,
+  you can either (a) only use `share_page` for non-sensitive content,
   which is the intended model, or (b) opt out by removing the tool
   from `server.ts`.
 
@@ -212,9 +242,9 @@ tells Claude when to pick `share_doc` over plain `reply`.
 ├── server.pid             # single-instance lock
 ├── .restart-flag          # transient: raw flags for cli.ts on /restart
 ├── .restart-ack           # transient: next-boot greeting marker
-├── docs/                  # share_doc markdown bodies (<slug>.md)
+├── docs/                  # share_page .md bodies + .decision.json siblings (7-day TTL)
 ├── bin/
-│   └── cloudflared        # auto-downloaded on first share_doc call
+│   └── cloudflared        # auto-downloaded on first share_page call
 ├── inbox/                 # downloaded media
 └── accounts/
     └── <bot_id>/
