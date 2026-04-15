@@ -286,7 +286,7 @@ async function saveToInbox(buf: Buffer, filename: string, userId?: string): Prom
 
 const UPLOAD_MEDIA_TYPE = { IMAGE: 1, VIDEO: 2, FILE: 3 } as const
 
-async function uploadToCdn(params: {
+async function uploadToCdnOnce(params: {
   filePath: string; toUserId: string; baseUrl: string; token: string; mediaType: number
 }): Promise<{ downloadParam: string; aeskey: string; fileSize: number; fileSizeCiphertext: number }> {
   const plaintext = Buffer.from(await Bun.file(params.filePath).arrayBuffer())
@@ -309,6 +309,11 @@ async function uploadToCdn(params: {
   if (!uploadUrl) throw new Error('getuploadurl returned no upload URL')
 
   const ciphertext = encryptAesEcb(plaintext, aeskey)
+  // NOTE: do NOT attach AbortSignal to this fetch. Bun appears to switch
+  // the body encoding path when a signal is present, which the ilink CDN
+  // stores in a form the WeChat client can't decrypt. getuploadurl above
+  // already has API_TIMEOUT_MS (30s) via ilinkPost, and the retry wrapper
+  // below bounds total wall time, so a signal here is redundant anyway.
   const cdnRes = await fetch(uploadUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/octet-stream' },
@@ -320,6 +325,30 @@ async function uploadToCdn(params: {
   if (!downloadParam) throw new Error('CDN response missing x-encrypted-param header')
 
   return { downloadParam, aeskey: aeskey.toString('hex'), fileSize: rawsize, fileSizeCiphertext: filesize }
+}
+
+// 对齐 ilinkSendMessage 的重试策略：AbortError（getuploadurl 超时）或
+// ilink/CDN 5xx 视为瞬时失败，最多 3 次，线性退避。ilink CDN 偶发 500，
+// 不重试会导致一次 flaky 就彻底发不出图。
+async function uploadToCdn(params: {
+  filePath: string; toUserId: string; baseUrl: string; token: string; mediaType: number
+}): Promise<{ downloadParam: string; aeskey: string; fileSize: number; fileSizeCiphertext: number }> {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await uploadToCdnOnce(params)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      const name = err instanceof Error ? err.name : ''
+      const isRetryable = name === 'AbortError'
+        || /CDN upload 5\d\d/.test(msg)
+        || /^ilink.*5\d\d/.test(msg)
+        || /operation was aborted/i.test(msg)
+      if (!isRetryable || attempt === 3) throw err
+      log('RETRY', `uploadToCdn attempt ${attempt} failed, retrying in ${attempt}s: ${msg}`)
+      await new Promise(r => setTimeout(r, attempt * 1000))
+    }
+  }
+  throw new Error('uploadToCdn: exhausted retries') // unreachable
 }
 
 // ── Access control ─────────────────────────────────────────────────────────
