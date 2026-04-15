@@ -691,6 +691,12 @@ const mcp = new Server(
       '',
       'Messages from known users are prefixed with [名字]. Messages from new users are prefixed with [新用户]. When you see [新用户], immediately reply asking "你好！我该怎么称呼你？" Once they answer, call the set_user_name tool with their chat_id and name. After that, their messages will show their name.',
       '',
+      '## Missing or unrecognized content',
+      '',
+      'If an inbound message contains tags like `[语音 · 未转文字]`, `[语音 · 空内容]`, `[语音 · 下载失败]`, `[未知消息类型 ...]`, or `[图片下载失败]` — the user sent something you literally cannot read. **Do not guess the content from surrounding context.** Immediately reply asking them to type it out or resend (e.g. `语音我这里没拿到内容，你打字重发一下或者再录一次好吗？`). Guessing even when the context makes it "obvious" is wrong — a wrong guess acted on is worse than a missed turn. An explicit re-ask costs one round trip and costs you nothing.',
+      '',
+      'Bare `[语音 <transcription>]` with actual text is fine — act on the transcription normally.',
+      '',
       '## Handling Messages While Busy',
       '',
       'When a WeChat message arrives and you are currently executing a long task (multi-step tool calls, code refactoring, etc.):',
@@ -1390,8 +1396,34 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
     }
     if (item.type === 1 && item.text_item?.text) {
       textParts.push(item.text_item.text)
-    } else if (item.type === 3 && item.voice_item?.text) {
-      textParts.push(`[语音] ${item.voice_item.text}`)
+    } else if (item.type === 3) {
+      // Voice item — dump the full shape to the log unconditionally so we
+      // can see what ilink actually returned (transcription field may not
+      // always be text; could be nested, absent, or use a different key).
+      // Once STT is wired up this verbose dump can drop back to "only on
+      // unknown shape", but for now always log.
+      try {
+        log('VOICE_RAW', JSON.stringify(item.voice_item ?? {}))
+      } catch {}
+
+      if (item.voice_item?.text) {
+        textParts.push(`[语音] ${item.voice_item.text}`)
+      } else if (item.voice_item?.media) {
+        // No transcription from ilink — at least save the audio so we can
+        // feed it to whisper later, and tell Claude explicitly that the
+        // voice content is missing so it doesn't guess.
+        try {
+          const buf = await downloadCdnMedia(item.voice_item.media)
+          const path = await saveToInbox(buf, 'voice.amr', fromUserId)
+          mediaPaths.push(path)
+          textParts.push(`[语音文件: ${path} · 未转文字，请让用户打字或重发]`)
+        } catch (err) {
+          log('ERROR', `voice download failed: ${err}`)
+          textParts.push('[语音 · 下载失败，请让用户打字]')
+        }
+      } else {
+        textParts.push('[语音 · 空内容，请让用户打字]')
+      }
     } else if (item.type === 2 && item.image_item?.media) {
       try {
         const buf = await downloadCdnMedia(item.image_item.media, item.image_item.aeskey)
@@ -1422,6 +1454,16 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
       } catch (err) {
         log('ERROR', `video download failed: ${err}`)
         textParts.push('[视频下载失败]')
+      }
+    } else {
+      // Catch-all for item types we don't recognize yet. Log the whole
+      // item so we can extend the type switch later when ilink adds new
+      // shapes. Do not guess — surface the gap to Claude explicitly.
+      try {
+        log('UNKNOWN_ITEM', JSON.stringify({ type: item.type, keys: Object.keys(item) }))
+      } catch {}
+      if (item.type !== undefined) {
+        textParts.push(`[未知消息类型 type=${item.type} · 请让用户重发为文本]`)
       }
     }
   }
