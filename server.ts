@@ -46,7 +46,35 @@ import {
 mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
 const START_TIME = Date.now()
 
+// ── channel.log rotation ──────────────────────────────────────────────────
+// Naive single-file rotation: if channel.log grows past 10MB, rename it
+// to channel.log.1 (overwriting any previous backup) and start fresh.
+// Checked at startup and again every LOG_ROTATE_CHECK_INTERVAL log calls
+// so we don't stat the file on every single log line.
+const LOG_ROTATE_SIZE = 10 * 1024 * 1024 // 10 MB
+const LOG_ROTATE_CHECK_INTERVAL = 100
+let _logCallsSinceCheck = 0
+
+function maybeRotateLog(): void {
+  try {
+    const st = statSync(LOG_FILE)
+    if (st.size > LOG_ROTATE_SIZE) {
+      try {
+        renameSync(LOG_FILE, `${LOG_FILE}.1`)
+      } catch {}
+    }
+  } catch {
+    // No log file yet, nothing to rotate
+  }
+}
+
+maybeRotateLog()
+
 function log(tag: string, msg: string): void {
+  if (++_logCallsSinceCheck >= LOG_ROTATE_CHECK_INTERVAL) {
+    _logCallsSinceCheck = 0
+    maybeRotateLog()
+  }
   const line = `${new Date().toISOString()} [${tag}] ${msg}\n`
   process.stderr.write(`wechat channel: ${line}`)
   try { appendFileSync(LOG_FILE, line) } catch {}
@@ -242,6 +270,46 @@ async function ilinkGetConfig(baseUrl: string, token: string, userId: string, co
 const CDN_BASE_URL = 'https://cdn.ilinkai.weixin.qq.com'
 const INBOX_DIR = join(STATE_DIR, 'inbox')
 
+// Inbox retention: media downloaded from WeChat accumulates indefinitely
+// otherwise. 30 days is long enough for practical reference-back scenarios
+// but short enough that old screenshots / audio files don't balloon disk.
+const INBOX_TTL_MS = 30 * 24 * 60 * 60 * 1000
+
+function cleanupOldInbox(): number {
+  let removed = 0
+  let chats: string[]
+  try {
+    chats = readdirSync(INBOX_DIR)
+  } catch {
+    return 0
+  }
+  const now = Date.now()
+  for (const chat of chats) {
+    const dir = join(INBOX_DIR, chat)
+    let files: string[]
+    try { files = readdirSync(dir) }
+    catch { continue }
+    for (const name of files) {
+      const full = join(dir, name)
+      try {
+        const st = statSync(full)
+        if (st.isFile() && now - st.mtimeMs > INBOX_TTL_MS) {
+          rmSync(full, { force: true })
+          removed++
+        }
+      } catch (err) {
+        process.stderr.write(`wechat channel: inbox cleanup failed for ${name}: ${err}\n`)
+      }
+    }
+  }
+  if (removed > 0) {
+    process.stderr.write(`wechat channel: cleaned up ${removed} inbox file(s) older than 30 days\n`)
+  }
+  return removed
+}
+
+cleanupOldInbox()
+
 function parseAesKey(aesKeyBase64: string): Buffer {
   const decoded = Buffer.from(aesKeyBase64, 'base64')
   if (decoded.length === 16) return decoded
@@ -295,6 +363,50 @@ async function saveToInbox(buf: Buffer, filename: string, userId?: string): Prom
   const filePath = join(dir, safeName)
   writeFileSync(filePath, buf)
   return filePath
+}
+
+// File preview for small text-ish inbound files so Claude can see what it's
+// dealing with without a "should I read this?" round-trip with the user.
+// Binary or oversized files get just the path + metadata line.
+const PREVIEW_MAX_BYTES = 10 * 1024
+const PREVIEW_MAX_LINES = 5
+const TEXT_PREVIEW_EXTS = new Set([
+  '.csv', '.tsv', '.md', '.txt', '.json', '.yml', '.yaml',
+  '.toml', '.ini', '.xml', '.html', '.log',
+  '.ts', '.js', '.py', '.sh', '.rb', '.go', '.rs',
+])
+
+function buildInboundFilePreview(path: string, fileName: string, buf: Buffer): string {
+  const sizeKb = (buf.length / 1024).toFixed(1)
+  const base = `[文件已下载: ${path}] (${fileName}, ${sizeKb}KB)`
+
+  const extMatch = fileName.match(/(\.[^./\\]+)$/)
+  const ext = (extMatch?.[1] ?? '').toLowerCase()
+  if (buf.length > PREVIEW_MAX_BYTES || !TEXT_PREVIEW_EXTS.has(ext)) {
+    return base
+  }
+
+  let text: string
+  try { text = buf.toString('utf8') }
+  catch { return base }
+
+  // Guard against binary files with a text-ish extension that still decode
+  // to garbage — if the preview is more than ~10% control characters,
+  // treat it as non-previewable.
+  const ctrlCount = (text.match(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g) ?? []).length
+  if (ctrlCount / Math.max(text.length, 1) > 0.1) {
+    return base
+  }
+
+  const allLines = text.split('\n')
+  const shown = allLines.slice(0, PREVIEW_MAX_LINES)
+  // Drop trailing empty line if the file ended with \n
+  while (shown.length > 0 && shown[shown.length - 1] === '') shown.pop()
+  const preview = shown.join('\n')
+  const moreLines = allLines.length > shown.length
+    ? ` (共 ${allLines.length} 行)`
+    : ''
+  return `${base}${moreLines}\n--- 前 ${shown.length} 行预览 ---\n${preview}\n---`
 }
 
 const UPLOAD_MEDIA_TYPE = { IMAGE: 1, VIDEO: 2, FILE: 3 } as const
@@ -1281,18 +1393,29 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
 
       case 'broadcast': {
         const text = args.text as string
-        const targets = [...userAccountMap.entries()]
-        if (targets.length === 0) {
-          return { content: [{ type: 'text', text: 'no active users to broadcast to' }], isError: true }
+        // Use contextTokens (loaded from disk) as the truth source for
+        // reachable users — userAccountMap is in-memory only and is empty
+        // after every restart until the first inbound arrives, which would
+        // make broadcast silently empty for minutes to hours after /restart.
+        // For each user, route through userAccountMap.get() if populated,
+        // otherwise fall back to _startupAccounts[0] like the permission
+        // handler already does.
+        const userIds = [...contextTokens.keys()]
+        if (userIds.length === 0) {
+          return { content: [{ type: 'text', text: 'no users to broadcast to (no context_tokens persisted)' }], isError: true }
         }
 
         let sent = 0
-        const skipped: string[] = []
         const errors: string[] = []
-        for (const [userId, entry] of targets) {
-          const ct = contextTokens.get(userId)
-          if (!ct) {
-            skipped.push(userId)
+        const noAccount: string[] = []
+        for (const userId of userIds) {
+          const ct = contextTokens.get(userId)!
+          const entry =
+            userAccountMap.get(userId)
+            ?? _startupAccounts.find(a => a.account.userId === userId)
+            ?? _startupAccounts[0]
+          if (!entry) {
+            noAccount.push(userId)
             continue
           }
           try {
@@ -1307,8 +1430,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           }
         }
 
-        const parts = [`broadcast: ${sent} sent`]
-        if (skipped.length > 0) parts.push(`${skipped.length} skipped (no context_token — they need to send a message first)`)
+        const parts = [`broadcast: ${sent}/${userIds.length} sent`]
+        if (noAccount.length > 0) parts.push(`${noAccount.length} skipped (no account entry)`)
         if (errors.length > 0) parts.push(`${errors.length} failed: ${errors.join(', ')}`)
         return { content: [{ type: 'text', text: parts.join(', ') }] }
       }
@@ -1440,7 +1563,7 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
         const buf = await downloadCdnMedia(item.file_item.media)
         const path = await saveToInbox(buf, fileName, fromUserId)
         mediaPaths.push(path)
-        textParts.push(`[文件已下载: ${path}] (${fileName})`)
+        textParts.push(buildInboundFilePreview(path, fileName, buf))
       } catch (err) {
         log('ERROR', `file download failed: ${err}`)
         textParts.push('[文件下载失败]')
