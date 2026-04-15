@@ -18,7 +18,7 @@ import { z } from 'zod'
 import { randomBytes, createDecipheriv, createCipheriv, createHash } from 'crypto'
 import {
   readFileSync, writeFileSync, mkdirSync, appendFileSync,
-  renameSync, chmodSync, readdirSync, existsSync, rmSync,
+  renameSync, chmodSync, readdirSync, existsSync, rmSync, statSync,
 } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
@@ -285,6 +285,43 @@ async function saveToInbox(buf: Buffer, filename: string, userId?: string): Prom
 }
 
 const UPLOAD_MEDIA_TYPE = { IMAGE: 1, VIDEO: 2, FILE: 3 } as const
+const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024 // ilink hard cap is higher; 50MB is safe + avoids slow uploads
+
+const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'])
+const VIDEO_EXTS = new Set(['mp4', 'mov', 'avi', 'webm'])
+
+function assertSendable(filePath: string): void {
+  let st: ReturnType<typeof statSync>
+  try { st = statSync(filePath) } catch { throw new Error(`file not found: ${filePath}`) }
+  if (!st.isFile()) throw new Error(`not a regular file: ${filePath}`)
+  if (st.size > MAX_ATTACHMENT_BYTES) {
+    throw new Error(`file too large: ${filePath} (${(st.size / 1024 / 1024).toFixed(1)}MB, max 50MB)`)
+  }
+}
+
+/** Upload a file to CDN + build the MessageItem ready for item_list. */
+async function buildMediaItemFromFile(
+  filePath: string, chat_id: string, baseUrl: string, token: string,
+): Promise<MessageItem> {
+  const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
+  const mediaType = IMAGE_EXTS.has(ext) ? UPLOAD_MEDIA_TYPE.IMAGE
+    : VIDEO_EXTS.has(ext) ? UPLOAD_MEDIA_TYPE.VIDEO
+    : UPLOAD_MEDIA_TYPE.FILE
+
+  const uploaded = await uploadToCdn({ filePath, toUserId: chat_id, baseUrl, token, mediaType })
+  // See cc8f282: aes_key must be base64 of the 32-char hex string, not raw 16 bytes.
+  const aesKeyBase64 = Buffer.from(uploaded.aeskey).toString('base64')
+  const mediaRef: CDNMedia = { encrypt_query_param: uploaded.downloadParam, aes_key: aesKeyBase64, encrypt_type: 1 }
+
+  if (mediaType === UPLOAD_MEDIA_TYPE.IMAGE) {
+    return { type: 2, image_item: { media: mediaRef, mid_size: uploaded.fileSizeCiphertext } }
+  }
+  if (mediaType === UPLOAD_MEDIA_TYPE.VIDEO) {
+    return { type: 5, video_item: { media: mediaRef, video_size: uploaded.fileSizeCiphertext } }
+  }
+  const fileName = filePath.split('/').pop() ?? 'file'
+  return { type: 4, file_item: { media: mediaRef, file_name: fileName, len: String(uploaded.fileSize) } }
+}
 
 async function uploadToCdnOnce(params: {
   filePath: string; toUserId: string; baseUrl: string; token: string; mediaType: number
@@ -678,14 +715,23 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'reply',
       description:
-        'Reply on WeChat. Pass chat_id from the inbound message. Text is split into chunks if it exceeds 4000 chars.',
+        'Reply on WeChat. Pass chat_id from the inbound message. Text is split into chunks at paragraph boundaries if it exceeds 4000 chars. Attach files via `files` (absolute paths); images (jpg/png/gif/webp) send as photos, videos as videos, anything else as a file. Use `reply_to` (message_id from an inbound <channel>) to quote-reply a specific earlier message (experimental — renders as quoted reply on supported clients).',
       inputSchema: {
         type: 'object',
         properties: {
           chat_id: { type: 'string', description: 'from_user_id from the inbound <channel> block' },
-          text: { type: 'string' },
+          text: { type: 'string', description: 'Message text. May be empty when only sending files.' },
+          reply_to: {
+            type: 'string',
+            description: 'Optional. message_id from an inbound <channel> block to quote-reply. Leave unset for normal replies.',
+          },
+          files: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Optional. Absolute file paths to attach (max 50MB each). Sent after the text as separate messages.',
+          },
         },
-        required: ['chat_id', 'text'],
+        required: ['chat_id'],
       },
     },
     {
@@ -763,18 +809,72 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
     switch (req.params.name) {
       case 'reply': {
         const chat_id = args.chat_id as string
-        const text = args.text as string
+        const text = (args.text as string | undefined) ?? ''
+        const reply_to = args.reply_to as string | undefined
+        const files = (args.files as string[] | undefined) ?? []
         assertAllowedChat(chat_id)
         const { baseUrl, token } = resolveAccountForUser(chat_id)
-        log('OUTBOUND', `→ [${userNames.get(chat_id) ?? chat_id}] ${text.slice(0, 100)}${text.length > 100 ? '...' : ''}`)
 
-        const chunks = chunk(text, MAX_TEXT_CHUNK)
+        if (!text && files.length === 0) {
+          return { content: [{ type: 'text', text: 'reply: nothing to send (text empty and no files)' }], isError: true }
+        }
+
+        // Validate all files up-front so we don't partially send then fail.
+        for (const f of files) assertSendable(f)
+
+        const ctxToken = contextTokens.get(chat_id)
+        // ref_msg on outbound is experimental — ilink protocol supports the field
+        // but none of the reference impls we found populate it on send. We attach
+        // to the first outbound MessageItem (first text chunk if text, else first
+        // file). If the receiving client ignores it, the message still delivers
+        // as plain content — no fallback needed.
+        const buildRefMsg = (): MessageItem['ref_msg'] | undefined =>
+          reply_to ? { message_item: { msg_id: reply_to } } : undefined
+
+        const shortPreview = text
+          ? `${text.slice(0, 80)}${text.length > 80 ? '...' : ''}`
+          : `(${files.length} file${files.length === 1 ? '' : 's'})`
+        log('OUTBOUND', `→ [${userNames.get(chat_id) ?? chat_id}]${reply_to ? ' ↩' : ''} ${shortPreview}`)
+
         let sentCount = 0
-        for (const part of chunks) {
-          await ilinkSendMessage(baseUrl, token,
-            botTextMessage(chat_id, part, contextTokens.get(chat_id)))
-          // Cache with local timestamp for quote resolution (fuzzy matched via lookupCache)
-          cacheMsg(Math.floor(Date.now() / 1000) * 1000, part)
+        let attachedRef = false
+
+        // 1) Text chunks
+        if (text) {
+          const chunks = chunk(text, MAX_TEXT_CHUNK)
+          for (let i = 0; i < chunks.length; i++) {
+            const part = chunks[i]
+            const textItem: MessageItem = { type: 1, text_item: { text: part } }
+            if (i === 0 && !attachedRef && reply_to) {
+              textItem.ref_msg = buildRefMsg()
+              attachedRef = true
+            }
+            await ilinkSendMessage(baseUrl, token, {
+              to_user_id: chat_id,
+              message_type: 2,
+              message_state: 2,
+              item_list: [textItem],
+              context_token: ctxToken,
+            })
+            cacheMsg(Math.floor(Date.now() / 1000) * 1000, part)
+            sentCount++
+          }
+        }
+
+        // 2) Files (each as its own item_list message)
+        for (const filePath of files) {
+          const mediaItem = await buildMediaItemFromFile(filePath, chat_id, baseUrl, token)
+          if (!attachedRef && reply_to) {
+            mediaItem.ref_msg = buildRefMsg()
+            attachedRef = true
+          }
+          await ilinkSendMessage(baseUrl, token, {
+            to_user_id: chat_id,
+            message_type: 2,
+            message_state: 2,
+            item_list: [mediaItem],
+            context_token: ctxToken,
+          })
           sentCount++
         }
 
@@ -810,37 +910,12 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         const file_path = args.file_path as string
         const caption = args.caption as string | undefined
         assertAllowedChat(chat_id)
+        assertSendable(file_path)
         const { baseUrl, token } = resolveAccountForUser(chat_id)
-
-        const ext = file_path.split('.').pop()?.toLowerCase() ?? ''
-        const imageExts = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'])
-        const videoExts = new Set(['mp4', 'mov', 'avi', 'webm'])
-        const mediaType = imageExts.has(ext) ? UPLOAD_MEDIA_TYPE.IMAGE
-          : videoExts.has(ext) ? UPLOAD_MEDIA_TYPE.VIDEO
-          : UPLOAD_MEDIA_TYPE.FILE
 
         log('OUTBOUND', `→ [${userNames.get(chat_id) ?? chat_id}] (file: ${file_path})`)
 
-        const uploaded = await uploadToCdn({ filePath: file_path, toUserId: chat_id, baseUrl, token, mediaType })
-
-        // IMPORTANT: WeChat expects aes_key as base64 of the ASCII HEX string
-        // (32 ASCII chars → 44-char base64), NOT base64 of the raw 16 key bytes.
-        // Our own parseAesKey (line 232) already handles both inbound formats,
-        // but WeChat clients only accept the hex-in-base64 form for outbound
-        // images — sending raw-in-base64 produces a gray placeholder on receive.
-        // Matches photon-hq/wechat-ilink-client reference impl.
-        const aesKeyBase64 = Buffer.from(uploaded.aeskey).toString('base64')
-        const mediaRef: CDNMedia = { encrypt_query_param: uploaded.downloadParam, aes_key: aesKeyBase64, encrypt_type: 1 }
-
-        let mediaItem: MessageItem
-        if (mediaType === UPLOAD_MEDIA_TYPE.IMAGE) {
-          mediaItem = { type: 2, image_item: { media: mediaRef, mid_size: uploaded.fileSizeCiphertext } }
-        } else if (mediaType === UPLOAD_MEDIA_TYPE.VIDEO) {
-          mediaItem = { type: 5, video_item: { media: mediaRef, video_size: uploaded.fileSizeCiphertext } }
-        } else {
-          const fileName = file_path.split('/').pop() ?? 'file'
-          mediaItem = { type: 4, file_item: { media: mediaRef, file_name: fileName, len: String(uploaded.fileSize) } }
-        }
+        const mediaItem = await buildMediaItemFromFile(file_path, chat_id, baseUrl, token)
 
         if (caption) {
           await ilinkSendMessage(baseUrl, token,
