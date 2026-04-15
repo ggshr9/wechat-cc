@@ -672,7 +672,85 @@ const mcp = new Server(
 // ── Permission relay ───────────────────────────────────────────────────────
 // When Claude Code asks for tool permission, forward to admins only (not all users).
 
-const PERMISSION_REPLY_RE = /^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$/i
+const PERMISSION_REPLY_STRICT_RE = /^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$/i
+const PERMISSION_REPLY_BARE_RE   = /^\s*(y|yes|n|no|允许|拒绝)\s*$/i
+const PERM_DETAILS_RE            = /^\s*\/perm\s+([a-km-z]{5})\s*$/i
+
+const PERMISSION_TTL_MS = 60 * 60 * 1000 // 1 hour
+
+interface PendingPermission {
+  tool_name: string
+  description: string
+  input_preview: string
+  created_at: number
+}
+const pendingPermissions = new Map<string, PendingPermission>()
+
+function prunePendingPermissions(): void {
+  const cutoff = Date.now() - PERMISSION_TTL_MS
+  for (const [id, p] of pendingPermissions) {
+    if (p.created_at < cutoff) pendingPermissions.delete(id)
+  }
+}
+
+// Per-tool compact formatters — extract signal from input_preview, drop noise.
+// Unknown tools fall back to a truncated raw dump.
+type ToolFormatter = (input: Record<string, unknown>) => string
+
+function permBasename(p: string): string {
+  return p.split('/').pop() ?? p
+}
+
+function permTrunc(s: string, n = 300): string {
+  return s.length > n ? s.slice(0, n - 3) + '...' : s
+}
+
+const PERMISSION_FORMATTERS: Record<string, ToolFormatter> = {
+  Edit: (i) => {
+    const file = permBasename(String(i.file_path ?? ''))
+    const oldStr = String(i.old_string ?? '')
+    const lines = oldStr ? oldStr.split('\n').length : 0
+    return `Edit  ${file}\n   - ~${lines} 行`
+  },
+  Write: (i) => {
+    const file = permBasename(String(i.file_path ?? ''))
+    const bytes = Buffer.byteLength(String(i.content ?? ''), 'utf8')
+    return `Write ${file}\n   - ${bytes} 字节`
+  },
+  Read: (i) => {
+    const file = permBasename(String(i.file_path ?? ''))
+    const range = i.offset != null
+      ? `\n   - ${i.offset}+${i.limit ?? '?'} 行`
+      : ''
+    return `Read  ${file}${range}`
+  },
+  Bash: (i) => {
+    const cmd = permTrunc(String(i.command ?? ''), 300)
+    return `Bash\n  ${cmd}`
+  },
+  Glob: (i) => `Glob: ${String(i.pattern ?? '')}${i.path ? ` (in ${i.path})` : ''}`,
+  Grep: (i) => {
+    const extras: string[] = []
+    if (i.type) extras.push(`type=${i.type}`)
+    if (i.glob) extras.push(`glob=${i.glob}`)
+    if (i.path) extras.push(`path=${i.path}`)
+    return `Grep: ${String(i.pattern ?? '')}${extras.length ? ' (' + extras.join(', ') + ')' : ''}`
+  },
+  WebFetch: (i) => `WebFetch: ${String(i.url ?? '')}`,
+  Task: (i) => `Agent: ${permTrunc(String(i.description ?? ''), 200)}`,
+}
+
+function formatPermissionCompact(tool_name: string, input_preview: string): string {
+  let parsed: Record<string, unknown> | null = null
+  try {
+    const v = JSON.parse(input_preview)
+    if (v && typeof v === 'object') parsed = v as Record<string, unknown>
+  } catch { /* fall through to default */ }
+
+  const formatter = PERMISSION_FORMATTERS[tool_name]
+  if (formatter && parsed) return formatter(parsed)
+  return `${tool_name}\n  ${permTrunc(input_preview, 200)}`
+}
 
 mcp.setNotificationHandler(
   z.object({
@@ -1176,8 +1254,8 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
     // If target not found, fall through to Claude (maybe it's a Claude command)
   }
 
-  // Permission-reply intercept
-  const permMatch = PERMISSION_REPLY_RE.exec(text)
+  // Permission-reply intercept (temporary — Task 3 replaces this block)
+  const permMatch = PERMISSION_REPLY_STRICT_RE.exec(text)
   if (permMatch) {
     void mcp.notification({
       method: 'notifications/claude/channel/permission',
