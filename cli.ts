@@ -11,13 +11,14 @@
  */
 
 import { execSync, spawnSync } from 'child_process'
-import { existsSync, readFileSync, writeFileSync, readdirSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'fs'
 import { resolve, dirname, join } from 'path'
 import { homedir } from 'os'
 
 const PLUGIN_DIR = dirname(new URL(import.meta.url).pathname)
 const STATE_DIR = join(homedir(), '.claude', 'channels', 'wechat')
 const ACCOUNTS_DIR = join(STATE_DIR, 'accounts')
+const RESTART_FLAG_PATH = join(STATE_DIR, '.restart-flag')
 
 function getBunPath(): string {
   try {
@@ -82,6 +83,61 @@ function install() {
   console.log('\n下一步: wechat-cc run')
 }
 
+// ── Argument parsing / building ────────────────────────────────────────────
+// Extracted so the supervisor loop can reuse them when /restart arrives with
+// a different set of flags.
+
+interface RunFlags {
+  skipPermissions: boolean
+  freshSession: boolean
+  extraArgs: string[]  // pass-through tokens for claude
+}
+
+function parseRunArgs(raw: string[]): RunFlags {
+  const extra = [...raw]
+  const take = (flag: string): boolean => {
+    const idx = extra.indexOf(flag)
+    if (idx === -1) return false
+    extra.splice(idx, 1)
+    return true
+  }
+  const skipPermissions = take('--dangerously')
+  const freshSession = take('--fresh')
+  take('--continue')  // --continue is default; consume to avoid duplication
+  return { skipPermissions, freshSession, extraArgs: extra }
+}
+
+function buildClaudeArgs(flags: RunFlags, bun: string): string[] {
+  const mcpConfig = JSON.stringify({
+    mcpServers: {
+      wechat: {
+        command: bun,
+        args: ['run', '--cwd', PLUGIN_DIR, '--silent', 'start'],
+      },
+    },
+  })
+  return [
+    '--mcp-config', mcpConfig,
+    '--dangerously-load-development-channels', 'server:wechat',
+    ...(flags.skipPermissions ? ['--dangerously-skip-permissions'] : []),
+    ...(flags.freshSession ? [] : ['--continue']),
+    ...flags.extraArgs,
+  ]
+}
+
+interface RestartFlag {
+  args: string[]  // empty = inherit current flags
+}
+
+// Atomically read + delete the flag file. Returns null if no restart requested.
+function readRestartFlag(): RestartFlag | null {
+  if (!existsSync(RESTART_FLAG_PATH)) return null
+  let content = ''
+  try { content = readFileSync(RESTART_FLAG_PATH, 'utf8').trim() } catch {}
+  try { rmSync(RESTART_FLAG_PATH) } catch {}
+  return { args: content ? content.split(/\s+/) : [] }
+}
+
 function run() {
   // Check accounts exist
   if (!existsSync(ACCOUNTS_DIR) || readdirSync(ACCOUNTS_DIR).length === 0) {
@@ -93,39 +149,49 @@ function run() {
   }
 
   const bun = getBunPath()
-  const mcpConfig = JSON.stringify({
-    mcpServers: {
-      wechat: {
-        command: bun,
-        args: ['run', '--cwd', PLUGIN_DIR, '--silent', 'start'],
-      },
-    },
-  })
 
-  // Parse our custom flags
-  const extraArgs = process.argv.slice(3)
+  // Clear any stale flag from a previous crashed run
+  if (existsSync(RESTART_FLAG_PATH)) {
+    try { rmSync(RESTART_FLAG_PATH) } catch {}
+  }
 
-  const dangerousIdx = extraArgs.indexOf('--dangerously')
-  const skipPermissions = dangerousIdx !== -1
-  if (dangerousIdx !== -1) extraArgs.splice(dangerousIdx, 1)
+  let currentFlags = parseRunArgs(process.argv.slice(3))
+  let fastExits = 0
 
-  // --continue is default; --fresh overrides to start a new session
-  const freshIdx = extraArgs.indexOf('--fresh')
-  const freshSession = freshIdx !== -1
-  if (freshIdx !== -1) extraArgs.splice(freshIdx, 1)
-  const continueIdx = extraArgs.indexOf('--continue')
-  if (continueIdx !== -1) extraArgs.splice(continueIdx, 1)
+  while (true) {
+    const claudeArgs = buildClaudeArgs(currentFlags, bun)
+    const startedAt = Date.now()
+    const result = spawnSync('claude', claudeArgs, { stdio: 'inherit' })
 
-  const args = [
-    '--mcp-config', mcpConfig,
-    '--dangerously-load-development-channels', 'server:wechat',
-    ...(skipPermissions ? ['--dangerously-skip-permissions'] : []),
-    ...(freshSession ? [] : ['--continue']),
-    ...extraArgs,
-  ]
+    const flag = readRestartFlag()
+    if (!flag) {
+      // No restart requested — normal exit path (Ctrl+C, claude exited on its own, etc.)
+      process.exit(result.status ?? 1)
+    }
 
-  const result = spawnSync('claude', args, { stdio: 'inherit' })
-  process.exit(result.status ?? 1)
+    // Crash-loop guard: two consecutive <5s exits → bail out
+    const elapsed = Date.now() - startedAt
+    if (elapsed < 5_000) {
+      fastExits++
+      if (fastExits >= 2) {
+        console.error('[wechat-cc] claude exited twice in <5s; aborting restart loop')
+        process.exit(1)
+      }
+    } else {
+      fastExits = 0
+    }
+
+    // Empty flag content = inherit current flags; non-empty = replace
+    if (flag.args.length > 0) {
+      currentFlags = parseRunArgs(flag.args)
+    }
+    const human = [
+      currentFlags.skipPermissions ? '--dangerously' : '',
+      currentFlags.freshSession ? '--fresh' : '--continue',
+      ...currentFlags.extraArgs,
+    ].filter(Boolean).join(' ')
+    console.error(`[wechat-cc] restart requested, relaunching with: ${human}`)
+  }
 }
 
 function help() {
