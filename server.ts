@@ -766,12 +766,16 @@ mcp.setNotificationHandler(
     const { request_id, tool_name, description, input_preview } = params
     const access = loadAccess()
 
+    // Cache full details for /perm lookup and single-pending shortcut.
+    prunePendingPermissions()
+    pendingPermissions.set(request_id, {
+      tool_name, description, input_preview, created_at: Date.now(),
+    })
+
     log('PERMISSION', `${tool_name}: ${description}\n${input_preview}`)
-    const lines = [`🔐 Permission: ${tool_name}`]
-    if (description) lines.push(description)
-    if (input_preview) lines.push(input_preview)
-    lines.push(`\nReply: yes ${request_id} / no ${request_id}`)
-    const text = lines.join('\n')
+
+    const compact = formatPermissionCompact(tool_name, input_preview)
+    const text = `🔐 ${compact}\nReply: y / n  (详情: /perm ${request_id})`
     const targets = (access as any).admins?.length ? (access as any).admins : access.allowFrom
     for (const userId of targets) {
       const entry = userAccountMap.get(userId)
