@@ -99,7 +99,16 @@ wechat-cc list
 # Open the live log viewer in your browser
 wechat-cc logs          # http://localhost:3456
 wechat-cc logs 4567     # override port
+
+# Pull latest code + reinstall deps if bun.lock changed.
+# Running server keeps using old code until you /restart in WeChat
+# (or Ctrl+C + wechat-cc run).
+wechat-cc update
 ```
+
+The WeChat `/status` command shows the current build SHA + commit subject and
+whether you're behind `origin/master`. If you see "落后 N 个 commit", run
+`wechat-cc update` in the terminal and then send `/restart` from WeChat.
 
 Behind the scenes `run` invokes `claude --dangerously-load-development-channels server:wechat` (or equivalent) so the MCP server is loaded at startup.
 

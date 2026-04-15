@@ -266,6 +266,47 @@ exit [lindex $result 3]
   return spawnSync('expect', ['-c', expectScript], { stdio: 'inherit' })
 }
 
+function update() {
+  const bunLockPath = join(PLUGIN_DIR, 'bun.lock')
+  const beforeLock = existsSync(bunLockPath) ? readFileSync(bunLockPath, 'utf8') : ''
+
+  // Fast-forward only — we never want to auto-merge diverging histories.
+  // If the user has local edits that conflict, fail loud and tell them to
+  // resolve manually instead of silently stepping on their work.
+  console.log('[wechat-cc] git pull --ff-only ...')
+  const pull = spawnSync('git', ['-C', PLUGIN_DIR, 'pull', '--ff-only'], { stdio: 'inherit' })
+  if (pull.status !== 0) {
+    console.error('')
+    console.error('[wechat-cc] git pull 失败。可能是：')
+    console.error('  - 有本地未提交的改动')
+    console.error('  - 非 fast-forward（你的本地 commit 和 origin 分叉了）')
+    console.error('  - 没有网络 / 仓库无权限')
+    console.error('请在 ' + PLUGIN_DIR + ' 手动处理后重跑。')
+    process.exit(pull.status ?? 1)
+  }
+
+  // Only re-install if bun.lock actually changed; skipping install when
+  // nothing depends on it saves 5-10 seconds on a typical pull.
+  const afterLock = existsSync(bunLockPath) ? readFileSync(bunLockPath, 'utf8') : ''
+  if (afterLock !== beforeLock) {
+    console.log('[wechat-cc] bun.lock 变化，重装依赖 ...')
+    const install = spawnSync('bun', ['install'], { cwd: PLUGIN_DIR, stdio: 'inherit' })
+    if (install.status !== 0) {
+      console.error('[wechat-cc] bun install 失败，请手动处理。')
+      process.exit(install.status ?? 1)
+    }
+  } else {
+    console.log('[wechat-cc] bun.lock 未变化，跳过 bun install')
+  }
+
+  console.log('')
+  console.log('[wechat-cc] 升级完成。')
+  console.log('  当前 server 仍在跑旧代码。要生效请：')
+  console.log('    - 在微信发 /restart（推荐，无需手动按回车）')
+  console.log('    - 或在终端 Ctrl+C 后重新 wechat-cc run')
+  process.exit(0)
+}
+
 function help() {
   console.log(`
   wechat-cc — WeChat channel for Claude Code
@@ -279,6 +320,7 @@ function help() {
     logs                 打开日志监控页面 (默认端口 3456)
     logs <port>          指定端口
     install              在当前目录生成 .mcp.json
+    update               git pull + bun install（需手动 /restart 生效）
     start                启动 MCP channel server（由 .mcp.json 调用）
     help                 显示帮助
 `)
@@ -311,6 +353,9 @@ switch (command) {
   }
   case 'install':
     install()
+    break
+  case 'update':
+    update()
     break
   case 'help':
   case '--help':

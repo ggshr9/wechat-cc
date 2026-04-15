@@ -95,9 +95,16 @@ wechat-cc list
 # 打开实时日志查看器
 wechat-cc logs          # http://localhost:3456
 wechat-cc logs 4567     # 指定端口
+
+# 拉最新代码 + 重装依赖（仅当 bun.lock 变化时）。
+# 运行中的 server 仍是旧代码，需要在微信发 /restart 或
+# Ctrl+C 后重跑 wechat-cc run 来生效。
+wechat-cc update
 ```
 
 `run` 背后会执行 `claude --dangerously-load-development-channels server:wechat`（或等价命令）把 MCP server 装进启动流程。
+
+微信端的 `/status` 命令会显示当前构建的 SHA + commit subject，以及是否落后于 `origin/master`。如果看到「落后 N 个 commit」，在终端跑 `wechat-cc update` 然后在微信发 `/restart` 即可完成升级。
 
 ## 访问控制
 

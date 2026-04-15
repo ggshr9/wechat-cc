@@ -21,7 +21,13 @@ import {
   renameSync, chmodSync, readdirSync, existsSync, rmSync, statSync,
 } from 'fs'
 import { homedir } from 'os'
-import { join } from 'path'
+import { join, dirname } from 'path'
+import { spawnSync } from 'child_process'
+
+// Plugin directory — resolved once so git-based version helpers know where
+// to look. Since server.ts lives at the plugin root, dirname(import.meta.url)
+// points at ~/.claude/plugins/local/wechat/ (or wherever the user installed it).
+const PLUGIN_DIR = dirname(new URL(import.meta.url).pathname)
 
 // ── Paths ──────────────────────────────────────────────────────────────────
 const STATE_DIR = process.env.WECHAT_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'wechat')
@@ -78,6 +84,58 @@ function log(tag: string, msg: string): void {
   const line = `${new Date().toISOString()} [${tag}] ${msg}\n`
   process.stderr.write(`wechat channel: ${line}`)
   try { appendFileSync(LOG_FILE, line) } catch {}
+}
+
+// ── Version info ──────────────────────────────────────────────────────────
+// getLocalVersion() reads the plugin's git HEAD (fast, local-only). Used in
+// the /status command so users can tell what build they're running.
+// getUpdateCount() fetches origin and counts commits we're behind; cached so
+// /status doesn't hit the network on every invocation.
+
+interface LocalVersion { sha: string; subject: string }
+
+function getLocalVersion(): LocalVersion {
+  try {
+    const sha = spawnSync('git', ['-C', PLUGIN_DIR, 'rev-parse', '--short', 'HEAD'],
+      { stdio: 'pipe', timeout: 2000 }).stdout?.toString().trim() ?? '?'
+    const subject = spawnSync('git', ['-C', PLUGIN_DIR, 'log', '-1', '--pretty=format:%s'],
+      { stdio: 'pipe', timeout: 2000 }).stdout?.toString().trim() ?? ''
+    return { sha: sha || '?', subject }
+  } catch {
+    return { sha: '?', subject: '' }
+  }
+}
+
+const UPDATE_CHECK_TTL_MS = 5 * 60 * 1000
+let _updateCheckCache: { behind: number; checkedAt: number } | null = null
+
+// Returns commits-behind-upstream, or null if the check couldn't run
+// (no network / not a git repo / different branch / etc.).
+function getUpdateCount(): number | null {
+  const now = Date.now()
+  if (_updateCheckCache && now - _updateCheckCache.checkedAt < UPDATE_CHECK_TTL_MS) {
+    return _updateCheckCache.behind
+  }
+  try {
+    const fetchRes = spawnSync('git', ['-C', PLUGIN_DIR, 'fetch', '--quiet', 'origin'],
+      { stdio: 'pipe', timeout: 3000 })
+    if (fetchRes.status !== 0) return null
+    // Try origin/HEAD first (works regardless of branch name), fall back to
+    // origin/master which is what wechat-cc actually uses.
+    let countRes = spawnSync('git', ['-C', PLUGIN_DIR, 'rev-list', 'HEAD..origin/HEAD', '--count'],
+      { stdio: 'pipe', timeout: 2000 })
+    if (countRes.status !== 0) {
+      countRes = spawnSync('git', ['-C', PLUGIN_DIR, 'rev-list', 'HEAD..origin/master', '--count'],
+        { stdio: 'pipe', timeout: 2000 })
+    }
+    if (countRes.status !== 0) return null
+    const n = parseInt(countRes.stdout?.toString().trim() ?? '0', 10)
+    const behind = Number.isFinite(n) ? n : 0
+    _updateCheckCache = { behind, checkedAt: now }
+    return behind
+  } catch {
+    return null
+  }
 }
 
 const ILINK_BASE_INFO = { channel_version: '2.1.7' } as const
@@ -1707,16 +1765,29 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
     return
   }
 
-  // /status — connection status
+  // /status — connection status + version + update check
   if (text.trim() === '/status') {
     const uptimeMs = Date.now() - START_TIME
     const hours = Math.floor(uptimeMs / 3600000)
     const mins = Math.floor((uptimeMs % 3600000) / 60000)
+    const localVersion = getLocalVersion()
+    const behind = getUpdateCount()
+    const versionLine = localVersion.subject
+      ? `版本：${localVersion.sha} · ${localVersion.subject}`
+      : `版本：${localVersion.sha}`
+    const updateLine =
+      behind === null ? '（更新检查失败，可能无网络）'
+      : behind === 0  ? '（已是最新）'
+      : `（落后 ${behind} 个 commit — 终端运行 wechat-cc update 升级）`
+
     const statusText = [
       '连接状态：在线',
       `运行时间：${hours}小时${mins}分`,
       `已绑定账号：${_startupAccounts.length}`,
       `活跃用户：${userAccountMap.size}`,
+      '',
+      versionLine,
+      updateLine,
     ].join('\n')
     ilinkSendMessage(entry.account.baseUrl, entry.token,
       botTextMessage(fromUserId, statusText, contextTokens.get(fromUserId)),
