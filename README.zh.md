@@ -25,7 +25,7 @@
 - 媒体自动下载到 inbox 目录，路径写进消息元数据
 - 基于白名单的访问控制（持久化到 `~/.claude/channels/wechat/access.json`）
 - 实时日志查看器 `http://localhost:3456`（`wechat-cc logs`）
-- 内建微信端斜杠命令：`/help`、`/status`、`/ping`、`/users`、`@all`、`@<名字>`
+- 内建微信端斜杠命令：`/help`、`/status`、`/ping`、`/users`、`/restart`、`@all`、`@<名字>`
 - 新用户首次发消息时自动提示 Claude 询问昵称，由 `set_user_name` 持久化
 
 ## 安装
@@ -101,14 +101,22 @@ wechat-cc logs 4567     # 指定端口
 
 ## 微信端命令
 
-| 命令        | 作用                                               |
-|-------------|----------------------------------------------------|
-| `/help`     | 显示可用命令                                        |
-| `/status`   | 连接 + 账号状态                                     |
-| `/ping`     | 连通性测试                                          |
-| `/users`    | 列出已绑定的在线用户                                |
-| `@all 消息` | 广播给所有已连接用户                                |
-| `@名字 消息`| 转发给指定用户（名字来自 `set_user_name`）          |
+| 命令                      | 作用                                               |
+|---------------------------|----------------------------------------------------|
+| `/help`                   | 显示可用命令                                        |
+| `/status`                 | 连接 + 账号状态                                     |
+| `/ping`                   | 连通性测试                                          |
+| `/users`                  | 列出已绑定的在线用户                                |
+| `/restart`                | 重启 wechat-cc，继承当前 flags（仅管理员）          |
+| `/restart --dangerously`  | 重启并启用 `--dangerously-skip-permissions`         |
+| `/restart --fresh`        | 重启并开启全新 Claude 会话（不带 `--continue`）     |
+| `@all 消息`               | 广播给所有已连接用户                                |
+| `@名字 消息`              | 转发给指定用户（名字来自 `set_user_name`）          |
+
+**`/restart` 原理：** `wechat-cc run` 现在跑的是一个 supervisor loop。管理员在
+微信发 `/restart`（可选带 flag）后，server 写入 flag 文件，向 `claude` 祖先发
+SIGTERM，CLI 包装器用新的 flag 重开 claude。除非带了 `--fresh`，Claude 会话会
+通过 `--continue` 恢复。
 
 ## 运行时目录
 

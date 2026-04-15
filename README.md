@@ -25,7 +25,7 @@
 - Inbox directory for incoming media (paths surfaced in message metadata)
 - Allowlist-based access control (persisted to `~/.claude/channels/wechat/access.json`)
 - Live log monitor at `http://localhost:3456` (`wechat-cc logs`)
-- Built-in WeChat slash commands: `/help`, `/status`, `/ping`, `/users`, `@all`, `@<name>`
+- Built-in WeChat slash commands: `/help`, `/status`, `/ping`, `/users`, `/restart`, `@all`, `@<name>`
 - Auto-prompts Claude to ask for a name when a new sender appears; stored via `set_user_name`
 
 ## Install
@@ -103,14 +103,23 @@ Access mutations **must only come from requests typed in the terminal**. The `ac
 
 ## Channel commands (from WeChat)
 
-| Command    | Effect                                                          |
-|------------|-----------------------------------------------------------------|
-| `/help`    | Show available commands                                         |
-| `/status`  | Connection + account health                                     |
-| `/ping`    | Connectivity test                                               |
-| `/users`   | List online (bound) users                                       |
-| `@all msg` | Broadcast to every connected user                               |
-| `@名字 msg`| Forward to a specific user (name from `set_user_name`)          |
+| Command                 | Effect                                                          |
+|-------------------------|-----------------------------------------------------------------|
+| `/help`                 | Show available commands                                         |
+| `/status`               | Connection + account health                                     |
+| `/ping`                 | Connectivity test                                               |
+| `/users`                | List online (bound) users                                       |
+| `/restart`              | Restart wechat-cc inheriting current flags (admin-only)         |
+| `/restart --dangerously`| Restart and enable `--dangerously-skip-permissions`             |
+| `/restart --fresh`      | Restart with a brand-new Claude session (no `--continue`)       |
+| `@all msg`              | Broadcast to every connected user                               |
+| `@名字 msg`             | Forward to a specific user (name from `set_user_name`)          |
+
+**How `/restart` works:** `wechat-cc run` runs a supervisor loop. When an
+admin sends `/restart` (optionally with flags), the server writes a flag
+file, SIGTERMs the `claude` ancestor, and the CLI wrapper respawns claude
+with the requested flags. The Claude session resumes via `--continue`
+unless `--fresh` is passed.
 
 ## State layout
 
