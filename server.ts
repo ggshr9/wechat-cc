@@ -771,13 +771,45 @@ const PERMISSION_FORMATTERS: Record<string, ToolFormatter> = {
   Task: (i) => `Agent: ${permTrunc(String(i.description ?? ''), 200)}`,
 }
 
-function formatPermissionCompact(tool_name: string, input_preview: string): string {
-  let parsed: Record<string, unknown> | null = null
-  try {
-    const v = JSON.parse(input_preview)
-    if (v && typeof v === 'object') parsed = v as Record<string, unknown>
-  } catch { /* fall through to default */ }
+// Claude Code pre-truncates input_preview (ends in `…` for long payloads),
+// so JSON.parse often fails. Fall back to regex extraction of common string
+// fields so formatters still get usable values for the truncation case.
+const PERM_EXTRACT_FIELDS = [
+  'command', 'file_path', 'old_string', 'new_string', 'content',
+  'pattern', 'url', 'description', 'path', 'type', 'glob', 'offset', 'limit',
+]
 
+function tryParsePermissionInput(raw: string): Record<string, unknown> | null {
+  try {
+    const v = JSON.parse(raw)
+    if (v && typeof v === 'object') return v as Record<string, unknown>
+  } catch { /* fall through to regex */ }
+
+  const out: Record<string, unknown> = {}
+  for (const f of PERM_EXTRACT_FIELDS) {
+    // "field":"..."  — match until closing unescaped quote OR end of string
+    // (truncation can cut mid-string, leaving the closing quote missing)
+    const strRe = new RegExp(`"${f}":"((?:[^"\\\\]|\\\\.)*)`)
+    const m = strRe.exec(raw)
+    if (m) {
+      out[f] = m[1]
+        .replace(/\\n/g, '\n')
+        .replace(/\\t/g, '\t')
+        .replace(/\\r/g, '\r')
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, '\\')
+      continue
+    }
+    // "field":N — numeric
+    const numRe = new RegExp(`"${f}":(-?\\d+)`)
+    const nm = numRe.exec(raw)
+    if (nm) out[f] = parseInt(nm[1]!, 10)
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
+function formatPermissionCompact(tool_name: string, input_preview: string): string {
+  const parsed = tryParsePermissionInput(input_preview)
   const formatter = PERMISSION_FORMATTERS[tool_name]
   if (formatter && parsed) return formatter(parsed)
   return `${tool_name}\n  ${permTrunc(input_preview, 200)}`
