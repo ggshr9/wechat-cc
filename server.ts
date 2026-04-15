@@ -417,9 +417,20 @@ function readAccessFile(): Access {
     }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return defaultAccess()
-    try { renameSync(ACCESS_FILE, `${ACCESS_FILE}.corrupt-${Date.now()}`) } catch {}
-    process.stderr.write(`wechat channel: access.json corrupt, moved aside. Starting fresh.\n`)
-    return defaultAccess()
+    // Non-ENOENT = file exists but is corrupt or unreadable. Refuse to start
+    // instead of silently falling back to an empty allowlist — that would
+    // lock out every legitimate sender and the only symptom would be
+    // "nobody's messages get through," hard to diagnose later. Fail loud so
+    // the admin notices and recovers from the .corrupt-<ts> file.
+    const corruptPath = `${ACCESS_FILE}.corrupt-${Date.now()}`
+    try { renameSync(ACCESS_FILE, corruptPath) } catch {}
+    process.stderr.write(
+      `wechat channel: FATAL access.json is corrupt (${err instanceof Error ? err.message : err})\n` +
+      `  moved aside to: ${corruptPath}\n` +
+      `  refusing to start with an empty allowlist (silent lockout).\n` +
+      `  recover by restoring a known-good copy, or delete the file and run /wechat:access to rebuild.\n`,
+    )
+    process.exit(1)
   }
 }
 
@@ -862,8 +873,18 @@ mcp.setNotificationHandler(
     const text = `🔐 ${compact}\nReply: y / n  (详情: /perm ${request_id})`
     const targets = (access as any).admins?.length ? (access as any).admins : access.allowFrom
     for (const userId of targets) {
-      const entry = userAccountMap.get(userId)
-      if (!entry) continue
+      // Route through whichever bot has seen this user before. Fall back to
+      // any loaded account so the prompt doesn't silently disappear when
+      // userAccountMap hasn't been populated yet (restart + admin not a
+      // scanner + no inbound traffic since boot).
+      const entry =
+        userAccountMap.get(userId)
+        ?? _startupAccounts.find(a => a.account.userId === userId)
+        ?? _startupAccounts[0]
+      if (!entry) {
+        process.stderr.write(`wechat channel: permission_request: no account available to reach ${userId} (this will leave Claude blocked)\n`)
+        continue
+      }
       try {
         await ilinkSendMessage(entry.account.baseUrl, entry.token,
           botTextMessage(userId, text, contextTokens.get(userId)))
@@ -1215,7 +1236,13 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
   if (!fromUserId) return
 
   const result = gate(fromUserId)
-  if (result.action === 'drop') return
+  if (result.action === 'drop') {
+    // Log so an admin chasing "why didn't X's message come through" can tell
+    // allowlist-block from silent loss. Per-inbound spam is fine here — ilink
+    // traffic is low and this only fires for genuinely unauthorized senders.
+    log('GATED', `${userNames.get(fromUserId) ?? fromUserId} (not on allowlist)`)
+    return
+  }
 
   // Store context token and account routing for replies
   if (msg.context_token) {
@@ -1604,13 +1631,23 @@ async function pollLoop(entry: AccountEntry, signal: AbortSignal): Promise<void>
 
       consecutiveFailures = 0
 
+      // Handle first, then ack. Saving get_updates_buf is how we tell ilink
+      // "don't redeliver these" — if we did it before the loop and then crashed,
+      // messages Claude never saw would be silently lost. await each handler so
+      // one slow CDN download can't cause the ack to race ahead of the handle.
+      // Individual handler errors are logged but don't abort the batch (we
+      // still want to ack the ones that did succeed).
+      for (const msg of resp.msgs ?? []) {
+        try {
+          await handleInbound(msg, entry)
+        } catch (err) {
+          process.stderr.write(`wechat channel: handleInbound threw: ${err}\n`)
+        }
+      }
+
       if (resp.get_updates_buf) {
         saveSyncBuf(syncBufPath, resp.get_updates_buf)
         getUpdatesBuf = resp.get_updates_buf
-      }
-
-      for (const msg of resp.msgs ?? []) {
-        handleInbound(msg, entry)
       }
     } catch (err) {
       if (signal.aborted) return
@@ -1674,6 +1711,23 @@ function shutdown(): void {
   shuttingDown = true
   process.stderr.write('wechat channel: shutting down\n')
   releasePidLock()
+  // Flush any pending context_tokens write before we go. Otherwise SIGTERM
+  // during the 3s debounce window silently loses whichever tokens were
+  // rotated since the last flush, and next startup can't reach those users
+  // until they message us again.
+  if (_ctSaveTimer) {
+    clearTimeout(_ctSaveTimer)
+    _ctSaveTimer = null
+    try {
+      writeFileSync(
+        CONTEXT_TOKENS_FILE,
+        JSON.stringify(Object.fromEntries(contextTokens), null, 2) + '\n',
+        { mode: 0o600 },
+      )
+    } catch (err) {
+      process.stderr.write(`wechat channel: context_tokens shutdown flush failed: ${err}\n`)
+    }
+  }
   abortController.abort()
   // Best-effort: tear down the share_doc backend (HTTP server + cloudflared)
   shutdownDocs().catch(() => {})
@@ -1684,14 +1738,17 @@ process.stdin.on('close', shutdown)
 process.on('SIGTERM', shutdown)
 process.on('SIGINT', shutdown)
 
-// Acquire lock and connect MCP
+// Load all accounts FIRST so userAccountMap has scanners pre-registered
+// before MCP connects. Otherwise a permission_request notification arriving
+// in the first few ms of the session would land with an empty map and the
+// dialog would vanish into the void, leaving Claude blocked.
 acquirePidLock()
-await mcp.connect(new StdioServerTransport())
-
-// Load all accounts and start poll loops — one per account.
-// Run `bun setup.ts` to add accounts.
 _startupAccounts = loadAllAccounts()
 const accounts = _startupAccounts
+for (const entry of accounts) {
+  userAccountMap.set(entry.account.userId, entry)
+}
+await mcp.connect(new StdioServerTransport())
 
 if (accounts.length === 0) {
   process.stderr.write(
@@ -1702,8 +1759,6 @@ if (accounts.length === 0) {
   process.stderr.write(`wechat channel: ${accounts.length} account(s) loaded\n`)
   for (const entry of accounts) {
     process.stderr.write(`  → ${entry.id} (${entry.account.userId})\n`)
-    // Pre-register scanner's userId for reply routing
-    userAccountMap.set(entry.account.userId, entry)
     void pollLoop(entry, abortController.signal)
   }
 
