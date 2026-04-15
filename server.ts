@@ -715,16 +715,12 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'reply',
       description:
-        'Reply on WeChat. Pass chat_id from the inbound message. Text is split into chunks at paragraph boundaries if it exceeds 4000 chars. Attach files via `files` (absolute paths); images (jpg/png/gif/webp) send as photos, videos as videos, anything else as a file. Use `reply_to` (message_id from an inbound <channel>) to quote-reply a specific earlier message (experimental — renders as quoted reply on supported clients).',
+        'Reply on WeChat. Pass chat_id from the inbound message. Text is split into chunks at paragraph boundaries if it exceeds 4000 chars. Attach files via `files` (absolute paths); images (jpg/png/gif/webp) send as photos, videos as videos, anything else as a file.',
       inputSchema: {
         type: 'object',
         properties: {
           chat_id: { type: 'string', description: 'from_user_id from the inbound <channel> block' },
           text: { type: 'string', description: 'Message text. May be empty when only sending files.' },
-          reply_to: {
-            type: 'string',
-            description: 'Optional. message_id from an inbound <channel> block to quote-reply. Leave unset for normal replies.',
-          },
           files: {
             type: 'array',
             items: { type: 'string' },
@@ -810,7 +806,6 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       case 'reply': {
         const chat_id = args.chat_id as string
         const text = (args.text as string | undefined) ?? ''
-        const reply_to = args.reply_to as string | undefined
         const files = (args.files as string[] | undefined) ?? []
         assertAllowedChat(chat_id)
         const { baseUrl, token } = resolveAccountForUser(chat_id)
@@ -823,39 +818,20 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         for (const f of files) assertSendable(f)
 
         const ctxToken = contextTokens.get(chat_id)
-        // ref_msg on outbound is experimental — ilink protocol supports the field
-        // but none of the reference impls we found populate it on send. We attach
-        // to the first outbound MessageItem (first text chunk if text, else first
-        // file). If the receiving client ignores it, the message still delivers
-        // as plain content — no fallback needed.
-        const buildRefMsg = (): MessageItem['ref_msg'] | undefined =>
-          reply_to ? { message_item: { msg_id: reply_to } } : undefined
 
         const shortPreview = text
           ? `${text.slice(0, 80)}${text.length > 80 ? '...' : ''}`
           : `(${files.length} file${files.length === 1 ? '' : 's'})`
-        log('OUTBOUND', `→ [${userNames.get(chat_id) ?? chat_id}]${reply_to ? ' ↩' : ''} ${shortPreview}`)
+        log('OUTBOUND', `→ [${userNames.get(chat_id) ?? chat_id}] ${shortPreview}`)
 
         let sentCount = 0
-        let attachedRef = false
 
         // 1) Text chunks
         if (text) {
           const chunks = chunk(text, MAX_TEXT_CHUNK)
-          for (let i = 0; i < chunks.length; i++) {
-            const part = chunks[i]
-            const textItem: MessageItem = { type: 1, text_item: { text: part } }
-            if (i === 0 && !attachedRef && reply_to) {
-              textItem.ref_msg = buildRefMsg()
-              attachedRef = true
-            }
-            await ilinkSendMessage(baseUrl, token, {
-              to_user_id: chat_id,
-              message_type: 2,
-              message_state: 2,
-              item_list: [textItem],
-              context_token: ctxToken,
-            })
+          for (const part of chunks) {
+            await ilinkSendMessage(baseUrl, token,
+              botTextMessage(chat_id, part, ctxToken))
             cacheMsg(Math.floor(Date.now() / 1000) * 1000, part)
             sentCount++
           }
@@ -864,10 +840,6 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         // 2) Files (each as its own item_list message)
         for (const filePath of files) {
           const mediaItem = await buildMediaItemFromFile(filePath, chat_id, baseUrl, token)
-          if (!attachedRef && reply_to) {
-            mediaItem.ref_msg = buildRefMsg()
-            attachedRef = true
-          }
           await ilinkSendMessage(baseUrl, token, {
             to_user_id: chat_id,
             message_type: 2,
