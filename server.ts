@@ -1258,15 +1258,51 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
     // If target not found, fall through to Claude (maybe it's a Claude command)
   }
 
-  // Permission-reply intercept (temporary — Task 3 replaces this block)
-  const permMatch = PERMISSION_REPLY_STRICT_RE.exec(text)
-  if (permMatch) {
+  // /perm <code> — show full details for a pending permission request
+  const permDetailsMatch = PERM_DETAILS_RE.exec(text)
+  if (permDetailsMatch) {
+    const code = permDetailsMatch[1]!.toLowerCase()
+    prunePendingPermissions()
+    const p = pendingPermissions.get(code)
+    if (!p) {
+      ilinkSendMessage(entry.account.baseUrl, entry.token,
+        botTextMessage(fromUserId, `没有找到权限请求 ${code}（可能已经处理或超时）`, contextTokens.get(fromUserId)),
+      ).catch(() => {})
+      return
+    }
+    const lines = [`🔐 Permission: ${p.tool_name}`]
+    if (p.description) lines.push(p.description)
+    if (p.input_preview) lines.push(p.input_preview)
+    lines.push(`\nReply: y / n`)
+    ilinkSendMessage(entry.account.baseUrl, entry.token,
+      botTextMessage(fromUserId, lines.join('\n'), contextTokens.get(fromUserId)),
+    ).catch(() => {})
+    return
+  }
+
+  // Permission reply — strict form (y|n <code>)
+  const strictMatch = PERMISSION_REPLY_STRICT_RE.exec(text)
+  if (strictMatch) {
+    const request_id = strictMatch[2]!.toLowerCase()
+    const behavior = strictMatch[1]!.toLowerCase().startsWith('y') ? 'allow' : 'deny'
+    pendingPermissions.delete(request_id)
     void mcp.notification({
       method: 'notifications/claude/channel/permission',
-      params: {
-        request_id: permMatch[2]!.toLowerCase(),
-        behavior: permMatch[1]!.toLowerCase().startsWith('y') ? 'allow' : 'deny',
-      },
+      params: { request_id, behavior },
+    })
+    return
+  }
+
+  // Permission reply — bare form (only when exactly 1 pending, unambiguous)
+  const bareMatch = PERMISSION_REPLY_BARE_RE.exec(text)
+  if (bareMatch && pendingPermissions.size === 1) {
+    const verb = bareMatch[1]!.toLowerCase()
+    const behavior = (verb === 'y' || verb === 'yes' || verb === '允许') ? 'allow' : 'deny'
+    const request_id = [...pendingPermissions.keys()][0]!
+    pendingPermissions.delete(request_id)
+    void mcp.notification({
+      method: 'notifications/claude/channel/permission',
+      params: { request_id, behavior },
     })
     return
   }
