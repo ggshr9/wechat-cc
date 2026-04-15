@@ -21,7 +21,7 @@
 
 - QR-code login, multi-account (each scanner = one independent bot, one `accounts/<bot_id>/` dir)
 - MCP server exposing channel tools: `reply`, `edit_message`, `broadcast`, `send_file`, `set_user_name`, `share_page`, `resurface_page`
-- `share_page` publishes long markdown (plans, specs, review docs) to a public cloudflared quick-tunnel URL so the WeChat user can tap and read rendered content on their phone. Rendered pages include an approve/reject form so you can forward the URL to non-Claude stakeholders (e.g. a supervisor) for sign-off — decisions arrive back as MCP notifications
+- `share_page` publishes long markdown (plans, specs, review docs) to a public cloudflared quick-tunnel URL so the WeChat user can tap and read rendered content on their phone. Rendered pages include a single one-tap Approve button at the bottom for non-Claude stakeholders to acknowledge ("read it, looks good, don't wait on me") — clicks arrive back as MCP notifications
 - `resurface_page` re-opens a previously shared document on the current tunnel when its original URL has died (tunnel URLs are per-run)
 - Text, image, file and video delivery (CDN upload/download + AES-128-ECB encryption)
 - Inbox directory for incoming media (paths surfaced in message metadata)
@@ -168,8 +168,8 @@ to a short-lived URL that renders properly in the user's phone browser.
 2. The content is written to `~/.claude/channels/wechat/docs/<slug>.md`.
 3. wechat-cc spawns a local `Bun.serve` on an ephemeral port that
    renders `/docs/<slug>` via `marked` with a clean desktop+mobile
-   stylesheet plus an **approve / reject form** at the bottom of every
-   page.
+   stylesheet plus a **single one-tap Approve button** at the bottom
+   of every page.
 4. On the first call, `cloudflared` is started as a subprocess with
    `tunnel --url http://localhost:<port>` — no Cloudflare account or
    domain needed. wechat-cc parses the assigned
@@ -183,18 +183,24 @@ to a short-lived URL that renders properly in the user's phone browser.
    from `access.json` so "share this with me" from a terminal context
    just works.
 
-**Approve / reject:** The embedded form is aimed at stakeholders
-*outside* the Claude session. Workflow: Claude generates a plan,
-shares it, you forward the URL to your supervisor via WeChat/email/
-whatever. The supervisor taps the URL, reads the plan, optionally types
-a comment, and clicks Approve or Reject. The click POSTs back through
-the same tunnel to wechat-cc's local server, which writes a per-slug
-`.decision.json` and fires an MCP notification so Claude sees the
-review result as inbound channel feedback (tagged
-`share_page:<slug>`). The page then shows a persistent
-"Approved ✓" / "Rejected ✗" banner on subsequent visits. No
-authentication beyond the random URL — adequate for personal /
-small-team sign-off, not for access-controlled workflows.
+**Approve:** The embedded button is aimed at stakeholders *outside*
+the Claude session. Workflow: Claude generates a plan, shares it, you
+forward the URL to your supervisor via WeChat/email/whatever. The
+supervisor taps the URL, reads the plan, and clicks Approve. The click
+POSTs back through the same tunnel to wechat-cc's local server, which
+writes a per-slug `.decision.json` and fires an MCP notification so
+Claude sees the acknowledgement as inbound channel feedback (tagged
+`share_page:<slug>`). The page then shows a persistent "Approved ✓"
+banner on subsequent visits. No authentication beyond the random URL —
+adequate for personal / small-team sign-off, not for access-controlled
+workflows.
+
+There is deliberately no reject or comment UI. If a reviewer needs to
+push back or explain, they can message the URL owner directly — a
+WeChat thread carries context much better than a form field, and
+wechat-cc is already the transport. Keeping the page approve-only also
+avoids a misleading "I explained in the form but nothing happens" UX
+for the reviewer.
 
 **`share_page` is a publishing step, not an approval gate.** It doesn't
 block Claude's execution. If you need an explicit y/n gate, that still
@@ -218,9 +224,9 @@ not an archive store.
   secrets (credentials, API keys, internal strategy) in a shared page.
   The slug is random enough (4-word subdomain + timestamp suffix) to
   resist brute force but is not an authorization control.
-- Anyone with the URL can also submit approve/reject — that's by
-  design (external-reviewer use case) but means the URL itself is
-  your trust boundary. Treat it as a bearer credential.
+- Anyone with the URL can also submit Approve — that's by design
+  (external-reviewer use case) but means the URL itself is your trust
+  boundary. Treat it as a bearer credential.
 - URLs are ephemeral: when `wechat-cc run` exits, cloudflared dies and
   the URL stops resolving. Use `resurface_page` to re-expose old pages
   on a new tunnel.

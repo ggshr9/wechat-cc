@@ -2,9 +2,10 @@
  * docs.ts — share_page backend
  *
  * Turns a markdown document into a publicly reachable URL that the WeChat
- * user can tap to read a rendered view. Also exposes an optional approve /
- * reject UI embedded in the rendered page so non-Claude reviewers (e.g. a
- * supervisor the URL was forwarded to) can sign off without any tooling.
+ * user can tap to read a rendered view. Each page also has a single Approve
+ * button — a one-tap "read it, don't wait on me" soft acknowledgement for
+ * whoever the URL was forwarded to. (No reject/comment UI on purpose; see
+ * the Decision type comment further down.)
  *
  * Stack:
  *
@@ -148,9 +149,13 @@ async function ensureCloudflared(): Promise<string> {
 
 // ── Decision storage ──────────────────────────────────────────────────────
 
+// Only "approve" exists — reject was dropped on purpose. Rationale: if a
+// reviewer needs to push back, the natural channel is to message the URL
+// owner in WeChat directly; there's no way to explain "why not" through a
+// single HTML button anyway. Approve stays as a one-tap "looks good, don't
+// wait on me" acknowledgement.
 export interface Decision {
-  decision: 'approve' | 'reject'
-  comment?: string
+  decision: 'approve'
   timestamp: number
 }
 
@@ -204,18 +209,12 @@ const DOC_CSS = `
   hr { border: none; border-top: 1px solid #eee; margin: 2em 0; }
   .meta { color: #888; font-size: 0.85em; margin-top: -0.5em; margin-bottom: 1em; }
 
-  .decision-zone { margin-top: 3em; padding: 1.5em; background: #fafafa; border: 1px solid #eee; border-radius: 8px; }
-  .decision-zone h3 { margin-top: 0; }
-  .decision-zone textarea { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font: inherit; margin-bottom: 8px; box-sizing: border-box; }
-  .decision-zone .btn-row { display: flex; gap: 10px; }
-  .decision-zone button { flex: 1; padding: 12px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 15px; font-weight: 600; }
-  .decision-zone button[data-decide="approve"] { background: #4caf50; color: white; }
-  .decision-zone button[data-decide="reject"] { background: #f44336; color: white; }
+  .decision-zone { margin-top: 3em; padding: 1.5em; background: #fafafa; border: 1px solid #eee; border-radius: 8px; text-align: center; }
+  .decision-zone p { color: #666; font-size: 0.9em; margin: 0 0 1em 0; }
+  .decision-zone button { padding: 14px 40px; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: 600; background: #4caf50; color: white; }
   .decision-zone button:hover { opacity: 0.9; }
-  .decision-banner { padding: 1em; border-radius: 6px; font-weight: 600; text-align: center; margin-top: 3em; }
-  .decision-banner.approve { background: #e8f5e9; color: #2e7d32; border: 1px solid #4caf50; }
-  .decision-banner.reject { background: #ffebee; color: #c62828; border: 1px solid #f44336; }
-  .decision-banner .comment { margin-top: 8px; font-weight: 400; color: #555; font-size: 0.9em; }
+  .decision-zone button:disabled { opacity: 0.6; cursor: default; }
+  .decision-banner { padding: 1em; border-radius: 6px; font-weight: 600; text-align: center; margin-top: 3em; background: #e8f5e9; color: #2e7d32; border: 1px solid #4caf50; }
   .decision-banner .ts { margin-top: 4px; font-weight: 400; color: #999; font-size: 0.8em; }
 `
 
@@ -228,50 +227,39 @@ function decisionSection(slug: string): string {
   const existing = readDecision(slug)
   if (existing) {
     const ts = new Date(existing.timestamp).toLocaleString('zh-CN')
-    const label = existing.decision === 'approve' ? 'Approved ✓' : 'Rejected ✗'
     return `
-<div class="decision-banner ${existing.decision}">
-  ${label}
-  ${existing.comment ? `<div class="comment">「${escapeHtml(existing.comment)}」</div>` : ''}
+<div class="decision-banner">
+  Approved ✓
   <div class="ts">${escapeHtml(ts)}</div>
 </div>`
   }
+  // Approve-only UI. Reject / comment were removed on purpose — if a
+  // reviewer wants to push back or explain, the owner of the URL can be
+  // reached through WeChat directly, and that path carries context much
+  // better than a cramped textarea on a web page.
   return `
 <div id="decision-zone" class="decision-zone">
-  <h3>审阅 / Review</h3>
-  <p style="color:#666; font-size:0.9em; margin-top:-0.5em;">这份文档需要你的反馈。可选：留一句备注。</p>
-  <textarea id="comment" placeholder="（可选）备注 …" rows="2"></textarea>
-  <div class="btn-row">
-    <button type="button" data-decide="approve">✓ Approve</button>
-    <button type="button" data-decide="reject">✗ Reject</button>
-  </div>
+  <p>读完了？一键确认，原作者就不用等你了。</p>
+  <button type="button" id="approve-btn">✓ Approve</button>
 </div>
 <script>
 (function () {
   var zone = document.getElementById('decision-zone');
-  function submit(decision) {
-    var comment = document.getElementById('comment').value;
-    var btns = zone.querySelectorAll('button');
-    for (var i = 0; i < btns.length; i++) btns[i].disabled = true;
+  var btn = document.getElementById('approve-btn');
+  btn.addEventListener('click', function () {
+    btn.disabled = true;
     zone.querySelector('p').textContent = '发送中 …';
     fetch(window.location.pathname.replace(/\\/$/, '') + '/decide', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ decision: decision, comment: comment }),
+      body: JSON.stringify({ decision: 'approve' }),
     }).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      var label = decision === 'approve' ? 'Approved ✓' : 'Rejected ✗';
-      zone.outerHTML =
-        '<div class="decision-banner ' + decision + '">' + label +
-        (comment ? '<div class="comment">「' + comment.replace(/[<>&]/g, function (c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]; }) + '」</div>' : '') +
-        '</div>';
+      zone.outerHTML = '<div class="decision-banner">Approved ✓</div>';
     }).catch(function (e) {
       zone.querySelector('p').textContent = '提交失败: ' + e.message;
-      for (var i = 0; i < btns.length; i++) btns[i].disabled = false;
+      btn.disabled = false;
     });
-  }
-  document.querySelectorAll('[data-decide]').forEach(function (b) {
-    b.addEventListener('click', function () { submit(b.dataset.decide); });
   });
 })();
 </script>`
@@ -326,7 +314,7 @@ function startHttpServer(): Server {
     async fetch(req) {
       const url = new URL(req.url)
 
-      // POST /docs/<slug>/decide — anonymous review submission
+      // POST /docs/<slug>/decide — one-tap approve from the rendered page
       const decideMatch = url.pathname.match(/^\/docs\/([a-zA-Z0-9_-]+)\/decide\/?$/)
       if (decideMatch && req.method === 'POST') {
         const slug = decideMatch[1]!
@@ -334,24 +322,17 @@ function startHttpServer(): Server {
         if (!existsSync(mdPath)) {
           return new Response('slug not found', { status: 404 })
         }
-        // Reject if already decided — decisions are one-shot
+        // Approvals are one-shot — if there's already a record, don't fire
+        // the callback a second time (would spam Claude with duplicates).
         if (readDecision(slug)) {
-          return new Response('already decided', { status: 409 })
+          return new Response('already approved', { status: 409 })
         }
-        let payload: { decision?: string; comment?: string }
-        try { payload = await req.json() as typeof payload }
-        catch { return new Response('bad json', { status: 400 }) }
 
-        const decision = payload.decision === 'approve' || payload.decision === 'reject'
-          ? payload.decision
-          : null
-        if (!decision) return new Response('bad decision', { status: 400 })
+        // We ignore the request body entirely. The page only POSTs
+        // {decision: "approve"} but that's cosmetic; any POST to this path
+        // is interpreted as "approve".
 
-        const comment = typeof payload.comment === 'string'
-          ? payload.comment.trim().slice(0, 2000) || undefined
-          : undefined
-
-        const record: Decision = { decision, comment, timestamp: Date.now() }
+        const record: Decision = { decision: 'approve', timestamp: Date.now() }
         try {
           writeDecision(slug, record)
         } catch (err) {
@@ -368,7 +349,7 @@ function startHttpServer(): Server {
           }
         }
 
-        return new Response(JSON.stringify({ ok: true, slug, decision }), {
+        return new Response(JSON.stringify({ ok: true, slug, decision: 'approve' }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         })

@@ -724,7 +724,7 @@ const mcp = new Server(
       '',
       'share_page is a PUBLISHING step, not an approval gate. It does not block your execution. If you need an explicit y/n decision before proceeding, that goes through the normal permission-request flow (🔐 prompts in WeChat) — do not couple the two.',
       '',
-      'Every rendered page has approve / reject buttons at the bottom. These are aimed at stakeholders outside the Claude session (e.g. the user forwards the URL to their supervisor for sign-off). When a decision is submitted, you will receive an inbound channel notification tagged [share_page] with the slug, decision, and optional comment — treat it the same as any other inbound feedback and respond accordingly.',
+      'Every rendered page has a single Approve button at the bottom — a one-tap "read it, looks good, don\'t wait on me" acknowledgement for the user or whoever they forwarded the URL to. When a reviewer clicks it you will receive an inbound notification tagged [share_page 审阅] with chat_id=share_page:<slug>. Treat it as soft confirmation, not as a blocking permission decision. There is deliberately no reject/comment UI — if a reviewer needs to push back or explain, they will message the URL owner directly through WeChat, which carries context much better than a cramped form field.',
       '',
       '## Re-opening previously shared pages',
       '',
@@ -988,7 +988,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'share_page',
       description:
-        'Publish a markdown document to a short-lived public URL that the WeChat user (or anyone they forward the URL to) can tap to read in their phone browser. The rendered page includes an approve/reject form at the bottom for out-of-band stakeholder sign-off (decisions arrive back as inbound channel notifications). Use for plans, specs, long review documents, or any content that is too long or richly formatted (code blocks, tables, diagrams) to cram into a WeChat text message. The URL lives inside a cloudflared quick tunnel from this machine — no GitHub, no account, no outside service beyond Cloudflare\'s edge. Do NOT use for secrets (API keys, credentials, private/internal strategy) because the URL is publicly reachable by anyone who gets it. share_page is a publishing step, not an approval gate — do not block execution waiting for something from this tool; use the permission-request flow when you need a real y/n decision. If chat_id is omitted, defaults to the first admin from access.json. Shared .md files are auto-deleted after 7 days.',
+        'Publish a markdown document to a short-lived public URL that the WeChat user (or anyone they forward the URL to) can tap to read in their phone browser. Rendered pages include a single one-tap Approve button at the bottom — a soft "read it, looks good, don\'t wait on me" acknowledgement. When clicked, you receive an inbound channel notification tagged [share_page 审阅]. There is no reject/comment UI by design: if a reviewer needs to push back, they message the URL owner in WeChat directly. Use for plans, specs, long review documents, or any content that is too long or richly formatted (code blocks, tables, diagrams) to cram into a WeChat text message. The URL lives inside a cloudflared quick tunnel from this machine — no GitHub, no account, no outside service beyond Cloudflare\'s edge. Do NOT use for secrets (API keys, credentials, private/internal strategy) because the URL is publicly reachable by anyone who gets it. share_page is a publishing step, not an approval gate. If chat_id is omitted, defaults to the first admin from access.json. Shared .md files are auto-deleted after 7 days.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1072,24 +1072,23 @@ async function sendShareMessage(
   }
 }
 
-// Register the decision callback so approve/reject clicks on the rendered
-// page come back through the MCP channel as inbound notifications Claude
-// can read and act on. We tag them with a distinct chat_id prefix so Claude
+// Register the decision callback so Approve clicks on the rendered page
+// come back through the MCP channel as inbound notifications Claude can
+// read and act on. We tag them with a distinct chat_id prefix so Claude
 // can tell "this is an external reviewer, not a WeChat user".
-onDecision(({ slug, title, decision }) => {
-  const verb = decision.decision === 'approve' ? 'APPROVED' : 'REJECTED'
-  const commentLine = decision.comment ? `\n备注: ${decision.comment}` : ''
-  const text = `[share_page 审阅] 「${title}」${verb}${commentLine}\nslug: ${slug}`
-  log('DECISION', `${slug} ${verb}${decision.comment ? ` — ${decision.comment}` : ''}`)
+onDecision(({ slug, title }) => {
+  const ts = new Date().toISOString()
+  const text = `[share_page 审阅] 「${title}」已通过 (approved)\nslug: ${slug}`
+  log('DECISION', `${slug} APPROVED`)
   mcp.notification({
     method: 'notifications/claude/channel',
     params: {
       content: text,
       meta: {
         chat_id: `share_page:${slug}`,
-        message_id: `decision-${slug}-${decision.timestamp}`,
+        message_id: `decision-${slug}-${Date.now()}`,
         user: 'external reviewer',
-        ts: new Date(decision.timestamp).toISOString(),
+        ts,
       },
     },
   }).catch(err => {
