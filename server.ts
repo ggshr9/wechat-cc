@@ -794,7 +794,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
 
         const uploaded = await uploadToCdn({ filePath: file_path, toUserId: chat_id, baseUrl, token, mediaType })
 
-        const aesKeyBase64 = Buffer.from(uploaded.aeskey, 'hex').toString('base64')
+        // IMPORTANT: WeChat expects aes_key as base64 of the ASCII HEX string
+        // (32 ASCII chars → 44-char base64), NOT base64 of the raw 16 key bytes.
+        // Our own parseAesKey (line 232) already handles both inbound formats,
+        // but WeChat clients only accept the hex-in-base64 form for outbound
+        // images — sending raw-in-base64 produces a gray placeholder on receive.
+        // Matches photon-hq/wechat-ilink-client reference impl.
+        const aesKeyBase64 = Buffer.from(uploaded.aeskey).toString('base64')
         const mediaRef: CDNMedia = { encrypt_query_param: uploaded.downloadParam, aes_key: aesKeyBase64, encrypt_type: 1 }
 
         let mediaItem: MessageItem
