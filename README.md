@@ -20,7 +20,8 @@
 ## Features
 
 - QR-code login, multi-account (each scanner = one independent bot, one `accounts/<bot_id>/` dir)
-- MCP server exposing channel tools: `reply`, `edit_message`, `broadcast`, `send_file`, `set_user_name`
+- MCP server exposing channel tools: `reply`, `edit_message`, `broadcast`, `send_file`, `set_user_name`, `share_doc`
+- `share_doc` publishes long markdown (plans, specs, review docs) to a public cloudflared quick-tunnel URL so the WeChat user can tap and read rendered content on their phone — no GitHub account, no hosting, no config
 - Text, image, file and video delivery (CDN upload/download + AES-128-ECB encryption)
 - Inbox directory for incoming media (paths surfaced in message metadata)
 - Allowlist-based access control (persisted to `~/.claude/channels/wechat/access.json`)
@@ -42,6 +43,13 @@ Optional:
   terminal and press Enter. Without it, `/restart` will relaunch `claude`
   normally but the session will stall on the dialog until a human intervenes.
   Install with `apt install expect` / `brew install expect`.
+- `cloudflared` — used by the `share_doc` tool to expose rendered markdown
+  pages through a public quick tunnel (`*.trycloudflare.com`). **You don't
+  need to install this yourself** — wechat-cc auto-downloads the matching
+  static binary into `~/.claude/channels/wechat/bin/cloudflared` on first
+  use. No Cloudflare account, no domain, no config. If you already have
+  cloudflared on your `PATH` (e.g. `brew install cloudflared`), wechat-cc
+  will reuse it instead of downloading.
 
 Clone the repo and install deps:
 
@@ -146,6 +154,53 @@ the account that originally handled the `/restart`, and sends
 marker. The Claude session itself resumes via `--continue` unless
 `--fresh` was passed.
 
+## Sharing long docs (`share_doc`)
+
+WeChat text messages can't render markdown — code blocks, tables, and
+nested lists collapse into a wall of text that's unusable on a phone.
+The `share_doc` MCP tool solves this by publishing a markdown document
+to a short-lived URL that renders properly in the user's phone browser.
+
+**How it works:**
+
+1. Claude calls `share_doc({ title, content, chat_id? })`.
+2. The content is written to `~/.claude/channels/wechat/docs/<slug>.md`.
+3. wechat-cc spawns a local `Bun.serve` on an ephemeral port that
+   renders `/docs/<slug>` via `marked` with a clean desktop+mobile
+   stylesheet.
+4. On the first call, `cloudflared` is started as a subprocess with
+   `tunnel --url http://localhost:<port>` — no Cloudflare account or
+   domain needed. wechat-cc parses the assigned
+   `https://<words>.trycloudflare.com` URL from its log and caches it
+   for the session. If `cloudflared` isn't on `PATH`, wechat-cc
+   auto-downloads the matching static binary to
+   `~/.claude/channels/wechat/bin/cloudflared` (30 MB, one-time).
+5. `share_doc` returns `https://<tunnel>.trycloudflare.com/docs/<slug>`.
+   If `chat_id` is provided, it auto-sends a WeChat message containing
+   the title, a short preview, and the URL — one tool call covers
+   publish + notify.
+
+**Claude uses it for:** plans, specs, design proposals, long review
+documents, anything multi-paragraph with structured content (code,
+tables, lists). The system prompt (see `server.ts` instructions block)
+tells Claude when to pick `share_doc` over plain `reply`.
+
+**Caveats:**
+
+- The URL is publicly reachable by anyone who gets it. Do **not** put
+  secrets (credentials, API keys, internal strategy) in a shared doc.
+  The slug is random enough (4-word subdomain + timestamp suffix) to
+  resist brute force but is not an authorization control.
+- URLs are ephemeral: when `wechat-cc run` exits, cloudflared dies and
+  the URL stops resolving. The underlying `.md` file stays on disk, so
+  Claude can re-share it on the next run and get a new URL.
+- Cloudflare's quick tunnels are officially labeled non-production —
+  fine for personal/small-team use, not suitable for high traffic.
+- Content does transit through Cloudflare's edge. If that's a problem
+  you can either (a) only use `share_doc` for non-sensitive content,
+  which is the intended model, or (b) opt out by removing the tool
+  from `server.ts`.
+
 ## State layout
 
 ```
@@ -157,6 +212,9 @@ marker. The Claude session itself resumes via `--continue` unless
 ├── server.pid             # single-instance lock
 ├── .restart-flag          # transient: raw flags for cli.ts on /restart
 ├── .restart-ack           # transient: next-boot greeting marker
+├── docs/                  # share_doc markdown bodies (<slug>.md)
+├── bin/
+│   └── cloudflared        # auto-downloaded on first share_doc call
 ├── inbox/                 # downloaded media
 └── accounts/
     └── <bot_id>/

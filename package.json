@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "marked": "^18.0.0",
     "qrcode-terminal": "^0.12.0"
   }
 }

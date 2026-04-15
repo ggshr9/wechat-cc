@@ -34,6 +34,9 @@ const RESTART_FLAG_PATH = join(STATE_DIR, '.restart-flag')
 // "已重连" once its poll loops are back up.
 const RESTART_ACK_PATH = join(STATE_DIR, '.restart-ack')
 
+// share_doc backend (doc HTTP server + cloudflared tunnel lifecycle)
+import { shareDoc, shutdown as shutdownDocs } from './docs.ts'
+
 // Ensure state dir exists once at load time
 mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
 const START_TIME = Date.now()
@@ -691,6 +694,20 @@ const mcp = new Server(
       '',
       'When the user (in the terminal, not WeChat) says @all or asks to notify everyone, use the broadcast tool to send to all connected WeChat users.',
       '',
+      '## Sharing long documents (plans, specs, reviews)',
+      '',
+      'WeChat text messages do not render markdown — headings, code blocks, tables all collapse into a wall of text that is painful to read on a phone. When you need the WeChat user to review a plan, spec, proposal, long analysis, or anything multi-paragraph with structure, use the share_doc tool instead of pasting the content into reply.',
+      '',
+      'share_doc takes `title` + `content` (full markdown) and returns a public URL on cloudflared quick tunnel that renders the markdown properly in the user\'s phone browser. If you also pass `chat_id`, it will auto-send a WeChat message containing the title, a short preview, and the URL — so one tool call covers "publish + notify".',
+      '',
+      'Triggers for using share_doc:',
+      '- The content is longer than ~15 lines of prose',
+      '- The content has code blocks, tables, bullet structure, or headings',
+      '- You are presenting a plan/spec/design for review before executing it',
+      '- The user asked to see a diff, summary, or report',
+      '',
+      'Do NOT use share_doc for short replies, secrets (API keys, credentials, internal strategy — the URL is publicly reachable by anyone who gets it), or content the user clearly wants inline in the chat.',
+      '',
       '## Response Style',
       '',
       'Respond in Chinese unless the user writes in another language. Keep replies concise — WeChat is a chat app, not an essay platform.',
@@ -932,6 +949,21 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['text'],
       },
     },
+    {
+      name: 'share_doc',
+      description:
+        'Publish a markdown document to a short-lived public URL that the WeChat user can tap to read in their phone browser. Use this for plans, specs, long review documents, or any content that is too long or richly formatted (code blocks, tables, diagrams) to cram into a WeChat text message. The URL lives inside a cloudflared quick tunnel from this machine — no GitHub, no account, no outside service beyond Cloudflare\'s edge. Do NOT use for anything containing secrets (API keys, credentials, private/internal strategy) because the URL is publicly reachable by anyone who gets it. If chat_id is provided, a WeChat message with the title + short preview + URL is sent automatically.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'Human-readable title shown in the page and the WeChat preview. E.g. "Plan: add share_doc tool".' },
+          content: { type: 'string', description: 'The full markdown body. Headings, fenced code blocks, tables, lists, blockquotes, links and inline HTML all render.' },
+          chat_id: { type: 'string', description: 'Optional. If set, also send a WeChat message to this chat_id with the title + preview + URL.' },
+          preview: { type: 'string', description: 'Optional. Short blurb to include in the auto-sent WeChat message. Defaults to the first non-heading line of the content, truncated to ~120 chars.' },
+        },
+        required: ['title', 'content'],
+      },
+    },
   ],
 }))
 
@@ -1052,6 +1084,52 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         })
 
         return { content: [{ type: 'text', text: `file sent: ${file_path}` }] }
+      }
+
+      case 'share_doc': {
+        const title = args.title as string
+        const content = args.content as string
+        const chat_id = args.chat_id as string | undefined
+        const previewArg = args.preview as string | undefined
+        if (!title || !content) {
+          return { content: [{ type: 'text', text: 'share_doc: title and content are required' }], isError: true }
+        }
+
+        let result
+        try {
+          result = await shareDoc(title, content)
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          return {
+            content: [{ type: 'text', text: `share_doc failed: ${msg}\n\nFalling back: you can post the content as a normal WeChat message via reply()` }],
+            isError: true,
+          }
+        }
+
+        // Optional: auto-send a WeChat message to the user with the URL
+        let autoSendNote = ''
+        if (chat_id) {
+          assertAllowedChat(chat_id)
+          const { baseUrl, token } = resolveAccountForUser(chat_id)
+          // Derive a short preview from the content if the caller didn't supply one
+          const previewText = previewArg ?? (() => {
+            const firstProse = content.split('\n').find(l => l.trim() && !l.trim().startsWith('#'))?.trim() ?? ''
+            return firstProse.length > 120 ? `${firstProse.slice(0, 117)}...` : firstProse
+          })()
+          const body = [title, previewText, result.url].filter(Boolean).join('\n\n')
+          try {
+            await ilinkSendMessage(baseUrl, token,
+              botTextMessage(chat_id, body, contextTokens.get(chat_id)))
+            log('OUTBOUND', `→ [${userNames.get(chat_id) ?? chat_id}] share_doc: ${title}`)
+            autoSendNote = ' (WeChat message sent)'
+          } catch (err) {
+            autoSendNote = ` (WeChat send failed: ${err instanceof Error ? err.message : err})`
+          }
+        }
+
+        return {
+          content: [{ type: 'text', text: `shared: ${result.url}${autoSendNote}` }],
+        }
       }
 
       case 'broadcast': {
@@ -1597,6 +1675,8 @@ function shutdown(): void {
   process.stderr.write('wechat channel: shutting down\n')
   releasePidLock()
   abortController.abort()
+  // Best-effort: tear down the share_doc backend (HTTP server + cloudflared)
+  shutdownDocs().catch(() => {})
   setTimeout(() => process.exit(0), 2000)
 }
 process.stdin.on('end', shutdown)
