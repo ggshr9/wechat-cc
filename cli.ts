@@ -191,6 +191,8 @@ async function run() {
   let currentFlags = parseRunArgs(process.argv.slice(3))
   let fastExits = 0
   let isRestart = false
+  // Guard for the --continue → --fresh auto-fallback below. Only fires once.
+  let triedFreshFallback = false
 
   while (true) {
     const claudeArgs = buildClaudeArgs(currentFlags, bun)
@@ -226,6 +228,23 @@ async function run() {
 
     const flag = readRestartFlag()
     if (!flag) {
+      // If claude exited quickly on a --continue attempt (default) and
+      // the user didn't explicitly ask for --fresh, it's probably
+      // "No conversation found to continue". Auto-retry once with --fresh
+      // instead of dumping the user back to their shell with no explanation.
+      const elapsed = Date.now() - startedAt
+      if (
+        !isRestart
+        && !currentFlags.freshSession
+        && !triedFreshFallback
+        && elapsed < 5_000
+        && exitCode !== 0
+      ) {
+        console.error('[wechat-cc] claude 退出（可能没有上一次会话可恢复），自动切换到 --fresh 重试 ...')
+        currentFlags.freshSession = true
+        triedFreshFallback = true
+        continue
+      }
       // Normal exit — no restart requested
       process.exit(exitCode)
     }
