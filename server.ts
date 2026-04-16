@@ -641,28 +641,10 @@ function isAdmin(userId: string): boolean {
   return access.allowFrom.includes(userId)
 }
 
-// Walk the process tree looking for a `claude` ancestor. Linux /proc only.
-// Used by /restart to SIGTERM the Claude Code parent so cli.ts's supervisor
-// loop can respawn it.
-function findClaudeAncestor(): number | null {
-  let pid = process.ppid
-  for (let hop = 0; hop < 10; hop++) {
-    if (pid <= 1) return null
-    try {
-      const cmdline = readFileSync(`/proc/${pid}/cmdline`, 'utf8')
-      const argv0 = cmdline.split('\0')[0] ?? ''
-      const base = argv0.split('/').pop() ?? ''
-      if (base === 'claude') return pid
-      // stat format: "pid (comm) state ppid ..." — ppid is the 2nd field after ')'
-      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
-      const after = stat.substring(stat.lastIndexOf(')') + 1).trim().split(/\s+/)
-      pid = parseInt(after[1] ?? '0', 10)
-    } catch {
-      return null
-    }
-  }
-  return null
-}
+// findClaudeAncestor was removed in the Plan B refactor. cli.ts now kills
+// claude directly via child.kill() when it detects .restart-flag, so
+// server.ts no longer needs to walk the process tree on any platform.
+// See commit history for the old /proc-based Linux implementation.
 
 // ── Multi-account state ────────────────────────────────────────────────────
 
@@ -1662,7 +1644,7 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
 
   // /restart [flags] — respawn wechat-cc via cli.ts supervisor loop.
   // Writes .restart-flag (content = raw extra args), ACKs, then SIGTERMs the
-  // claude ancestor so spawnSync in cli.ts returns + re-reads the flag.
+  // cli.ts detects the flag via its 500ms poll, kills claude, and respawns.
   if (text.startsWith('/restart')) {
     if (!isAdmin(fromUserId)) {
       log('CMD', `[${displayName}] /restart (denied: not admin)`)
@@ -1690,7 +1672,7 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
 
     log('CMD', `[${displayName}] /restart ${rest}`)
 
-    // Sync-write flag before any tear-down so cli.ts sees it after spawnSync returns
+    // Sync-write flag before any tear-down so cli.ts's 500ms poll detects it
     try {
       writeFileSync(RESTART_FLAG_PATH, rest, 'utf8')
     } catch (err) {
@@ -1714,7 +1696,7 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
       log('RESTART', `ack marker write failed: ${err}`)
     }
 
-    // Ack BEFORE we kill anything (need the MCP channel to still be alive)
+    // Ack BEFORE anything tears down (need the MCP channel to still be alive)
     const ackText = `正在重启…${rest ? `（${rest}）` : ''}约 5 秒后重连`
     try {
       await ilinkSendMessage(entry.account.baseUrl, entry.token,
@@ -1723,18 +1705,20 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
       log('RESTART', `ack send failed: ${err}`)
     }
 
-    const claudePid = findClaudeAncestor()
-    if (claudePid == null) {
-      log('RESTART', 'warning: could not find claude ancestor; self-exiting only')
-      setTimeout(() => process.exit(0), 500)
-      return
-    }
-    log('RESTART', `sending SIGTERM to claude pid ${claudePid} (requested by ${fromUserId})`)
-    try { process.kill(claudePid, 'SIGTERM') } catch (err) {
-      log('RESTART', `kill failed: ${err}`)
-    }
-    // Safety net: die ourselves within 3s even if SIGTERM hangs on claude
-    setTimeout(() => process.exit(0), 3000)
+    // Plan B architecture: we do NOT try to find/kill claude from here.
+    // cli.ts's supervisor loop polls .restart-flag every 500ms and calls
+    // child.kill() when it sees it — that's the cross-platform kill path
+    // (works on Linux, macOS, AND Windows without /proc, wmic, or ps).
+    //
+    // Our job is done: .restart-flag + .restart-ack are written, WeChat
+    // ack is sent. cli.ts will detect the flag, kill claude, which closes
+    // our stdin pipe → we shut down via the stdin EOF handler. The safety
+    // net below handles the edge case where cli.ts is slow to poll.
+    log('RESTART', `flag written, waiting for cli.ts to kill claude (requested by ${fromUserId})`)
+    setTimeout(() => {
+      log('RESTART', 'safety net: self-exiting after 5s (cli.ts should have killed claude by now)')
+      process.exit(0)
+    }, 5000)
     return
   }
 

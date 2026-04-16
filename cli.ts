@@ -10,7 +10,7 @@
  *   wechat-cc install   — 在当前目录生成 .mcp.json
  */
 
-import { spawnSync } from 'child_process'
+import { spawn, spawnSync, type ChildProcess } from 'child_process'
 import { existsSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'fs'
 import { resolve, dirname, join } from 'path'
 import { homedir, platform } from 'os'
@@ -158,7 +158,7 @@ function readRestartFlag(): RestartFlag | null {
   return { args: content ? content.split(/\s+/) : [] }
 }
 
-function run() {
+async function run() {
   // Check accounts exist
   if (!existsSync(ACCOUNTS_DIR) || readdirSync(ACCOUNTS_DIR).length === 0) {
     // Check old format too
@@ -170,9 +170,7 @@ function run() {
 
   // Soft-warn once per launch if expect(1) is missing — /restart will still
   // work, but the user will have to walk back to the terminal and press Enter
-  // through claude's dev-channel dialog on every relaunch. On Windows there
-  // is no native expect, so we don't even bother trying to wrap; users there
-  // always press Enter manually on /restart.
+  // through claude's dev-channel dialog on every relaunch.
   if (platform() === 'win32') {
     console.error('[wechat-cc] 提示：Windows 平台没有 expect(1) 替代品，WeChat 触发的 /restart 需要你在终端手动按一次回车通过 Claude Code 的开发通道确认框。')
   } else if (findOnPath('expect') == null) {
@@ -188,23 +186,44 @@ function run() {
 
   let currentFlags = parseRunArgs(process.argv.slice(3))
   let fastExits = 0
-  let isRestart = false  // first iteration = user launched; later = /restart from WeChat
+  let isRestart = false
 
   while (true) {
     const claudeArgs = buildClaudeArgs(currentFlags, bun)
     const startedAt = Date.now()
-    // On /restart there's no human at the terminal to press Enter through the
-    // --dangerously-load-development-channels confirmation dialog. Wrap claude
-    // in `expect` so we auto-accept it. First launch stays as plain spawn:
-    // the user is right there and can press Enter themselves.
-    const result = isRestart
-      ? spawnClaudeWithAutoConfirm(claudeArgs)
-      : spawnSync('claude', claudeArgs, { stdio: 'inherit' })
+
+    // Spawn claude (or expect-wrapped claude on restart with expect available).
+    // Using async spawn() instead of spawnSync() so we can simultaneously poll
+    // for .restart-flag. This is the key architectural choice that makes
+    // /restart work on ALL platforms without process-tree walking: cli.ts
+    // already holds the child handle, so it kills claude directly via
+    // child.kill() when server.ts signals a restart via the flag file.
+    const child = spawnClaude(claudeArgs, isRestart)
+
+    // Poll for .restart-flag every 500ms while claude is running.
+    // server.ts writes this file when it receives /restart from WeChat,
+    // then we kill claude from here. No findClaudeAncestor, no /proc,
+    // no wmic, no ps — works identically on Linux, macOS, and Windows.
+    let flagDetected = false
+    const flagPoll = setInterval(() => {
+      if (existsSync(RESTART_FLAG_PATH)) {
+        flagDetected = true
+        clearInterval(flagPoll)
+        try { child.kill() } catch {}
+      }
+    }, 500)
+
+    // Wait for child to exit (normally, via Ctrl-C, or because we killed it)
+    const exitCode = await new Promise<number>((resolve) => {
+      child.on('exit', (code) => resolve(code ?? 1))
+    })
+
+    clearInterval(flagPoll)
 
     const flag = readRestartFlag()
     if (!flag) {
-      // No restart requested — normal exit path (Ctrl+C, claude exited on its own, etc.)
-      process.exit(result.status ?? 1)
+      // Normal exit — no restart requested
+      process.exit(exitCode)
     }
 
     // Crash-loop guard: two consecutive <5s exits → bail out
@@ -219,7 +238,6 @@ function run() {
       fastExits = 0
     }
 
-    // Empty flag content = inherit current flags; non-empty = replace
     if (flag.args.length > 0) {
       currentFlags = parseRunArgs(flag.args)
     }
@@ -233,55 +251,25 @@ function run() {
   }
 }
 
-// Auto-accepts the --dangerously-load-development-channels confirmation dialog
-// by wrapping claude in `expect`, which pattern-matches the dialog text and
-// sends Enter, then hands control back to the user via `interact`.
-// Falls back to plain spawn if `expect` is not installed on the system.
-function spawnClaudeWithAutoConfirm(claudeArgs: string[]) {
-  // Windows has no `expect(1)` equivalent, and trying to replicate ConPTY
-  // auto-confirmation there is more trouble than it's worth. Degrade to
-  // plain inherit-spawn — /restart still relaunches claude, the user just
-  // has to press Enter once on the dev-channel dialog.
-  if (platform() === 'win32') {
-    return spawnSync('claude', claudeArgs, { stdio: 'inherit' })
-  }
-  const hasExpect = findOnPath('expect') != null
-  if (!hasExpect) {
-    console.error('[wechat-cc] `expect` not installed — startup dialog will require a manual Enter press. Install expect (apt install expect / brew install expect) to auto-confirm on /restart.')
-    return spawnSync('claude', claudeArgs, { stdio: 'inherit' })
-  }
-  // Tcl list literal: wrap each arg in {braces} to preserve whitespace and
-  // special characters (e.g. the JSON blob passed via --mcp-config).
-  const tclArgs = claudeArgs.map(a => `{${a}}`).join(' ')
-  // After auto-accepting the dialog, `interact` hands stdin/stdout back to the
-  // user so the TUI behaves normally — both when a human is at the terminal
-  // during /restart, and so claude's own stdio plumbing keeps working.
-  // Use \`interact\` from the start with an output-pattern hook so that:
-  //   1. Real-terminal stdin (and its responses to claude's DA queries like
-  //      ESC[c / ESC[>c) is forwarded into claude's pty *from the very first
-  //      byte*. If we stayed in a plain \`expect {}\` block first, those
-  //      terminal-capability responses would pile up in the kernel buffer and
-  //      then get replayed as junk keypresses once interact started, garbling
-  //      claude's ink TUI.
-  //   2. The dev-channel confirmation dialog still gets auto-answered by
-  //      matching its text and sending \\r back into the child's pty.
-  //
-  // interact's -o pattern watches child *output* (not user input), and
-  // \`return\` hands control back to the bidirectional forwarding loop after
-  // firing the action. Exit status is propagated explicitly via wait/exit.
-  // Strategy: start claude, then schedule background Enter sends via Tcl
-  // \`after\`. Three blasts at 800ms / 2000ms / 4000ms catch the dialog no
-  // matter how fast/slow the startup is. interact runs immediately so stdin
-  // is forwarded from the first byte (avoids the DA-query-response race that
-  // garbled ink). On /restart no human is typing, so extra Enters arriving
-  // post-dialog are harmless (claude's prompt ignores empty submits).
-  //
-  // We chose a timer-based spray over pattern matching because:
-  //   (a) interact -o patterns silently failed to match ink's output in
-  //       practice, possibly due to chunking or ANSI interleaving
-  //   (b) a plain \`expect {}\` block before interact causes DA-query
-  //       responses to pile up in stdin and garble the TUI
-  const expectScript = `
+/**
+ * Spawn claude (or an expect wrapper around claude on /restart).
+ *
+ * On restart with expect available (Linux/macOS): wraps claude in expect(1)
+ * to auto-confirm the --dangerously-load-development-channels dialog via
+ * three timed \r sends (800ms / 2000ms / 4000ms). interact runs from the
+ * first byte to avoid DA-query garbling.
+ *
+ * On first launch, or on Windows, or without expect: plain spawn with
+ * stdio inherited — user presses Enter manually on the dialog.
+ */
+function spawnClaude(claudeArgs: string[], isRestart: boolean): ChildProcess {
+  const useExpect = isRestart
+    && platform() !== 'win32'
+    && findOnPath('expect') != null
+
+  if (useExpect) {
+    const tclArgs = claudeArgs.map(a => `{${a}}`).join(' ')
+    const expectScript = `
 set timeout -1
 spawn -noecho claude ${tclArgs}
 after 800  { catch { send "\\r" } }
@@ -291,7 +279,10 @@ interact { eof { return } }
 catch wait result
 exit [lindex $result 3]
 `
-  return spawnSync('expect', ['-c', expectScript], { stdio: 'inherit' })
+    return spawn('expect', ['-c', expectScript], { stdio: 'inherit' })
+  }
+
+  return spawn('claude', claudeArgs, { stdio: 'inherit' })
 }
 
 function update() {
@@ -368,7 +359,7 @@ switch (command) {
     process.exit(result.status ?? 1)
   }
   case 'run':
-    run()
+    await run()
     break
   case 'list':
     listAccounts()
