@@ -10,22 +10,39 @@
  *   wechat-cc install   — 在当前目录生成 .mcp.json
  */
 
-import { execSync, spawnSync } from 'child_process'
+import { spawnSync } from 'child_process'
 import { existsSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'fs'
 import { resolve, dirname, join } from 'path'
-import { homedir } from 'os'
+import { homedir, platform } from 'os'
 
 const PLUGIN_DIR = dirname(new URL(import.meta.url).pathname)
 const STATE_DIR = join(homedir(), '.claude', 'channels', 'wechat')
 const ACCOUNTS_DIR = join(STATE_DIR, 'accounts')
 const RESTART_FLAG_PATH = join(STATE_DIR, '.restart-flag')
 
-function getBunPath(): string {
+// Cross-platform PATH lookup: use `where` on Windows, `which` elsewhere.
+// Returns the first matching absolute path, or null.
+function findOnPath(cmd: string): string | null {
+  const finder = platform() === 'win32' ? 'where' : 'which'
   try {
-    return execSync('which bun', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
-  } catch {
-    return join(homedir(), '.bun', 'bin', 'bun')
-  }
+    const r = spawnSync(finder, [cmd], { stdio: 'pipe' })
+    if (r.status === 0) {
+      const out = r.stdout?.toString() ?? ''
+      const first = out.split(/\r?\n/)[0]?.trim()
+      if (first) return first
+    }
+  } catch {}
+  return null
+}
+
+function getBunPath(): string {
+  const found = findOnPath('bun')
+  if (found) return found
+  // Fallback: default Bun install location (handles users who installed
+  // Bun but haven't added it to PATH yet). On Windows the binary is
+  // bun.exe; on Linux/macOS it has no extension.
+  const isWin = platform() === 'win32'
+  return join(homedir(), '.bun', 'bin', isWin ? 'bun.exe' : 'bun')
 }
 
 function listAccounts() {
@@ -153,8 +170,12 @@ function run() {
 
   // Soft-warn once per launch if expect(1) is missing — /restart will still
   // work, but the user will have to walk back to the terminal and press Enter
-  // through claude's dev-channel dialog on every relaunch.
-  if (spawnSync('which', ['expect'], { stdio: 'pipe' }).status !== 0) {
+  // through claude's dev-channel dialog on every relaunch. On Windows there
+  // is no native expect, so we don't even bother trying to wrap; users there
+  // always press Enter manually on /restart.
+  if (platform() === 'win32') {
+    console.error('[wechat-cc] 提示：Windows 平台没有 expect(1) 替代品，WeChat 触发的 /restart 需要你在终端手动按一次回车通过 Claude Code 的开发通道确认框。')
+  } else if (findOnPath('expect') == null) {
     console.error('[wechat-cc] 提示：未检测到 expect，WeChat 触发的 /restart 将无法自动通过 Claude Code 的开发通道确认框。安装方法：apt install expect / brew install expect')
   }
 
@@ -217,7 +238,14 @@ function run() {
 // sends Enter, then hands control back to the user via `interact`.
 // Falls back to plain spawn if `expect` is not installed on the system.
 function spawnClaudeWithAutoConfirm(claudeArgs: string[]) {
-  const hasExpect = spawnSync('which', ['expect'], { stdio: 'pipe' }).status === 0
+  // Windows has no `expect(1)` equivalent, and trying to replicate ConPTY
+  // auto-confirmation there is more trouble than it's worth. Degrade to
+  // plain inherit-spawn — /restart still relaunches claude, the user just
+  // has to press Enter once on the dev-channel dialog.
+  if (platform() === 'win32') {
+    return spawnSync('claude', claudeArgs, { stdio: 'inherit' })
+  }
+  const hasExpect = findOnPath('expect') != null
   if (!hasExpect) {
     console.error('[wechat-cc] `expect` not installed — startup dialog will require a manual Enter press. Install expect (apt install expect / brew install expect) to auto-confirm on /restart.')
     return spawnSync('claude', claudeArgs, { stdio: 'inherit' })

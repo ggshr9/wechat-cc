@@ -45,7 +45,9 @@ import { marked } from 'marked'
 const STATE_DIR = process.env.WECHAT_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'wechat')
 const DOCS_DIR = join(STATE_DIR, 'docs')
 const BIN_DIR = join(STATE_DIR, 'bin')
-const CLOUDFLARED_BIN = join(BIN_DIR, 'cloudflared')
+// .exe suffix on Windows so `chmod +x` and cmd.exe both work correctly.
+// On Linux/macOS the binary has no extension.
+const CLOUDFLARED_BIN = join(BIN_DIR, platform() === 'win32' ? 'cloudflared.exe' : 'cloudflared')
 
 const DOCS_TTL_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
 
@@ -92,14 +94,27 @@ cleanupOldDocs()
 
 // ── cloudflared binary discovery + auto-download ──────────────────────────
 
+// Cross-platform PATH lookup: Linux/macOS use `which`, Windows uses `where`.
+// Returns the absolute path of the binary if found, or null. `where` may
+// print multiple lines on Windows; we take the first hit.
+function findOnPath(cmd: string): string | null {
+  const finder = platform() === 'win32' ? 'where' : 'which'
+  try {
+    const r = spawnSync(finder, [cmd], { stdio: 'pipe' })
+    if (r.status === 0) {
+      const out = r.stdout?.toString() ?? ''
+      const first = out.split(/\r?\n/)[0]?.trim()
+      if (first) return first
+    }
+  } catch {}
+  return null
+}
+
 function whichCloudflared(): string | null {
   // Prefer a cloudflared already on PATH (e.g. brew install), fall back to
   // the plugin-local copy in ~/.claude/channels/wechat/bin/.
-  const onPath = spawnSync('which', ['cloudflared'], { stdio: 'pipe' })
-  if (onPath.status === 0) {
-    const p = onPath.stdout.toString().trim()
-    if (p) return p
-  }
+  const onPath = findOnPath('cloudflared')
+  if (onPath) return onPath
   if (existsSync(CLOUDFLARED_BIN)) return CLOUDFLARED_BIN
   return null
 }
@@ -113,6 +128,9 @@ function cloudflaredAssetUrl(): string {
   } else if (os === 'darwin') {
     // Cloudflare ships a universal tarball for darwin: cloudflared-darwin-amd64.tgz
     asset = 'cloudflared-darwin-amd64.tgz'
+  } else if (os === 'win32') {
+    // Cloudflare ships a direct .exe for Windows; no archive extraction needed.
+    asset = a === 'arm64' ? 'cloudflared-windows-arm64.exe' : 'cloudflared-windows-amd64.exe'
   } else {
     throw new Error(`cloudflared auto-download not supported on ${os}; please install it manually (https://github.com/cloudflare/cloudflared/releases)`)
   }
@@ -127,6 +145,7 @@ async function downloadCloudflared(): Promise<string> {
   const buf = Buffer.from(await res.arrayBuffer())
 
   if (url.endsWith('.tgz')) {
+    // macOS path — extract the single binary from the universal tarball.
     const tarGzPath = join(BIN_DIR, 'cloudflared.tgz')
     writeFileSync(tarGzPath, buf, { mode: 0o600 })
     const extract = spawnSync('tar', ['-xzf', tarGzPath, '-C', BIN_DIR], { stdio: 'pipe' })
@@ -134,9 +153,15 @@ async function downloadCloudflared(): Promise<string> {
       throw new Error(`cloudflared tgz extract failed: ${extract.stderr?.toString() ?? 'unknown'}`)
     }
   } else {
+    // Linux / Windows: direct binary, just write to disk.
     writeFileSync(CLOUDFLARED_BIN, buf, { mode: 0o755 })
   }
-  chmodSync(CLOUDFLARED_BIN, 0o755)
+  // chmod is a no-op on Windows but still works for Linux tarball-extracted
+  // binaries that may land without the exec bit. Wrap so Windows edge cases
+  // don't blow up installation.
+  if (platform() !== 'win32') {
+    try { chmodSync(CLOUDFLARED_BIN, 0o755) } catch {}
+  }
   process.stderr.write(`wechat channel: cloudflared installed at ${CLOUDFLARED_BIN}\n`)
   return CLOUDFLARED_BIN
 }
