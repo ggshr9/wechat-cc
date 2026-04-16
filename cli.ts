@@ -14,6 +14,7 @@ import { spawn, spawnSync, type ChildProcess } from 'child_process'
 import { existsSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'fs'
 import { resolve, join } from 'path'
 import { homedir, platform } from 'os'
+import { findOnPath } from './util.ts'
 
 // Bun's import.meta.dir gives a proper filesystem path on ALL platforms.
 // The old approach (dirname(new URL(import.meta.url).pathname)) produces
@@ -23,21 +24,6 @@ const PLUGIN_DIR = import.meta.dir
 const STATE_DIR = join(homedir(), '.claude', 'channels', 'wechat')
 const ACCOUNTS_DIR = join(STATE_DIR, 'accounts')
 const RESTART_FLAG_PATH = join(STATE_DIR, '.restart-flag')
-
-// Cross-platform PATH lookup: use `where` on Windows, `which` elsewhere.
-// Returns the first matching absolute path, or null.
-function findOnPath(cmd: string): string | null {
-  const finder = platform() === 'win32' ? 'where' : 'which'
-  try {
-    const r = spawnSync(finder, [cmd], { stdio: 'pipe' })
-    if (r.status === 0) {
-      const out = r.stdout?.toString() ?? ''
-      const first = out.split(/\r?\n/)[0]?.trim()
-      if (first) return first
-    }
-  } catch {}
-  return null
-}
 
 function getBunPath(): string {
   const found = findOnPath('bun')

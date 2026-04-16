@@ -10,16 +10,14 @@ import { randomBytes } from 'crypto'
 import { readFileSync, writeFileSync, mkdirSync, renameSync, chmodSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
+import { ILINK_BASE_URL, ILINK_APP_ID, ILINK_BOT_TYPE, LONG_POLL_TIMEOUT_MS } from './config.ts'
 
 const STATE_DIR = join(homedir(), '.claude', 'channels', 'wechat')
 const ACCOUNTS_DIR = join(STATE_DIR, 'accounts')
 const ACCESS_FILE = join(STATE_DIR, 'access.json')
 
-const ILINK_BASE_URL = 'https://ilinkai.weixin.qq.com'
-const ILINK_APP_ID = 'bot'
-const ILINK_BOT_TYPE = '3'
+// Per-file constants (see config.ts note on why these differ from server.ts)
 const ILINK_CLIENT_VERSION = '65547'
-const LONG_POLL_TIMEOUT_MS = 35_000
 const API_TIMEOUT_MS = 15_000
 
 async function ilinkGet(baseUrl: string, endpoint: string, timeoutMs = API_TIMEOUT_MS): Promise<string> {

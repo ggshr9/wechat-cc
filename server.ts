@@ -47,6 +47,12 @@ import {
   onDecision,
   shutdown as shutdownDocs,
 } from './docs.ts'
+import {
+  ILINK_BASE_URL,
+  ILINK_APP_ID,
+  ILINK_BOT_TYPE,
+  LONG_POLL_TIMEOUT_MS,
+} from './config.ts'
 
 // Ensure state dir exists once at load time
 mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
@@ -140,12 +146,10 @@ function getUpdateCount(): number | null {
 
 const ILINK_BASE_INFO = { channel_version: '2.1.7' } as const
 
-// ── ilink constants ────────────────────────────────────────────────────────
-const ILINK_BASE_URL = 'https://ilinkai.weixin.qq.com'
-const ILINK_APP_ID = 'bot'
-const ILINK_BOT_TYPE = '3'
+// ── ilink constants (shared ones imported from config.ts) ─────────────────
+// ILINK_BASE_URL, ILINK_APP_ID, ILINK_BOT_TYPE, LONG_POLL_TIMEOUT_MS
+// come from config.ts. Per-file constants stay here:
 const ILINK_CLIENT_VERSION = '131335' // 2.1.7 → 0x00020107
-const LONG_POLL_TIMEOUT_MS = 35_000
 const API_TIMEOUT_MS = 30_000
 const MAX_TEXT_CHUNK = 4000
 

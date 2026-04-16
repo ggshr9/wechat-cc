@@ -28,6 +28,7 @@
  */
 
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'child_process'
+import { findOnPath } from './util.ts'
 import {
   existsSync,
   mkdirSync,
@@ -93,22 +94,6 @@ function cleanupOldDocs(): number {
 cleanupOldDocs()
 
 // ── cloudflared binary discovery + auto-download ──────────────────────────
-
-// Cross-platform PATH lookup: Linux/macOS use `which`, Windows uses `where`.
-// Returns the absolute path of the binary if found, or null. `where` may
-// print multiple lines on Windows; we take the first hit.
-function findOnPath(cmd: string): string | null {
-  const finder = platform() === 'win32' ? 'where' : 'which'
-  try {
-    const r = spawnSync(finder, [cmd], { stdio: 'pipe' })
-    if (r.status === 0) {
-      const out = r.stdout?.toString() ?? ''
-      const first = out.split(/\r?\n/)[0]?.trim()
-      if (first) return first
-    }
-  } catch {}
-  return null
-}
 
 function whichCloudflared(): string | null {
   // Prefer a cloudflared already on PATH (e.g. brew install), fall back to
