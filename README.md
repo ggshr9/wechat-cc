@@ -5,10 +5,11 @@
 </p>
 
 <p align="center">
-  <img alt="version"  src="https://img.shields.io/badge/version-0.1.0-blue">
-  <img alt="platform" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey">
+  <img alt="version"  src="https://img.shields.io/badge/version-0.2.0-blue">
+  <img alt="platform" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey">
   <img alt="runtime"  src="https://img.shields.io/badge/runtime-Bun-black">
   <img alt="license"  src="https://img.shields.io/badge/license-MIT-green">
+  <a href="https://github.com/ggshr9/wechat-cc/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ggshr9/wechat-cc/actions/workflows/ci.yml/badge.svg"></a>
 </p>
 
 <p align="center">
@@ -51,6 +52,13 @@ Optional:
   use. No Cloudflare account, no domain, no config. If you already have
   cloudflared on your `PATH` (e.g. `brew install cloudflared`), wechat-cc
   will reuse it instead of downloading.
+
+**Windows note:** wechat-cc works on Windows (Bun 1.1+ supports it
+natively). The `share_page` auto-download of `cloudflared.exe` and all
+MCP tools function cross-platform. The only degradation is `/restart`
+auto-confirmation of the dev-channel dialog — Windows has no `expect(1)`
+equivalent, so you'll press Enter once in the terminal on restart. All
+other functionality is identical to Linux/macOS.
 
 Clone the repo and install deps:
 
@@ -253,14 +261,14 @@ not an archive store.
 ├── access.json            # allowlist
 ├── context_tokens.json    # ilink context tokens (needed to initiate outbound messages)
 ├── user_names.json        # chat_id → display name
-├── channel.log            # rolling log
+├── channel.log            # rolling log (auto-rotated to .1 at 10 MB)
 ├── server.pid             # single-instance lock
 ├── .restart-flag          # transient: raw flags for cli.ts on /restart
 ├── .restart-ack           # transient: next-boot greeting marker
 ├── docs/                  # share_page .md bodies + .decision.json siblings (7-day TTL)
 ├── bin/
-│   └── cloudflared        # auto-downloaded on first share_page call
-├── inbox/                 # downloaded media
+│   └── cloudflared        # auto-downloaded on first share_page call (.exe on Windows)
+├── inbox/                 # downloaded media (30-day TTL, auto-cleaned on startup)
 └── accounts/
     └── <bot_id>/
         ├── account.json
