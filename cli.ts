@@ -94,13 +94,13 @@ function install() {
 // Extracted so the supervisor loop can reuse them when /restart arrives with
 // a different set of flags.
 
-interface RunFlags {
+export interface RunFlags {
   skipPermissions: boolean
   freshSession: boolean
   extraArgs: string[]  // pass-through tokens for claude
 }
 
-function parseRunArgs(raw: string[]): RunFlags {
+export function parseRunArgs(raw: string[]): RunFlags {
   // Normalize em/en dashes back to `--` — WeChat/iOS keyboards autocorrect
   // `--` into `—` (U+2014), and we don't want that to silently break flag
   // parsing when the args come from a `.restart-flag` written by server.ts.
@@ -117,7 +117,7 @@ function parseRunArgs(raw: string[]): RunFlags {
   return { skipPermissions, freshSession, extraArgs: extra }
 }
 
-function buildClaudeArgs(flags: RunFlags, bun: string): string[] {
+export function buildClaudeArgs(flags: RunFlags, bun: string): string[] {
   const mcpConfig = JSON.stringify({
     mcpServers: {
       wechat: {
@@ -350,44 +350,48 @@ function help() {
 `)
 }
 
-const command = process.argv[2]
+// Only run the CLI dispatch when this file is the entry point (not when
+// imported by tests or other modules that just want parseRunArgs etc.).
+if (import.meta.main) {
+  const command = process.argv[2]
 
-switch (command) {
-  case 'setup': {
-    const bun = getBunPath()
-    const result = spawnSync(bun, [resolve(PLUGIN_DIR, 'setup.ts')], { stdio: 'inherit' })
-    process.exit(result.status ?? 1)
+  switch (command) {
+    case 'setup': {
+      const bun = getBunPath()
+      const result = spawnSync(bun, [resolve(PLUGIN_DIR, 'setup.ts')], { stdio: 'inherit' })
+      process.exit(result.status ?? 1)
+    }
+    case 'start': {
+      const bun = getBunPath()
+      const result = spawnSync(bun, [resolve(PLUGIN_DIR, 'server.ts')], { stdio: 'inherit' })
+      process.exit(result.status ?? 1)
+    }
+    case 'run':
+      await run()
+      break
+    case 'list':
+      listAccounts()
+      break
+    case 'logs': {
+      const bun = getBunPath()
+      const port = process.argv[3] ?? '3456'
+      const result = spawnSync(bun, [resolve(PLUGIN_DIR, 'log-viewer.ts'), port], { stdio: 'inherit' })
+      process.exit(result.status ?? 1)
+    }
+    case 'install':
+      install()
+      break
+    case 'update':
+      update()
+      break
+    case 'help':
+    case '--help':
+    case '-h':
+      help()
+      break
+    default:
+      if (command) console.error(`未知命令: ${command}`)
+      help()
+      process.exit(command ? 1 : 0)
   }
-  case 'start': {
-    const bun = getBunPath()
-    const result = spawnSync(bun, [resolve(PLUGIN_DIR, 'server.ts')], { stdio: 'inherit' })
-    process.exit(result.status ?? 1)
-  }
-  case 'run':
-    await run()
-    break
-  case 'list':
-    listAccounts()
-    break
-  case 'logs': {
-    const bun = getBunPath()
-    const port = process.argv[3] ?? '3456'
-    const result = spawnSync(bun, [resolve(PLUGIN_DIR, 'log-viewer.ts'), port], { stdio: 'inherit' })
-    process.exit(result.status ?? 1)
-  }
-  case 'install':
-    install()
-    break
-  case 'update':
-    update()
-    break
-  case 'help':
-  case '--help':
-  case '-h':
-    help()
-    break
-  default:
-    if (command) console.error(`未知命令: ${command}`)
-    help()
-    process.exit(command ? 1 : 0)
 }

@@ -43,3 +43,6 @@ jobs:
 
       - name: Build log-viewer.ts
         run: bun build log-viewer.ts --target=node --outfile=dist/log-viewer.js
+
+      - name: Run tests
+        run: npx vitest run
