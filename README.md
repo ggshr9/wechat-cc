@@ -1,7 +1,7 @@
 <h1 align="center">wechat-cc</h1>
 
 <p align="center">
-  <b>A WeChat channel plugin for Claude Code — bridge WeChat messages in and out of your Claude Code session via the ilink bot API.</b>
+  <b>Talk to your Claude Code session from WeChat on your phone.</b>
 </p>
 
 <p align="center">
@@ -16,309 +16,247 @@
   English | <a href="./README.zh.md">中文</a>
 </p>
 
-> Unofficial. Built on the ilink bot protocol (`https://ilinkai.weixin.qq.com`). Each QR scan binds one 1:1 bot — this is an ilink limitation; group chat is not supported.
+<!-- TODO: add a 4-panel screenshot or 30s demo video here -->
+
+## Why?
+
+- **Work away from your desk** — start a long Claude task on your computer, lock the screen, and keep interacting from WeChat on your phone
+- **Share plans with non-technical people** — Claude generates a plan, you forward a rendered URL to your supervisor, they tap Approve on their phone
+- **Multi-user access** — allow teammates to message your Claude session through their own WeChat, controlled by an allowlist
+
+> Unofficial. Built on the ilink bot protocol. Each QR scan binds one 1:1 bot (ilink limitation; no group chat). Automated WeChat access may violate WeChat ToS — use at your own risk.
+
+## Quick Start
+
+```bash
+git clone https://github.com/ggshr9/wechat-cc.git ~/.claude/plugins/local/wechat
+cd ~/.claude/plugins/local/wechat && bun install && bun link
+wechat-cc setup              # scan QR with WeChat
+wechat-cc run --fresh        # start Claude Code + WeChat channel
+```
+
+That's it. Send a message from WeChat and Claude will see it.
+
+<details>
+<summary><b>Detailed install instructions (Windows / manual steps / optional deps)</b></summary>
+
+### Requirements
+
+- [Bun](https://bun.sh) 1.1+ (`curl -fsSL https://bun.sh/install | bash`)
+- [Claude Code CLI](https://github.com/anthropics/claude-code)
+
+### Step-by-step
+
+<details>
+<summary>Linux / macOS</summary>
+
+```bash
+# Clone directly into the Claude Code plugin directory
+git clone https://github.com/ggshr9/wechat-cc.git ~/.claude/plugins/local/wechat
+cd ~/.claude/plugins/local/wechat
+bun install
+
+# Add `wechat-cc` command to your PATH
+bun link
+
+# Bind your WeChat (scan the QR code that appears)
+wechat-cc setup
+
+# Start
+wechat-cc run --fresh
+```
+
+Optional: install `expect` for hands-free `/restart` from WeChat:
+```bash
+# Ubuntu/Debian
+sudo apt install expect
+# macOS
+brew install expect
+```
+</details>
+
+<details>
+<summary>Windows</summary>
+
+```powershell
+# Clone directly into the Claude Code plugin directory
+git clone https://github.com/ggshr9/wechat-cc.git "%USERPROFILE%\.claude\plugins\local\wechat"
+cd "%USERPROFILE%\.claude\plugins\local\wechat"
+bun install
+
+# Add `wechat-cc` command to your PATH (creates wechat-cc.cmd)
+bun link
+
+# Bind your WeChat (scan the QR code that appears)
+wechat-cc setup
+
+# Start
+wechat-cc run --fresh
+```
+
+Everything works on Windows. The only difference: `/restart` from WeChat requires you to press Enter once in the terminal (Windows has no `expect` equivalent for auto-confirmation).
+</details>
+
+### Optional dependencies
+
+| Dependency | What it enables | Auto-installed? |
+|:---|:---|:---:|
+| `expect` | `/restart` from WeChat auto-confirms the dev-channel dialog | No — `apt install expect` / `brew install expect` |
+| `cloudflared` | `share_page` publishes rendered markdown to a public URL | **Yes** — auto-downloaded on first use |
+
+### Updating
+
+```bash
+wechat-cc update    # git pull + bun install if needed
+```
+
+Then send `/restart` from WeChat (or Ctrl+C + `wechat-cc run` in terminal) to pick up the new code.
+
+WeChat's `/status` command shows your current version and whether you're behind `origin/master`.
+
+</details>
 
 ## Features
 
-- QR-code login, multi-account (each scanner = one independent bot, one `accounts/<bot_id>/` dir)
+- **WeChat as your Claude remote** — send text, images, files, and voice from your phone; Claude sees everything and replies in-chat
+- **share_page** — long markdown (plans, specs, reviews) published as a phone-friendly rendered web page via cloudflared tunnel, with a one-tap Approve button for external reviewers
+- **`/restart` from WeChat** — restart your Claude session without touching the terminal; auto-confirms the startup dialog on Linux/macOS
+- **Allowlist access control** — only approved WeChat users can reach your Claude session
+- **`wechat-cc update`** — one-command upgrade with version checking via `/status`
+
+<details>
+<summary><b>All features</b></summary>
+
+- QR-code login, multi-account (each scanner = one independent bot)
 - MCP server exposing channel tools: `reply`, `edit_message`, `broadcast`, `send_file`, `set_user_name`, `share_page`, `resurface_page`
-- `share_page` publishes long markdown (plans, specs, review docs) to a public cloudflared quick-tunnel URL so the WeChat user can tap and read rendered content on their phone. Rendered pages include a single one-tap Approve button at the bottom for non-Claude stakeholders to acknowledge ("read it, looks good, don't wait on me") — clicks arrive back as MCP notifications
-- `resurface_page` re-opens a previously shared document on the current tunnel when its original URL has died (tunnel URLs are per-run)
+- `resurface_page` re-opens old shared documents on the current tunnel when the original URL has expired
 - Text, image, file and video delivery (CDN upload/download + AES-128-ECB encryption)
-- Inbox directory for incoming media (paths surfaced in message metadata)
-- Allowlist-based access control (persisted to `~/.claude/channels/wechat/access.json`)
+- Incoming media auto-downloaded to inbox (paths surfaced in message metadata)
+- Small text files (csv, json, md, code) get an inline 5-line preview on arrival
 - Live log monitor at `http://localhost:3456` (`wechat-cc logs`)
 - Built-in WeChat slash commands: `/help`, `/status`, `/ping`, `/users`, `/restart`, `@all`, `@<name>`
-- Auto-prompts Claude to ask for a name when a new sender appears; stored via `set_user_name`
+- New users auto-prompted for their name; stored via `set_user_name`
+- Voice messages with ilink transcription displayed inline; untranscribed audio saved to inbox with explicit "please retype" prompt
+- Shared `.md` files auto-cleaned after 7 days; inbox media after 30 days; `channel.log` rotated at 10 MB
+- `share_page` Approve button for out-of-band stakeholder sign-off (decision arrives back as MCP notification)
+- Cross-platform: Linux, macOS, Windows — zero platform-specific code in the restart path
+</details>
 
-## Install
-
-Requirements:
-
-- [Bun](https://bun.sh) (tested with 1.1+)
-- [Claude Code CLI](https://github.com/anthropics/claude-code)
-
-Optional:
-
-- `expect(1)` — lets WeChat-triggered `/restart` auto-confirm Claude Code's
-  `--dangerously-load-development-channels` dialog so nobody has to sit at the
-  terminal and press Enter. Without it, `/restart` will relaunch `claude`
-  normally but the session will stall on the dialog until a human intervenes.
-  Install with `apt install expect` / `brew install expect`.
-- `cloudflared` — used by the `share_page` tool to expose rendered markdown
-  pages through a public quick tunnel (`*.trycloudflare.com`). **You don't
-  need to install this yourself** — wechat-cc auto-downloads the matching
-  static binary into `~/.claude/channels/wechat/bin/cloudflared` on first
-  use. No Cloudflare account, no domain, no config. If you already have
-  cloudflared on your `PATH` (e.g. `brew install cloudflared`), wechat-cc
-  will reuse it instead of downloading.
-
-**Windows note:** wechat-cc works on Windows (Bun 1.1+ supports it
-natively). The `share_page` auto-download of `cloudflared.exe` and all
-MCP tools function cross-platform. The only degradation is `/restart`
-auto-confirmation of the dev-channel dialog — Windows has no `expect(1)`
-equivalent, so you'll press Enter once in the terminal on restart. All
-other functionality is identical to Linux/macOS.
-
-Clone the repo and install deps:
+## Usage
 
 ```bash
-git clone https://github.com/ggshr9/wechat-cc.git
-cd wechat-cc
-bun install
+wechat-cc setup              # scan QR to bind a WeChat account
+wechat-cc run                # start (resumes last session)
+wechat-cc run --fresh        # start a new session
+wechat-cc run --dangerously  # skip all permission prompts
+wechat-cc list               # show bound accounts
+wechat-cc logs               # open live log viewer (http://localhost:3456)
+wechat-cc update             # pull latest code + reinstall deps
 ```
 
-Link the plugin into Claude Code. The plugin lives at `~/.claude/plugins/local/wechat/`; either clone directly there or symlink:
+### WeChat commands
 
-```bash
-mkdir -p ~/.claude/plugins/local
-ln -s "$(pwd)" ~/.claude/plugins/local/wechat    # Linux/macOS
-# Windows: mklink /D "%USERPROFILE%\.claude\plugins\local\wechat" "%cd%"
-```
-
-Add the CLI to your `PATH` (works on Linux, macOS, AND Windows — bun
-creates the right shim for each platform):
-
-```bash
-bun link
-```
-
-After this you can run `wechat-cc setup`, `wechat-cc run`, etc. from
-any directory. On Windows this creates a `wechat-cc.cmd` in bun's
-global bin; on Linux/macOS a symlink. Since `bun link` points back at
-the plugin directory via symlink, `wechat-cc update` (git pull) takes
-effect immediately without re-linking.
-
-## First-run setup
-
-Each person who wants Claude to see their WeChat runs this **once**:
-
-```bash
-wechat-cc setup
-```
-
-A QR code prints in your terminal. Scan it with WeChat. On success, account state is written to `~/.claude/channels/wechat/accounts/<bot_id>/`. Repeat `wechat-cc setup` to bind additional accounts — each scan creates a separate directory and each is polled independently.
-
-## Run
-
-```bash
-# Start Claude Code with the WeChat channel loaded, resuming the last session
-wechat-cc run --dangerously
-
-# Fresh session instead
-wechat-cc run --fresh
-
-# List already bound accounts
-wechat-cc list
-
-# Open the live log viewer in your browser
-wechat-cc logs          # http://localhost:3456
-wechat-cc logs 4567     # override port
-
-# Pull latest code + reinstall deps if bun.lock changed.
-# Running server keeps using old code until you /restart in WeChat
-# (or Ctrl+C + wechat-cc run).
-wechat-cc update
-```
-
-The WeChat `/status` command shows the current build SHA + commit subject and
-whether you're behind `origin/master`. If you see "落后 N 个 commit", run
-`wechat-cc update` in the terminal and then send `/restart` from WeChat.
-
-Behind the scenes `run` invokes `claude --dangerously-load-development-channels server:wechat` (or equivalent) so the MCP server is loaded at startup.
+| Command | Effect |
+|:---|:---|
+| `/help` | Show available commands |
+| `/status` | Connection health + version + update check |
+| `/ping` | Connectivity test |
+| `/users` | List online users |
+| `/restart` | Restart session (admin-only) |
+| `/restart --fresh` | Restart with a brand-new session |
+| `@all msg` | Broadcast to everyone |
+| `@name msg` | Forward to a specific user |
 
 ## Access control
 
-The channel is **allowlist-only by default** — WeChat messages from users not on the allowlist are dropped silently.
-
-Inside Claude Code:
+Allowlist-only by default. Manage from the terminal (never from WeChat, to prevent prompt injection):
 
 ```
 /wechat:access                        # show policy + allowlist
-/wechat:access allow <user_id>        # add a sender (user IDs look like xxx@im.wechat)
-/wechat:access remove <user_id>       # remove
-/wechat:access policy disabled        # kill the channel entirely
+/wechat:access allow <user_id>        # add a sender
+/wechat:access remove <user_id>       # remove a sender
 ```
 
-Access mutations **must only come from requests typed in the terminal**. The `access` skill refuses to modify the allowlist if the request arrived via an inbound WeChat message (prompt-injection surface).
+Users who scan the QR during `wechat-cc setup` are automatically added to the allowlist.
 
-## Channel commands (from WeChat)
+<details>
+<summary><b>How /restart works</b></summary>
 
-| Command                 | Effect                                                          |
-|-------------------------|-----------------------------------------------------------------|
-| `/help`                 | Show available commands                                         |
-| `/status`               | Connection + account health                                     |
-| `/ping`                 | Connectivity test                                               |
-| `/users`                | List online (bound) users                                       |
-| `/restart`              | Restart wechat-cc inheriting current flags (admin-only)         |
-| `/restart --dangerously`| Restart and enable `--dangerously-skip-permissions`             |
-| `/restart --fresh`      | Restart with a brand-new Claude session (no `--continue`)       |
-| `@all msg`              | Broadcast to every connected user                               |
-| `@名字 msg`             | Forward to a specific user (name from `set_user_name`)          |
+`wechat-cc run` runs a supervisor loop. When an admin sends `/restart`:
 
-**How `/restart` works:** `wechat-cc run` runs a supervisor loop. When an
-admin sends `/restart` (optionally with flags), the server:
+1. Server writes `.restart-flag` + `.restart-ack` marker files
+2. Sends "正在重启…" acknowledgement via WeChat
+3. `cli.ts` detects the flag via 500ms polling, kills the `claude` child process
+4. Supervisor respawns claude (wrapped in `expect` on Linux/macOS to auto-confirm the dev-channel dialog)
+5. New server boots, reads `.restart-ack`, sends "已重连（flags）用时约 Ns" back to the requester
 
-1. Writes `.restart-flag` (raw flag string) so `cli.ts` knows how to respawn.
-2. Writes `.restart-ack` with `{chat_id, account_id, flags, requested_at}`
-   so the *next* server boot knows to greet the requester.
-3. Sends "正在重启…约 5 秒后重连" through the same bot.
-4. SIGTERMs the `claude` ancestor.
+The kill flows downward (cli.ts → claude → server) via `child.kill()`, requiring zero platform-specific process-tree walking. Works identically on Linux, macOS, and Windows.
+</details>
 
-The CLI supervisor catches `claude`'s exit, re-reads `.restart-flag`, and
-respawns. On the relaunch path, `claude` is wrapped in `expect(1)` which
-sprays `\r` via three `after` timers (800ms / 2000ms / 4000ms) to
-auto-confirm the `--dangerously-load-development-channels` dialog — no
-human needs to be at the terminal. If `expect` is not installed the
-respawn still works but will stall on that dialog until someone presses
-Enter (a soft warning is printed at `wechat-cc run` startup).
+<details>
+<summary><b>How share_page works</b></summary>
 
-Once the new server's poll loops are up, it reads `.restart-ack`, finds
-the account that originally handled the `/restart`, and sends
-"已重连（flags）用时约 Ns" back to the requester, then deletes the
-marker. The Claude session itself resumes via `--continue` unless
-`--fresh` was passed.
+WeChat can't render markdown. `share_page` solves this by publishing content to a short-lived public URL:
 
-## Sharing long docs (`share_page` / `resurface_page`)
+1. Claude calls `share_page({ title, content, chat_id? })`
+2. Content written to `~/.claude/channels/wechat/docs/<slug>.md`
+3. Local `Bun.serve` renders `/docs/<slug>` via `marked` with mobile-friendly CSS
+4. `cloudflared tunnel` exposes the local server to `*.trycloudflare.com` (auto-downloaded on first use, no account needed)
+5. URL sent to WeChat with title + preview
 
-WeChat text messages can't render markdown — code blocks, tables, and
-nested lists collapse into a wall of text that's unusable on a phone.
-The `share_page` MCP tool solves this by publishing a markdown document
-to a short-lived URL that renders properly in the user's phone browser.
+Each page has a single **Approve** button for external reviewers (e.g. a supervisor you forwarded the URL to). Clicks POST back through the tunnel and arrive as MCP notifications. No reject/comment UI by design — pushback goes through normal WeChat conversation.
 
-**How it works:**
+`share_page` is a publishing tool, not an approval gate. For explicit y/n decisions, use Claude's built-in permission-request flow.
 
-1. Claude calls `share_page({ title, content, chat_id? })`.
-2. The content is written to `~/.claude/channels/wechat/docs/<slug>.md`.
-3. wechat-cc spawns a local `Bun.serve` on an ephemeral port that
-   renders `/docs/<slug>` via `marked` with a clean desktop+mobile
-   stylesheet plus a **single one-tap Approve button** at the bottom
-   of every page.
-4. On the first call, `cloudflared` is started as a subprocess with
-   `tunnel --url http://localhost:<port>` — no Cloudflare account or
-   domain needed. wechat-cc parses the assigned
-   `https://<words>.trycloudflare.com` URL from its log and caches it
-   for the session. If `cloudflared` isn't on `PATH`, wechat-cc
-   auto-downloads the matching static binary to
-   `~/.claude/channels/wechat/bin/cloudflared` (30 MB, one-time).
-5. `share_page` returns `https://<tunnel>.trycloudflare.com/docs/<slug>`.
-   If `chat_id` is provided it auto-sends a WeChat message with
-   title + preview + URL. If omitted, defaults to the first admin
-   from `access.json` so "share this with me" from a terminal context
-   just works.
-
-**Approve:** The embedded button is aimed at stakeholders *outside*
-the Claude session. Workflow: Claude generates a plan, shares it, you
-forward the URL to your supervisor via WeChat/email/whatever. The
-supervisor taps the URL, reads the plan, and clicks Approve. The click
-POSTs back through the same tunnel to wechat-cc's local server, which
-writes a per-slug `.decision.json` and fires an MCP notification so
-Claude sees the acknowledgement as inbound channel feedback (tagged
-`share_page:<slug>`). The page then shows a persistent "Approved ✓"
-banner on subsequent visits. No authentication beyond the random URL —
-adequate for personal / small-team sign-off, not for access-controlled
-workflows.
-
-There is deliberately no reject or comment UI. If a reviewer needs to
-push back or explain, they can message the URL owner directly — a
-WeChat thread carries context much better than a form field, and
-wechat-cc is already the transport. Keeping the page approve-only also
-avoids a misleading "I explained in the form but nothing happens" UX
-for the reviewer.
-
-**`share_page` is a publishing step, not an approval gate.** It doesn't
-block Claude's execution. If you need an explicit y/n gate, that still
-goes through the normal permission-request flow (🔐 prompts in WeChat).
-The two mechanisms are deliberately separate.
-
-**Resurface:** cloudflared quick-tunnel URLs only live for one
-wechat-cc run. When you reference a plan from yesterday whose URL no
-longer resolves, ask Claude to reopen it — Claude calls
-`resurface_page({ slug? , title_fragment? })` and gets a fresh working
-URL on the current tunnel for the same underlying `.md` file.
-
-**Retention:** shared `.md` files (and their `.decision.json` siblings)
-are auto-deleted after 7 days. If you need to archive a plan
-long-term, copy it somewhere else yourself — wechat-cc is a transport,
-not an archive store.
-
-**Caveats:**
-
-- The URL is publicly reachable by anyone who gets it. Do **not** put
-  secrets (credentials, API keys, internal strategy) in a shared page.
-  The slug is random enough (4-word subdomain + timestamp suffix) to
-  resist brute force but is not an authorization control.
-- Anyone with the URL can also submit Approve — that's by design
-  (external-reviewer use case) but means the URL itself is your trust
-  boundary. Treat it as a bearer credential.
-- URLs are ephemeral: when `wechat-cc run` exits, cloudflared dies and
-  the URL stops resolving. Use `resurface_page` to re-expose old pages
-  on a new tunnel.
-- Cloudflare's quick tunnels are officially labeled non-production —
-  fine for personal/small-team use, not suitable for high traffic.
-- Content does transit through Cloudflare's edge. If that's a problem
-  you can either (a) only use `share_page` for non-sensitive content,
-  which is the intended model, or (b) opt out by removing the tool
-  from `server.ts`.
+`resurface_page` re-opens old docs on a new tunnel when the original URL has died (URLs are per-session). Shared files auto-delete after 7 days.
+</details>
 
 ## State layout
 
 ```
 ~/.claude/channels/wechat/
 ├── access.json            # allowlist
-├── context_tokens.json    # ilink context tokens (needed to initiate outbound messages)
+├── context_tokens.json    # ilink context tokens
 ├── user_names.json        # chat_id → display name
-├── channel.log            # rolling log (auto-rotated to .1 at 10 MB)
+├── channel.log            # rolling log (10 MB rotation)
 ├── server.pid             # single-instance lock
-├── .restart-flag          # transient: raw flags for cli.ts on /restart
-├── .restart-ack           # transient: next-boot greeting marker
-├── docs/                  # share_page .md bodies + .decision.json siblings (7-day TTL)
-├── bin/
-│   └── cloudflared        # auto-downloaded on first share_page call (.exe on Windows)
-├── inbox/                 # downloaded media (30-day TTL, auto-cleaned on startup)
-└── accounts/
-    └── <bot_id>/
-        ├── account.json
-        └── token          # bot bearer token, mode 0600
+├── .restart-flag          # transient: restart flags
+├── .restart-ack           # transient: reconnect greeting marker
+├── docs/                  # share_page .md + .decision.json (7-day TTL)
+├── bin/cloudflared        # auto-downloaded (.exe on Windows)
+├── inbox/                 # downloaded media (30-day TTL)
+└── accounts/<bot_id>/     # per-account credentials
 ```
 
-None of this is committed — it's all under `~/.claude/`, outside the repo.
+All state lives under `~/.claude/` — nothing is committed to the repo.
 
-## Architecture notes
+<details>
+<summary><b>Architecture notes</b></summary>
 
 - **Receive**: long-polling `POST /ilink/bot/getupdates` per account
-- **Send**: `POST /ilink/bot/sendmessage` — outbound to a user requires a `context_token`; ilink won't deliver to anyone who hasn't sent at least one "hi" first
-- **Typing indicator**: `/ilink/bot/sendtyping` fired on inbound, ticket cached ~60 s
-- **Dedup**: `from_user_id:create_time_ms` key guards against at-least-once delivery
+- **Send**: `POST /ilink/bot/sendmessage` — requires a `context_token` (user must message the bot first)
+- **Typing indicator**: `/ilink/bot/sendtyping`, ticket cached ~60s
+- **Dedup**: `from_user_id:create_time_ms` guards against at-least-once redelivery
 - **Media**: CDN upload/download with AES-128-ECB encryption
-- **Retry**: outbound send retries 3× on timeout or 5xx, 1 s spacing
+- **Retry**: outbound send retries 3× on timeout or 5xx
+</details>
 
 ## Known limitations
 
-- `context_token` bootstrap: you can't message a user who has never messaged the bot first
-- Channel currently resets message history on server restart (no SQLite persistence)
-- Session expiry / unauthorized sender flows silently drop messages today
-- `cdn.ilinkai.weixin.qq.com` base URL is hardcoded — may need to be derived from account in the future
+- `context_token` bootstrap: can't message a user who hasn't messaged the bot first
+- Message history resets on server restart (no persistence layer)
+- `cdn.ilinkai.weixin.qq.com` base URL is hardcoded
 
 ## Uninstall
 
 ```bash
-# 1. Remove the Claude Code plugin symlink
-rm ~/.claude/plugins/local/wechat
-
-# 2. Remove the CLI symlink (if you added one)
-rm ~/.local/bin/wechat-cc
-
-# 3. Wipe all bound accounts, tokens, logs and inbox
-rm -rf ~/.claude/channels/wechat
-
-# 4. Drop the wechat entry from any project's .mcp.json
-#    (edit the file and delete the "wechat" key under mcpServers)
+rm ~/.claude/plugins/local/wechat     # remove plugin symlink
+rm -rf ~/.claude/channels/wechat      # wipe all state, accounts, logs
 ```
 
 ## Disclaimer
 
-Unofficial plugin. Not affiliated with, endorsed by, or sponsored by Tencent or WeChat. The ilink bot protocol is a third-party interface — automated WeChat access may violate the WeChat Terms of Service and can result in account suspension. Use at your own risk.
+Unofficial plugin. Not affiliated with, endorsed by, or sponsored by Tencent or WeChat. The ilink bot protocol is a third-party interface — automated WeChat access may violate the WeChat Terms of Service and can result in account suspension. **Use at your own risk.**
 
 ## License
 
