@@ -28,6 +28,8 @@
 
 ## Quick Start
 
+Works on Linux, macOS, and Windows (PowerShell / Git Bash):
+
 ```bash
 git clone https://github.com/ggshr9/wechat-cc.git ~/.claude/plugins/local/wechat
 cd ~/.claude/plugins/local/wechat && bun install && bun link
@@ -243,16 +245,28 @@ All state lives under `~/.claude/` — nothing is committed to the repo.
 
 ## Known limitations
 
-- `context_token` bootstrap: can't message a user who hasn't messaged the bot first
-- Message history resets on server restart (no persistence layer)
-- `cdn.ilinkai.weixin.qq.com` base URL is hardcoded
+- **First contact**: you can't message a WeChat user who hasn't sent at least one message to the bot first (ilink requires a `context_token` from their side)
+- **Claude forgets WeChat context on restart**: your WeChat chat history stays on your phone, but Claude starts with a fresh context after `/restart` or `wechat-cc run` — it won't remember what was discussed in the previous session unless you use `--continue` (which resumes Claude's own session, not the WeChat thread)
 
 ## Uninstall
+
+<details>
+<summary>Linux / macOS</summary>
 
 ```bash
 rm ~/.claude/plugins/local/wechat     # remove plugin symlink
 rm -rf ~/.claude/channels/wechat      # wipe all state, accounts, logs
 ```
+</details>
+
+<details>
+<summary>Windows (PowerShell)</summary>
+
+```powershell
+Remove-Item "$env:USERPROFILE\.claude\plugins\local\wechat"              # remove plugin
+Remove-Item "$env:USERPROFILE\.claude\channels\wechat" -Recurse -Force   # wipe all state
+```
+</details>
 
 ## Disclaimer
 

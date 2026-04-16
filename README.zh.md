@@ -28,6 +28,8 @@
 
 ## 快速开始
 
+Linux、macOS、Windows（PowerShell / Git Bash）通用：
+
 ```bash
 git clone https://github.com/ggshr9/wechat-cc.git ~/.claude/plugins/local/wechat
 cd ~/.claude/plugins/local/wechat && bun install && bun link
@@ -243,16 +245,28 @@ kill 走**向下**方向（cli.ts → claude → server），通过 `child.kill(
 
 ## 已知限制
 
-- `context_token` 引导：对方没发过消息的话你没法主动联系
-- 重启后微信对话上下文清空（没有持久化层）
-- `cdn.ilinkai.weixin.qq.com` 硬编码
+- **首次联系**：对方必须先给 bot 发过至少一条消息，你才能主动联系他（ilink 需要对方的 `context_token`）
+- **重启后 Claude 忘记微信上下文**：你的微信聊天记录一直在手机上，但 Claude 重启后会从新上下文开始 —— 它不记得上一次 session 里微信聊了什么（除非用 `--continue` 恢复 Claude 自己的会话，但那也不会回放微信消息）
 
 ## 卸载
+
+<details>
+<summary>Linux / macOS</summary>
 
 ```bash
 rm ~/.claude/plugins/local/wechat     # 删除插件
 rm -rf ~/.claude/channels/wechat      # 清空所有状态、账号、日志
 ```
+</details>
+
+<details>
+<summary>Windows (PowerShell)</summary>
+
+```powershell
+Remove-Item "$env:USERPROFILE\.claude\plugins\local\wechat"              # 删除插件
+Remove-Item "$env:USERPROFILE\.claude\channels\wechat" -Recurse -Force   # 清空所有状态
+```
+</details>
 
 ## 免责声明
 
