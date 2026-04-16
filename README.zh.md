@@ -24,6 +24,8 @@
 - **把方案分享给非技术人** —— Claude 生成了一份 plan，你转发一个渲染好的链接给上司，他在手机上看完点 Approve
 - **多人协作** —— 允许同事通过各自的微信给你的 Claude 发消息，白名单控制访问
 
+> 基于 [Claude Code](https://github.com/anthropics/claude-code)，也可通过 [cc-switch](https://github.com/farion1231/cc-switch) 图形化配置。
+
 ---
 
 ## 目录

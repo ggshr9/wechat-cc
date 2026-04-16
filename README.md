@@ -24,6 +24,8 @@
 - **Share plans with non-technical people** — Claude generates a plan, you forward a rendered URL to your supervisor, they tap Approve on their phone
 - **Multi-user access** — allow teammates to message your Claude session through their own WeChat, controlled by an allowlist
 
+> Works with [Claude Code](https://github.com/anthropics/claude-code). Also configurable via [cc-switch](https://github.com/farion1231/cc-switch).
+
 ---
 
 ## Table of Contents
