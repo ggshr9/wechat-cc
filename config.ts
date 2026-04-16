@@ -1,10 +1,16 @@
 /**
- * config.ts — shared ilink constants.
+ * config.ts — shared constants and paths.
  *
- * Values that are identical between server.ts and setup.ts live here.
+ * Values that are identical across multiple entry points live here.
  * Per-file overrides (e.g. different CLIENT_VERSION or API_TIMEOUT) stay
  * in the respective files — see the note on CLIENT_VERSION below.
  */
+
+import { homedir } from 'os'
+import { join } from 'path'
+
+/** Root state directory — all persistent wechat-cc data lives under here. */
+export const STATE_DIR = process.env.WECHAT_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'wechat')
 
 /** ilink API base URL (shared by server + setup). */
 export const ILINK_BASE_URL = 'https://ilinkai.weixin.qq.com'

@@ -17,23 +17,32 @@ import {
 import { z } from 'zod'
 import { randomBytes, createDecipheriv, createCipheriv, createHash } from 'crypto'
 import {
-  readFileSync, writeFileSync, mkdirSync, appendFileSync,
+  readFileSync, writeFileSync, mkdirSync,
   renameSync, chmodSync, readdirSync, existsSync, rmSync, statSync,
 } from 'fs'
-import { homedir } from 'os'
 import { join } from 'path'
 import { spawnSync } from 'child_process'
+import { log } from './log.ts'
+import {
+  type Access, type GateResult,
+  loadAccess, saveAccess, assertAllowedChat, isAdmin, gate,
+} from './access.ts'
+import {
+  type WeixinMessage, type MessageItem, type CDNMedia, type GetUpdatesResp,
+  ILINK_BASE_INFO,
+  ilinkPost, ilinkGetUpdates, ilinkSendMessage, ilinkSendTyping, ilinkGetConfig,
+  botTextMessage, generateClientId,
+} from './ilink.ts'
 
 // Bun's import.meta.dir gives a proper filesystem path on ALL platforms
 // (including Windows where the old URL().pathname approach produces a
 // leading-slash /C:/... that breaks git -C and other shell commands).
 const PLUGIN_DIR = import.meta.dir
 
-// ── Paths ──────────────────────────────────────────────────────────────────
-const STATE_DIR = process.env.WECHAT_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'wechat')
-const ACCESS_FILE = join(STATE_DIR, 'access.json')
+// ── Paths (STATE_DIR imported from config.ts) ─────────────────────────────
+// ACCESS_FILE now in access.ts
 const ACCOUNTS_DIR = join(STATE_DIR, 'accounts')
-const LOG_FILE = join(STATE_DIR, 'channel.log')
+// LOG_FILE now in log.ts
 const RESTART_FLAG_PATH = join(STATE_DIR, '.restart-flag')
 // Marker written by the old server right before SIGTERM, so the newly spawned
 // server can tell this boot came from /restart and greet the requester with
@@ -48,6 +57,7 @@ import {
   shutdown as shutdownDocs,
 } from './docs.ts'
 import {
+  STATE_DIR,
   ILINK_BASE_URL,
   ILINK_APP_ID,
   ILINK_BOT_TYPE,
@@ -58,39 +68,7 @@ import {
 mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
 const START_TIME = Date.now()
 
-// ── channel.log rotation ──────────────────────────────────────────────────
-// Naive single-file rotation: if channel.log grows past 10MB, rename it
-// to channel.log.1 (overwriting any previous backup) and start fresh.
-// Checked at startup and again every LOG_ROTATE_CHECK_INTERVAL log calls
-// so we don't stat the file on every single log line.
-const LOG_ROTATE_SIZE = 10 * 1024 * 1024 // 10 MB
-const LOG_ROTATE_CHECK_INTERVAL = 100
-let _logCallsSinceCheck = 0
-
-function maybeRotateLog(): void {
-  try {
-    const st = statSync(LOG_FILE)
-    if (st.size > LOG_ROTATE_SIZE) {
-      try {
-        renameSync(LOG_FILE, `${LOG_FILE}.1`)
-      } catch {}
-    }
-  } catch {
-    // No log file yet, nothing to rotate
-  }
-}
-
-maybeRotateLog()
-
-function log(tag: string, msg: string): void {
-  if (++_logCallsSinceCheck >= LOG_ROTATE_CHECK_INTERVAL) {
-    _logCallsSinceCheck = 0
-    maybeRotateLog()
-  }
-  const line = `${new Date().toISOString()} [${tag}] ${msg}\n`
-  process.stderr.write(`wechat channel: ${line}`)
-  try { appendFileSync(LOG_FILE, line) } catch {}
-}
+// log() imported from log.ts (includes rotation)
 
 // ── Version info ──────────────────────────────────────────────────────────
 // getLocalVersion() reads the plugin's git HEAD (fast, local-only). Used in
@@ -144,13 +122,8 @@ function getUpdateCount(): number | null {
   }
 }
 
-const ILINK_BASE_INFO = { channel_version: '2.1.7' } as const
-
-// ── ilink constants (shared ones imported from config.ts) ─────────────────
-// ILINK_BASE_URL, ILINK_APP_ID, ILINK_BOT_TYPE, LONG_POLL_TIMEOUT_MS
-// come from config.ts. Per-file constants stay here:
-const ILINK_CLIENT_VERSION = '131335' // 2.1.7 → 0x00020107
-const API_TIMEOUT_MS = 30_000
+// ilink types + HTTP imported from ilink.ts
+// ilink constants imported from config.ts
 const MAX_TEXT_CHUNK = 4000
 
 // ── Message cache for quote resolution ─────────────────────────────────────
@@ -180,152 +153,7 @@ function lookupCache(timeMs: number): string | undefined {
   return undefined
 }
 
-// ── ilink types ────────────────────────────────────────────────────────────
-interface WeixinMessage {
-  seq?: number
-  message_id?: number
-  from_user_id?: string
-  to_user_id?: string
-  create_time_ms?: number
-  update_time_ms?: number
-  message_type?: number   // 1=user, 2=bot
-  message_state?: number  // 0=new, 1=generating, 2=finish
-  item_list?: MessageItem[]
-  context_token?: string
-  session_id?: string
-}
-
-interface CDNMedia {
-  encrypt_query_param?: string
-  aes_key?: string       // base64-encoded
-  encrypt_type?: number
-  full_url?: string
-}
-
-interface MessageItem {
-  type?: number  // 1=text, 2=image, 3=voice, 4=file, 5=video
-  msg_id?: string
-  text_item?: { text?: string }
-  voice_item?: { text?: string; media?: CDNMedia }
-  ref_msg?: { title?: string; message_item?: { type?: number; text_item?: { text?: string }; unsupported_item?: { text?: string } } }
-  image_item?: { media?: CDNMedia; aeskey?: string; mid_size?: number; hd_size?: number }
-  file_item?: { media?: CDNMedia; file_name?: string; md5?: string; len?: string }
-  video_item?: { media?: CDNMedia; video_size?: number; thumb_media?: CDNMedia }
-}
-
-interface GetUpdatesResp {
-  ret?: number
-  errcode?: number
-  errmsg?: string
-  msgs?: WeixinMessage[]
-  get_updates_buf?: string
-  longpolling_timeout_ms?: number
-}
-
-// ── ilink HTTP helpers ─────────────────────────────────────────────────────
-
-function randomWechatUin(): string {
-  const uint32 = randomBytes(4).readUInt32BE(0)
-  return Buffer.from(String(uint32), 'utf-8').toString('base64')
-}
-
-function buildHeaders(token?: string): Record<string, string> {
-  const h: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'AuthorizationType': 'ilink_bot_token',
-    'iLink-App-Id': ILINK_APP_ID,
-    'iLink-App-ClientVersion': ILINK_CLIENT_VERSION,
-    'X-WECHAT-UIN': randomWechatUin(),
-  }
-  if (token) h['Authorization'] = `Bearer ${token}`
-  return h
-}
-
-async function ilinkPost(baseUrl: string, endpoint: string, body: object, token?: string, timeoutMs = API_TIMEOUT_MS): Promise<string> {
-  const url = new URL(endpoint, baseUrl.endsWith('/') ? baseUrl : baseUrl + '/')
-  const json = JSON.stringify(body)
-  const ctrl = new AbortController()
-  const t = setTimeout(() => ctrl.abort(), timeoutMs)
-  try {
-    const res = await fetch(url.toString(), {
-      method: 'POST',
-      headers: { ...buildHeaders(token), 'Content-Length': String(Buffer.byteLength(json, 'utf-8')) },
-      body: json,
-      signal: ctrl.signal,
-    })
-    if (!res.ok) throw new Error(`${endpoint} ${res.status}: ${await res.text()}`)
-    return await res.text()
-  } finally { clearTimeout(t) }
-}
-
-// ── ilink API calls ────────────────────────────────────────────────────────
-
-async function ilinkGetUpdates(baseUrl: string, token: string, buf: string): Promise<GetUpdatesResp> {
-  try {
-    const raw = await ilinkPost(baseUrl, 'ilink/bot/getupdates', {
-      get_updates_buf: buf,
-      base_info: ILINK_BASE_INFO,
-    }, token, LONG_POLL_TIMEOUT_MS)
-    return JSON.parse(raw) as GetUpdatesResp
-  } catch (err) {
-    // Long-poll timeout is normal
-    if (err instanceof Error && err.name === 'AbortError') {
-      return { ret: 0, msgs: [], get_updates_buf: buf }
-    }
-    throw err
-  }
-}
-
-function generateClientId(): string {
-  return `claude-code-wechat:${Date.now()}-${randomBytes(4).toString('hex')}`
-}
-
-function botTextMessage(toUserId: string, text: string, ctxToken?: string): WeixinMessage {
-  return {
-    to_user_id: toUserId,
-    message_type: 2,
-    message_state: 2,
-    item_list: [{ type: 1, text_item: { text } }],
-    context_token: ctxToken,
-  }
-}
-
-async function ilinkSendMessage(baseUrl: string, token: string, msg: WeixinMessage): Promise<void> {
-  const body = {
-    msg: { from_user_id: '', client_id: generateClientId(), ...msg },
-    base_info: ILINK_BASE_INFO,
-  }
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      await ilinkPost(baseUrl, 'ilink/bot/sendmessage', body, token)
-      return
-    } catch (err) {
-      const isRetryable = err instanceof Error &&
-        (err.name === 'AbortError' || /^ilink.*5\d\d/.test(err.message))
-      if (!isRetryable || attempt === 3) throw err
-      log('RETRY', `sendmessage attempt ${attempt} failed, retrying in 1s: ${err instanceof Error ? err.message : err}`)
-      await new Promise(r => setTimeout(r, 1000))
-    }
-  }
-}
-
-async function ilinkSendTyping(baseUrl: string, token: string, userId: string, ticket: string): Promise<void> {
-  await ilinkPost(baseUrl, 'ilink/bot/sendtyping', {
-    ilink_user_id: userId,
-    typing_ticket: ticket,
-    status: 1,
-    base_info: ILINK_BASE_INFO,
-  }, token)
-}
-
-async function ilinkGetConfig(baseUrl: string, token: string, userId: string, contextToken?: string): Promise<{ typing_ticket?: string }> {
-  const raw = await ilinkPost(baseUrl, 'ilink/bot/getconfig', {
-    ilink_user_id: userId,
-    context_token: contextToken,
-    base_info: ILINK_BASE_INFO,
-  }, token)
-  return JSON.parse(raw)
-}
+// ilink types, HTTP helpers, and API calls imported from ilink.ts
 
 // ── CDN media ──────────────────────────────────────────────────────────────
 
@@ -575,75 +403,7 @@ async function uploadToCdn(params: {
   throw new Error('uploadToCdn: exhausted retries') // unreachable
 }
 
-// ── Access control ─────────────────────────────────────────────────────────
-
-interface Access {
-  dmPolicy: 'allowlist' | 'disabled'
-  allowFrom: string[]
-}
-
-function defaultAccess(): Access {
-  return { dmPolicy: 'allowlist', allowFrom: [] }
-}
-
-function readAccessFile(): Access {
-  try {
-    const raw = readFileSync(ACCESS_FILE, 'utf8')
-    const parsed = JSON.parse(raw) as Partial<Access>
-    return {
-      dmPolicy: parsed.dmPolicy ?? 'allowlist',
-      allowFrom: parsed.allowFrom ?? [],
-    }
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return defaultAccess()
-    // Non-ENOENT = file exists but is corrupt or unreadable. Refuse to start
-    // instead of silently falling back to an empty allowlist — that would
-    // lock out every legitimate sender and the only symptom would be
-    // "nobody's messages get through," hard to diagnose later. Fail loud so
-    // the admin notices and recovers from the .corrupt-<ts> file.
-    const corruptPath = `${ACCESS_FILE}.corrupt-${Date.now()}`
-    try { renameSync(ACCESS_FILE, corruptPath) } catch {}
-    process.stderr.write(
-      `wechat channel: FATAL access.json is corrupt (${err instanceof Error ? err.message : err})\n` +
-      `  moved aside to: ${corruptPath}\n` +
-      `  refusing to start with an empty allowlist (silent lockout).\n` +
-      `  recover by restoring a known-good copy, or delete the file and run /wechat:access to rebuild.\n`,
-    )
-    process.exit(1)
-  }
-}
-
-function saveAccess(a: Access): void {
-  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
-  const tmp = ACCESS_FILE + '.tmp'
-  writeFileSync(tmp, JSON.stringify(a, null, 2) + '\n', { mode: 0o600 })
-  renameSync(tmp, ACCESS_FILE)
-}
-
-// Cache access in memory — re-read from disk every 5s max
-let _accessCache: Access | null = null
-let _accessCacheTime = 0
-function loadAccess(): Access {
-  const now = Date.now()
-  if (_accessCache && now - _accessCacheTime < 5000) return _accessCache
-  _accessCache = readAccessFile()
-  _accessCacheTime = now
-  return _accessCache
-}
-
-function assertAllowedChat(chat_id: string): void {
-  const access = loadAccess()
-  if (!access.allowFrom.includes(chat_id)) {
-    throw new Error(`chat ${chat_id} is not allowlisted — add via /wechat:access`)
-  }
-}
-
-function isAdmin(userId: string): boolean {
-  const access = loadAccess()
-  const admins = (access as any).admins as string[] | undefined
-  if (admins?.length) return admins.includes(userId)
-  return access.allowFrom.includes(userId)
-}
+// Access control (loadAccess, saveAccess, gate, isAdmin, etc.) imported from access.ts
 
 // findClaudeAncestor was removed in the Plan B refactor. cli.ts now kills
 // claude directly via child.kill() when it detects .restart-flag, so
@@ -788,18 +548,7 @@ async function sendTypingIndicator(entry: AccountEntry, userId: string): Promise
   } catch {} // fire-and-forget
 }
 
-// ── Gate ────────────────────────────────────────────────────────────────────
-
-type GateResult =
-  | { action: 'deliver' }
-  | { action: 'drop' }
-
-function gate(fromUserId: string): GateResult {
-  const access = loadAccess()
-  if (access.dmPolicy === 'disabled') return { action: 'drop' }
-  if (access.allowFrom.includes(fromUserId)) return { action: 'deliver' }
-  return { action: 'drop' }
-}
+// gate() imported from access.ts
 
 const SESSION_EXPIRED_ERRCODE = -14
 
@@ -1048,7 +797,7 @@ mcp.setNotificationHandler(
 
     const compact = formatPermissionCompact(tool_name, input_preview)
     const text = `🔐 ${compact}\nReply: y / n  (详情: /perm ${request_id})`
-    const targets = (access as any).admins?.length ? (access as any).admins : access.allowFrom
+    const targets = access.admins?.length ? access.admins : access.allowFrom
     for (const userId of targets) {
       // Route through whichever bot has seen this user before. Fall back to
       // any loaded account so the prompt doesn't silently disappear when
@@ -1197,7 +946,7 @@ function resolveAccountForUser(chat_id: string): { baseUrl: string; token: strin
 // undefined if neither exists; caller handles that as "don't auto-send".
 function defaultShareTarget(): string | undefined {
   const access = loadAccess()
-  const admins = (access as any).admins as string[] | undefined
+  const admins = access.admins as string[] | undefined
   if (admins?.length) return admins[0]
   if (access.allowFrom.length > 0) return access.allowFrom[0]
   return undefined
