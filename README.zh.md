@@ -66,15 +66,20 @@ bun install
 
 ```bash
 mkdir -p ~/.claude/plugins/local
-ln -s "$(pwd)" ~/.claude/plugins/local/wechat
+ln -s "$(pwd)" ~/.claude/plugins/local/wechat    # Linux/macOS
+# Windows: mklink /D "%USERPROFILE%\.claude\plugins\local\wechat" "%cd%"
 ```
 
-可选：把 CLI 加进 `$PATH`：
+把 CLI 加进 `PATH`（三平台统一，bun 会自动创建对应平台的 shim）：
 
 ```bash
-ln -s "$(pwd)/cli.ts" ~/.local/bin/wechat-cc
-chmod +x ~/.local/bin/wechat-cc
+bun link
 ```
+
+之后就可以在任何目录运行 `wechat-cc setup`、`wechat-cc run` 等命令。
+Windows 上会在 bun 全局 bin 目录创建 `wechat-cc.cmd`；Linux/macOS 创建
+symlink。因为 `bun link` 底层是 symlink 指回插件目录，`wechat-cc update`
+（git pull）之后不需要重新 link，新代码立刻生效。
 
 ## 首次配置
 

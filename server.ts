@@ -21,13 +21,13 @@ import {
   renameSync, chmodSync, readdirSync, existsSync, rmSync, statSync,
 } from 'fs'
 import { homedir } from 'os'
-import { join, dirname } from 'path'
+import { join } from 'path'
 import { spawnSync } from 'child_process'
 
-// Plugin directory — resolved once so git-based version helpers know where
-// to look. Since server.ts lives at the plugin root, dirname(import.meta.url)
-// points at ~/.claude/plugins/local/wechat/ (or wherever the user installed it).
-const PLUGIN_DIR = dirname(new URL(import.meta.url).pathname)
+// Bun's import.meta.dir gives a proper filesystem path on ALL platforms
+// (including Windows where the old URL().pathname approach produces a
+// leading-slash /C:/... that breaks git -C and other shell commands).
+const PLUGIN_DIR = import.meta.dir
 
 // ── Paths ──────────────────────────────────────────────────────────────────
 const STATE_DIR = process.env.WECHAT_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'wechat')

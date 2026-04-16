@@ -72,15 +72,22 @@ Link the plugin into Claude Code. The plugin lives at `~/.claude/plugins/local/w
 
 ```bash
 mkdir -p ~/.claude/plugins/local
-ln -s "$(pwd)" ~/.claude/plugins/local/wechat
+ln -s "$(pwd)" ~/.claude/plugins/local/wechat    # Linux/macOS
+# Windows: mklink /D "%USERPROFILE%\.claude\plugins\local\wechat" "%cd%"
 ```
 
-Optional: add the CLI to your `$PATH`:
+Add the CLI to your `PATH` (works on Linux, macOS, AND Windows — bun
+creates the right shim for each platform):
 
 ```bash
-ln -s "$(pwd)/cli.ts" ~/.local/bin/wechat-cc
-chmod +x ~/.local/bin/wechat-cc
+bun link
 ```
+
+After this you can run `wechat-cc setup`, `wechat-cc run`, etc. from
+any directory. On Windows this creates a `wechat-cc.cmd` in bun's
+global bin; on Linux/macOS a symlink. Since `bun link` points back at
+the plugin directory via symlink, `wechat-cc update` (git pull) takes
+effect immediately without re-linking.
 
 ## First-run setup
 

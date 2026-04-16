@@ -12,10 +12,14 @@
 
 import { spawn, spawnSync, type ChildProcess } from 'child_process'
 import { existsSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'fs'
-import { resolve, dirname, join } from 'path'
+import { resolve, join } from 'path'
 import { homedir, platform } from 'os'
 
-const PLUGIN_DIR = dirname(new URL(import.meta.url).pathname)
+// Bun's import.meta.dir gives a proper filesystem path on ALL platforms.
+// The old approach (dirname(new URL(import.meta.url).pathname)) produces
+// /C:/Users/... on Windows (note leading slash) which breaks git -C and
+// other shell commands. import.meta.dir handles this correctly.
+const PLUGIN_DIR = import.meta.dir
 const STATE_DIR = join(homedir(), '.claude', 'channels', 'wechat')
 const ACCOUNTS_DIR = join(STATE_DIR, 'accounts')
 const RESTART_FLAG_PATH = join(STATE_DIR, '.restart-flag')
