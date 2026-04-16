@@ -44,7 +44,7 @@
 
 **Prerequisites:** [Bun](https://bun.sh) 1.1+ and [Claude Code CLI](https://github.com/anthropics/claude-code).
 
-Works on Linux, macOS, and Windows (PowerShell / Git Bash):
+Works on Linux, macOS, and Windows (PowerShell):
 
 ```bash
 git clone https://github.com/ggshr9/wechat-cc.git ~/.claude/plugins/local/wechat

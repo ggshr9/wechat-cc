@@ -44,7 +44,7 @@
 
 **前置条件：**[Bun](https://bun.sh) 1.1+ 和 [Claude Code CLI](https://github.com/anthropics/claude-code)。
 
-Linux、macOS、Windows（PowerShell / Git Bash）通用：
+Linux、macOS、Windows（PowerShell）通用：
 
 ```bash
 git clone https://github.com/ggshr9/wechat-cc.git ~/.claude/plugins/local/wechat
