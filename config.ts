@@ -25,16 +25,11 @@ export const ILINK_BOT_TYPE = '3'
 export const LONG_POLL_TIMEOUT_MS = 35_000
 
 /**
- * Note: ILINK_CLIENT_VERSION is intentionally NOT shared here.
+ * Note: ILINK_CLIENT_VERSION ('131335' = 0x00020107 = v2.1.7) is declared
+ * in ilink.ts (for server runtime) and setup.ts (for QR login). Both now
+ * use the same value. It's not in config.ts because only those two files
+ * need it, and keeping it local makes the dependency explicit.
  *
- * server.ts uses '131335' (0x00020107, version 2.1.7 encoding), while
- * setup.ts uses '65547'. The discrepancy may be intentional (different
- * client handshake modes) or a stale value in one of the two files.
- * Unifying them requires testing against ilink — doing it blindly risks
- * breaking either the poll loop or the QR login flow. Left as a TODO
- * for when someone has time to verify which value is correct for each
- * endpoint.
- *
- * Similarly, API_TIMEOUT_MS differs by design: server.ts uses 30s
- * (heavier ilink calls), setup.ts uses 15s (lighter status polls).
+ * API_TIMEOUT_MS differs by design: ilink.ts uses 30s (heavier bot API
+ * calls), setup.ts uses 15s (lighter QR status polls).
  */

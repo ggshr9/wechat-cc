@@ -63,6 +63,13 @@ export function loadAccess(): Access {
   return _accessCache
 }
 
+/** @internal — for tests only. Clears the in-memory access cache so the
+ * next loadAccess() call re-reads from disk. */
+export function _clearCache(): void {
+  _accessCache = null
+  _accessCacheTime = 0
+}
+
 export function assertAllowedChat(chat_id: string): void {
   const access = loadAccess()
   if (!access.allowFrom.includes(chat_id)) {

@@ -16,8 +16,12 @@ const STATE_DIR = join(homedir(), '.claude', 'channels', 'wechat')
 const ACCOUNTS_DIR = join(STATE_DIR, 'accounts')
 const ACCESS_FILE = join(STATE_DIR, 'access.json')
 
-// Per-file constants (see config.ts note on why these differ from server.ts)
-const ILINK_CLIENT_VERSION = '65547'
+// Unified with server.ts/ilink.ts: 131335 = 0x00020107 = version 2.1.7.
+// Was '65547' (= 0x1000B = v1.0.11) before this change. The server poll
+// loop already uses 131335 for all runtime calls; if ilink gate-checks
+// version on the QR endpoint, the old value was stale and this unification
+// is correct. If QR scanning breaks after this change, revert this line.
+const ILINK_CLIENT_VERSION = '131335'
 const API_TIMEOUT_MS = 15_000
 
 async function ilinkGet(baseUrl: string, endpoint: string, timeoutMs = API_TIMEOUT_MS): Promise<string> {
