@@ -125,6 +125,21 @@ wechat-cc update    # git pull + 按需 bun install
 
 然后在微信发 `/restart`（或在终端 Ctrl+C 后重新 `wechat-cc run`）生效。微信端 `/status` 显示当前版本和是否有更新。
 
+### 通过 cc-switch 配置
+
+[cc-switch](https://github.com/farion1231/cc-switch) 是一个桌面应用，用图形界面管理 Claude Code 等 AI CLI 工具的 MCP server、API key 和插件。如果你用 cc-switch，可以在它的 MCP 管理页面注册 wechat-cc，不用手动编辑 `.mcp.json`：
+
+| 字段 | 值 |
+|:---|:---|
+| Name | `wechat` |
+| Transport | `stdio` |
+| Command | `bun` |
+| Args | `run`, `--cwd`, `~/.claude/plugins/local/wechat`, `--silent`, `start` |
+
+cc-switch 会把这段写进 Claude 的 `mcpServers` 配置。效果和 `wechat-cc install` 完全一样 —— Claude Code 下次启动时自动加载。
+
+你仍然需要自己 clone 仓库 + `bun install` + `wechat-cc setup`（扫码）。cc-switch 只负责 MCP 注册，不管插件安装。
+
 </details>
 
 ---

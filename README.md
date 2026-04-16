@@ -125,6 +125,21 @@ wechat-cc update    # git pull + bun install if needed
 
 Then send `/restart` from WeChat (or Ctrl+C + `wechat-cc run`) to pick up the new code. `/status` in WeChat shows your current version and whether updates are available.
 
+### Using with cc-switch
+
+[cc-switch](https://github.com/farion1231/cc-switch) is a desktop app that manages MCP servers, API keys, and plugins for Claude Code and other AI CLI tools through a visual interface. If you use cc-switch, you can register wechat-cc from its MCP management page instead of editing `.mcp.json` by hand:
+
+| Field | Value |
+|:---|:---|
+| Name | `wechat` |
+| Transport | `stdio` |
+| Command | `bun` |
+| Args | `run`, `--cwd`, `~/.claude/plugins/local/wechat`, `--silent`, `start` |
+
+cc-switch writes this into Claude's `mcpServers` config. The effect is identical to running `wechat-cc install` — Claude Code picks up the MCP server on next launch.
+
+You still need to clone the repo + `bun install` + `wechat-cc setup` (QR scan) separately. cc-switch handles the MCP registration, not the plugin installation.
+
 </details>
 
 ---
