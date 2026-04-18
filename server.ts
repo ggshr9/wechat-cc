@@ -485,6 +485,7 @@ function saveSyncBuf(path: string, buf: string): void {
 
 const CONTEXT_TOKENS_FILE = join(STATE_DIR, 'context_tokens.json')
 const USER_NAMES_FILE = join(STATE_DIR, 'user_names.json')
+const USER_ACCOUNT_IDS_FILE = join(STATE_DIR, 'user_account_ids.json')
 
 function loadContextTokens(): Map<string, string> {
   try {
@@ -495,14 +496,13 @@ function loadContextTokens(): Map<string, string> {
   }
 }
 
-let _ctSaveTimer: ReturnType<typeof setTimeout> | null = null
 function saveContextTokens(tokens: Map<string, string>): void {
-  // Debounce: flush at most every 3s to avoid disk thrashing on rapid messages
-  if (_ctSaveTimer) return
-  _ctSaveTimer = setTimeout(() => {
-    _ctSaveTimer = null
-    writeFileSync(CONTEXT_TOKENS_FILE, JSON.stringify(Object.fromEntries(tokens), null, 2) + '\n', { mode: 0o600 })
-  }, 3000)
+  // Synchronous fsync. WeChat messages arrive one-at-a-time per user;
+  // previous 3s debounce could lose the latest context_token if the
+  // process was killed/restarted within the debounce window, leaving
+  // the on-disk token stale and causing post-restart replies to fail.
+  // Throughput impact: ~1ms per inbound, negligible at human typing rates.
+  writeFileSync(CONTEXT_TOKENS_FILE, JSON.stringify(Object.fromEntries(tokens), null, 2) + '\n', { mode: 0o600 })
 }
 
 const contextTokens = loadContextTokens()
@@ -525,8 +525,27 @@ function saveUserNames(names: Map<string, string>): void {
 
 const userNames = loadUserNames()
 
-// Maps user_id → AccountEntry for routing replies to the correct bot
+// Maps user_id → AccountEntry for routing replies to the correct bot.
+// Lives in memory only; rebuilt on startup from USER_ACCOUNT_IDS_FILE which
+// persists user_id → accountEntry.id mappings so cold-start proactive sends
+// (broadcast, scheduled notifications) don't fall back to the wrong bot.
 const userAccountMap = new Map<string, AccountEntry>()
+
+function loadUserAccountIds(): Map<string, string> {
+  try {
+    const data = JSON.parse(readFileSync(USER_ACCOUNT_IDS_FILE, 'utf8')) as Record<string, string>
+    return new Map(Object.entries(data))
+  } catch {
+    return new Map()
+  }
+}
+
+function saveUserAccountIds(ids: Map<string, string>): void {
+  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
+  writeFileSync(USER_ACCOUNT_IDS_FILE, JSON.stringify(Object.fromEntries(ids), null, 2) + '\n', { mode: 0o600 })
+}
+
+const userAccountIds = loadUserAccountIds()
 
 // ── Typing ticket cache ────────────────────────────────────────────────────
 const typingTickets = new Map<string, { ticket: string, ts: number }>()
@@ -935,6 +954,22 @@ let _startupAccounts: AccountEntry[] = []
 function resolveAccountForUser(chat_id: string): { baseUrl: string; token: string } {
   const entry = userAccountMap.get(chat_id)
   if (entry) return { baseUrl: entry.account.baseUrl, token: entry.token }
+
+  // Cold-start fallback: memory map is empty after restart until first
+  // inbound from this user. Look up persisted user→accountId mapping
+  // and resolve back through _startupAccounts so proactive sends reach
+  // the right bot.
+  const accountId = userAccountIds.get(chat_id)
+  if (accountId) {
+    const persisted = _startupAccounts.find(a => a.id === accountId)
+    if (persisted) {
+      userAccountMap.set(chat_id, persisted) // warm the memory cache
+      return { baseUrl: persisted.account.baseUrl, token: persisted.token }
+    }
+  }
+
+  // Last resort: any loaded account. May be wrong for multi-bot setups but
+  // better than throwing — still logs OUTBOUND, so a mis-route shows up.
   if (_startupAccounts.length > 0) return { baseUrl: _startupAccounts[0].account.baseUrl, token: _startupAccounts[0].token }
   throw new Error('no accounts configured — run: bun ~/.claude/plugins/local/wechat/setup.ts')
 }
@@ -1292,6 +1327,11 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
     saveContextTokens(contextTokens)
   }
   userAccountMap.set(fromUserId, entry)
+  // Persist user→accountId so cold-start resolveAccountForUser has a hint
+  if (userAccountIds.get(fromUserId) !== entry.id) {
+    userAccountIds.set(fromUserId, entry.id)
+    saveUserAccountIds(userAccountIds)
+  }
 
   // Send typing indicator (fire-and-forget)
   void sendTypingIndicator(entry, fromUserId)
