@@ -62,6 +62,7 @@ import {
   ILINK_APP_ID,
   ILINK_BOT_TYPE,
   LONG_POLL_TIMEOUT_MS,
+  MAX_TEXT_CHUNK,
 } from './config.ts'
 import { chunk } from './send-reply.ts'
 
@@ -125,7 +126,6 @@ function getUpdateCount(): number | null {
 
 // ilink types + HTTP imported from ilink.ts
 // ilink constants imported from config.ts
-const MAX_TEXT_CHUNK = 4000
 
 // ── Message cache for quote resolution ─────────────────────────────────────
 // Key: create_time_ms (string), Value: text content
@@ -1305,17 +1305,26 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
     return
   }
 
-  // Store context token and account routing for replies
+  // Store context token and account routing for replies.
+  // Delete-then-set so Map insertion order reflects recency (same rationale
+  // as userAccountIds below — CLI fallback reads key order to find the
+  // most recently active user).
   if (msg.context_token) {
+    contextTokens.delete(fromUserId)
     contextTokens.set(fromUserId, msg.context_token)
     saveContextTokens(contextTokens)
   }
   userAccountMap.set(fromUserId, entry)
-  // Persist user→accountId so cold-start resolveAccountForUser has a hint
-  if (userAccountIds.get(fromUserId) !== entry.id) {
-    userAccountIds.set(fromUserId, entry.id)
-    saveUserAccountIds(userAccountIds)
-  }
+  // Persist user→accountId so cold-start resolveAccountForUser has a hint,
+  // AND so that the CLI fallback can resolve "most-recently-active" user.
+  // Delete-then-set bumps the key to end-of-Map; after saveUserAccountIds
+  // round-trips through JSON, the disk insertion order is recency order.
+  // Always save (not just on accountId change) because the recency bump
+  // itself is load-bearing. saveUserAccountIds is already synchronous and
+  // this fires once per inbound, so the cost is negligible.
+  userAccountIds.delete(fromUserId)
+  userAccountIds.set(fromUserId, entry.id)
+  saveUserAccountIds(userAccountIds)
 
   // Send typing indicator (fire-and-forget)
   void sendTypingIndicator(entry, fromUserId)

@@ -342,7 +342,12 @@ async function replyFromCli(rawArgs: string[]): Promise<void> {
   for (let i = 0; i < rawArgs.length; i++) {
     const a = rawArgs[i]!
     if (a === '--to' || a === '-t') {
-      chatId = rawArgs[++i] ?? null
+      const val = rawArgs[++i]
+      if (!val) {
+        console.error('--to 需要一个 chat_id 参数')
+        process.exit(1)
+      }
+      chatId = val
     } else {
       rest.push(a)
     }

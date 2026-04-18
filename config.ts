@@ -24,6 +24,9 @@ export const ILINK_BOT_TYPE = '3'
 /** Long-poll timeout in ms (getupdates blocks for up to this long). */
 export const LONG_POLL_TIMEOUT_MS = 35_000
 
+/** Max chars per outbound text chunk — ilink rejects bodies larger than this. */
+export const MAX_TEXT_CHUNK = 4000
+
 /**
  * Note: ILINK_CLIENT_VERSION ('131335' = 0x00020107 = v2.1.7) is declared
  * in ilink.ts (for server runtime) and setup.ts (for QR login). Both now

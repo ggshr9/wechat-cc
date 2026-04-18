@@ -14,15 +14,12 @@
 
 import { existsSync, readFileSync, readdirSync } from 'fs'
 import { join } from 'path'
-import { homedir } from 'os'
+import { STATE_DIR, MAX_TEXT_CHUNK } from './config.ts'
 import { ilinkSendMessage, botTextMessage } from './ilink.ts'
 
-const STATE_DIR = join(homedir(), '.claude', 'channels', 'wechat')
 const ACCOUNTS_DIR = join(STATE_DIR, 'accounts')
 const CONTEXT_TOKENS_FILE = join(STATE_DIR, 'context_tokens.json')
 const USER_ACCOUNT_IDS_FILE = join(STATE_DIR, 'user_account_ids.json')
-
-const MAX_TEXT_CHUNK = 4000
 
 export interface MinimalAccount {
   baseUrl: string
@@ -108,21 +105,25 @@ export async function sendReplyOnce(chatId: string, text: string): Promise<SendR
 }
 
 /**
- * Resolve the "default" chat_id for terminal use.
+ * Resolve the "default" chat_id for terminal use — the MOST RECENTLY
+ * active user.
  *
- * Try userAccountIds first (written by newer server versions), then fall
- * back to context_tokens keys (written on every inbound — always present
- * after any real message). Returns null only when the user has literally
- * never received a message.
+ * Relies on server.ts bumping each user to end-of-Map on inbound (via
+ * delete-then-set), so the JSON key order on disk = recency order and
+ * the LAST key is the most recent. Prefer userAccountIds (the authoritative
+ * routing map); fall back to context_tokens when that file doesn't exist
+ * yet (older server versions, or before the first inbound post-upgrade).
+ *
+ * Returns null only when the user has literally never received a message.
  */
 export function defaultTerminalChatId(): string | null {
   const userAccountIds = readJson<Record<string, string>>(USER_ACCOUNT_IDS_FILE) ?? {}
   const fromAccounts = Object.keys(userAccountIds)
-  if (fromAccounts.length > 0) return fromAccounts[0]!
+  if (fromAccounts.length > 0) return fromAccounts[fromAccounts.length - 1]!
 
   const contextTokens = readJson<Record<string, string>>(CONTEXT_TOKENS_FILE) ?? {}
   const fromContext = Object.keys(contextTokens)
-  if (fromContext.length > 0) return fromContext[0]!
+  if (fromContext.length > 0) return fromContext[fromContext.length - 1]!
 
   return null
 }
