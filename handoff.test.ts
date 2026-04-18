@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest'
-import { mkdtempSync, mkdirSync, readFileSync, existsSync, rmSync } from 'fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { writeHandoff, type HandoffInput } from './handoff'
@@ -68,5 +68,43 @@ describe('writeHandoff', () => {
   it('writes atomically (no .tmp file left behind)', () => {
     writeHandoff(baseInput())
     expect(existsSync(join(targetDir, 'memory', '_handoff.md.tmp'))).toBe(false)
+  })
+})
+
+describe('MEMORY.md index maintenance', () => {
+  it('creates MEMORY.md with index line when missing', () => {
+    writeHandoff(baseInput())
+    const mem = readFileSync(join(targetDir, 'memory', 'MEMORY.md'), 'utf8')
+    expect(mem).toContain('](_handoff.md)')
+    expect(mem).toContain('compass')
+  })
+
+  it('appends to existing MEMORY.md without touching other lines', () => {
+    mkdirSync(join(targetDir, 'memory'))
+    writeFileSync(join(targetDir, 'memory', 'MEMORY.md'), [
+      '# Memory',
+      '',
+      '- [Some note](note.md) — existing',
+      '',
+    ].join('\n'))
+    writeHandoff(baseInput())
+    const mem = readFileSync(join(targetDir, 'memory', 'MEMORY.md'), 'utf8')
+    expect(mem).toContain('[Some note](note.md)')
+    expect(mem).toContain('](_handoff.md)')
+  })
+
+  it('replaces existing _handoff.md index line (does not duplicate)', () => {
+    mkdirSync(join(targetDir, 'memory'))
+    writeFileSync(join(targetDir, 'memory', 'MEMORY.md'), [
+      '# Memory',
+      '- [Cross-project handoff](_handoff.md) — from OLD at 2025-01-01',
+      '',
+    ].join('\n'))
+    writeHandoff(baseInput())
+    const mem = readFileSync(join(targetDir, 'memory', 'MEMORY.md'), 'utf8')
+    const handoffLines = mem.split('\n').filter(l => l.includes('](_handoff.md)'))
+    expect(handoffLines).toHaveLength(1)
+    expect(handoffLines[0]).toContain('compass')
+    expect(handoffLines[0]).not.toContain('OLD')
   })
 })

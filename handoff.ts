@@ -5,7 +5,7 @@
  * `memory/` dir. Overwrites on each switch. See the design spec for why
  * we don't accumulate history here.
  */
-import { existsSync, mkdirSync, renameSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { join } from 'path'
 
 export interface HandoffInput {
@@ -43,9 +43,35 @@ function writeAtomic(file: string, content: string): void {
   renameSync(tmp, file)
 }
 
+function buildIndexLine(sourceAlias: string, timestamp: string): string {
+  const date = timestamp.slice(0, 10)  // YYYY-MM-DD
+  return `- [Cross-project handoff](${HANDOFF_FILENAME}) — 从 ${sourceAlias} 切过来 (${date})`
+}
+
+function updateMemoryIndex(memoryDir: string, sourceAlias: string, timestamp: string): void {
+  const file = join(memoryDir, 'MEMORY.md')
+  const newLine = buildIndexLine(sourceAlias, timestamp)
+  if (!existsSync(file)) {
+    writeAtomic(file, `# Memory\n\n${newLine}\n`)
+    return
+  }
+  const existing = readFileSync(file, 'utf8')
+  const lines = existing.split('\n')
+  const idx = lines.findIndex(l => l.includes(`](${HANDOFF_FILENAME})`))
+  if (idx >= 0) {
+    lines[idx] = newLine
+  } else {
+    // Append as a new line at the end (before trailing newline)
+    if (lines[lines.length - 1] === '') lines.splice(lines.length - 1, 0, newLine)
+    else lines.push(newLine)
+  }
+  writeAtomic(file, lines.join('\n'))
+}
+
 export function writeHandoff(input: HandoffInput): void {
   const memoryDir = join(input.targetDir, 'memory')
   if (!existsSync(memoryDir)) mkdirSync(memoryDir, { recursive: true })
   const handoffPath = join(memoryDir, HANDOFF_FILENAME)
   writeAtomic(handoffPath, renderHandoff(input))
+  updateMemoryIndex(memoryDir, input.sourceAlias, input.timestamp)
 }
