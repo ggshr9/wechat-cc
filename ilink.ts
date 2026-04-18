@@ -125,6 +125,44 @@ export function botTextMessage(toUserId: string, text: string, ctxToken?: string
   }
 }
 
+/**
+ * Check ilink's JSON-body-level status. ilink often returns HTTP 200 with
+ * errcode != 0 (session expired, invalid context_token, rate limited, etc.)
+ * — without this check, silent message drops would be invisible to callers.
+ *
+ * Throws on non-zero errcode/ret with a message starting with "ilink/<endpoint>"
+ * so callers can parse it in retry logic.
+ */
+export function assertIlinkOk(endpoint: string, rawResponse: string): void {
+  let parsed: { ret?: number; errcode?: number; errmsg?: string }
+  try {
+    parsed = JSON.parse(rawResponse) as typeof parsed
+  } catch {
+    return // non-JSON response — treat as success (legacy or unusual format)
+  }
+  const code = parsed.errcode ?? parsed.ret
+  if (code !== undefined && code !== 0) {
+    const errmsg = parsed.errmsg ?? 'no errmsg'
+    throw new Error(`ilink/${endpoint} errcode=${code}: ${errmsg}`)
+  }
+}
+
+/**
+ * Decide whether a send-path error is worth retrying.
+ *
+ * Retry on: AbortError (timeout), HTTP 5xx.
+ * Do NOT retry on: session expired (errcode=-14), auth errors (errcode=-6) —
+ * a fresh token is needed; retry would just burn attempts.
+ * Other ilink errcodes: treated as possibly-transient, retried.
+ */
+export function isRetryableSendError(err: Error): boolean {
+  if (err.name === 'AbortError') return true
+  if (/\s5\d\d:/.test(err.message)) return true
+  if (/errcode=(-14|-6)\b/.test(err.message)) return false
+  if (/errcode=/.test(err.message)) return true
+  return false
+}
+
 export async function ilinkSendMessage(baseUrl: string, token: string, msg: WeixinMessage): Promise<void> {
   const body = {
     msg: { from_user_id: '', client_id: generateClientId(), ...msg },
@@ -132,13 +170,18 @@ export async function ilinkSendMessage(baseUrl: string, token: string, msg: Weix
   }
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      await ilinkPost(baseUrl, 'ilink/bot/sendmessage', body, token)
+      const raw = await ilinkPost(baseUrl, 'ilink/bot/sendmessage', body, token)
+      assertIlinkOk('sendmessage', raw) // Bug #1 fix — surface errcode != 0
+      if (attempt > 1) log('RETRY_OK', `sendmessage succeeded on attempt ${attempt}`)
       return
     } catch (err) {
-      const isRetryable = err instanceof Error &&
-        (err.name === 'AbortError' || /^ilink.*5\d\d/.test(err.message))
-      if (!isRetryable || attempt === 3) throw err
-      log('RETRY', `sendmessage attempt ${attempt} failed, retrying in 1s: ${err instanceof Error ? err.message : err}`)
+      const errmsg = err instanceof Error ? err.message : String(err)
+      const retryable = err instanceof Error && isRetryableSendError(err)
+      if (!retryable || attempt === 3) {
+        log('RETRY_FAIL', `sendmessage gave up after ${attempt} attempt(s): ${errmsg}`)
+        throw err
+      }
+      log('RETRY', `sendmessage attempt ${attempt} failed, retrying in 1s: ${errmsg}`)
       await new Promise(r => setTimeout(r, 1000))
     }
   }
