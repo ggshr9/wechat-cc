@@ -105,3 +105,8 @@ export function removeProject(file: string, alias: string): void {
   delete reg.projects[alias]
   saveRegistry(file, reg)
 }
+
+export function resolveProject(file: string, alias: string): ProjectEntry | null {
+  const reg = loadRegistry(file)
+  return reg.projects[alias] ?? null
+}

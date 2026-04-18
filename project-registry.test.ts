@@ -7,6 +7,7 @@ import {
   listProjects,
   setCurrent,
   removeProject,
+  resolveProject,
   ALIAS_REGEX,
   type ProjectRegistry,
 } from './project-registry'
@@ -176,5 +177,40 @@ describe('removeProject', () => {
 
   it('throws if alias not registered', () => {
     expect(() => removeProject(registryFile, 'ghost')).toThrow(/not registered/i)
+  })
+})
+
+describe('resolveProject', () => {
+  it('returns entry for a registered alias', () => {
+    addProject(registryFile, 'alpha', realDir1)
+    const entry = resolveProject(registryFile, 'alpha')
+    expect(entry?.path).toBe(realDir1)
+  })
+
+  it('returns null for unknown alias', () => {
+    expect(resolveProject(registryFile, 'ghost')).toBe(null)
+  })
+
+  it('returns null for missing registry file', () => {
+    expect(resolveProject(registryFile, 'alpha')).toBe(null)
+  })
+})
+
+describe('corruption fallback', () => {
+  it('listProjects returns [] on corrupted JSON (does not throw)', () => {
+    writeFileSync(registryFile, 'this is not valid json {')
+    expect(listProjects(registryFile)).toEqual([])
+  })
+
+  it('resolveProject returns null on corrupted JSON', () => {
+    writeFileSync(registryFile, '{{{malformed')
+    expect(resolveProject(registryFile, 'anything')).toBe(null)
+  })
+
+  it('addProject recovers by overwriting corrupted file', () => {
+    writeFileSync(registryFile, 'garbage')
+    addProject(registryFile, 'alpha', realDir1)
+    const reg = JSON.parse(readFileSync(registryFile, 'utf8')) as ProjectRegistry
+    expect(reg.projects.alpha).toBeDefined()
   })
 })
