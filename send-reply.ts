@@ -98,9 +98,16 @@ export async function sendReplyOnce(chatId: string, text: string): Promise<SendR
  * on disk = recency order — last key is newest. userAccountIds is the
  * authoritative file; context_tokens is a fallback for the edge case
  * where the former is empty/missing.
+ *
+ * The `stateDir` override exists only for tests — bun test shares one
+ * process, so env-based overrides don't reliably reach this module.
  */
-export function defaultTerminalChatId(): string | null {
-  for (const file of [USER_ACCOUNT_IDS_FILE, CONTEXT_TOKENS_FILE]) {
+export function defaultTerminalChatId(stateDir: string = STATE_DIR): string | null {
+  const files = [
+    join(stateDir, 'user_account_ids.json'),
+    join(stateDir, 'context_tokens.json'),
+  ]
+  for (const file of files) {
     const keys = Object.keys(readJson<Record<string, string>>(file) ?? {})
     if (keys.length > 0) return keys[keys.length - 1]!
   }

@@ -153,6 +153,7 @@ You still need to clone the repo + `bun install` + `wechat-cc setup` (QR scan) s
 - **`/restart` from WeChat** — restart your Claude session without touching the terminal; auto-confirms the startup dialog on Linux/macOS
 - **Allowlist access control** — only approved WeChat users can reach your Claude session
 - **`wechat-cc update`** — one-command upgrade with version checking via `/status`
+- **CLI fallback** — `wechat-cc reply "..."` sends from any terminal using the same routing/session state, so you can still reach WeChat when the MCP channel is down
 
 <details>
 <summary><b>All features</b></summary>
@@ -183,7 +184,20 @@ wechat-cc run --dangerously  # skip all permission prompts
 wechat-cc list               # show bound accounts
 wechat-cc logs               # open live log viewer (http://localhost:3456)
 wechat-cc update             # pull latest code + reinstall deps
+wechat-cc reply "message"    # send from terminal when MCP channel is down
 ```
+
+### CLI fallback: `wechat-cc reply`
+
+If the MCP channel is unavailable (server crashed, or Claude Code not running) you can still reply from any terminal:
+
+```bash
+wechat-cc reply "I'll be back in 10 min"          # → most-recently-active chat
+wechat-cc reply --to <chat_id> "specific user"    # → specific chat
+echo "piped text" | wechat-cc reply               # → stdin pipe
+```
+
+The CLI reads the same `~/.claude/channels/wechat/` state (accounts, context tokens, user→account routing) as the running server, so recipient resolution and session continuity are identical. This makes the state files the single source of truth — you never lose a thread just because the MCP server restarted.
 
 ### WeChat commands
 
