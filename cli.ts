@@ -8,6 +8,7 @@
  *   wechat-cc run       — 启动 Claude Code + WeChat channel（一键启动）
  *   wechat-cc list      — 列出已绑定账号
  *   wechat-cc install   — 在当前目录生成 .mcp.json
+ *   wechat-cc reply     — 从终端直接回复微信（MCP 通道不可用时的 fallback）
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'child_process'
@@ -15,6 +16,7 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'fs
 import { resolve, join } from 'path'
 import { homedir, platform } from 'os'
 import { findOnPath } from './util.ts'
+import { sendReplyOnce, defaultTerminalChatId } from './send-reply.ts'
 
 // Bun's import.meta.dir gives a proper filesystem path on ALL platforms.
 // The old approach (dirname(new URL(import.meta.url).pathname)) produces
@@ -331,6 +333,50 @@ function update() {
   process.exit(0)
 }
 
+async function replyFromCli(rawArgs: string[]): Promise<void> {
+  // Parse `--to <chat_id>` flag; the rest (joined by space) is the text.
+  // Example: wechat-cc reply --to abc123 "hello there"
+  //          wechat-cc reply "hello" — uses default chat_id.
+  let chatId: string | null = null
+  const rest: string[] = []
+  for (let i = 0; i < rawArgs.length; i++) {
+    const a = rawArgs[i]!
+    if (a === '--to' || a === '-t') {
+      chatId = rawArgs[++i] ?? null
+    } else {
+      rest.push(a)
+    }
+  }
+
+  if (!chatId) chatId = defaultTerminalChatId()
+  if (!chatId) {
+    console.error('没有可回复的对象。还没收到过任何微信消息，或者请用 --to <chat_id> 指定。')
+    process.exit(1)
+  }
+
+  let text = rest.join(' ').trim()
+  if (!text) {
+    // Support stdin pipe: echo "foo" | wechat-cc reply
+    if (!process.stdin.isTTY) {
+      const chunks: Buffer[] = []
+      for await (const c of process.stdin) chunks.push(c as Buffer)
+      text = Buffer.concat(chunks).toString('utf8').trim()
+    }
+  }
+  if (!text) {
+    console.error('没有内容可发。用法: wechat-cc reply [--to <chat_id>] "文字"')
+    process.exit(1)
+  }
+
+  const result = await sendReplyOnce(chatId, text)
+  if (result.ok) {
+    console.log(`已发送到 ${chatId} (${result.chunks} 段, via account ${result.account})`)
+    process.exit(0)
+  }
+  console.error(`发送失败: ${result.error}`)
+  process.exit(1)
+}
+
 function help() {
   console.log(`
   wechat-cc — WeChat channel for Claude Code
@@ -346,6 +392,8 @@ function help() {
     install              在当前目录生成 .mcp.json
     update               git pull + bun install（需手动 /restart 生效）
     start                启动 MCP channel server（由 .mcp.json 调用）
+    reply [--to <id>] <text>
+                         从终端直接回复微信（MCP 通道不可用时的 fallback）
     help                 显示帮助
 `)
 }
@@ -383,6 +431,9 @@ if (import.meta.main) {
       break
     case 'update':
       update()
+      break
+    case 'reply':
+      await replyFromCli(process.argv.slice(3))
       break
     case 'help':
     case '--help':

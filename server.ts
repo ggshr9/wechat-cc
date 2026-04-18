@@ -63,6 +63,7 @@ import {
   ILINK_BOT_TYPE,
   LONG_POLL_TIMEOUT_MS,
 } from './config.ts'
+import { chunk } from './send-reply.ts'
 
 // Ensure state dir exists once at load time
 mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
@@ -572,23 +573,6 @@ async function sendTypingIndicator(entry: AccountEntry, userId: string): Promise
 const SESSION_EXPIRED_ERRCODE = -14
 
 // ── Text chunking ──────────────────────────────────────────────────────────
-
-function chunk(text: string, limit: number): string[] {
-  if (text.length <= limit) return [text]
-  const out: string[] = []
-  let rest = text
-  while (rest.length > limit) {
-    // Prefer paragraph, then line, then space, then hard cut
-    const para = rest.lastIndexOf('\n\n', limit)
-    const line = rest.lastIndexOf('\n', limit)
-    const space = rest.lastIndexOf(' ', limit)
-    const cut = para > limit / 2 ? para : line > limit / 2 ? line : space > 0 ? space : limit
-    out.push(rest.slice(0, cut))
-    rest = rest.slice(cut).replace(/^\n+/, '')
-  }
-  if (rest) out.push(rest)
-  return out
-}
 
 // ── MCP server ─────────────────────────────────────────────────────────────
 
