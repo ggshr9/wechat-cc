@@ -6,6 +6,7 @@ import {
   addProject,
   listProjects,
   setCurrent,
+  removeProject,
   ALIAS_REGEX,
   type ProjectRegistry,
 } from './project-registry'
@@ -152,5 +153,28 @@ describe('setCurrent', () => {
 
   it('throws if alias not registered', () => {
     expect(() => setCurrent(registryFile, 'ghost')).toThrow(/not registered/i)
+  })
+})
+
+describe('removeProject', () => {
+  it('removes a registered non-current project', () => {
+    addProject(registryFile, 'alpha', realDir1)
+    addProject(registryFile, 'beta', realDir2)
+    setCurrent(registryFile, 'alpha')
+    removeProject(registryFile, 'beta')
+    const reg = JSON.parse(readFileSync(registryFile, 'utf8')) as ProjectRegistry
+    expect(reg.projects.beta).toBeUndefined()
+    expect(reg.projects.alpha).toBeDefined()
+    expect(reg.current).toBe('alpha')
+  })
+
+  it('rejects removing the current project', () => {
+    addProject(registryFile, 'alpha', realDir1)
+    setCurrent(registryFile, 'alpha')
+    expect(() => removeProject(registryFile, 'alpha')).toThrow(/current/i)
+  })
+
+  it('throws if alias not registered', () => {
+    expect(() => removeProject(registryFile, 'ghost')).toThrow(/not registered/i)
   })
 })

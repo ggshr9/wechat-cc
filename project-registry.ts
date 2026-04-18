@@ -93,3 +93,15 @@ export function setCurrent(file: string, alias: string): void {
   reg.projects[alias]!.last_active = new Date().toISOString()
   saveRegistry(file, reg)
 }
+
+export function removeProject(file: string, alias: string): void {
+  const reg = loadRegistry(file)
+  if (!reg.projects[alias]) {
+    throw new Error(`alias '${alias}' is not registered`)
+  }
+  if (reg.current === alias) {
+    throw new Error(`cannot remove current project '${alias}' — switch elsewhere first`)
+  }
+  delete reg.projects[alias]
+  saveRegistry(file, reg)
+}
