@@ -1306,22 +1306,16 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
   }
 
   // Store context token and account routing for replies.
-  // Delete-then-set so Map insertion order reflects recency (same rationale
-  // as userAccountIds below — CLI fallback reads key order to find the
-  // most recently active user).
+  // Why delete-then-set: Map insertion order = recency order, which the
+  // CLI fallback (send-reply.ts:defaultTerminalChatId) reads off disk to
+  // pick the most-recently-active user. Save unconditionally so the
+  // recency bump is persisted even when the accountId hasn't changed.
   if (msg.context_token) {
     contextTokens.delete(fromUserId)
     contextTokens.set(fromUserId, msg.context_token)
     saveContextTokens(contextTokens)
   }
   userAccountMap.set(fromUserId, entry)
-  // Persist user→accountId so cold-start resolveAccountForUser has a hint,
-  // AND so that the CLI fallback can resolve "most-recently-active" user.
-  // Delete-then-set bumps the key to end-of-Map; after saveUserAccountIds
-  // round-trips through JSON, the disk insertion order is recency order.
-  // Always save (not just on accountId change) because the recency bump
-  // itself is load-bearing. saveUserAccountIds is already synchronous and
-  // this fires once per inbound, so the cost is negligible.
   userAccountIds.delete(fromUserId)
   userAccountIds.set(fromUserId, entry.id)
   saveUserAccountIds(userAccountIds)

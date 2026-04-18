@@ -1,18 +1,10 @@
 /**
- * send-reply.ts — standalone reply helper used by both the MCP `reply` tool
- * and the `wechat-cc reply` CLI fallback.
- *
- * The MCP server keeps in-memory Maps of contextTokens / userAccountIds but
- * also persists them to disk (state/context_tokens.json / state/user_account_ids.json).
- * This helper reads those files fresh each call so it works whether invoked
- * from inside the MCP server process or from a standalone CLI.
- *
- * Terminal `wechat-cc reply` exists as a fallback when the MCP channel is
- * unavailable (server crashed, or Claude Code not running). It reuses the
- * same state files so there is exactly ONE source of truth for who-talks-to-whom.
+ * send-reply.ts — shared send path for the MCP `reply` tool and the
+ * `wechat-cc reply` CLI fallback. Reads routing state from disk each call
+ * so it works both inside the server process and standalone.
  */
 
-import { existsSync, readFileSync, readdirSync } from 'fs'
+import { readFileSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR, MAX_TEXT_CHUNK } from './config.ts'
 import { ilinkSendMessage, botTextMessage } from './ilink.ts'
@@ -37,9 +29,10 @@ function readJson<T>(path: string): T | null {
 }
 
 function loadAccounts(): MinimalAccount[] {
-  if (!existsSync(ACCOUNTS_DIR)) return []
+  let ids: string[]
+  try { ids = readdirSync(ACCOUNTS_DIR) } catch { return [] }
   const out: MinimalAccount[] = []
-  for (const id of readdirSync(ACCOUNTS_DIR)) {
+  for (const id of ids) {
     const dir = join(ACCOUNTS_DIR, id)
     try {
       const token = readFileSync(join(dir, 'token'), 'utf8').trim()
@@ -68,13 +61,7 @@ export function chunk(text: string, limit: number): string[] {
   return out
 }
 
-/**
- * Send a text reply to a WeChat user. Single source of truth for the send
- * path — both MCP `reply` tool and CLI `wechat-cc reply` route through here.
- *
- * Reads state fresh each call so behavior doesn't depend on whether the
- * caller is an MCP server process (with in-memory caches) or a one-shot CLI.
- */
+/** Send a text reply. Shared by MCP `reply` and `wechat-cc reply`. */
 export async function sendReplyOnce(chatId: string, text: string): Promise<SendReplyResult> {
   if (!text) return { ok: false, error: 'empty text' }
 
@@ -105,25 +92,17 @@ export async function sendReplyOnce(chatId: string, text: string): Promise<SendR
 }
 
 /**
- * Resolve the "default" chat_id for terminal use — the MOST RECENTLY
- * active user.
+ * Most recently active chat_id, or null if nothing on record.
  *
- * Relies on server.ts bumping each user to end-of-Map on inbound (via
- * delete-then-set), so the JSON key order on disk = recency order and
- * the LAST key is the most recent. Prefer userAccountIds (the authoritative
- * routing map); fall back to context_tokens when that file doesn't exist
- * yet (older server versions, or before the first inbound post-upgrade).
- *
- * Returns null only when the user has literally never received a message.
+ * Why: server.ts does delete-then-set on each inbound, so JSON key order
+ * on disk = recency order — last key is newest. userAccountIds is the
+ * authoritative file; context_tokens is a fallback for the edge case
+ * where the former is empty/missing.
  */
 export function defaultTerminalChatId(): string | null {
-  const userAccountIds = readJson<Record<string, string>>(USER_ACCOUNT_IDS_FILE) ?? {}
-  const fromAccounts = Object.keys(userAccountIds)
-  if (fromAccounts.length > 0) return fromAccounts[fromAccounts.length - 1]!
-
-  const contextTokens = readJson<Record<string, string>>(CONTEXT_TOKENS_FILE) ?? {}
-  const fromContext = Object.keys(contextTokens)
-  if (fromContext.length > 0) return fromContext[fromContext.length - 1]!
-
+  for (const file of [USER_ACCOUNT_IDS_FILE, CONTEXT_TOKENS_FILE]) {
+    const keys = Object.keys(readJson<Record<string, string>>(file) ?? {})
+    if (keys.length > 0) return keys[keys.length - 1]!
+  }
   return null
 }
