@@ -64,15 +64,35 @@ function listAccounts() {
 
 function install() {
   const bun = getBunPath()
-  const mcpConfig = {
-    mcpServers: {
-      wechat: {
-        command: bun,
-        args: ['run', '--cwd', PLUGIN_DIR, '--silent', 'start'],
-      },
-    },
+  const wechatEntry = {
+    command: bun,
+    args: ['run', '--cwd', PLUGIN_DIR, '--silent', 'start'],
   }
 
+  const scope = process.argv[3] === '--user' || process.argv[3] === '--scope=user'
+    ? 'user'
+    : 'project'
+
+  if (scope === 'user') {
+    // Lazy import so tests that don't need it don't drag fs in
+    import('./install-user-mcp.ts').then(({ installUserMcp }) => {
+      const configFile = join(homedir(), '.claude.json')
+      installUserMcp(configFile, 'wechat', wechatEntry)
+      console.log(`已更新用户级 MCP 配置: ${configFile}`)
+      console.log('\n下一步: wechat-cc run 或在任意项目中启动 claude')
+    }).catch(err => {
+      console.error('install --user 失败:', err)
+      process.exit(1)
+    })
+    return
+  }
+
+  // Default: project-scope .mcp.json (legacy behavior, unchanged)
+  const mcpConfig = {
+    mcpServers: {
+      wechat: wechatEntry,
+    },
+  }
   const mcpPath = resolve(process.cwd(), '.mcp.json')
   if (existsSync(mcpPath)) {
     try {
@@ -90,6 +110,7 @@ function install() {
     console.log(`已创建: ${mcpPath}`)
   }
   console.log('\n下一步: wechat-cc run')
+  console.log('\n提示: 想让 wechat 在所有项目中自动可用？试试 wechat-cc install --user')
 }
 
 // ── Argument parsing / building ────────────────────────────────────────────
@@ -394,7 +415,8 @@ function help() {
     list                 列出已绑定账号
     logs                 打开日志监控页面 (默认端口 3456)
     logs <port>          指定端口
-    install              在当前目录生成 .mcp.json
+    install              在当前目录生成 .mcp.json（项目级）
+    install --user       注册到 ~/.claude.json（用户级，所有项目可用）
     update               git pull + bun install（需手动 /restart 生效）
     start                启动 MCP channel server（由 .mcp.json 调用）
     reply [--to <id>] <text>
