@@ -61,3 +61,35 @@ export function addProject(file: string, alias: string, path: string): void {
   reg.projects[alias] = { path, last_active: new Date().toISOString() }
   saveRegistry(file, reg)
 }
+
+export interface ProjectView {
+  alias: string
+  path: string
+  last_active: string
+  is_current: boolean
+}
+
+export function listProjects(file: string): ProjectView[] {
+  const reg = loadRegistry(file)
+  const out: ProjectView[] = []
+  for (const [alias, entry] of Object.entries(reg.projects)) {
+    out.push({
+      alias,
+      path: entry.path,
+      last_active: entry.last_active,
+      is_current: reg.current === alias,
+    })
+  }
+  out.sort((a, b) => b.last_active.localeCompare(a.last_active))
+  return out
+}
+
+export function setCurrent(file: string, alias: string): void {
+  const reg = loadRegistry(file)
+  if (!reg.projects[alias]) {
+    throw new Error(`alias '${alias}' is not registered`)
+  }
+  reg.current = alias
+  reg.projects[alias]!.last_active = new Date().toISOString()
+  saveRegistry(file, reg)
+}

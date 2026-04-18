@@ -4,6 +4,8 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import {
   addProject,
+  listProjects,
+  setCurrent,
   ALIAS_REGEX,
   type ProjectRegistry,
 } from './project-registry'
@@ -13,8 +15,11 @@ let registryFile: string
 let realDir1: string
 let realDir2: string
 
+const tmpDirs: string[] = []
+
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'wechat-cc-registry-'))
+  tmpDirs.push(tmpDir)
   registryFile = join(tmpDir, 'projects.json')
   realDir1 = join(tmpDir, 'project-a')
   realDir2 = join(tmpDir, 'project-b')
@@ -23,8 +28,9 @@ beforeEach(() => {
 })
 
 afterAll(() => {
-  // beforeEach creates fresh tmpDirs; don't need to clean each, but catch the last
-  try { rmSync(tmpDir, { recursive: true, force: true }) } catch {}
+  for (const d of tmpDirs) {
+    try { rmSync(d, { recursive: true, force: true }) } catch {}
+  }
 })
 
 describe('ALIAS_REGEX', () => {
@@ -79,5 +85,72 @@ describe('addProject', () => {
     addProject(registryFile, 'beta', realDir2)
     const reg = JSON.parse(readFileSync(registryFile, 'utf8')) as ProjectRegistry
     expect(Object.keys(reg.projects)).toEqual(['alpha', 'beta'])
+  })
+})
+
+describe('listProjects', () => {
+  it('returns [] when registry file is missing', () => {
+    expect(listProjects(registryFile)).toEqual([])
+  })
+
+  it('returns all registered projects with is_current flag', () => {
+    addProject(registryFile, 'alpha', realDir1)
+    addProject(registryFile, 'beta', realDir2)
+    setCurrent(registryFile, 'beta')
+    const out = listProjects(registryFile)
+    expect(out).toHaveLength(2)
+    const beta = out.find(p => p.alias === 'beta')!
+    const alpha = out.find(p => p.alias === 'alpha')!
+    expect(beta.is_current).toBe(true)
+    expect(alpha.is_current).toBe(false)
+  })
+
+  it('sorts by last_active descending', async () => {
+    addProject(registryFile, 'alpha', realDir1)
+    await new Promise(r => setTimeout(r, 10))
+    addProject(registryFile, 'beta', realDir2)
+    await new Promise(r => setTimeout(r, 10))
+    setCurrent(registryFile, 'alpha')  // bumps alpha
+    const out = listProjects(registryFile)
+    // alpha was just bumped, so it's most recent
+    expect(out[0]!.alias).toBe('alpha')
+    expect(out[1]!.alias).toBe('beta')
+  })
+})
+
+describe('setCurrent', () => {
+  it('sets current and bumps target last_active', async () => {
+    addProject(registryFile, 'alpha', realDir1)
+    addProject(registryFile, 'beta', realDir2)
+    const before = JSON.parse(readFileSync(registryFile, 'utf8')) as ProjectRegistry
+    const alphaBefore = before.projects.alpha!.last_active
+
+    await new Promise(r => setTimeout(r, 20))
+    setCurrent(registryFile, 'alpha')
+
+    const after = JSON.parse(readFileSync(registryFile, 'utf8')) as ProjectRegistry
+    expect(after.current).toBe('alpha')
+    expect(after.projects.alpha!.last_active).not.toBe(alphaBefore)
+    expect(Date.parse(after.projects.alpha!.last_active)).toBeGreaterThan(Date.parse(alphaBefore))
+  })
+
+  it('does not bump previously-current on switch out', async () => {
+    addProject(registryFile, 'alpha', realDir1)
+    addProject(registryFile, 'beta', realDir2)
+    setCurrent(registryFile, 'alpha')
+    const midState = JSON.parse(readFileSync(registryFile, 'utf8')) as ProjectRegistry
+    const alphaAt = midState.projects.alpha!.last_active
+
+    await new Promise(r => setTimeout(r, 20))
+    setCurrent(registryFile, 'beta')
+
+    const final = JSON.parse(readFileSync(registryFile, 'utf8')) as ProjectRegistry
+    expect(final.current).toBe('beta')
+    expect(final.projects.alpha!.last_active).toBe(alphaAt)  // unchanged
+    expect(Date.parse(final.projects.beta!.last_active)).toBeGreaterThan(Date.parse(alphaAt))
+  })
+
+  it('throws if alias not registered', () => {
+    expect(() => setCurrent(registryFile, 'ghost')).toThrow(/not registered/i)
   })
 })
