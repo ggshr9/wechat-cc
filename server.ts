@@ -58,12 +58,15 @@ import {
 } from './docs.ts'
 import {
   STATE_DIR,
+  PROJECTS_FILE,
   ILINK_BASE_URL,
   ILINK_APP_ID,
   ILINK_BOT_TYPE,
   LONG_POLL_TIMEOUT_MS,
   MAX_TEXT_CHUNK,
 } from './config.ts'
+import { listProjects, addProject, removeProject, resolveProject, setCurrent, type ProjectView } from './project-registry.ts'
+import { writeHandoff } from './handoff.ts'
 import { chunk } from './send-reply.ts'
 
 // Ensure state dir exists once at load time
@@ -927,6 +930,15 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
       },
     },
+    {
+      name: 'list_projects',
+      description: 'List all registered projects with alias, absolute path, last_active timestamp, and is_current flag. Use this to match a user-provided alias against the registry (fuzzy/substring match) before calling switch_project.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
   ],
 }))
 
@@ -1246,6 +1258,11 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         if (noAccount.length > 0) parts.push(`${noAccount.length} skipped (no account entry)`)
         if (errors.length > 0) parts.push(`${errors.length} failed: ${errors.join(', ')}`)
         return { content: [{ type: 'text', text: parts.join(', ') }] }
+      }
+
+      case 'list_projects': {
+        const projects = listProjects(PROJECTS_FILE)
+        return { content: [{ type: 'text', text: JSON.stringify(projects, null, 2) }] }
       }
 
       default:
