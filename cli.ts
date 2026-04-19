@@ -159,16 +159,30 @@ export function buildClaudeArgs(flags: RunFlags, bun: string): string[] {
 }
 
 interface RestartFlag {
-  args: string[]  // empty = inherit current flags
+  args: string[]   // empty = inherit current flags
+  cwd: string | null  // non-null = chdir before respawn
 }
 
 // Atomically read + delete the flag file. Returns null if no restart requested.
+// File format:
+//   Line 1 may be "cwd=<absolute path>" (optional)
+//   Rest is whitespace-separated claude flags (legacy format — single line also works)
 function readRestartFlag(): RestartFlag | null {
   if (!existsSync(RESTART_FLAG_PATH)) return null
   let content = ''
   try { content = readFileSync(RESTART_FLAG_PATH, 'utf8').trim() } catch {}
   try { rmSync(RESTART_FLAG_PATH) } catch {}
-  return { args: content ? content.split(/\s+/) : [] }
+
+  let cwd: string | null = null
+  let argsText = content
+  const lines = content.split('\n').map(l => l.trim())
+  if (lines[0]?.startsWith('cwd=')) {
+    const maybeCwd = lines[0].slice(4).trim()
+    if (maybeCwd) cwd = maybeCwd
+    argsText = lines.slice(1).join(' ').trim()
+  }
+  const args = argsText ? argsText.split(/\s+/) : []
+  return { args, cwd }
 }
 
 async function run() {
@@ -268,6 +282,14 @@ async function run() {
 
     if (flag.args.length > 0) {
       currentFlags = parseRunArgs(flag.args)
+    }
+    if (flag.cwd) {
+      try {
+        process.chdir(flag.cwd)
+        console.error(`[wechat-cc] chdir → ${flag.cwd}`)
+      } catch (err) {
+        console.error(`[wechat-cc] chdir failed for ${flag.cwd}: ${err}. Staying in ${process.cwd()}`)
+      }
     }
     const human = [
       currentFlags.skipPermissions ? '--dangerously' : '',
