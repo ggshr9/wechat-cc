@@ -154,6 +154,7 @@ You still need to clone the repo + `bun install` + `wechat-cc setup` (QR scan) s
 - **Allowlist access control** — only approved WeChat users can reach your Claude session
 - **`wechat-cc update`** — one-command upgrade with version checking via `/status`
 - **CLI fallback** — `wechat-cc reply "..."` sends from any terminal using the same routing/session state, so you can still reach WeChat when the MCP channel is down
+- **Multi-project switching** — switch the active project by sending `切到 sidecar` in WeChat (or `/project switch sidecar`); wechat-cc respawns Claude in the target cwd and writes a lazy handoff pointer so you can keep conversations flowing
 
 <details>
 <summary><b>All features</b></summary>
@@ -185,6 +186,7 @@ wechat-cc list               # show bound accounts
 wechat-cc logs               # open live log viewer (http://localhost:3456)
 wechat-cc update             # pull latest code + reinstall deps
 wechat-cc reply "message"    # send from terminal when MCP channel is down
+wechat-cc install --user     # register wechat at user scope (works in every project)
 ```
 
 ### CLI fallback: `wechat-cc reply`
@@ -199,6 +201,38 @@ echo "piped text" | wechat-cc reply               # → stdin pipe
 
 The CLI reads the same `~/.claude/channels/wechat/` state (accounts, context tokens, user→account routing) as the running server, so recipient resolution and session continuity are identical. This makes the state files the single source of truth — you never lose a thread just because the MCP server restarted.
 
+### Multi-project switching
+
+If you maintain several projects, register them once and switch between them from WeChat.
+
+**One-time setup (install MCP at user scope so it works across all projects):**
+
+```bash
+wechat-cc install --user    # writes ~/.claude.json, no per-project .mcp.json needed
+```
+
+**Register your projects** (admin-only, type in WeChat):
+
+```
+/project add /home/u/Documents/compass compass
+/project add /home/u/Documents/compass-wechat-sidecar sidecar
+```
+
+**Switch** (natural language or command):
+
+```
+切到 sidecar                 # natural language — Claude parses intent
+/project switch sidecar      # exact command form
+/project list                # show all registered projects
+/project status              # show current project
+```
+
+Switching takes ~5-10 seconds. WeChat messages sent during the window are buffered by ilink and delivered after reconnect — no messages lost.
+
+**How handoff context works:** On switch, wechat-cc writes a small pointer file `<target>/memory/_handoff.md` referencing the source project's session transcript. If you later reference the prior conversation ("刚才聊的 xxx"), Claude looks up the pointer and reads the source jsonl on demand. Nothing is eagerly copied across projects.
+
+See `docs/specs/2026-04-18-project-switch-design.md` for the full design.
+
 ### WeChat commands
 
 | Command | Effect |
@@ -209,6 +243,11 @@ The CLI reads the same `~/.claude/channels/wechat/` state (accounts, context tok
 | `/users` | List online users |
 | `/restart` | Restart session (admin-only) |
 | `/restart --fresh` | Restart with a brand-new session |
+| `/project add <path> <alias>` | Register a project (admin-only) |
+| `/project list` | List all registered projects |
+| `/project switch <alias>` | Switch to a registered project (admin-only) |
+| `/project status` | Show current project alias + cwd |
+| `/project remove <alias>` | Unregister a project (admin-only) |
 | `@all msg` | Broadcast to everyone |
 | `@name msg` | Forward to a specific user |
 
