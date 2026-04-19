@@ -21,6 +21,7 @@ import {
   renameSync, chmodSync, readdirSync, existsSync, rmSync, statSync,
 } from 'fs'
 import { join } from 'path'
+import { homedir } from 'os'
 import { spawnSync } from 'child_process'
 import { log } from './log.ts'
 import {
@@ -827,6 +828,25 @@ mcp.setNotificationHandler(
   },
 )
 
+/**
+ * Resolve the path to the current Claude Code session's .jsonl file, or
+ * null if we can't determine it. Uses the encoded cwd convention.
+ */
+function currentSessionJsonl(): string | null {
+  const home = process.env.HOME ?? homedir()
+  const encoded = process.cwd().replace(/\//g, '-')
+  const projectDir = join(home, '.claude', 'projects', encoded)
+  if (!existsSync(projectDir)) return null
+  // Session files are <uuid>.jsonl — pick the most recently modified
+  try {
+    const files = readdirSync(projectDir)
+      .filter(f => f.endsWith('.jsonl'))
+      .map(f => ({ f, mtime: statSync(join(projectDir, f)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime)
+    return files.length > 0 ? join(projectDir, files[0]!.f) : null
+  } catch { return null }
+}
+
 // ── Tool definitions ───────────────────────────────────────────────────────
 
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -937,6 +957,24 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: 'object',
         properties: {},
         required: [],
+      },
+    },
+    {
+      name: 'switch_project',
+      description: 'Switch the active project. Triggers a restart of the Claude Code session in the target project\'s cwd. Writes a handoff pointer to <target>/memory/_handoff.md so the next session can look up prior context on demand. The switch is async — returns after writing the restart flag; actual respawn takes 5-10 seconds. Admin-only.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          alias: {
+            type: 'string',
+            description: 'Target project alias (must be registered via /project add first)',
+          },
+          note: {
+            type: 'string',
+            description: 'Optional short note from the user about what they are about to work on in the target project. Appears in the handoff file.',
+          },
+        },
+        required: ['alias'],
       },
     },
   ],
@@ -1263,6 +1301,66 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       case 'list_projects': {
         const projects = listProjects(PROJECTS_FILE)
         return { content: [{ type: 'text', text: JSON.stringify(projects, null, 2) }] }
+      }
+
+      case 'switch_project': {
+        const alias = args.alias as string
+        const note = (args.note as string | undefined) ?? null
+
+        // Resolve target
+        const entry = resolveProject(PROJECTS_FILE, alias)
+        if (!entry) {
+          const known = listProjects(PROJECTS_FILE).map(p => p.alias).join(', ') || '(none)'
+          return { content: [{ type: 'text', text: `switch_project failed: alias '${alias}' not registered. Known: ${known}` }], isError: true }
+        }
+
+        // Validate target path still exists
+        try {
+          const st = statSync(entry.path)
+          if (!st.isDirectory()) throw new Error('not a directory')
+        } catch {
+          return { content: [{ type: 'text', text: `switch_project failed: target path does not exist or is not a directory: ${entry.path}` }], isError: true }
+        }
+
+        // Find source info for handoff
+        const reg = listProjects(PROJECTS_FILE)
+        const currentEntry = reg.find(p => p.is_current)
+        const sourceAlias = currentEntry?.alias ?? 'unknown'
+        const sourcePath = currentEntry?.path ?? process.cwd()
+        const sourceJsonl = currentSessionJsonl() ?? '(session jsonl not found)'
+
+        // Write handoff (best-effort — non-fatal on failure)
+        try {
+          writeHandoff({
+            targetDir: entry.path,
+            sourceAlias,
+            sourcePath,
+            sourceJsonl,
+            timestamp: new Date().toISOString(),
+            note,
+          })
+        } catch (err) {
+          log('HANDOFF_FAIL', `writeHandoff for ${alias}: ${err instanceof Error ? err.message : String(err)}`)
+          // Continue — handoff is nice-to-have, not required
+        }
+
+        // Update registry current
+        try {
+          setCurrent(PROJECTS_FILE, alias)
+        } catch (err) {
+          return { content: [{ type: 'text', text: `switch_project failed at setCurrent: ${err instanceof Error ? err.message : String(err)}` }], isError: true }
+        }
+
+        // Write restart flag with cwd= prefix
+        try {
+          const flagPath = join(STATE_DIR, '.restart-flag')
+          writeFileSync(flagPath, `cwd=${entry.path}\n`, { mode: 0o600 })
+        } catch (err) {
+          return { content: [{ type: 'text', text: `switch_project failed writing restart flag: ${err instanceof Error ? err.message : String(err)}` }], isError: true }
+        }
+
+        log('PROJECT_SWITCH', `${sourceAlias} → ${alias} (${entry.path})`)
+        return { content: [{ type: 'text', text: `switch to ${alias} initiated — session will restart in ~10s` }] }
       }
 
       default:
