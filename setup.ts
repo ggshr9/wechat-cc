@@ -156,9 +156,14 @@ while (Date.now() < deadline) {
           }
         }
 
-        console.log('\n下一步：')
-        console.log('  claude --dangerously-load-development-channels server:wechat')
-        console.log('\n（需要在项目目录有 .mcp.json 指向 wechat server）')
+        console.log('')
+        console.log('💡 提示：你可以把 wechat 安装到用户级 MCP 配置，这样所有 Claude Code 会话')
+        console.log('   都能自动使用 wechat 通道（跨项目切换的前提）:')
+        console.log('     wechat-cc install --user')
+        console.log('')
+        console.log('   如果只想在当前项目使用，跳过这步，按下面方式继续:')
+        console.log('     wechat-cc install    # 生成 .mcp.json')
+        console.log('     wechat-cc run')
         process.exit(0)
       }
     }
