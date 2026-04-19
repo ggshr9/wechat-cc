@@ -847,6 +847,132 @@ function currentSessionJsonl(): string | null {
   } catch { return null }
 }
 
+/**
+ * Shared switch implementation. Returns a user-facing message string.
+ * Used by both MCP switch_project tool and WeChat /project switch command.
+ */
+function switchProjectCore(alias: string, note: string | null): string {
+  const entry = resolveProject(PROJECTS_FILE, alias)
+  if (!entry) {
+    const known = listProjects(PROJECTS_FILE).map(p => p.alias).join(', ') || '(none)'
+    return `❌ '${alias}' 未注册。已注册: ${known}`
+  }
+  try {
+    const st = statSync(entry.path)
+    if (!st.isDirectory()) throw new Error('not a directory')
+  } catch {
+    return `❌ target path invalid: ${entry.path}`
+  }
+
+  const reg = listProjects(PROJECTS_FILE)
+  const currentEntry = reg.find(p => p.is_current)
+  const sourceAlias = currentEntry?.alias ?? 'unknown'
+  const sourcePath = currentEntry?.path ?? process.cwd()
+  const sourceJsonl = currentSessionJsonl() ?? '(session jsonl not found)'
+
+  try {
+    writeHandoff({
+      targetDir: entry.path,
+      sourceAlias, sourcePath, sourceJsonl,
+      timestamp: new Date().toISOString(), note,
+    })
+  } catch (err) {
+    log('HANDOFF_FAIL', `writeHandoff for ${alias}: ${err instanceof Error ? err.message : String(err)}`)
+  }
+
+  try {
+    setCurrent(PROJECTS_FILE, alias)
+  } catch (err) {
+    return `❌ setCurrent failed: ${err instanceof Error ? err.message : String(err)}`
+  }
+
+  try {
+    writeFileSync(join(STATE_DIR, '.restart-flag'), `cwd=${entry.path}\n`, { mode: 0o600 })
+  } catch (err) {
+    return `❌ restart flag write failed: ${err instanceof Error ? err.message : String(err)}`
+  }
+
+  log('PROJECT_SWITCH', `${sourceAlias} → ${alias} (${entry.path})`)
+  return `正在切换到 ${alias}... 大约 10 秒`
+}
+
+/**
+ * Parse and dispatch /project subcommands. Returns a WeChat reply string
+ * or null if this isn't a /project command (caller falls through).
+ *
+ * All /project commands require admin — caller must check isAdmin() first.
+ */
+function handleProjectCommand(subcmd: string, args: string[]): string {
+  switch (subcmd) {
+    case 'add': {
+      if (args.length < 2) return 'usage: /project add <absolute-path> <alias>'
+      const [path, alias] = [args[0]!, args[1]!]
+      try {
+        addProject(PROJECTS_FILE, alias, path)
+        return `✅ 已注册: ${alias} → ${path}`
+      } catch (err) {
+        return `❌ ${err instanceof Error ? err.message : String(err)}`
+      }
+    }
+    case 'list': {
+      const projects = listProjects(PROJECTS_FILE)
+      if (projects.length === 0) return '还没注册任何项目。用 /project add <path> <alias> 添加。'
+      const lines = projects.map(p => {
+        const marker = p.is_current ? '→' : ' '
+        const rel = relativeTime(p.last_active)
+        return `${marker} ${p.alias}  (${p.path})  [${rel}]`
+      })
+      return '已注册项目:\n' + lines.join('\n')
+    }
+    case 'switch': {
+      if (args.length < 1) return 'usage: /project switch <alias>'
+      const alias = args[0]!
+      const entry = resolveProject(PROJECTS_FILE, alias)
+      if (!entry) {
+        const known = listProjects(PROJECTS_FILE).map(p => p.alias).join(', ') || '(none)'
+        return `❌ '${alias}' 未注册。已注册: ${known}`
+      }
+      const current = listProjects(PROJECTS_FILE).find(p => p.is_current)
+      if (current?.alias === alias) return `你已经在 ${alias} 了`
+      // Dispatch via the same code path as the MCP tool to keep single source of truth
+      return switchProjectCore(alias, null)
+    }
+    case 'status': {
+      const current = listProjects(PROJECTS_FILE).find(p => p.is_current)
+      if (!current) return '当前没有活跃项目（registry 为空或无 current）。cwd = ' + process.cwd()
+      return `当前: ${current.alias}\ncwd: ${current.path}\n上次切换: ${relativeTime(current.last_active)}`
+    }
+    case 'remove': {
+      if (args.length < 1) return 'usage: /project remove <alias>'
+      const alias = args[0]!
+      try {
+        removeProject(PROJECTS_FILE, alias)
+        return `✅ 已移除: ${alias}`
+      } catch (err) {
+        return `❌ ${err instanceof Error ? err.message : String(err)}`
+      }
+    }
+    default:
+      return `未知子命令: ${subcmd}\n可用: add | list | switch | status | remove`
+  }
+}
+
+/**
+ * Format an ISO timestamp as "5 分钟前" / "昨天" / "Apr 10".
+ */
+function relativeTime(iso: string): string {
+  const diff = Date.now() - Date.parse(iso)
+  if (Number.isNaN(diff)) return iso
+  const minutes = Math.floor(diff / 60_000)
+  if (minutes < 1) return '刚刚'
+  if (minutes < 60) return `${minutes} 分钟前`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} 小时前`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days} 天前`
+  return iso.slice(0, 10)
+}
+
 // ── Tool definitions ───────────────────────────────────────────────────────
 
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -1306,61 +1432,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       case 'switch_project': {
         const alias = args.alias as string
         const note = (args.note as string | undefined) ?? null
-
-        // Resolve target
-        const entry = resolveProject(PROJECTS_FILE, alias)
-        if (!entry) {
-          const known = listProjects(PROJECTS_FILE).map(p => p.alias).join(', ') || '(none)'
-          return { content: [{ type: 'text', text: `switch_project failed: alias '${alias}' not registered. Known: ${known}` }], isError: true }
-        }
-
-        // Validate target path still exists
-        try {
-          const st = statSync(entry.path)
-          if (!st.isDirectory()) throw new Error('not a directory')
-        } catch {
-          return { content: [{ type: 'text', text: `switch_project failed: target path does not exist or is not a directory: ${entry.path}` }], isError: true }
-        }
-
-        // Find source info for handoff
-        const reg = listProjects(PROJECTS_FILE)
-        const currentEntry = reg.find(p => p.is_current)
-        const sourceAlias = currentEntry?.alias ?? 'unknown'
-        const sourcePath = currentEntry?.path ?? process.cwd()
-        const sourceJsonl = currentSessionJsonl() ?? '(session jsonl not found)'
-
-        // Write handoff (best-effort — non-fatal on failure)
-        try {
-          writeHandoff({
-            targetDir: entry.path,
-            sourceAlias,
-            sourcePath,
-            sourceJsonl,
-            timestamp: new Date().toISOString(),
-            note,
-          })
-        } catch (err) {
-          log('HANDOFF_FAIL', `writeHandoff for ${alias}: ${err instanceof Error ? err.message : String(err)}`)
-          // Continue — handoff is nice-to-have, not required
-        }
-
-        // Update registry current
-        try {
-          setCurrent(PROJECTS_FILE, alias)
-        } catch (err) {
-          return { content: [{ type: 'text', text: `switch_project failed at setCurrent: ${err instanceof Error ? err.message : String(err)}` }], isError: true }
-        }
-
-        // Write restart flag with cwd= prefix
-        try {
-          const flagPath = join(STATE_DIR, '.restart-flag')
-          writeFileSync(flagPath, `cwd=${entry.path}\n`, { mode: 0o600 })
-        } catch (err) {
-          return { content: [{ type: 'text', text: `switch_project failed writing restart flag: ${err instanceof Error ? err.message : String(err)}` }], isError: true }
-        }
-
-        log('PROJECT_SWITCH', `${sourceAlias} → ${alias} (${entry.path})`)
-        return { content: [{ type: 'text', text: `switch to ${alias} initiated — session will restart in ~10s` }] }
+        const msg = switchProjectCore(alias, note)
+        const isError = msg.startsWith('❌')
+        return { content: [{ type: 'text', text: msg }], isError }
       }
 
       default:
@@ -1536,6 +1610,24 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
   }
 
   // ── WeChat-side commands (handled directly, not forwarded to Claude) ──
+
+  // /project <subcmd> [...args] — admin-only project registry management
+  if (text.startsWith('/project')) {
+    if (!isAdmin(fromUserId)) {
+      ilinkSendMessage(entry.account.baseUrl, entry.token,
+        botTextMessage(fromUserId, '需要 admin 权限', contextTokens.get(fromUserId)),
+      ).catch(() => {})
+      return
+    }
+    const parts = text.split(/\s+/)
+    const subcmd = parts[1] ?? 'status'
+    const rest = parts.slice(2)
+    const reply = handleProjectCommand(subcmd, rest)
+    ilinkSendMessage(entry.account.baseUrl, entry.token,
+      botTextMessage(fromUserId, reply, contextTokens.get(fromUserId)),
+    ).catch(() => {})
+    return
+  }
 
   // /restart [flags] — respawn wechat-cc via cli.ts supervisor loop.
   // Writes .restart-flag (content = raw extra args), ACKs, then SIGTERMs the
