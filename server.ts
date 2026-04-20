@@ -886,8 +886,15 @@ function autoRepairCurrent(): void {
 /**
  * Shared switch implementation. Returns a user-facing message string.
  * Used by both MCP switch_project tool and WeChat /project switch command.
+ *
+ * Optional `requester` lets the new post-switch session greet the person
+ * who triggered the switch via WeChat. Falls back to first account if omitted.
  */
-function switchProjectCore(alias: string, note: string | null): string {
+function switchProjectCore(
+  alias: string,
+  note: string | null,
+  requester?: { chat_id: string; account_id: string } | null,
+): string {
   const entry = resolveProject(PROJECTS_FILE, alias)
   if (!entry) {
     const known = listProjects(PROJECTS_FILE).map(p => p.alias).join(', ') || '(none)'
@@ -928,6 +935,24 @@ function switchProjectCore(alias: string, note: string | null): string {
     return `❌ restart flag write failed: ${err instanceof Error ? err.message : String(err)}`
   }
 
+  // Drop a restart-ack with kind='switch' so the new session can greet the
+  // requester with "已切到 <alias>". Best-effort — skipped silently if write
+  // fails or if no requester info (e.g. MCP tool called without context).
+  if (requester?.chat_id) {
+    try {
+      writeFileSync(RESTART_ACK_PATH, JSON.stringify({
+        kind: 'switch',
+        chat_id: requester.chat_id,
+        account_id: requester.account_id,
+        from_alias: sourceAlias,
+        to_alias: alias,
+        requested_at: Date.now(),
+      }), { mode: 0o600 })
+    } catch (err) {
+      log('PROJECT_SWITCH', `ack marker write failed: ${err}`)
+    }
+  }
+
   log('PROJECT_SWITCH', `${sourceAlias} → ${alias} (${entry.path})`)
   return `正在切换到 ${alias}... 大约 10 秒`
 }
@@ -938,7 +963,11 @@ function switchProjectCore(alias: string, note: string | null): string {
  *
  * All /project commands require admin — caller must check isAdmin() first.
  */
-function handleProjectCommand(subcmd: string, args: string[]): string {
+function handleProjectCommand(
+  subcmd: string,
+  args: string[],
+  requester?: { chat_id: string; account_id: string } | null,
+): string {
   // Sync registry current with user's physical cwd before every command, so
   // stale state (e.g. failed-switch leaving current=sidecar but user rolled
   // back to compass) is auto-repaired. Cheap — only writes if mismatch.
@@ -986,7 +1015,7 @@ function handleProjectCommand(subcmd: string, args: string[]): string {
       const current = listProjects(PROJECTS_FILE).find(p => p.is_current)
       if (current?.alias === alias) return `你已经在 ${alias} 了`
       // Dispatch via the same code path as the MCP tool to keep single source of truth
-      return switchProjectCore(alias, null)
+      return switchProjectCore(alias, null, requester ?? null)
     }
     case 'status': {
       const current = listProjects(PROJECTS_FILE).find(p => p.is_current)
@@ -1516,7 +1545,17 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       case 'switch_project': {
         const alias = args.alias as string
         const note = (args.note as string | undefined) ?? null
-        const msg = switchProjectCore(alias, note)
+        // Pick most-recently-active chat as the greeting recipient. Map
+        // insertion order = recency order (see contextTokens.delete+set at
+        // the inbound handler). If nobody has talked to us yet this session,
+        // fall back to null and skip the greeting entirely.
+        const chatIds = Array.from(contextTokens.keys())
+        const lastChatId = chatIds[chatIds.length - 1] ?? null
+        const lastAccountId = lastChatId ? (userAccountIds.get(lastChatId) ?? null) : null
+        const requester = lastChatId && lastAccountId
+          ? { chat_id: lastChatId, account_id: lastAccountId }
+          : null
+        const msg = switchProjectCore(alias, note, requester)
         const isError = msg.startsWith('❌')
         return { content: [{ type: 'text', text: msg }], isError }
       }
@@ -1721,7 +1760,7 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
     const parts = text.split(/\s+/)
     const subcmd = parts[1] ?? 'status'
     const rest = parts.slice(2)
-    const reply = handleProjectCommand(subcmd, rest)
+    const reply = handleProjectCommand(subcmd, rest, { chat_id: fromUserId, account_id: entry.id })
     ilinkSendMessage(entry.account.baseUrl, entry.token,
       botTextMessage(fromUserId, reply, contextTokens.get(fromUserId)),
     ).catch(() => {})
@@ -2192,12 +2231,21 @@ if (accounts.length === 0) {
   // marker before SIGTERM, let the requester know we're back. Fire-and-forget;
   // don't block startup.
   void (async () => {
-    let marker: { chat_id: string; account_id: string; flags: string; requested_at: number } | null = null
+    type RestartMarker = {
+      chat_id: string
+      account_id: string
+      requested_at: number
+      kind?: 'restart' | 'switch'
+      flags?: string
+      from_alias?: string
+      to_alias?: string
+    }
+    let marker: RestartMarker | null = null
     try {
       const raw = readFileSync(RESTART_ACK_PATH, 'utf8')
       marker = JSON.parse(raw)
     } catch {
-      return  // no marker → this wasn't a /restart boot
+      return  // no marker → this wasn't a /restart or /switch boot
     }
     try { rmSync(RESTART_ACK_PATH) } catch {}
     if (!marker?.chat_id) return
@@ -2206,12 +2254,18 @@ if (accounts.length === 0) {
     if (!entry) return
 
     const elapsedSec = Math.max(1, Math.round((Date.now() - marker.requested_at) / 1000))
-    const flagSuffix = marker.flags ? `（${marker.flags}）` : ''
-    const greeting = `已重连${flagSuffix}，用时约 ${elapsedSec}s`
+    let greeting: string
+    if (marker.kind === 'switch') {
+      const fromPart = marker.from_alias ? `（从 ${marker.from_alias}，` : '（'
+      greeting = `已切到 ${marker.to_alias ?? '?'}${fromPart}用时约 ${elapsedSec}s）`
+    } else {
+      const flagSuffix = marker.flags ? `（${marker.flags}）` : ''
+      greeting = `已重连${flagSuffix}，用时约 ${elapsedSec}s`
+    }
     try {
       await ilinkSendMessage(entry.account.baseUrl, entry.token,
         botTextMessage(marker.chat_id, greeting, contextTokens.get(marker.chat_id)))
-      log('RESTART', `post-restart greeting sent to ${marker.chat_id} via ${entry.id}`)
+      log('RESTART', `post-restart greeting sent to ${marker.chat_id} via ${entry.id} (kind=${marker.kind ?? 'restart'})`)
     } catch (err) {
       log('RESTART', `post-restart greeting failed: ${err}`)
     }
