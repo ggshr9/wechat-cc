@@ -31,6 +31,14 @@ export const MAX_TEXT_CHUNK = 4000
 export const PROJECTS_FILE = join(STATE_DIR, 'projects.json')
 
 /**
+ * User cwd at wechat-cc run time. cli.ts writes this so server.ts (whose
+ * own process.cwd() is the plugin dir, not the user's project) knows where
+ * the user actually is. Used for /project status display, currentSessionJsonl
+ * lookup, and auto-repair of registry current on startup.
+ */
+export const CURRENT_CWD_FILE = join(STATE_DIR, 'current-cwd')
+
+/**
  * Note: ILINK_CLIENT_VERSION ('131335' = 0x00020107 = v2.1.7) is declared
  * in ilink.ts (for server runtime) and setup.ts (for QR login). Both now
  * use the same value. It's not in config.ts because only those two files

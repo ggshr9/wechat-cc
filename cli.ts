@@ -12,7 +12,7 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'child_process'
-import { existsSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, readdirSync, rmSync, mkdirSync } from 'fs'
 import { resolve, join } from 'path'
 import { homedir, platform } from 'os'
 import { findOnPath } from './util.ts'
@@ -26,6 +26,33 @@ const PLUGIN_DIR = import.meta.dir
 const STATE_DIR = join(homedir(), '.claude', 'channels', 'wechat')
 const ACCOUNTS_DIR = join(STATE_DIR, 'accounts')
 const RESTART_FLAG_PATH = join(STATE_DIR, '.restart-flag')
+const CURRENT_CWD_FILE = join(STATE_DIR, 'current-cwd')
+
+/** Write the user's real cwd to disk so the MCP server (whose own
+ *  process.cwd() is the plugin dir) can read it. Used by server.ts for
+ *  currentSessionJsonl lookup, /project status display, and registry
+ *  current-field auto-repair. Best-effort — silent on failure. */
+function writeCurrentCwd(cwd: string): void {
+  try {
+    mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
+    writeFileSync(CURRENT_CWD_FILE, cwd + '\n', { mode: 0o600 })
+  } catch { /* non-fatal */ }
+}
+
+/** Does the target cwd have an existing Claude Code session jsonl to
+ *  --continue from? Claude stores sessions under ~/.claude/projects/<encoded-cwd>/.
+ *  If no jsonl exists, forcing --continue fails with "No conversation found to
+ *  continue". We use this to pre-flight switch to --fresh instead. */
+function hasClaudeSessionIn(cwd: string): boolean {
+  const encoded = cwd.replace(/\//g, '-')
+  const sessionDir = join(homedir(), '.claude', 'projects', encoded)
+  if (!existsSync(sessionDir)) return false
+  try {
+    return readdirSync(sessionDir).some(f => f.endsWith('.jsonl'))
+  } catch {
+    return false
+  }
+}
 
 function getBunPath(): string {
   const found = findOnPath('bun')
@@ -216,7 +243,21 @@ async function run() {
   let isRestart = false
 
   while (true) {
-    const claudeArgs = buildClaudeArgs(currentFlags, bun)
+    // Per-iteration state sync with server.ts:
+    // 1. Record user's real cwd so server can use it (not process.cwd() which is plugin dir)
+    // 2. If --continue but no existing session in this cwd, downgrade to --fresh
+    //    just for this iteration (avoid "No conversation found to continue").
+    //    Don't mutate currentFlags so next iteration (e.g. restart back to old cwd)
+    //    still respects the user's original --continue intent.
+    writeCurrentCwd(process.cwd())
+    const noSession = !currentFlags.freshSession && !hasClaudeSessionIn(process.cwd())
+    if (noSession) {
+      console.error(`[wechat-cc] no Claude session history in ${process.cwd()} — using --fresh for this launch`)
+    }
+    const effectiveFlags: RunFlags = noSession
+      ? { ...currentFlags, freshSession: true }
+      : currentFlags
+    const claudeArgs = buildClaudeArgs(effectiveFlags, bun)
     const startedAt = Date.now()
 
     // Spawn claude (or expect-wrapped claude on restart with expect available).
@@ -249,21 +290,19 @@ async function run() {
 
     const flag = readRestartFlag()
     if (!flag) {
-      // If claude exited quickly on a --continue attempt (default) and
-      // the user didn't explicitly ask for --fresh, it's probably
-      // "No conversation found to continue". Print a helpful hint
-      // instead of silently exiting.
+      // Pre-flight now downgrades --continue to --fresh when no session
+      // exists, so "No conversation found to continue" shouldn't be reached
+      // via this code path anymore. Left as a safety net in case future
+      // scenarios still trip on it.
       const elapsed = Date.now() - startedAt
       if (
         !isRestart
-        && !currentFlags.freshSession
+        && !effectiveFlags.freshSession
         && elapsed < 5_000
         && exitCode !== 0
       ) {
         console.error('')
-        console.error('[wechat-cc] Hint: no previous session to continue. Run with --fresh to start a new session:')
-        console.error('  wechat-cc run --fresh')
-        console.error('  wechat-cc run --fresh --dangerously')
+        console.error('[wechat-cc] claude exited fast — check session state manually if this repeats.')
       }
       process.exit(exitCode)
     }
