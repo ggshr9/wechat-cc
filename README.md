@@ -160,7 +160,7 @@ You still need to clone the repo + `bun install` + `wechat-cc setup` (QR scan) s
 <summary><b>All features</b></summary>
 
 - QR-code login, multi-account (each scanner = one independent bot)
-- MCP server exposing channel tools: `reply`, `edit_message`, `broadcast`, `send_file`, `set_user_name`, `share_page`, `resurface_page`
+- MCP server exposing channel tools: `reply`, `edit_message`, `broadcast`, `send_file`, `set_user_name`, `share_page`, `resurface_page`, `list_projects`, `switch_project`, `add_project`, `remove_project` (project-management tools are admin-gated identically to the `/project` command path)
 - `resurface_page` re-opens old shared documents on the current tunnel when the original URL has expired
 - Text, image, file and video delivery (CDN upload/download + AES-128-ECB encryption)
 - Incoming media auto-downloaded to inbox (paths surfaced in message metadata)
@@ -227,7 +227,7 @@ wechat-cc install --user    # writes ~/.claude.json, no per-project .mcp.json ne
 /project status              # show current project
 ```
 
-Switching takes ~5-10 seconds. WeChat messages sent during the window are buffered by ilink and delivered after reconnect — no messages lost.
+Switching takes ~5-10 seconds. WeChat messages sent during the window are buffered by ilink and delivered after reconnect — no messages lost. The new session sends a confirmation ("已切到 X (from Y, took Ns)") so you know the switch landed.
 
 **How handoff context works:** On switch, wechat-cc writes a small pointer file `<target>/memory/_handoff.md` referencing the source project's session transcript. If you later reference the prior conversation ("刚才聊的 xxx"), Claude looks up the pointer and reads the source jsonl on demand. Nothing is eagerly copied across projects.
 

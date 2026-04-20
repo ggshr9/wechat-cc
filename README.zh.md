@@ -151,6 +151,7 @@ cc-switch 会把这段写进 Claude 的 `mcpServers` 配置。效果和 `wechat-
 - **微信当 Claude 遥控器** —— 从手机发文本、图片、文件、语音，Claude 全都能看到并回复
 - **share_page** —— 长 markdown（plan / spec / 审阅文档）发布成手机浏览器可直接点开的网页，底部有 Approve 按钮给外部审阅人用
 - **微信端 `/restart`** —— 不用走到电脑前就能重启 Claude session，Linux/macOS 自动通过对话框
+- **多项目切换** —— 微信发 `切到 sidecar` 或 `/project switch sidecar`，wechat-cc 会在目标 cwd 重启 Claude 并写一份 handoff pointer，对话上下文自然续上
 - **白名单访问控制** —— 只有被允许的微信用户才能联系你的 Claude
 - **`wechat-cc update`** —— 一条命令升级，`/status` 查看版本
 
@@ -158,7 +159,7 @@ cc-switch 会把这段写进 Claude 的 `mcpServers` 配置。效果和 `wechat-
 <summary><b>全部功能</b></summary>
 
 - 扫码登录，支持多账号（每次扫码 = 一个独立 bot）
-- MCP server 暴露频道工具：`reply`、`edit_message`、`broadcast`、`send_file`、`set_user_name`、`share_page`、`resurface_page`
+- MCP server 暴露频道工具：`reply`、`edit_message`、`broadcast`、`send_file`、`set_user_name`、`share_page`、`resurface_page`、`list_projects`、`switch_project`、`add_project`、`remove_project`（项目管理类都有 admin 检查，和 `/project` 命令路径一致）
 - `resurface_page` 让过期的旧文档在新 tunnel 上重新可访问
 - 文本 / 图片 / 文件 / 视频收发（CDN 上传下载 + AES-128-ECB 加密）
 - 收到的媒体自动保存到 inbox（路径写进消息元数据）
@@ -183,7 +184,40 @@ wechat-cc run --dangerously  # 跳过所有权限确认
 wechat-cc list               # 列出已绑定账号
 wechat-cc logs               # 打开日志查看器
 wechat-cc update             # 拉最新代码 + 重装依赖
+wechat-cc install --user     # 把 wechat 注册到用户级 MCP（多项目共用）
 ```
+
+### 多项目切换
+
+如果你同时维护多个项目，可以把它们注册到 wechat-cc 里，通过微信一条命令在项目之间切换。
+
+**一次性安装**（把 MCP 装到用户级，所有项目共用）：
+
+```bash
+wechat-cc install --user    # 写入 ~/.claude.json，不再需要每个项目的 .mcp.json
+```
+
+**注册项目**（仅管理员，在微信里输入）：
+
+```
+/project add /home/u/Documents/compass compass
+/project add /home/u/Documents/compass-wechat-sidecar sidecar
+```
+
+**切换**（自然语言或命令）：
+
+```
+切到 sidecar                 # 自然语言 —— Claude 会理解意图
+/project switch sidecar      # 显式命令
+/project list                # 列出所有注册项目
+/project status              # 查看当前项目 + cwd
+```
+
+切换大约 5-10 秒。切换窗口内微信发的消息 ilink 会缓存，重连后一起补发，不会丢。切换成功后新 session 会主动发 "已切到 X（从 Y，用时 Ns）" 确认。
+
+**Handoff context 怎么工作**：切换时 wechat-cc 在目标项目写一个小指针文件 `<target>/memory/_handoff.md`，里面指向源项目的 session jsonl。你后来提到之前的对话（"刚才聊的 xxx"），Claude 会按需读取源 jsonl。项目间不会复制对话内容。
+
+完整设计见 `docs/specs/2026-04-18-project-switch-design.md`。
 
 ### 微信端命令
 
@@ -195,6 +229,11 @@ wechat-cc update             # 拉最新代码 + 重装依赖
 | `/users` | 在线用户 |
 | `/restart` | 重启 session（仅管理员）|
 | `/restart --fresh` | 重启并开全新会话 |
+| `/project add <路径> <别名>` | 注册项目（仅管理员） |
+| `/project list` | 列出所有注册项目 |
+| `/project switch <别名>` | 切换项目（仅管理员） |
+| `/project status` | 查看当前项目别名 + cwd |
+| `/project remove <别名>` | 取消注册（仅管理员） |
 | `@all 消息` | 群发 |
 | `@名字 消息` | 转发给指定人 |
 
