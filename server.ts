@@ -60,6 +60,7 @@ import {
 import {
   STATE_DIR,
   PROJECTS_FILE,
+  CURRENT_CWD_FILE,
   ILINK_BASE_URL,
   ILINK_APP_ID,
   ILINK_BOT_TYPE,
@@ -829,12 +830,25 @@ mcp.setNotificationHandler(
 )
 
 /**
+ * The user's real cwd — where they ran `wechat-cc run`. cli.ts writes this
+ * to CURRENT_CWD_FILE before spawning claude. We can't use process.cwd()
+ * because the MCP server is spawned via `bun run --cwd <plugin_dir>`, so its
+ * own cwd is the plugin dir, not the user's project.
+ *
+ * Fallback to process.cwd() if the file is missing (backward compat).
+ */
+function userCwd(): string {
+  try { return readFileSync(CURRENT_CWD_FILE, 'utf8').trim() || process.cwd() }
+  catch { return process.cwd() }
+}
+
+/**
  * Resolve the path to the current Claude Code session's .jsonl file, or
  * null if we can't determine it. Uses the encoded cwd convention.
  */
 function currentSessionJsonl(): string | null {
   const home = process.env.HOME ?? homedir()
-  const encoded = process.cwd().replace(/\//g, '-')
+  const encoded = userCwd().replace(/\//g, '-')
   const projectDir = join(home, '.claude', 'projects', encoded)
   if (!existsSync(projectDir)) return null
   // Session files are <uuid>.jsonl — pick the most recently modified
@@ -845,6 +859,28 @@ function currentSessionJsonl(): string | null {
       .sort((a, b) => b.mtime - a.mtime)
     return files.length > 0 ? join(projectDir, files[0]!.f) : null
   } catch { return null }
+}
+
+/**
+ * Ensure the registry's `current` field matches the user's physical cwd.
+ * Called at startup + before any /project status / list / switch, so the
+ * answer is never lagging reality.
+ *
+ * If the user's cwd matches a registered project's path, setCurrent to that
+ * alias. If no registered project matches, leave current as-is (user is
+ * running wechat-cc outside any registered project; that's fine).
+ *
+ * This also auto-repairs the "failed-switch leaves stale current" bug:
+ * even if a prior switch set current=sidecar but --continue failed and user
+ * restarted in compass, the next call here re-sets current=compass.
+ */
+function autoRepairCurrent(): void {
+  const cwd = userCwd()
+  const projects = listProjects(PROJECTS_FILE)
+  const match = projects.find(p => p.path === cwd)
+  if (!match) return  // no registered project at this cwd; keep registry untouched
+  if (match.is_current) return  // already correct
+  try { setCurrent(PROJECTS_FILE, match.alias) } catch { /* non-fatal */ }
 }
 
 /**
@@ -867,7 +903,7 @@ function switchProjectCore(alias: string, note: string | null): string {
   const reg = listProjects(PROJECTS_FILE)
   const currentEntry = reg.find(p => p.is_current)
   const sourceAlias = currentEntry?.alias ?? 'unknown'
-  const sourcePath = currentEntry?.path ?? process.cwd()
+  const sourcePath = currentEntry?.path ?? userCwd()
   const sourceJsonl = currentSessionJsonl() ?? '(session jsonl not found)'
 
   try {
@@ -903,12 +939,27 @@ function switchProjectCore(alias: string, note: string | null): string {
  * All /project commands require admin — caller must check isAdmin() first.
  */
 function handleProjectCommand(subcmd: string, args: string[]): string {
+  // Sync registry current with user's physical cwd before every command, so
+  // stale state (e.g. failed-switch leaving current=sidecar but user rolled
+  // back to compass) is auto-repaired. Cheap — only writes if mismatch.
+  autoRepairCurrent()
+
   switch (subcmd) {
     case 'add': {
       if (args.length < 2) return 'usage: /project add <absolute-path> <alias>'
       const [path, alias] = [args[0]!, args[1]!]
       try {
         addProject(PROJECTS_FILE, alias, path)
+        // If this is the first registered project, set it as current so the
+        // user doesn't have to switch once just to activate it.
+        const projects = listProjects(PROJECTS_FILE)
+        const cwd = userCwd()
+        if (projects.length === 1) {
+          setCurrent(PROJECTS_FILE, alias)
+        } else if (path === cwd) {
+          // User registered the project they're actually in → activate it
+          setCurrent(PROJECTS_FILE, alias)
+        }
         return `✅ 已注册: ${alias} → ${path}`
       } catch (err) {
         return `❌ ${err instanceof Error ? err.message : String(err)}`
@@ -939,7 +990,7 @@ function handleProjectCommand(subcmd: string, args: string[]): string {
     }
     case 'status': {
       const current = listProjects(PROJECTS_FILE).find(p => p.is_current)
-      if (!current) return '当前没有活跃项目（registry 为空或无 current）。cwd = ' + process.cwd()
+      if (!current) return '当前没有活跃项目（registry 为空或无 current）。cwd = ' + userCwd()
       return `当前: ${current.alias}\ncwd: ${current.path}\n上次切换: ${relativeTime(current.last_active)}`
     }
     case 'remove': {
@@ -1098,6 +1149,38 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           note: {
             type: 'string',
             description: 'Optional short note from the user about what they are about to work on in the target project. Appears in the handoff file.',
+          },
+        },
+        required: ['alias'],
+      },
+    },
+    {
+      name: 'add_project',
+      description: 'Register a project path with a short alias so it can be switched to later. Use this when the user says things like "帮我注册 compass" or "add this project" — infer the path from current cwd if they don\'t specify, ask if ambiguous. Prefer short lowercase aliases (2-20 chars, [a-z0-9_-]). Admin-only.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Absolute path to the project root. If user said "add this project", use the current cwd from list_projects context or ask them to confirm.',
+          },
+          alias: {
+            type: 'string',
+            description: 'Short lowercase alias for the project. Must match /^[a-z0-9][a-z0-9_-]{1,19}$/. E.g. "compass", "side-api", "web2".',
+          },
+        },
+        required: ['path', 'alias'],
+      },
+    },
+    {
+      name: 'remove_project',
+      description: 'Unregister a project alias from the registry. Use when user says "删掉 xxx 项目" or "forget the sidecar project". Fails if the alias is the current active project. Admin-only.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          alias: {
+            type: 'string',
+            description: 'Alias to remove',
           },
         },
         required: ['alias'],
@@ -1425,6 +1508,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       }
 
       case 'list_projects': {
+        autoRepairCurrent()  // ensure current reflects physical cwd
         const projects = listProjects(PROJECTS_FILE)
         return { content: [{ type: 'text', text: JSON.stringify(projects, null, 2) }] }
       }
@@ -1435,6 +1519,21 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         const msg = switchProjectCore(alias, note)
         const isError = msg.startsWith('❌')
         return { content: [{ type: 'text', text: msg }], isError }
+      }
+
+      case 'add_project': {
+        // Reuse the same command-handler logic so auto-setCurrent + cwd match
+        // behavior stays consistent with the /project add WeChat command.
+        const path = args.path as string
+        const alias = args.alias as string
+        const msg = handleProjectCommand('add', [path, alias])
+        return { content: [{ type: 'text', text: msg }], isError: msg.startsWith('❌') }
+      }
+
+      case 'remove_project': {
+        const alias = args.alias as string
+        const msg = handleProjectCommand('remove', [alias])
+        return { content: [{ type: 'text', text: msg }], isError: msg.startsWith('❌') }
       }
 
       default:
