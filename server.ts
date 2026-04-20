@@ -954,6 +954,17 @@ function switchProjectCore(
   }
 
   log('PROJECT_SWITCH', `${sourceAlias} → ${alias} (${entry.path})`)
+
+  // Safety net: mirror the /restart self-exit path. cli.ts's 500ms poll
+  // detects the flag and kill()s claude, which should close our stdin and
+  // trigger shutdown via the EOF handler. If that path fails (observed with
+  // multiple orphan servers piling up after restarts because stdin EOF
+  // didn't propagate under bun), force-exit after 5s so we don't accumulate.
+  setTimeout(() => {
+    log('PROJECT_SWITCH', 'safety net: self-exiting after 5s (cli.ts should have killed claude by now)')
+    process.exit(0)
+  }, 5000)
+
   return `正在切换到 ${alias}... 大约 10 秒`
 }
 
@@ -1543,17 +1554,22 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       }
 
       case 'switch_project': {
+        // Attribute the tool call to the most recent inbound WeChat user and
+        // enforce the same admin gate that /project switch enforces. Without
+        // this, an allowlisted non-admin could ask Claude in natural language
+        // to switch projects and bypass the command-path check.
+        const requesterChatId = _lastInboundChatId
+        if (!requesterChatId || !isAdmin(requesterChatId)) {
+          return {
+            content: [{ type: 'text', text: '❌ switch_project 需要 admin 权限（或没有可归属的 WeChat 请求者）' }],
+            isError: true,
+          }
+        }
         const alias = args.alias as string
         const note = (args.note as string | undefined) ?? null
-        // Pick most-recently-active chat as the greeting recipient. Map
-        // insertion order = recency order (see contextTokens.delete+set at
-        // the inbound handler). If nobody has talked to us yet this session,
-        // fall back to null and skip the greeting entirely.
-        const chatIds = Array.from(contextTokens.keys())
-        const lastChatId = chatIds[chatIds.length - 1] ?? null
-        const lastAccountId = lastChatId ? (userAccountIds.get(lastChatId) ?? null) : null
-        const requester = lastChatId && lastAccountId
-          ? { chat_id: lastChatId, account_id: lastAccountId }
+        const requesterAccountId = userAccountIds.get(requesterChatId) ?? null
+        const requester = requesterAccountId
+          ? { chat_id: requesterChatId, account_id: requesterAccountId }
           : null
         const msg = switchProjectCore(alias, note, requester)
         const isError = msg.startsWith('❌')
@@ -1561,6 +1577,12 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       }
 
       case 'add_project': {
+        if (!_lastInboundChatId || !isAdmin(_lastInboundChatId)) {
+          return {
+            content: [{ type: 'text', text: '❌ add_project 需要 admin 权限（或没有可归属的 WeChat 请求者）' }],
+            isError: true,
+          }
+        }
         // Reuse the same command-handler logic so auto-setCurrent + cwd match
         // behavior stays consistent with the /project add WeChat command.
         const path = args.path as string
@@ -1570,6 +1592,12 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       }
 
       case 'remove_project': {
+        if (!_lastInboundChatId || !isAdmin(_lastInboundChatId)) {
+          return {
+            content: [{ type: 'text', text: '❌ remove_project 需要 admin 权限（或没有可归属的 WeChat 请求者）' }],
+            isError: true,
+          }
+        }
         const alias = args.alias as string
         const msg = handleProjectCommand('remove', [alias])
         return { content: [{ type: 'text', text: msg }], isError: msg.startsWith('❌') }
@@ -1605,6 +1633,12 @@ process.on('uncaughtException', err => {
 const seenMessageIds = new Set<string>()
 const MAX_SEEN = 2000
 
+// Tracks the most recent inbound WeChat user. MCP tool handlers that mutate
+// state (switch_project, add_project, remove_project) use this to attribute
+// the tool call to a specific user for admin gating and post-switch greeting.
+// Null until the first inbound arrives — MCP tools default-deny in that case.
+let _lastInboundChatId: string | null = null
+
 async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<void> {
   // Only process user messages (type=1) that are finished (state=2)
   if (msg.message_type !== 1) return
@@ -1631,6 +1665,9 @@ async function handleInbound(msg: WeixinMessage, entry: AccountEntry): Promise<v
     log('GATED', `${userNames.get(fromUserId) ?? fromUserId} (not on allowlist)`)
     return
   }
+
+  // Attribute subsequent MCP tool calls to this user (for admin gating).
+  _lastInboundChatId = fromUserId
 
   // Store context token and account routing for replies.
   // Why delete-then-set: Map insertion order = recency order, which the
@@ -2202,6 +2239,21 @@ process.stdin.on('end', shutdown)
 process.stdin.on('close', shutdown)
 process.on('SIGTERM', shutdown)
 process.on('SIGINT', shutdown)
+
+// Orphan watchdog. Claude spawns us as an MCP child, so our ppid is claude's
+// pid. When claude dies (e.g. cli.ts kills it on /restart), we're reparented
+// to init (ppid becomes 1). Stdin EOF + SIGTERM should handle shutdown, but
+// both have failed under bun in practice — 4 orphan servers were found alive
+// with high CPU/memory long after their claudes died, causing duplicate
+// replies because they all kept polling the same ilink token. This interval
+// is a defense-in-depth catch: check every 10s, exit immediately if orphaned.
+const _originalPpid = process.ppid
+setInterval(() => {
+  if (process.ppid === 1 || process.ppid !== _originalPpid) {
+    process.stderr.write(`wechat channel: orphaned (ppid ${_originalPpid} → ${process.ppid}), exiting\n`)
+    process.exit(0)
+  }
+}, 10_000).unref()
 
 // Load all accounts FIRST so userAccountMap has scanners pre-registered
 // before MCP connects. Otherwise a permission_request notification arriving
