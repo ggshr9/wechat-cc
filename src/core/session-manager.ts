@@ -37,10 +37,10 @@ export class SessionManager {
       existing.handle.lastUsedAt = Date.now()
       return existing.handle
     }
-    return Promise.resolve(this.spawn(alias, path))
+    return this.spawn(alias, path)
   }
 
-  private spawn(alias: string, path: string): SessionHandle {
+  private async spawn(alias: string, path: string): Promise<SessionHandle> {
     const queue = new AsyncQueue<SDKUserMessage>()
     const options = this.opts.sdkOptionsForProject(alias, path)
     const q = query({ prompt: queue.iterable(), options })
@@ -95,6 +95,7 @@ export class SessionManager {
     })()
 
     this.sessions.set(alias, { handle, queue, q, drainPromise })
+    await this.enforceCapacity()
     return handle
   }
 
@@ -117,6 +118,32 @@ export class SessionManager {
   async shutdown(): Promise<void> {
     const aliases = Array.from(this.sessions.keys())
     await Promise.all(aliases.map(a => this.release(a)))
+  }
+
+  private async enforceCapacity(): Promise<void> {
+    while (this.sessions.size > this.opts.maxConcurrent) {
+      const lru = this.pickLru()
+      if (!lru) break
+      await this.release(lru)
+    }
+  }
+
+  private pickLru(): string | null {
+    let worstAlias: string | null = null
+    let worstAt = Infinity
+    for (const [alias, s] of this.sessions) {
+      if (s.handle.lastUsedAt < worstAt) { worstAt = s.handle.lastUsedAt; worstAlias = alias }
+    }
+    return worstAlias
+  }
+
+  async sweepIdle(): Promise<void> {
+    const now = Date.now()
+    for (const [alias, s] of Array.from(this.sessions.entries())) {
+      if (now - s.handle.lastUsedAt >= this.opts.idleEvictMs) {
+        await this.release(alias)
+      }
+    }
   }
 }
 

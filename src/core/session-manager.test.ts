@@ -78,4 +78,37 @@ describe('SessionManager', () => {
     expect(seen).toEqual(['first', 'second'])
     await mgr.shutdown()
   })
+
+  it('evicts least-recently-used when capacity exceeded', async () => {
+    const mgr = new SessionManager({
+      maxConcurrent: 2,
+      idleEvictMs: 60_000,
+      sdkOptionsForProject: () => ({ cwd: '/tmp/x' } as Options),
+    })
+    await mgr.acquire('a', '/a')
+    await mgr.acquire('b', '/b')
+    // force b more recent than a
+    await new Promise(r => setTimeout(r, 2))
+    const handleA = await mgr.acquire('a', '/a')  // re-touches a
+    expect(handleA.alias).toBe('a')
+    await mgr.acquire('c', '/c')  // should evict b (LRU), keep a
+    const aliases = mgr.list().map(s => s.alias).sort()
+    expect(aliases).toEqual(['a', 'c'])
+    await mgr.shutdown()
+  })
+
+  it('evicts idle sessions past idleEvictMs', async () => {
+    vi.useFakeTimers()
+    const mgr = new SessionManager({
+      maxConcurrent: 10,
+      idleEvictMs: 1000,
+      sdkOptionsForProject: () => ({ cwd: '/tmp/x' } as Options),
+    })
+    await mgr.acquire('a', '/a')
+    vi.advanceTimersByTime(2000)
+    await mgr.sweepIdle()
+    expect(mgr.list()).toEqual([])
+    vi.useRealTimers()
+    await mgr.shutdown()
+  })
 })
