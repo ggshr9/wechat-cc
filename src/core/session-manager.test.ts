@@ -1,0 +1,54 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { SessionManager } from './session-manager'
+import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
+
+// Module-level spy injected via vi.mock so SessionManager uses our fake query()
+const fakeQuery = vi.fn()
+vi.mock('@anthropic-ai/claude-agent-sdk', async () => {
+  return {
+    query: (params: unknown) => fakeQuery(params),
+  }
+})
+
+function makeFakeQuery(): Query {
+  async function* gen(): AsyncGenerator<SDKMessage, void> {
+    // never yields on its own — caller pushes messages, test asserts receipt
+    await new Promise(() => {})
+  }
+  const q = gen() as unknown as Query
+  ;(q as any).interrupt = vi.fn()
+  ;(q as any).close = vi.fn()
+  return q
+}
+
+beforeEach(() => {
+  fakeQuery.mockReset()
+  fakeQuery.mockImplementation(() => makeFakeQuery())
+})
+
+describe('SessionManager', () => {
+  it('does not spawn until acquire() is called', async () => {
+    const mgr = new SessionManager({
+      maxConcurrent: 4,
+      idleEvictMs: 60_000,
+      sdkOptionsForProject: () => ({ cwd: '/tmp/x' } as Options),
+    })
+    expect(fakeQuery).not.toHaveBeenCalled()
+    expect(mgr.list()).toEqual([])
+    await mgr.shutdown()
+  })
+
+  it('lazy-spawns on first acquire, reuses on second', async () => {
+    const mgr = new SessionManager({
+      maxConcurrent: 4,
+      idleEvictMs: 60_000,
+      sdkOptionsForProject: (alias, path) => ({ cwd: path } as Options),
+    })
+    const a = await mgr.acquire('proj-a', '/home/nate/proj-a')
+    expect(fakeQuery).toHaveBeenCalledTimes(1)
+    const a2 = await mgr.acquire('proj-a', '/home/nate/proj-a')
+    expect(a).toBe(a2)
+    expect(fakeQuery).toHaveBeenCalledTimes(1)
+    await mgr.shutdown()
+  })
+})
