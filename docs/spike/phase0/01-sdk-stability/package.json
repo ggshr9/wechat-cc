@@ -1,0 +1,13 @@
+{
+  "name": "spike-01-sdk-stability",
+  "version": "0.0.1",
+  "description": "Phase 0 Spike 1: verify Bun + Claude Agent SDK headless mode works without any dialog on Windows/macOS/Linux",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "run": "bun spike.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "*"
+  }
+}
