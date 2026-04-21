@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { SessionManager } from './session-manager'
-import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
+import type { Options, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 
 // Module-level spy injected via vi.mock so SessionManager uses our fake query()
 const fakeQuery = vi.fn()
@@ -49,6 +49,33 @@ describe('SessionManager', () => {
     const a2 = await mgr.acquire('proj-a', '/home/nate/proj-a')
     expect(a).toBe(a2)
     expect(fakeQuery).toHaveBeenCalledTimes(1)
+    await mgr.shutdown()
+  })
+
+  it('dispatch pushes messages in order into the prompt iterable', async () => {
+    const seen: string[] = []
+    fakeQuery.mockImplementation((params: any) => {
+      const iter = params.prompt as AsyncIterable<SDKUserMessage>
+      ;(async () => {
+        for await (const m of iter) {
+          const content: any = m.message?.content
+          const text = Array.isArray(content) ? content.map((b: any) => b.text ?? '').join('') : content
+          seen.push(text)
+        }
+      })().catch(() => {})
+      return makeFakeQuery()
+    })
+
+    const mgr = new SessionManager({
+      maxConcurrent: 4,
+      idleEvictMs: 60_000,
+      sdkOptionsForProject: () => ({ cwd: '/tmp/x' } as Options),
+    })
+    const h = await mgr.acquire('a', '/tmp/x')
+    await h.dispatch('first')
+    await h.dispatch('second')
+    await new Promise(r => setTimeout(r, 10))
+    expect(seen).toEqual(['first', 'second'])
     await mgr.shutdown()
   })
 })
