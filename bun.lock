@@ -11,7 +11,7 @@
         "zod": "^4.0.0",
       },
       "devDependencies": {
-        "bun-types": "^1.3.13",
+        "@types/bun": "^1.3.0",
         "typescript": "^6.0.3",
         "vitest": "^4.1.4",
       },
@@ -92,6 +92,8 @@
 
     "@tybys/wasm-util": ["@tybys/wasm-util@0.10.1", "https://registry.npmmirror.com/@tybys/wasm-util/-/wasm-util-0.10.1.tgz", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-9tTaPJLSiejZKx+Bmog4uSubteqTvFrVrURwkmHixBo0G4seD0zUxp98E1DzUBJxLQ3NPwXrGKDiVjwx/DpPsg=="],
 
+    "@types/bun": ["@types/bun@1.3.12", "https://registry.npmmirror.com/@types/bun/-/bun-1.3.12.tgz", { "dependencies": { "bun-types": "1.3.12" } }, "sha512-DBv81elK+/VSwXHDlnH3Qduw+KxkTIWi7TXkAeh24zpi5l0B2kUg9Ga3tb4nJaPcOFswflgi/yAvMVBPrxMB+A=="],
+
     "@types/chai": ["@types/chai@5.2.3", "https://registry.npmmirror.com/@types/chai/-/chai-5.2.3.tgz", { "dependencies": { "@types/deep-eql": "*", "assertion-error": "^2.0.1" } }, "sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA=="],
 
     "@types/deep-eql": ["@types/deep-eql@4.0.2", "https://registry.npmmirror.com/@types/deep-eql/-/deep-eql-4.0.2.tgz", {}, "sha512-c9h9dVVMigMPc4bwTvC5dxqtqJZwQPePsWjPlpSOnojbor6pGqdk541lfA7AqFQr5pB1BRdq0juY9db81BwyFw=="],
@@ -124,7 +126,7 @@
 
     "body-parser": ["body-parser@2.2.2", "https://registry.npmmirror.com/body-parser/-/body-parser-2.2.2.tgz", { "dependencies": { "bytes": "^3.1.2", "content-type": "^1.0.5", "debug": "^4.4.3", "http-errors": "^2.0.0", "iconv-lite": "^0.7.0", "on-finished": "^2.4.1", "qs": "^6.14.1", "raw-body": "^3.0.1", "type-is": "^2.0.1" } }, "sha512-oP5VkATKlNwcgvxi0vM0p/D3n2C3EReYVX+DNYs5TjZFn/oQt2j+4sVJtSMr18pdRr8wjTcBl6LoV+FUwzPmNA=="],
 
-    "bun-types": ["bun-types@1.3.13", "https://registry.npmmirror.com/bun-types/-/bun-types-1.3.13.tgz", { "dependencies": { "@types/node": "*" } }, "sha512-QXKeHLlOLqQX9LgYaHJfzdBaV21T63HhFJnvuRCcjZiaUDpbs5ED1MgxbMra71CsryN/1dAoXuJJJwIv/2drVA=="],
+    "bun-types": ["bun-types@1.3.12", "https://registry.npmmirror.com/bun-types/-/bun-types-1.3.12.tgz", { "dependencies": { "@types/node": "*" } }, "sha512-HqOLj5PoFajAQciOMRiIZGNoKxDJSr6qigAttOX40vJuSp6DN/CxWp9s3C1Xwm4oH7ybueITwiaOcWXoYVoRkA=="],
 
     "bytes": ["bytes@3.1.2", "https://registry.npmmirror.com/bytes/-/bytes-3.1.2.tgz", {}, "sha512-/Nf7TyzTx6S3yRJObOAV7956r8cr2+Oj8AC5dt8wSP3BQAoeX58NoHyCU8P8zGkNXStjTSi6fzO6F0pBdcYbEg=="],
 
