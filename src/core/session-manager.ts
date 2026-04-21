@@ -46,7 +46,7 @@ export class SessionManager {
     const q = query({ prompt: queue.iterable(), options })
     const assistantListeners = new Set<(t: string) => void>()
     const resultListeners = new Set<(r: { session_id: string; num_turns: number; duration_ms: number }) => void>()
-    let drainResolve: (() => void) | null = null
+    let drainResolve: (() => void) | undefined
     const drainPromise = new Promise<void>(res => { drainResolve = res })
 
     const handle: SessionHandle = {
