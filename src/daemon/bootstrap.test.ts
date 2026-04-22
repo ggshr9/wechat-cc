@@ -44,4 +44,45 @@ describe('bootstrap', () => {
     })
     expect(b.resolve('anyone')).toEqual({ alias: 'P', path: '/p' })
   })
+
+  it('with dangerouslySkipPermissions=true, sdkOptionsForProject uses bypassPermissions and no canUseTool', () => {
+    const b = buildBootstrap({
+      stateDir: '/tmp/state',
+      ilink: makeIlinkStub() as any,
+      loadProjects: () => ({ projects: { P: { path: '/p', last_active: 0 } }, current: 'P' }),
+      lastActiveChatId: () => 'chat-1',
+      log: () => {},
+      dangerouslySkipPermissions: true,
+    })
+    const opts = b.sdkOptionsForProject('P', '/p')
+    expect(opts.permissionMode).toBe('bypassPermissions')
+    expect(opts.canUseTool).toBeUndefined()
+  })
+
+  it('with dangerouslySkipPermissions=false, sdkOptionsForProject keeps Phase 1 default + canUseTool', () => {
+    const b = buildBootstrap({
+      stateDir: '/tmp/state',
+      ilink: makeIlinkStub() as any,
+      loadProjects: () => ({ projects: { P: { path: '/p', last_active: 0 } }, current: 'P' }),
+      lastActiveChatId: () => 'chat-1',
+      log: () => {},
+      dangerouslySkipPermissions: false,
+    })
+    const opts = b.sdkOptionsForProject('P', '/p')
+    expect(opts.permissionMode).toBe('default')
+    expect(typeof opts.canUseTool).toBe('function')
+  })
+
+  it('defaults dangerouslySkipPermissions to false when omitted', () => {
+    const b = buildBootstrap({
+      stateDir: '/tmp/state',
+      ilink: makeIlinkStub() as any,
+      loadProjects: () => ({ projects: {}, current: null }),
+      lastActiveChatId: () => null,
+      log: () => {},
+    })
+    const opts = b.sdkOptionsForProject('P', '/p')
+    expect(opts.permissionMode).toBe('default')
+    expect(typeof opts.canUseTool).toBe('function')
+  })
 })

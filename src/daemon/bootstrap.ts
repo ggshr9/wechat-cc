@@ -27,6 +27,7 @@ export interface BootstrapDeps {
    * launch cwd by default.
    */
   fallbackProject?: () => { alias: string; path: string } | null
+  dangerouslySkipPermissions?: boolean
 }
 
 export interface Bootstrap {
@@ -65,14 +66,18 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     log: deps.log,
   })
 
-  const sdkOptionsForProject = (_alias: string, path: string): Options => ({
-    cwd: path,
-    permissionMode: 'default',
-    canUseTool,
-    mcpServers: { wechat: mcp.config },
-    systemPrompt: CHANNEL_SYSTEM_PROMPT,
-    settingSources: ['user', 'project', 'local'],
-  })
+  const sdkOptionsForProject = (_alias: string, path: string): Options => {
+    const common: Options = {
+      cwd: path,
+      mcpServers: { wechat: mcp.config },
+      systemPrompt: CHANNEL_SYSTEM_PROMPT,
+      settingSources: ['user', 'project', 'local'],
+    }
+    if (deps.dangerouslySkipPermissions) {
+      return { ...common, permissionMode: 'bypassPermissions' }
+    }
+    return { ...common, permissionMode: 'default', canUseTool }
+  }
 
   const sessionManager = new SessionManager({
     maxConcurrent: 6,
