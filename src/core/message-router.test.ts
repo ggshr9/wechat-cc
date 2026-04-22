@@ -5,11 +5,12 @@ describe('routeInbound', () => {
   it('resolves chat to project and dispatches formatted prompt', async () => {
     const dispatch = vi.fn().mockResolvedValue(undefined)
     const acquire = vi.fn().mockResolvedValue({ alias: 'P', path: '/p', dispatch })
+    const log = vi.fn()
     const deps: RouterDeps = {
       resolveProject: () => ({ alias: 'P', path: '/p' }),
       manager: { acquire } as any,
       format: (m) => `MSG:${m.text}`,
-      log: () => {},
+      log,
     }
     await routeInbound(deps, {
       chatId: 'c', userId: 'u', userName: 'n',
@@ -17,6 +18,7 @@ describe('routeInbound', () => {
     })
     expect(acquire).toHaveBeenCalledWith('P', '/p')
     expect(dispatch).toHaveBeenCalledWith('MSG:hi')
+    expect(log).toHaveBeenCalledWith('ROUTER', expect.stringContaining('route chat=c'))
   })
 
   it('logs and drops when resolver returns null project', async () => {

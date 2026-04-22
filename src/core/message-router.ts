@@ -16,6 +16,7 @@ export async function routeInbound(deps: RouterDeps, msg: InboundMsg): Promise<v
     deps.log('ROUTER', `drop: no project for chat=${msg.chatId}`)
     return
   }
+  deps.log('ROUTER', `route chat=${msg.chatId} → project=${proj.alias} path=${proj.path}`)
   const handle = await deps.manager.acquire(proj.alias, proj.path)
   const text = deps.format(msg)
   await handle.dispatch(text)
