@@ -27,8 +27,9 @@ describe('bootstrap', () => {
     const opts = b.sdkOptionsForProject('P', '/p')
     expect(opts.cwd).toBe('/p')
     expect(opts.mcpServers).toBeDefined()
-    expect(opts.mcpServers!['wechat']).toBeDefined()
-    expect(opts.mcpServers!['wechat'].type).toBe('sdk')
+    const wechatCfg = opts.mcpServers!['wechat']
+    expect(wechatCfg).toBeDefined()
+    expect(wechatCfg!.type).toBe('sdk')
     expect(typeof opts.canUseTool).toBe('function')
     expect(typeof opts.systemPrompt === 'string' || Array.isArray(opts.systemPrompt)).toBe(true)
   })
