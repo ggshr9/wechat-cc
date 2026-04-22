@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { slugify } from './docs'
+
+describe('docs.ts hardening', () => {
+  it('Bun.serve binds to 127.0.0.1 (loopback only, suppresses Windows firewall popup)', () => {
+    const src = readFileSync(__dirname + '/docs.ts', 'utf8')
+    expect(src).toMatch(/Bun\.serve\(\s*\{[^}]*hostname:\s*['"]127\.0\.0\.1['"]/s)
+  })
+})
 
 describe('slugify', () => {
   it('converts ASCII title to lowercase slug with timestamp', () => {
