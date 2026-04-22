@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { loadAllAccounts } from './ilink-glue'
+import { describe, it, expect, vi } from 'vitest'
+import { makeIlinkAdapter, loadAllAccounts, type Account } from './ilink-glue'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -49,5 +49,129 @@ describe('loadAllAccounts', () => {
     // partial has no files
     const accts = await loadAllAccounts(state)
     expect(accts.map(a => a.id)).toEqual(['good'])
+  })
+})
+
+describe('makeIlinkAdapter (composed)', () => {
+  function newStateDir(): string {
+    return mkdtempSync(join(tmpdir(), 'wcc-adapter-'))
+  }
+  const acct: Account = { id: 'A1', botId: 'b', userId: 'ubot', baseUrl: 'https://x', token: 'T', syncBuf: '' }
+
+  it('exposes all IlinkAdapter methods', () => {
+    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct] })
+    expect(typeof a.sendMessage).toBe('function')
+    expect(typeof a.sendFile).toBe('function')
+    expect(typeof a.editMessage).toBe('function')
+    expect(typeof a.broadcast).toBe('function')
+    expect(typeof a.sharePage).toBe('function')
+    expect(typeof a.resurfacePage).toBe('function')
+    expect(typeof a.setUserName).toBe('function')
+    expect(typeof a.askUser).toBe('function')
+    expect(typeof a.loadProjects).toBe('function')
+    expect(typeof a.lastActiveChatId).toBe('function')
+    expect(typeof a.flush).toBe('function')
+    expect(typeof a.handlePermissionReply).toBe('function')
+    expect(typeof a.markChatActive).toBe('function')
+    expect(typeof a.resolveUserName).toBe('function')
+    expect(a.projects).toBeDefined()
+  })
+
+  it('setUserName persists to user_names.json', async () => {
+    const stateDir = newStateDir()
+    const a = makeIlinkAdapter({ stateDir, accounts: [acct] })
+    await a.setUserName('chat-1', '小白')
+    await a.flush()
+    // second instance reads the persisted file
+    const { readFileSync } = await import('node:fs')
+    const names = JSON.parse(readFileSync(join(stateDir, 'user_names.json'), 'utf8'))
+    expect(names['chat-1']).toBe('小白')
+  })
+
+  it('resolveUserName returns name after setUserName', async () => {
+    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct] })
+    await a.setUserName('chat-2', '测试用户')
+    expect(a.resolveUserName('chat-2')).toBe('测试用户')
+    expect(a.resolveUserName('chat-unknown')).toBeUndefined()
+  })
+
+  it('lastActiveChatId returns null when no activity recorded', () => {
+    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct] })
+    expect(a.lastActiveChatId()).toBeNull()
+  })
+
+  it('markChatActive updates lastActiveChatId', () => {
+    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct] })
+    expect(a.lastActiveChatId()).toBeNull()
+    a.markChatActive('chat-99')
+    expect(a.lastActiveChatId()).toBe('chat-99')
+    a.markChatActive('chat-100')
+    expect(a.lastActiveChatId()).toBe('chat-100')
+  })
+
+  it('loadProjects returns {projects: {}, current: null} when projects.json missing', () => {
+    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct] })
+    const snap = a.loadProjects()
+    expect(snap.projects).toEqual({})
+    expect(snap.current).toBeNull()
+  })
+
+  it('handlePermissionReply returns false for non-permission text', () => {
+    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct] })
+    expect(a.handlePermissionReply('hello world')).toBe(false)
+    expect(a.handlePermissionReply('y')).toBe(false)
+    expect(a.handlePermissionReply('n abc')).toBe(false)
+  })
+
+  it('handlePermissionReply returns false when hash not registered', () => {
+    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct] })
+    // Valid format but no pending entry registered
+    expect(a.handlePermissionReply('y abc12')).toBe(false)
+  })
+
+  it('handlePermissionReply consumes a registered permission entry', async () => {
+    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct] })
+    // Register a pending hash without the askUser network call
+    // We test the internal wiring: askUser registers + handlePermissionReply consumes.
+    // Use askUser with very long timeout — manually consume via handlePermissionReply.
+    const p = a.askUser('chat-1', 'test prompt', 'ab123', 60_000)
+    // Immediately consume it
+    const consumed = a.handlePermissionReply('y ab123')
+    expect(consumed).toBe(true)
+    const decision = await p
+    expect(decision).toBe('allow')
+    await a.flush()
+  })
+
+  it('handlePermissionReply handles deny decision', async () => {
+    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct] })
+    const p = a.askUser('chat-1', 'test prompt', 'zz999', 60_000)
+    const consumed = a.handlePermissionReply('n zz999')
+    expect(consumed).toBe(true)
+    const decision = await p
+    expect(decision).toBe('deny')
+    await a.flush()
+  })
+
+  it('askUser times out after given ms and returns timeout', async () => {
+    vi.useFakeTimers()
+    try {
+      const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct] })
+      // askUser registers pending + best-effort sends (send will fail silently — no real ilink).
+      // We use vi.advanceTimersByTimeAsync which processes all timers+microtasks iteratively,
+      // including the send-retry timeouts (1s each, 3 attempts max) and the sweep timer.
+      const p = a.askUser('chat-1', 'test', 'abc12', 50)
+      // Advance past the timeout + retries (50ms timeout + 1 sweep at 51ms +
+      // up to 3s of ilinkSendMessage retries).
+      await vi.advanceTimersByTimeAsync(4000)
+      await expect(p).resolves.toBe('timeout')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('projects.list() returns empty array when projects.json missing', () => {
+    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct] })
+    expect(a.projects.list()).toEqual([])
   })
 })

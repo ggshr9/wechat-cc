@@ -2,7 +2,9 @@
 import { acquireInstanceLock, releaseInstanceLock } from './single-instance'
 import { buildBootstrap } from './bootstrap'
 import { routeInbound } from '../core/message-router'
-import { loadAllAccounts, startLongPollLoops, makeIlinkAdapter } from './ilink-glue'
+import { loadAllAccounts, makeIlinkAdapter } from './ilink-glue'
+import { startLongPollLoops, parseUpdates } from './poll-loop'
+import { ilinkGetUpdates } from '../../ilink'
 import { log } from '../../log'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
@@ -35,12 +37,32 @@ async function main() {
 
   const stopPolling = startLongPollLoops({
     accounts,
-    onInbound: (msg) => routeInbound({
-      resolveProject: resolve,
-      manager: sessionManager,
-      format: formatInbound,
-      log: (tag, line) => log(tag, line),
-    }, msg),
+    ilink: {
+      getUpdates: async (baseUrl, token, syncBuf) => {
+        const resp = await ilinkGetUpdates(baseUrl, token, syncBuf)
+        return {
+          updates: resp.msgs,
+          sync_buf: resp.get_updates_buf,
+        }
+      },
+    },
+    parse: parseUpdates,
+    resolveUserName: (chatId) => ilink.resolveUserName(chatId),
+    log: (tag, line) => log(tag, line),
+    onInbound: async (msg) => {
+      ilink.markChatActive(msg.chatId)
+      // Short-circuit permission replies BEFORE routing to Claude
+      if (ilink.handlePermissionReply(msg.text)) {
+        log('PERMISSION', `consumed reply from chat=${msg.chatId}`)
+        return
+      }
+      await routeInbound({
+        resolveProject: resolve,
+        manager: sessionManager,
+        format: formatInbound,
+        log: (tag, line) => log(tag, line),
+      }, msg)
+    },
   })
 
   const shutdown = async () => {
