@@ -11,6 +11,21 @@ function makeIlinkStub() {
     resurfacePage: vi.fn(),
     setUserName: vi.fn(),
     projects: { list: () => [], switchTo: vi.fn(), add: vi.fn(), remove: vi.fn() },
+    companion: {
+      enable: vi.fn(),
+      disable: vi.fn(),
+      status: () => ({
+        enabled: false,
+        timezone: 'Asia/Shanghai',
+        per_project_persona: {},
+        personas_available: [],
+        triggers: [],
+        snooze_until: null,
+        pushes_last_24h: 0,
+        runs_last_24h: 0,
+      }),
+      snooze: vi.fn(),
+    },
     askUser: vi.fn(),
   }
 }

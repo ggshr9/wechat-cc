@@ -42,6 +42,7 @@ export interface IlinkAdapter {
   resolveUserName(chatId: string): string | undefined
   projects: ToolDeps['projects']
   voice: ToolDeps['voice']
+  companion: ToolDeps['companion']
   askUser(chatId: string, prompt: string, hash: string, timeoutMs: number): Promise<'allow' | 'deny' | 'timeout'>
   loadProjects(): { projects: Record<string, { path: string; last_active: number }>; current: string | null }
   lastActiveChatId(): string | null
@@ -202,6 +203,22 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
     },
   }
 
+  // ── Companion stub (Task 20 will wire real impl) ────────────────────────
+  const companion: ToolDeps['companion'] = {
+    async enable() {
+      throw new Error('companion.enable: not yet implemented — Task 20')
+    },
+    async disable() {
+      throw new Error('companion.disable: not yet implemented — Task 20')
+    },
+    status() {
+      throw new Error('companion.status: not yet implemented — Task 20')
+    },
+    async snooze(_minutes) {
+      throw new Error('companion.snooze: not yet implemented — Task 20')
+    },
+  }
+
   const adapter: IlinkAdapter = {
     // ── sendMessage ───────────────────────────────────────────────────────
     async sendMessage(chatId, text) {
@@ -311,6 +328,9 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
 
     // ── voice ─────────────────────────────────────────────────────────────
     voice,
+
+    // ── companion ─────────────────────────────────────────────────────────
+    companion,
 
     // ── askUser ───────────────────────────────────────────────────────────
     async askUser(chatId, prompt, hash, timeoutMs) {

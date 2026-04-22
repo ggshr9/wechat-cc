@@ -44,6 +44,40 @@ export interface ToolDeps {
           saved_at: string
         }
   }
+  companion: {
+    /** On first call: scaffold profile.md + personas/*.md + config.json. Returns welcome message + cost estimate. Idempotent on subsequent calls. */
+    enable(): Promise<
+      | {
+          ok: true
+          state_dir: string
+          personas_scaffolded: string[]
+          welcome_message: string
+          cost_estimate_note: string
+        }
+      | { ok: true; already_configured: true }
+    >
+    disable(): Promise<{ ok: true; enabled: false }>
+    /** Consolidated status — replaces separate persona_list / trigger_list tools. */
+    status(): {
+      enabled: boolean
+      timezone: string
+      per_project_persona: Record<string, string>
+      personas_available: { name: string; display_name: string }[]
+      triggers: {
+        id: string
+        project: string
+        schedule: string
+        personas: string[]
+        next_fire_at: string | null
+        last_run_at?: string | null
+        last_pushed_at?: string | null
+      }[]
+      snooze_until: string | null
+      pushes_last_24h: number
+      runs_last_24h: number
+    }
+    snooze(minutes: number): Promise<{ ok: true; until: string }>
+  }
 }
 
 export interface BuiltWechatMcp {
@@ -69,6 +103,10 @@ export interface BuiltWechatMcp {
       default_voice?: string
     }) => Promise<unknown>
     voice_config_status: (args: Record<string, never>) => Promise<unknown>
+    companion_enable: (args: Record<string, never>) => Promise<unknown>
+    companion_disable: (args: Record<string, never>) => Promise<unknown>
+    companion_status: (args: Record<string, never>) => Promise<unknown>
+    companion_snooze: (args: { minutes: number }) => Promise<unknown>
   }
 }
 
@@ -234,6 +272,38 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
   )
   handlers.voice_config_status = async (a) => (await voiceConfigStatusDef.handler(a, undefined)) as unknown
 
+  const companionEnableDef = tool(
+    'companion_enable',
+    '开启 Companion 主动推送功能。第一次调用会自动创建 profile.md + personas/assistant.md + personas/companion.md + config.json，并返回欢迎消息和成本提示。后续调用是幂等的。',
+    {},
+    async () => okText(JSON.stringify(await deps.companion.enable())),
+  )
+  handlers.companion_enable = async (a) => (await companionEnableDef.handler(a, undefined)) as unknown
+
+  const companionDisableDef = tool(
+    'companion_disable',
+    '关闭 Companion 主动推送。scheduler 在下一次 tick 停止。',
+    {},
+    async () => okText(JSON.stringify(await deps.companion.disable())),
+  )
+  handlers.companion_disable = async (a) => (await companionDisableDef.handler(a, undefined)) as unknown
+
+  const companionStatusDef = tool(
+    'companion_status',
+    '查询 Companion 状态：是否开启、当前时区、每个项目的人格、已安装人格、已注册触发器（及下次触发时间）、snooze 状态、最近 24 小时推送/评估次数。',
+    {},
+    async () => okText(JSON.stringify(deps.companion.status())),
+  )
+  handlers.companion_status = async (a) => (await companionStatusDef.handler(a, undefined)) as unknown
+
+  const companionSnoozeDef = tool(
+    'companion_snooze',
+    '暂停所有主动推送若干分钟。用户说 "别烦我"/"停"/"snooze N 小时"/"shut up" 等时调用。默认 180 分钟（3 小时）。',
+    { minutes: z.number().int().min(1).max(24 * 60) },
+    async ({ minutes }) => okText(JSON.stringify(await deps.companion.snooze(minutes))),
+  )
+  handlers.companion_snooze = async (a) => (await companionSnoozeDef.handler(a as any, undefined)) as unknown
+
   const config = createSdkMcpServer({
     name: 'wechat',
     version: '1.0.0',
@@ -242,6 +312,7 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
       shareDef, resurfaceDef,
       listProjectsDef, switchProjectDef, addProjectDef, removeProjectDef,
       replyVoiceDef, saveVoiceConfigDef, voiceConfigStatusDef,
+      companionEnableDef, companionDisableDef, companionStatusDef, companionSnoozeDef,
     ],
   })
 

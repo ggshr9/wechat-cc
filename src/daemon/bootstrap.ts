@@ -18,6 +18,7 @@ export interface BootstrapDeps {
     setUserName: (chatId: string, name: string) => Promise<void>
     projects: ToolDeps['projects']
     voice: IlinkAdapter['voice']
+    companion: IlinkAdapter['companion']
     askUser: (chatId: string, prompt: string, hash: string, timeoutMs: number) => Promise<'allow'|'deny'|'timeout'>
   }
   loadProjects: () => { projects: Record<string, { path: string; last_active: number }>; current: string | null }
@@ -63,6 +64,7 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     setUserName: deps.ilink.setUserName,
     projects: deps.ilink.projects,
     voice: deps.ilink.voice,
+    companion: deps.ilink.companion,
   }
   const mcp = buildWechatMcpServer(toolDeps)
   const canUseTool = makeCanUseTool({

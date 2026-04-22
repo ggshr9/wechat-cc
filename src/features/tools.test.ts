@@ -23,6 +23,27 @@ function makeDeps(over: Partial<ToolDeps> = {}): ToolDeps {
       }),
       configStatus: () => ({ configured: false as const }),
     },
+    companion: {
+      enable: vi.fn().mockResolvedValue({
+        ok: true,
+        state_dir: '/tmp/state',
+        personas_scaffolded: ['assistant', 'companion'],
+        welcome_message: '开启完成。两个人格已经装好...',
+        cost_estimate_note: '每次评估约 $0.01',
+      }),
+      disable: vi.fn().mockResolvedValue({ ok: true, enabled: false }),
+      status: () => ({
+        enabled: false,
+        timezone: 'Asia/Shanghai',
+        per_project_persona: {},
+        personas_available: [],
+        triggers: [],
+        snooze_until: null,
+        pushes_last_24h: 0,
+        runs_last_24h: 0,
+      }),
+      snooze: vi.fn().mockResolvedValue({ ok: true, until: '2026-04-22T13:00:00Z' }),
+    },
     ...over,
   }
 }
@@ -130,6 +151,56 @@ describe('buildWechatMcpServer', () => {
     expect(parsed.base_url).toBe('http://mac:8000/v1/audio/speech')
     // never return api_key
     expect(parsed.api_key).toBeUndefined()
+  })
+
+  it('companion_enable returns welcome message on first enable', async () => {
+    const deps = makeDeps()
+    const { handlers } = buildWechatMcpServer(deps)
+    const out = await handlers.companion_enable({})
+    expect(deps.companion.enable).toHaveBeenCalled()
+    expect(extractText(out)).toContain('开启完成')
+  })
+
+  it('companion_disable flips enabled=false', async () => {
+    const deps = makeDeps()
+    const { handlers } = buildWechatMcpServer(deps)
+    const out = await handlers.companion_disable({})
+    expect(deps.companion.disable).toHaveBeenCalled()
+    const parsed = JSON.parse(extractText(out))
+    expect(parsed.enabled).toBe(false)
+  })
+
+  it('companion_status returns consolidated status as JSON', async () => {
+    const deps = makeDeps({
+      companion: {
+        enable: vi.fn(),
+        disable: vi.fn(),
+        status: () => ({
+          enabled: true,
+          timezone: 'Asia/Shanghai',
+          per_project_persona: { P: 'assistant' },
+          personas_available: [{ name: 'assistant', display_name: '小助手' }],
+          triggers: [{ id: 't', project: 'P', schedule: '* * * * *', personas: [], next_fire_at: '2026-04-22T10:00Z' }],
+          snooze_until: null,
+          pushes_last_24h: 2,
+          runs_last_24h: 10,
+        }),
+        snooze: vi.fn(),
+      },
+    } as any)
+    const { handlers } = buildWechatMcpServer(deps)
+    const out = await handlers.companion_status({})
+    const parsed = JSON.parse(extractText(out))
+    expect(parsed.enabled).toBe(true)
+    expect(parsed.triggers).toHaveLength(1)
+    expect(parsed.pushes_last_24h).toBe(2)
+  })
+
+  it('companion_snooze delegates minutes to deps', async () => {
+    const deps = makeDeps()
+    const { handlers } = buildWechatMcpServer(deps)
+    await handlers.companion_snooze({ minutes: 60 })
+    expect(deps.companion.snooze).toHaveBeenCalledWith(60)
   })
 })
 
