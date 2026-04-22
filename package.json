@@ -5,7 +5,6 @@
   "keywords": [
     "claude-code",
     "claude-code-plugin",
-    "mcp",
     "wechat",
     "ilink",
     "channel"
@@ -25,8 +24,9 @@
     "wechat-cc": "./cli.ts"
   },
   "scripts": {
-    "start": "bun install --no-summary && bun server.ts",
-    "test": "vitest run"
+    "start": "bun install --no-summary && bun src/daemon/main.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.2.116",
