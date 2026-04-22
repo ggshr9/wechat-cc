@@ -236,8 +236,7 @@ const result = await query({
     cwd: projectPath,
     systemPrompt: profileContent + '\n---\n' + personaBody,  // front-matter stripped
     mcpServers: { wechat: mcp.config },        // full user tools available
-    canUseTool: evalCanUseTool,                // Phase 1's canUseTool; same permission relay
-    permissionMode: 'acceptEdits',             // non-interactive
+    permissionMode: 'bypassPermissions',       // matches Claude Code's default; see §Security
     settingSources: ['user', 'project', 'local'],
   },
 })
@@ -283,9 +282,17 @@ Both live under `<stateDir>/companion/`.
 
 ### Security model for triggers
 
-Since triggers are Claude tasks (not shell commands), the permission relay from Phase 1 automatically protects sensitive operations. If the task says "run `rm -rf foo/`", Claude invokes the Bash tool, which invokes `canUseTool`, which prompts the user on WeChat with a hash. User must explicitly allow. No trigger can execute anything Claude couldn't already execute via normal tools.
+Isolated eval sessions use `permissionMode: 'bypassPermissions'` — the same default Claude Code itself ships with when users pass `--dangerously-skip-permissions`. Rationale:
 
-Explicit note in README: *"Triggers are prompts, not scripts. Dangerous actions still go through your WeChat permission flow — a trigger can't silently run `rm -rf`."*
+- Triggers are **prompts**, not scripts. The attack surface is task content written by the user (or Claude, via `trigger_add`). User owns their own prompts.
+- Claude is trained to recognize destructive ops and confirm via natural language before performing them. In a trigger context this means: if a task gets Claude into a position where `rm -rf` feels warranted, Claude will either (a) not do it and emit a push asking the user, or (b) reach for safer tools (`ls`, `git status`) first. In practice, trigger tasks are evaluation-shaped ("check X, push if Y"), not action-shaped.
+- Forcing a permission prompt during eval would stall the scheduler tick on a sleeping user's WeChat — breaking the whole point of proactive triggers.
+
+Users who want stricter behavior can:
+- Scope the task description ("check CI; do NOT modify any files").
+- Restrict `mcpServers` or `tools` via persona front-matter (v1.2 escape hatch).
+
+README note: *"Triggers run with the same permission model as Claude Code's `--dangerously-skip-permissions`. Dangerous actions Claude will ask about before doing; evaluation tasks don't touch state. Review `runs.jsonl` if anything feels off."*
 
 ---
 
@@ -521,11 +528,7 @@ Claude → reply (formatted summary, e.g. "开着，时区 Asia/Shanghai。
 - Verify `croner` (or chosen lib) handles DST transitions in Asia/Shanghai (no DST — easy) and a DST timezone (e.g. America/New_York) correctly.
 - Edge: cron scheduled for 02:30 on a spring-forward day — does it fire / skip / double-fire?
 
-**Spike 8 — `canUseTool` behavior in isolated sessions during long-running triggers**
-- Isolated eval session's `canUseTool` invokes the permission relay. If user is asleep, ilink takes 10 min to time out per our `permission-relay.ts` default. Does this stall the scheduler tick?
-- Probable mitigation: isolated eval sessions use `permissionMode: 'acceptEdits'` and a **tightened canUseTool** that auto-denies (rather than prompts) during trigger eval — safer default. User's reactive sessions still prompt normally.
-
-Add to persona front-matter a `trigger_permission_policy: "deny" | "prompt"` knob; default `deny` for v1.1.
+(Spike 8 was about `canUseTool` stalling scheduler ticks; resolved by the §Security decision — isolated eval uses `bypassPermissions`, no permission prompt during eval.)
 
 ---
 
