@@ -18,6 +18,53 @@
 
 <!-- TODO: 加一张 4 格截图或 30 秒演示视频 -->
 
+## v1.1 —— 语音 + Companion
+
+在 v1.0 daemon 之上加了三个能力：
+
+### 1. `--dangerously` CLI 开关
+
+`wechat-cc run --dangerously` 恢复 v0.x 语义：反应式 session 用 `bypassPermissions` 模式（微信里不再逐条弹权限）。和 `claude --dangerously-skip-permissions` 一致。真正会造成破坏的操作，Claude 仍会用自然语言先和你确认。
+
+严格模式（`wechat-cc run` 不带参数）保留 Phase 1 的权限中继。共享 bot 用严格模式；自己一个人用 `--dangerously` 省事。
+
+### 2. 出站语音 (`reply_voice`)
+
+你说 "念一下 X" 或 "speak it"，Claude 会用语音回复。主力方案是 **[VoxCPM2](https://huggingface.co/openbmb/VoxCPM2)**，通过 `vllm serve --omni` 本地部署（OpenAI 兼容的 `/v1/audio/speech` 接口）；Qwen DashScope 作为云端备选保留。两种 provider 都通过微信对话配置——第一次要求语音时 Claude 会引导你填入 `base_url` / `api_key`。
+
+```
+# 在任意一台 Mac 上（通过 Tailscale 连接）:
+vllm serve openbmb/VoxCPM2 --omni --port 8000
+```
+
+然后在微信里说 "念一下 你好"；Claude 会问你 `base_url`（比如 `http://<mac>:8000/v1/audio/speech`）和 `model`（`openbmb/VoxCPM2`），测试合成，保存到 `voice-config.json`，然后发语音。
+
+### 3. Companion 层（opt-in 主动推送）
+
+把 wechat-cc 从被动 bridge 变成长期陪你的 AI。两个**人格**你可以切换：
+
+- **小助手 (assistant)** —— 干活导向，推送从严（CI 炸了、PR 冲突、部署失败）。
+- **陪伴 (companion)** —— 温柔一些，推送松一些，下班时段的轻量问候。
+
+主动触发器是 Claude 任务（不是 shell 命令），按 cron 时间表跑。每次触发会开一个隔离的 Agent SDK session 让当前人格评估；Claude 决定推送就调 `reply` 工具（= 推送），决定不推就安静结束（= 不推）。所有状态放在可手改的 markdown 文件里：`~/.claude/channels/wechat/companion/`。
+
+**快速上手：**
+
+```
+User: "开启 companion"
+Claude: [创建 profile.md + personas/assistant.md + personas/companion.md，返回欢迎词]
+User: "加个 CI 监控，每 10 分钟检查一次 main 分支"
+Claude: [调 trigger_add，cron 是 */10 * * * *，task 是一句中文 prompt]
+```
+
+**自然语言控制：**
+- `切到陪伴` / `换回小助手` —— 切换当前项目的人格
+- `别烦我` / `snooze 3 小时` —— 暂停主动推送
+
+默认关闭；必须手动 `companion_enable` 才会跑。完整设计见 `docs/specs/2026-04-22-companion.md`。
+
+---
+
 ## v1.0 有什么变化
 
 wechat-cc 从头重写为一个独立的 Bun 守护进程。

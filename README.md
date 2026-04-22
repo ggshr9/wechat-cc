@@ -18,6 +18,53 @@
 
 <!-- TODO: add a 4-panel screenshot or 30s demo video here -->
 
+## v1.1 — Voice + Companion
+
+Three new capabilities layered on top of the v1.0 daemon:
+
+### 1. `--dangerously` CLI flag
+
+`wechat-cc run --dangerously` revives the v0.x semantic: reactive sessions run in `bypassPermissions` mode (no per-tool WeChat prompts). Matches `claude --dangerously-skip-permissions`. Claude still confirms destructive operations via natural-language reply before acting.
+
+Strict mode (`wechat-cc run` with no flag) keeps the Phase 1 permission relay active. Use strict for shared bots, `--dangerously` for personal single-admin daemons.
+
+### 2. Outbound voice (`reply_voice`)
+
+Claude can reply with audio when you ask — say "念一下 X" or "speak it" and Claude voices the response. Primary provider is **[VoxCPM2](https://huggingface.co/openbmb/VoxCPM2)** served locally via `vllm serve --omni` (OpenAI-compatible `/v1/audio/speech` endpoint). Qwen DashScope retained as cloud fallback. Either provider is configured entirely via WeChat conversation — Claude walks you through the API-key or base-URL setup on your first voice request.
+
+```
+# On a Mac (reachable via Tailscale):
+vllm serve openbmb/VoxCPM2 --omni --port 8000
+```
+
+Then say "念一下 你好" in WeChat; Claude will ask for your `base_url` (e.g. `http://<mac>:8000/v1/audio/speech`) and `model` (`openbmb/VoxCPM2`), test it, save to `voice-config.json`, and voice the reply.
+
+### 3. Companion layer (opt-in proactive pushes)
+
+Turn wechat-cc from reactive bridge into a long-running AI presence. Two user-pickable **personas (人格)**:
+
+- **小助手 (assistant)** — work-focused, strict push rules (CI failures, PR conflicts, deploy issues).
+- **陪伴 (companion)** — warmer, lighter rules, evening check-ins.
+
+Proactive triggers are Claude tasks (not shell commands) on cron schedules. Each trigger runs in an isolated Agent SDK session evaluated by the active persona; Claude decides whether to push by calling the `reply` tool (= push) or completing silently (= no push). All state lives in editable markdown files under `~/.claude/channels/wechat/companion/`.
+
+**Quick start:**
+
+```
+User: "开启 companion"
+Claude: [creates profile.md + personas/assistant.md + personas/companion.md, sends welcome]
+User: "加个 CI 监控，每 10 分钟检查一次 main 分支"
+Claude: [calls trigger_add with cron */10 * * * * + a task prompt]
+```
+
+**Natural-language controls:**
+- `切到陪伴` / `换回小助手` — switch persona for the current project
+- `别烦我` / `snooze 3 小时` — pause proactive pushes
+
+Defaults-off; must opt in via `companion_enable`. See `docs/specs/2026-04-22-companion.md` for the full design.
+
+---
+
 ## What changed in v1.0
 
 wechat-cc has been rebuilt from the ground up as a standalone Bun daemon.
