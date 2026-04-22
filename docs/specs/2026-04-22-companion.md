@@ -1,6 +1,6 @@
 # Companion Spec (Phase 2 → 3 · Sub-spec 2)
 
-**Status**: Draft · 2026-04-22
+**Status**: v0.2 · 2026-04-22
 **Target**: v1.1 foundation · v1.2 recall · v1.3 archival
 **Supersedes**: the originally-scoped `/cron` sub-spec (Companion fully subsumes it)
 
@@ -8,272 +8,398 @@
 
 ## Goal
 
-Turn wechat-cc from reactive bridge into a long-running AI presence that can:
-- Hold a sense of *who the user is* and *what they care about* (Core Profile + later Recall/Archive).
-- Proactively reach out — but only with the user's opt-in, within rate limits, and with clear rationale.
-- Present as distinct user-pickable **人格 / Personas** (the user facet of the Companion Layer).
+Turn wechat-cc from reactive bridge into a long-running AI presence that can proactively reach out — but only with the user's opt-in, within rhythm-based guardrails, and with two user-pickable **人格 / Personas** governing how pushes feel.
 
 RFC §4 defined this as the "灵魂，独家" layer. This spec takes it from concept to implementation, sliced across v1.1 → v1.3.
+
+## v0.2 departures from v0.1 (for posterity)
+
+- **Personas are proactive-only**. Reactive user sessions use the base (Phase 1) systemPrompt, minimally extended to know about Companion tools. Tonal shifts in reactive chat emerge from Claude's natural context-reading — we don't inject full-identity roleplay there.
+- **Triggers are Claude tasks, not shell commands.** Replaces the security foot-gun where the daemon's permission relay wasn't in the loop for trigger-defined commands.
+- **Standard cron syntax** (`"0 22 * * *"`) replaces `interval_minutes + on_change`.
+- **No hard daily push cap.** Replaced by a single safety rail (`min_push_gap_minutes`, default 10) plus recent-push context injected into each eval — Claude judges cadence based on signal, not a counter.
+- **No `emit_decision` tool.** Claude either calls `reply` (push happens) or doesn't (silent completion). Daemon logs either way.
+- **Dual-file scaffold + welcome** on `companion_enable` — both personas exist from day one.
 
 ---
 
 ## Non-goals (v1.1)
 
-- No automatic persona switching (explicit-only; daemon never infers).
-- No memory retrieval beyond `profile.md` being injected into systemPrompt.
-- No archival summaries. No vector search. No embeddings.
-- No custom-persona creation tool — users who want a third persona drop a markdown file.
-- No multi-user / multi-chat-simultaneous support — single primary chat.
+- No automatic persona switching (explicit-only).
+- No memory retrieval beyond `profile.md` injected into isolated eval sessions.
+- No archival summaries, vector search, embeddings.
+- No custom-persona creation tool — users who want a third persona drop a markdown file; daemon picks it up.
+- No multi-user / multi-account Companion state (single account in v1.1).
 - No dashboard / web UI.
-- No calendar / webhook / MCP-external triggers — `exec` (shell command with diff) is the only trigger type.
+- No hot-reload of `config.json` (restart daemon to pick up changes). Markdown files (profile, personas) DO hot-reload (read per session spawn).
+- No engagement-based push-budget feedback (v1.2).
 
 ---
 
 ## Personas (人格)
 
-### Data model
+### Model: Proactive Persona
 
-Each persona is one markdown file at `<stateDir>/companion/personas/<name>.md`. Files are *hand-editable* — the entire configuration of a persona is visible in that single file.
+Personas govern **three things, nothing else**:
 
-File format:
+1. Which proactive triggers fire for a given project (via trigger `personas: [...]` filter).
+2. The narrator system prompt used inside the isolated eval session that evaluates a trigger.
+3. The tone of any push message that results.
+
+They do **NOT** affect reactive (user-initiated) Claude sessions. Reactive systemPrompt is the Phase 1 channel-tag prompt, minimally extended (see §Reactive session below).
+
+### File format
+
+Each persona is one markdown file at `<stateDir>/companion/personas/<name>.md`. Files are hand-editable; changes picked up on next trigger eval.
 
 ```markdown
 ---
 name: assistant
-display_name_zh: 小助手
-display_name_en: Assistant
-max_pushes_per_day: 3
-push_propensity: strict
+display_name: 小助手
+min_push_gap_minutes: 10
 quiet_hours_local: "00:00-08:00"
 ---
 
-# 系统提示（System Prompt）
+# 小助手 · 推送角色系统提示
 
-你现在的人格是"小助手"。你在 wechat-cc 的消息通道里帮助作者完成工作。
+你现在作为 "小助手" 评估一个 trigger，决定是否推送给作者。
 
-规则：
-- 回复简短、具体、可执行。不寒暄，不铺垫。
-- 代码块用 fenced code blocks，引用具体文件:行号。
-- 主动推送（来自 trigger 决策时）：只在真的需要行动时推送。"CI 挂了"算；"项目看起来挺稳"不算。
-- 如果工具返回 error，直接说失败原因，不修饰。
+**判断原则：**
+- 必要性：这件事用户真的需要现在知道吗？若等一小时也没区别，就等。
+- 频率感：看 `recent_pushes` 上下文。若刚推过类似内容，这次沉默。
+- 整合：合并同类提醒（3 个 PR review 请求打包成一条，而不是三条）。
+- 工作时段偏好：代码块、文件路径、精简、直接。
 
----
-
-# 推送规则（Push Rules）
-
-**要推送的情况：**
-- 需要用户本人做决定（审批、冲突、确认）
+**要推的情况：**
+- 用户本人要做决定（审批、冲突、确认）
 - 有阻塞（CI 红、部署失败、merge conflict）
 - 时间敏感（今天要交、周末要合）
 
-**不要推送的情况：**
+**不要推的情况：**
 - 信息性更新（build 绿了、PR 被 review 了）
 - 周期性检查的无变化结果
-- 社交 / 问候
+- 纯社交 / 问候（那是 "陪伴" 人格的事）
+
+**推送格式：**
+- 中文为主，简短直接
+- 引用具体文件:行号
+- 代码块用 fenced
+- ≤ 200 字
+
+若决定推送：调用 `reply(chat_id, message)` 工具。
+若决定不推送：什么都不做，让这轮安静结束。
+
+---
+
+# 用户还有另一个人格 "陪伴"
+
+轻盈、温暖、偏向生活侧。若对话氛围合适（用户明显累了、抱怨工作太久没休息），可以轻轻提一句 "要切到陪伴聊会儿吗？"。不推销，只在时机明显时一句带过。
 ```
 
-Front-matter fields (YAML, parsed at load):
+Front-matter fields (YAML; parsed at load, stripped before systemPrompt injection):
 - `name` (string, matches filename slug)
-- `display_name_zh`, `display_name_en` (string)
-- `max_pushes_per_day` (number)
-- `push_propensity` (enum: `'strict' | 'lenient'`) — tuning knob for trigger evaluation prompt
-- `quiet_hours_local` (string, `HH:MM-HH:MM`, empty = always quiet) — suppresses proactive pushes in window
+- `display_name` (string, zh)
+- `min_push_gap_minutes` (number; default 10; safety rail against runaway)
+- `quiet_hours_local` (string `HH:MM-HH:MM`; empty = no quiet hours)
 
-Below front-matter: two markdown sections, `# 系统提示（System Prompt）` and `# 推送规则（Push Rules）`. The full file content (including the push-rules section) is embedded in the Claude systemPrompt when a session uses this persona — push rules *are* instructions, not DSL.
+Everything after front-matter is the persona's body — injected as-is into the isolated eval session's `systemPrompt`. The body is where persona "character" lives; the daemon is policy-light, content is markdown-heavy.
 
 ### Built-in personas shipped in v1.1
 
-- `assistant.md` — 小助手. Strict push propensity, 3 pushes/day, work-tone.
-- `companion.md` — 陪伴. Lenient push propensity, 5 pushes/day, warmer tone, slower rhythm.
+Both scaffolded on first `companion_enable`:
+- `personas/assistant.md` — 小助手. Strict propensity, work tone.
+- `personas/companion.md` — 陪伴. Lenient propensity, warm tone, intro to natural check-ins.
 
-Both as real files on disk (written by `wechat-cc setup` or lazy-created by the daemon on first Companion use). Users freely edit; we re-read on each session spawn (no persistent in-memory copy).
+Malformed persona files are logged and skipped; `companion_status` only reports loadable personas.
 
-### Profile.md — the global user facts + per-project persona defaults
+### Persona resolution chain (per project)
 
-`<stateDir>/companion/profile.md`:
+At trigger-eval time, daemon picks the active persona via:
+1. `config.per_project_persona[project_alias]` if set
+2. else `config.per_project_persona._default` if set
+3. else hardcoded fallback: `assistant`
+
+---
+
+## profile.md — user facts as free markdown
+
+`<stateDir>/companion/profile.md`. **Unstructured markdown**, never parsed by the daemon. Injected verbatim into isolated eval session systemPrompt before the persona body.
+
+Scaffolded template on first enable:
 
 ```markdown
-# User Profile
+# 用户信息
 
-## Identity
-- name: nate
-- timezone: Asia/Shanghai
-- active_hours: 09:00-23:30 (weekday) / 11:00-01:00 (weekend)
-- preferred_language: zh-CN
+(Claude 会在与用户聊天中，根据你提供的信息持续更新这份文件。你也可以直接编辑它。)
 
-## Per-project persona defaults
-| alias        | path                              | default_persona |
-|--------------|-----------------------------------|-----------------|
-| wechat-cc    | ~/.claude/plugins/local/wechat    | assistant       |
-| notes        | ~/notes                           | companion       |
-| _default     | (daemon launch cwd)               | assistant       |
+## 身份
+- 名字：<待确认>
+- 时区：<自动填充，基于系统时区>
+- 活跃时段：<工作日 09:00-23:00 / 周末 11:00-01:00（默认，可编辑）>
 
-## Long-term goals / ongoing threads
-(Claude writes here over time; user edits freely)
+## 长期目标 / 在意的事
+
+## 最近在做
+
+## 偏好
+- 回复语言：中文
+- 代码块语言偏好：中文注释 + 英文代码
+
+## push 偏好
+- 需求多时可以每天几次；没回响时退潮
+- 偶尔的关心 OK；不要为刷存在感而频繁问候
 ```
 
-Loaded at session-spawn time, merged into systemPrompt *before* the persona's own system-prompt text:
-
-```
-[profile.md content]
----
-[personas/<current-persona>.md content]
----
-[existing channel-tag rules from Phase 1]
-```
-
-Persona markdown wins on tone / push rules; profile markdown wins on identity facts.
+Timezone precedence: `profile.md` can declare it in free text; daemon doesn't parse. For `quiet_hours_local` enforcement, daemon reads `config.json.timezone` (written by `companion_enable` from `Intl.DateTimeFormat().resolvedOptions().timeZone` at scaffold time). User changes via `config.json` edit + daemon restart.
 
 ---
 
-## Trigger architecture (per-project proactive)
+## Triggers (Claude tasks, cron-scheduled)
 
-Each project has zero or more triggers. A trigger is stored in `config.json`:
+### Data shape
+
+Triggers persisted in `config.json`:
 
 ```json
 {
   "enabled": true,
-  "per_project_persona": { "wechat-cc": "assistant", "notes": "companion" },
+  "timezone": "Asia/Shanghai",
+  "per_project_persona": {
+    "wechat-cc": "assistant",
+    "notes": "companion",
+    "_default": "assistant"
+  },
+  "default_chat_id": "o9cq800sObd3lbrHBgiItB1pooDQ@im.wechat",
+  "snooze_until": null,
   "triggers": [
     {
       "id": "ci-monitor",
       "project": "wechat-cc",
-      "command": "gh run list --limit 5 --json status,conclusion,name,event,headBranch,createdAt",
-      "interval_minutes": 10,
-      "on_change": true,
-      "chat_id": "o9cq800sObd3lbrHBgiItB1pooDQ@im.wechat",
-      "personas": ["assistant"]
+      "schedule": "*/10 9-22 * * 1-5",
+      "task": "用 `gh run list --branch main --limit 5 --json ...` 查看最近 CI。若最后一次是失败且尚未推送过（见 recent_pushes 上下文），按 '小助手' 原则决定是否推送。",
+      "personas": ["assistant"],
+      "on_failure": "silent",
+      "created_at": "2026-04-22T10:30:00Z"
+    },
+    {
+      "id": "evening-checkin",
+      "project": "notes",
+      "schedule": "0 19 * * 1-5",
+      "task": "评估是否适合和用户做一次轻量晚间关心。读 profile 和最近 24h push_log。若今天用户已经收到过关心消息，多半不要重复；若看起来在抱怨或疲惫，适合问候；若在忙，不要打断。",
+      "personas": ["companion"],
+      "on_failure": "silent",
+      "created_at": "2026-04-22T10:31:00Z"
     }
   ]
 }
 ```
 
-### Scheduler
+Trigger fields:
+- `id` (string, unique within triggers)
+- `project` (string, matches project alias; `_default` for fallback project)
+- `schedule` (string, standard 5-field cron syntax in `timezone`; parsed by `croner` or `node-cron`)
+- `task` (string, Claude prompt — describes what to evaluate; NOT a shell command)
+- `personas` (string[]; trigger fires only when current active persona for the project matches; `[]` means "any")
+- `on_failure` (enum: `"silent"` | `"notify-user"` | `"retry-once"`)
+- `created_at` (ISO, daemon-written)
 
-Single interval (default 1 minute) iterates `triggers[]`:
-1. If `trigger.personas` doesn't contain the project's *currently active* persona → skip.
-2. If `interval_minutes` since last eval hasn't elapsed → skip.
-3. Run `trigger.command` in the project cwd. Capture stdout+stderr+exit.
-4. If `on_change` and stdout+stderr is byte-identical to last run → skip; just update `last_eval_at`.
-5. If quiet-hours is active for the persona AND the trigger isn't marked critical → skip.
-6. Check global rate limit for persona+day → if exceeded, skip + log `rate_limited`.
-7. Otherwise: dispatch to **isolated Agent SDK session** (see below) for evaluation.
+### Schedule semantics
 
-Scheduler state persisted to `companion/scheduler-state.json`:
-```json
-{
-  "ci-monitor": {
-    "last_eval_at": "2026-04-22T10:20:00Z",
-    "last_stdout_hash": "sha256:...",
-    "last_push_at": "2026-04-22T10:20:04Z",
-    "pushes_today": 2
-  }
-}
-```
+`schedule` is standard 5-field cron: `"minute hour day-of-month month day-of-week"`. Evaluated in the `timezone` from `config.json`. Minimum effective tick = the scheduler's coarse tick (1 min) — if the cron expression would fire more than once per minute, extras are collapsed.
 
-### Isolated evaluation session
+**Minimum gap constraint** is independent: `min_push_gap_minutes` on the active persona is enforced regardless of schedule. If the schedule fires but gap since last push <10min → eval still runs (for logging + run history), but push is suppressed.
 
-For each trigger that passes the gate, daemon spawns a fresh Agent SDK `query()`:
+### Scheduler tick loop
+
+Single interval timer (1-minute granularity). On each tick:
+
+1. Load `config.json`; if `snooze_until > now` → skip entire tick, log `snoozed`.
+2. If `config.enabled === false` → no ticks (scheduler halted on disable).
+3. For each `trigger` in `config.triggers`:
+   a. Skip if schedule doesn't match current minute.
+   b. Resolve project's active persona via resolution chain.
+   c. Skip if `trigger.personas` non-empty AND persona not in list → log `skipped_persona`.
+   d. Skip if persona's quiet_hours active for current time in `timezone` → log `skipped_quiet_hours`.
+   e. Check `min_push_gap_minutes` vs. last push across all triggers for this persona → if gap not met, we still evaluate but suppress push (log `would_push_but_gap_enforced` or `silent`).
+   f. Spawn isolated eval session with task (see below).
+
+Daemon startup: reads `config.json`, computes "next valid fire time" for each trigger. Overdue triggers (last_eval older than one interval) do NOT retroactively fire — we start clean on next valid minute. Stated explicitly to avoid post-restart flood.
+
+### Isolated eval session
+
+Fresh Agent SDK `query()` per trigger fire:
 
 ```ts
 const result = await query({
-  prompt: buildEvalPrompt(trigger, stdout, stderr, profile, persona),
+  prompt: buildTaskPrompt(trigger, profile, persona, recentPushes, recentRuns),
   options: {
-    cwd: project.path,
-    systemPrompt: profile.content + '\n---\n' + persona.content,
-    mcpServers: { wechat: mcp.config },  // same MCP as user sessions
-    canUseTool: evalCanUseTool,           // restrictive: only recall_search (v1.2+) and emit_decision
-    permissionMode: 'acceptEdits',        // non-interactive; no user to ask
+    cwd: projectPath,
+    systemPrompt: profileContent + '\n---\n' + personaBody,  // front-matter stripped
+    mcpServers: { wechat: mcp.config },        // full user tools available
+    canUseTool: evalCanUseTool,                // Phase 1's canUseTool; same permission relay
+    permissionMode: 'acceptEdits',             // non-interactive
+    settingSources: ['user', 'project', 'local'],
   },
 })
-// consume messages until we see a 'result' message with emit_decision's JSON
+// Wait for the session to reach a 'result' message.
+// If during the session, the 'reply' tool was invoked → a push happened.
+// If not → silent completion.
 ```
 
-`buildEvalPrompt` yields:
+`buildTaskPrompt`:
 
-```
-<trigger name="ci-monitor" run_at="2026-04-22T10:20:00Z">
-  <command>gh run list --limit 5 --json ...</command>
-  <stdout>
-    [... actual output ...]
-  </stdout>
-  <stderr></stderr>
-  <diff_from_last>
-    + new entry: run #1234 status=completed conclusion=failure name="ci"
-    - removed: (none)
-  </diff_from_last>
-</trigger>
+```xml
+<eval_context>
+  <trigger id="ci-monitor" persona="assistant" project="wechat-cc" />
+  <current_time local="2026-04-22 10:20" timezone="Asia/Shanghai" />
+  <recent_pushes last_24h="2">
+    <push ts="2026-04-22 09:15" msg="CI 炸了..." trigger="ci-monitor" />
+    <push ts="2026-04-22 10:00" msg="..." trigger="..." />
+  </recent_pushes>
+  <recent_runs trigger="ci-monitor" last_24h="6" last_push="2026-04-22 09:15" />
+  <min_push_gap_minutes>10</min_push_gap_minutes>
+</eval_context>
 
-现在评估：是否要推送？
-你必须用 emit_decision 工具以 JSON 格式回答，不要用 reply。
-JSON 格式：
-  {
-    "should_push": boolean,
-    "message": string (if should_push=true; 中文; <=300 chars),
-    "reason": string (always; <=200 chars),
-    "cooldown_minutes": number (default 0 means no cooldown)
-  }
+任务：
+<task>
+用 `gh run list --branch main --limit 5 --json ...` 查看最近 CI。
+若最后一次是失败且尚未推送过（见 recent_pushes 上下文），按 "小助手" 原则决定是否推送。
+</task>
+
+若决定推送，调用 reply(chat_id="{default_chat_id}", text=...)。
+若不推送，直接完成本轮——不要调用 reply，也不要解释理由。
 ```
 
-New tool `emit_decision` (only registered in isolated sessions, not in user sessions):
-```ts
-tool(
-  'emit_decision',
-  '在 trigger 评估时返回决定。push 决定必须经此工具。',
-  {
-    should_push: z.boolean(),
-    message: z.string().max(300).optional(),
-    reason: z.string().max(200),
-    cooldown_minutes: z.number().min(0).optional(),
-  },
-  async (decision) => { /* daemon captures; returns ok */ },
-)
-```
+Task language is flexible; the daemon doesn't constrain it beyond "reply is the push mechanism, silence is the don't-push mechanism".
 
-If Claude uses `reply` or any tool other than `emit_decision` inside an isolated eval session, daemon treats that as an error (log + skip push).
+`chat_id` is defaulted from `config.default_chat_id` (set by daemon when first inbound message arrives).
 
-### Push execution
+### Logging: two append-only files
 
-If `should_push === true`:
-1. Log to `push-log.jsonl`:
-   ```json
-   {"ts":"...","trigger_id":"ci-monitor","persona":"assistant","message":"...","reason":"...","cooldown_minutes":0}
-   ```
-2. Call `ilink.sendMessage(trigger.chat_id, message)` (existing infra).
-3. Bump `pushes_today` for this persona.
-4. Track outcome (v1.2+): if user replies within N minutes, mark entry `outcome: 'replied'`.
+- `runs.jsonl`: every eval attempt, regardless of outcome. Fields: `{ts, trigger_id, persona, duration_ms, pushed: bool, reason: string, tool_uses_count: number, cost_usd: number}`. Rotated at 10 MB.
+- `push-log.jsonl`: subset — entries where `pushed=true`. Also includes `message`, `chat_id`, `delivery_status`, `delivered_at`. Rotated at 10 MB.
 
-### Opt-in, throttling, quiet hours
+Both live under `<stateDir>/companion/`.
 
-- `config.json.enabled` defaults to `false`. User invokes `companion_enable` tool to flip.
-- Global rate limit: per-persona `max_pushes_per_day` from front-matter.
-- Per-trigger cooldown: honor `cooldown_minutes` returned by `emit_decision`.
-- Quiet hours: per-persona, from front-matter.
-- Emergency halt: user sends natural-language "停" / "snooze 3h" / "别烦我" → daemon pattern-match (a small regex set in Phase 1 style) → pauses all triggers + sends acknowledgment via `reply`. Stored in `config.json.snooze_until`.
-- Manual disable: `companion_disable` tool → flips `enabled=false`, scheduler halts next tick.
+### Security model for triggers
+
+Since triggers are Claude tasks (not shell commands), the permission relay from Phase 1 automatically protects sensitive operations. If the task says "run `rm -rf foo/`", Claude invokes the Bash tool, which invokes `canUseTool`, which prompts the user on WeChat with a hash. User must explicitly allow. No trigger can execute anything Claude couldn't already execute via normal tools.
+
+Explicit note in README: *"Triggers are prompts, not scripts. Dangerous actions still go through your WeChat permission flow — a trigger can't silently run `rm -rf`."*
 
 ---
 
-## Tool surface (new in v1.1)
+## Snooze & emergency halt
 
-All follow the Phase 1 configure-by-conversation pattern (no terminal). Added via `buildWechatMcpServer`.
+Claude-driven via tool, not daemon regex:
 
-| Tool | Purpose | Scope |
-|---|---|---|
-| `companion_enable()` | Flip `enabled` to true. First call scaffolds `profile.md` + `personas/assistant.md` + `personas/companion.md` from embedded templates if absent. | User session |
-| `companion_disable()` | Flip `enabled` to false. Scheduler halts next tick. | User session |
-| `companion_status()` | Return `{enabled, per_project_persona, trigger_count, pushes_today, next_eval_at}` for CLI + diagnostic. | User session |
-| `persona_switch({project?, persona})` | Set `per_project_persona[project]=persona`. If `project` omitted, use current project. | User session |
-| `persona_list()` | List installed personas: `[{name, display_name_zh, display_name_en}]` — reads `personas/` directory. | User session |
-| `trigger_add({id, project, command, interval_minutes, on_change, chat_id, personas})` | Append to `config.json.triggers`. Validates: id unique, command non-empty, interval ≥ 1min. | User session |
-| `trigger_list({project?})` | List triggers (optional project filter). | User session |
-| `trigger_remove({id})` | Remove by id. | User session |
-| `trigger_pause({id, minutes?})` | Temporarily disable. If `minutes` omitted, pause indefinitely. | User session |
-| `emit_decision({should_push, message?, reason, cooldown_minutes?})` | Only registered in isolated eval sessions. Captures the decision. | Isolated session |
+```ts
+tool(
+  'companion_snooze',
+  '暂停所有主动推送若干分钟。用户说 "别烦我"/"停"/"snooze"/"shut up" 等时调用。',
+  { minutes: z.number().min(1).max(24*60).default(180) },
+  async ({ minutes }) => { /* writes config.snooze_until; returns {ok, until} */ },
+)
+```
 
-Tool count: Phase 1 shipped 11; voice spec adds 3 (total 14); this spec adds 9 user-session tools + 1 isolated-only = **23 user-session tools + 1 internal** in v1.1.
+Persona system prompts (appended to reactive systemPrompt when Companion is enabled) contain:
 
-If tool-count concerns arise (model gets confused with >20 tools), we group: `companion_*` prefix on 3 + `persona_*` on 2 + `trigger_*` on 4 suggests a natural refactor into MCP sub-servers, but that's v1.2 territory. 14→23 is a jump; worth a spike.
+> 若用户显然在表达"停止打扰"（"别烦我" / "stop" / "snooze N 小时" / "shut up" 等），调用 `companion_snooze` 工具。默认暂停 3 小时；用户若指定时长按指定；然后简短确认。
+
+Over-matching risk: user asks "how do I use 别烦我?" — Claude should recognize the meta-question and NOT snooze. Documented as a limitation; if it misfires, user calls `companion_disable` explicitly.
+
+---
+
+## Tool surface
+
+New tools in v1.1 (added to `buildWechatMcpServer`):
+
+| Tool | Purpose |
+|---|---|
+| `companion_enable()` | Flips `enabled=true`. On first call: scaffolds `profile.md` + `personas/assistant.md` + `personas/companion.md` + `config.json`. Returns welcome message text for Claude to deliver. |
+| `companion_disable()` | Flips `enabled=false`. Scheduler halts next tick. |
+| `companion_snooze({minutes?})` | Writes `config.snooze_until = now + minutes`. Default 180 min. |
+| `companion_status()` | Returns `{enabled, timezone, per_project_persona, personas_available: [{name, display_name}], triggers: [{id, project, schedule, personas, next_fire_at, last_run_at, last_pushed_at}], snooze_until, pushes_last_24h, runs_last_24h}`. Consolidated view — replaces separate list tools. |
+| `persona_switch({persona, project?})` | Updates `config.per_project_persona[project]=persona` (current project if omitted). Returns `{ok, project, persona}`. No session forced-close needed — personas are proactive-only, reactive isn't affected. |
+| `trigger_add({id, project, schedule, task, personas?, on_failure?})` | Appends to `config.triggers`. Validates: id unique within file, schedule parses, project known. Returns `{ok, next_fire_at}`. |
+| `trigger_remove({id})` | Removes from `config.triggers`. |
+| `trigger_pause({id, minutes?})` | Disables a trigger temporarily (or indefinitely if minutes omitted). Persisted via `paused_until` field on the trigger. |
+
+**Tool count math:**
+- Phase 1: 11
+- Voice: 3
+- Companion: 8 (this list)
+- **Total in-user-sessions: 22.** Running Spike 6 pre-implementation to check model behavior at this count; if degraded, MCP sub-server split (`wechat-core`, `wechat-voice`, `wechat-companion`) is v1.2's first task.
+
+### `persona_list` and `trigger_list` removed
+
+Folded into `companion_status`. Claude asks status, gets everything at once.
+
+### Removed `emit_decision`
+
+Not needed. Isolated eval session signals push-or-not by calling (or not calling) `reply`.
+
+---
+
+## Reactive session behavior
+
+Phase 1's reactive systemPrompt is extended ONLY when Companion is enabled. The extension, appended after the Phase 1 channel rules, is short:
+
+```
+---
+Companion 功能已开启。用户当前项目默认人格：{current_persona}。
+
+可用工具：
+- companion_snooze: 用户说"别烦我"/"停"/"snooze N 小时"时调用
+- companion_disable: 用户明确要关闭推送时调用
+- persona_switch: 用户说"切到陪伴"/"换回小助手"时调用
+- companion_status: 用户问"当前怎么样"/"都有什么提醒"时调用
+- trigger_add / trigger_remove / trigger_pause: 用户说"加个 X 监控"/"删掉 X"/"暂停 X"时调用
+
+反应式对话由你自然判断语气。Companion 的人格只影响主动推送的角色；此刻你是 Claude 本人。
+```
+
+No persona-tone injection into reactive systemPrompt. No tone pinning. Claude reads the room.
+
+---
+
+## Scaffold & welcome flow
+
+### First call to `companion_enable`
+
+1. Create `<stateDir>/companion/` directory (mode 0700 on POSIX).
+2. Write `profile.md` from template (with inferred timezone filled in).
+3. Write `personas/assistant.md` from embedded template.
+4. Write `personas/companion.md` from embedded template.
+5. Write `config.json` with `enabled=true`, `timezone` inferred, `per_project_persona={_default: "assistant"}`, `default_chat_id` set from the current session's chat context (passed via a session-local), `triggers=[]`, `snooze_until=null`.
+6. Initialize empty `runs.jsonl` + `push-log.jsonl`.
+7. Return payload:
+
+```ts
+{
+  ok: true,
+  state_dir: '<absolute path>',
+  personas_scaffolded: ['assistant', 'companion'],
+  welcome_message: `
+开启完成。两个人格已经装好：
+- 小助手（当前默认）：干活为主，推送从严。CI / PR / 部署故障会提醒。
+- 陪伴：聊天为主，推送更随性。下班时段切过去比较舒服。
+
+目前还没配任何触发器。要加提醒就说 "加个 CI 监控" / "每周五下午提醒我写周记" 这类。
+要切人格就说 "切到陪伴"。要暂停就说 "别烦我" 或 "snooze 3 小时"。
+`,
+  cost_estimate_note: `
+主动推送每次评估走 Claude Agent SDK 一次短会话，典型成本约 $0.01/次。
+频率由你的触发器决定；默认只提醒明显需要动手的事。
+`,
+}
+```
+
+Claude receives this from the tool, calls `reply` with the welcome text to the user. (The natural flow is: user asks "开启 companion" → Claude calls `companion_enable` → Claude calls `reply` with welcome.)
+
+### Subsequent calls to `companion_enable`
+
+Idempotent: flips `enabled=true` if disabled, does NOT overwrite existing persona / profile files. Returns brief `{ok, already_configured: true}` signal; Claude responds naturally.
 
 ---
 
@@ -281,120 +407,180 @@ If tool-count concerns arise (model gets confused with >20 tools), we group: `co
 
 ```
 ~/.claude/channels/wechat/
-├── [existing Phase 1 files]
+├── [Phase 1 files]
 └── companion/
-    ├── profile.md              ← scaffolded on companion_enable
+    ├── profile.md
     ├── personas/
-    │   ├── assistant.md        ← scaffolded on companion_enable
-    │   └── companion.md        ← scaffolded on companion_enable
-    ├── config.json             ← {enabled, per_project_persona, triggers[], snooze_until?}
-    ├── scheduler-state.json    ← per-trigger last-eval state
-    └── push-log.jsonl          ← append-only audit
+    │   ├── assistant.md
+    │   └── companion.md
+    ├── config.json               (ops: enabled, timezone, triggers[], per_project_persona, snooze_until, default_chat_id)
+    ├── runs.jsonl                (append-only, rotated 10MB; every eval)
+    └── push-log.jsonl            (append-only, rotated 10MB; pushes only)
 ```
-
-All under `<stateDir>/companion/` — a clean boundary from Phase 1 state files. Easy to `rm -rf ~/.claude/channels/wechat/companion/` to reset.
 
 ---
 
-## User flows (v1.1)
+## User flows
 
-### Flow 1: First-time setup (5 minutes)
+### Flow 1 — First-time enable
 
 ```
-User: /wechat:companion enable  (or just: "开启 companion")
-Claude: companion_enable() → scaffolds files → returns {ok, profile_path, personas_installed:[...]}
-Claude: "开好了。两个人格已经装好：小助手（干活）、陪伴（陪聊）。默认按项目配：
-         wechat-cc 这类工作仓库走小助手，其他走小助手。要改人格就说"切到陪伴"。
-         现在你有推送触发器要加吗？例如 CI 监控、git 未提交提醒等。"
-User: 加个 CI 监控
-Claude: trigger_add({id:'ci', project:'wechat-cc', command:'gh run list --json ...', interval_minutes:10, on_change:true, chat_id:<current>, personas:['assistant']})
-        "加好了。10 分钟轮询一次，只在状态变化时考虑推送。今日推送上限 3 条。"
+User: 开启 companion
+Claude → companion_enable() → {ok, welcome_message, cost_estimate_note}
+Claude → reply(chat_id, welcome_message + "\n\n" + cost_estimate_note)
+        "开启完成。两个人格已经装好..."
 ```
 
-### Flow 2: Persona switch
+### Flow 2 — Add a trigger
+
+```
+User: 加个 CI 监控，每 10 分钟检查一次 main 分支
+Claude → trigger_add({
+  id: 'ci-monitor',
+  project: 'wechat-cc',
+  schedule: '*/10 * * * *',
+  task: '用 `gh run list --branch main --limit 5 --json ...` 查看 CI ...',
+  personas: ['assistant'],
+  on_failure: 'silent',
+}) → {ok, next_fire_at: '2026-04-22 10:30'}
+Claude → reply "加好了。10 分钟一次，下一次评估在 10:30。"
+```
+
+### Flow 3 — Persona switch
 
 ```
 User: 切到陪伴
-Claude: persona_switch({persona:'companion'}) → {ok, project:'wechat-cc', persona:'companion'}
-        "切成陪伴了。"
+Claude → persona_switch({persona: 'companion'}) → {ok, project: 'wechat-cc', persona: 'companion'}
+Claude → reply "好，wechat-cc 切到陪伴了。"
 ```
 
-(Future messages in this project use companion persona's system prompt + rules.)
+Subsequent pushes for `wechat-cc` project will use companion persona's system prompt + narrator tone.
 
-### Flow 3: Proactive push
-
-```
-[10:15:00] scheduler ticks for 'ci' trigger
-[10:15:01] runs gh run list → stdout hash differs from last
-[10:15:02] spawns isolated eval session with assistant persona + trigger context
-[10:15:09] Claude emits: {should_push:true, message:"CI 炸了：run 1234 failed on main。tests/session-manager.test.ts:12 超时。", reason:"status changed to failure", cooldown_minutes:30}
-[10:15:10] daemon sendMessage → WeChat
-[10:15:10] push-log.jsonl += {...}
-```
-
-### Flow 4: Emergency halt
+### Flow 4 — Proactive push
 
 ```
-User: 别烦我
-Claude (reactive, user session): detects halt intent → calls companion_disable() or sets snooze_until
-        "好，停 3 小时。之后恢复。"
+[10:30:00] scheduler tick matches ci-monitor's cron
+[10:30:00] daemon resolves active persona for wechat-cc → assistant
+[10:30:00] min_gap check: last push for assistant was 09:15 → gap 75min OK
+[10:30:00] spawns isolated query() with profile.md + personas/assistant.md + eval_context XML
+[10:30:08] Claude reads task, uses Bash tool → gh run list JSON
+[10:30:12] Claude decides: run 1234 failed, last push didn't mention it → push
+[10:30:12] Claude calls reply(chat_id, "CI 炸了：run 1234 failed ...") → daemon logs push
+[10:30:12] runs.jsonl += {..., pushed: true, duration_ms: 12000, cost_usd: 0.012, ...}
+[10:30:12] push-log.jsonl += {...}
+[10:30:13] WeChat received message
+```
+
+### Flow 5 — Snooze
+
+```
+User: 别烦我 2 小时
+Claude (reactive, user session): recognizes snooze intent
+Claude → companion_snooze({minutes: 120}) → {ok, until: '2026-04-22 13:00'}
+Claude → reply "好，停 2 小时。13:00 恢复。"
+[scheduler ticks during snooze → logged as 'snoozed', no evals]
+```
+
+### Flow 6 — Disable
+
+```
+User: 关掉 companion
+Claude → companion_disable() → {ok, enabled: false}
+Claude → reply "关掉了。要再开就说 '开启 companion'。"
+[scheduler halts next tick; in-flight eval (if any) completes and logs]
+```
+
+### Flow 7 — Status
+
+```
+User: 看下当前 companion 状态
+Claude → companion_status() → { ... full blob ... }
+Claude → reply (formatted summary, e.g. "开着，时区 Asia/Shanghai。
+  当前人格 per 项目：wechat-cc → 小助手, notes → 陪伴.
+  触发器 2 个：
+    - ci-monitor (wechat-cc, 每 10 分钟)，上次评估 10:30，上次推送 09:15
+    - evening-checkin (notes, 每周 1-5 的 19:00)，尚未触发
+  过去 24 小时推送 3 次 / 评估 58 次。")
 ```
 
 ---
 
-## Spike items (Phase 2 Task 0-group)
+## Spike items (run before Phase 2 implementation)
 
-Before or during v1.1 implementation:
+**Spike 5 — isolated eval session latency + cache**
+- Cold-spawn latency target: ≤ 5s per eval. Spike 1 saw ~11s with no prompt cache; isolated sessions with stable systemPrompt should hit cache better.
+- Measure: 20 sequential evals with same persona + task-template, different context XML. Record p50/p95 wall time + cost.
+- Decision: if p50 > 5s consistently, pool isolated sessions (small process pool, recycle with explicit context reset). Else accept spawn-per-eval.
 
-**Spike 5 — isolated eval session stability**
-- Cold-spawn latency: Spike 1 showed ~11s. How much of that is Agent SDK init vs. model time? Target: <5s per eval so a 10-eval/hour trigger scheduler doesn't stack up.
-- Does Agent SDK's prompt-cache cover isolated sessions? If not, ~$0.02/eval × 100 evals/day = $2/day — affordable but not ideal.
-- Does the isolated session honor `canUseTool` restrictions cleanly, or does Claude sometimes try `reply` anyway?
+**Spike 6 — tool count impact**
+- Test model tool-selection quality at 22 tools (post-v1.1 count). 
+- Compare against 11-tool baseline (Phase 1).
+- If regression detected, MCP sub-server split becomes v1.2 Task 0.
 
-**Spike 6 — tool count impact on model decision quality**
-- Phase 1 has 11 tools + 3 voice + 9 companion + 1 isolated = 14 user tools in voice; 23 in companion.
-- Is there noticeable regression in tool-selection quality as we grow this? If yes, MCP sub-server split (`wechat`, `wechat_voice`, `wechat_companion`) is warranted for v1.2.
+**Spike 7 — cron expression edge cases + timezone**
+- Verify `croner` (or chosen lib) handles DST transitions in Asia/Shanghai (no DST — easy) and a DST timezone (e.g. America/New_York) correctly.
+- Edge: cron scheduled for 02:30 on a spring-forward day — does it fire / skip / double-fire?
 
-**Spike 7 — emergency-halt pattern matching**
-- Which regex set is robust enough? Initial: `/别烦我|停|snooze|shut up|stop/i` + Claude consults `companion_disable` tool when it sees one.
-- Risk: Claude over-interprets casual "别烦我" in a joke.
+**Spike 8 — `canUseTool` behavior in isolated sessions during long-running triggers**
+- Isolated eval session's `canUseTool` invokes the permission relay. If user is asleep, ilink takes 10 min to time out per our `permission-relay.ts` default. Does this stall the scheduler tick?
+- Probable mitigation: isolated eval sessions use `permissionMode: 'acceptEdits'` and a **tightened canUseTool** that auto-denies (rather than prompts) during trigger eval — safer default. User's reactive sessions still prompt normally.
+
+Add to persona front-matter a `trigger_permission_policy: "deny" | "prompt"` knob; default `deny` for v1.1.
 
 ---
 
-## Testing (v1.1)
+## Testing
 
-- Unit tests for persona front-matter parser, trigger validation, scheduler-state diff.
-- Integration test: spawn isolated session with a known trigger stdout → assert `emit_decision` called with expected JSON shape (mock provider).
-- E2E (Task 16-style): enable Companion via real WeChat, add a trigger that always changes (e.g. `date`), wait for a push, verify log entry.
+Unit:
+- Persona front-matter parser: valid / malformed / missing-name / extra fields.
+- Cron schedule parser: typical + edge cases.
+- Persona resolution chain: all 3 fallback levels.
+- Scheduler `min_push_gap` enforcement across triggers for same persona.
+- Scaffold idempotency: re-enable after disable.
+
+Integration:
+- Mock Agent SDK `query()`: trigger tick → verify isolated session spawn with correct systemPrompt (profile + persona).
+- Mock ilink: Claude's `reply` call during eval → push-log entry + runs-log entry.
+- Silent completion: eval that doesn't call reply → runs entry only, no push entry.
+
+E2E (Task 16-style):
+- Enable Companion via WeChat.
+- Add a trigger using a task like "出当前时间和你的运行模式，若现在是偶数分钟则推送；否则不推送" — deterministic.
+- Wait across minute boundary; verify exactly one push when expected.
+- Snooze; verify scheduler halts within 1 tick.
+
+---
+
+## Acceptance criteria for v1.1
+
+- [ ] `companion_enable` scaffolds 5 files + directory, idempotent on re-run.
+- [ ] Welcome message delivered to user via `reply` on first enable.
+- [ ] `persona_switch` flips config; next trigger fire for that project uses new persona. Reactive session responses are unchanged (Claude still Claude).
+- [ ] `trigger_add` with cron syntax + task → scheduler picks up on next minute boundary; eval runs in isolated session.
+- [ ] Claude's `reply` call inside eval → push-log entry + delivered in WeChat.
+- [ ] Silent completion (no reply call) → runs entry only, no push.
+- [ ] `min_push_gap_minutes` honored across triggers for same persona.
+- [ ] Quiet hours honored (per-persona).
+- [ ] `companion_snooze` halts scheduler for specified duration; resumes automatically.
+- [ ] `companion_disable` halts scheduler; in-flight eval (if any) completes and logs.
+- [ ] Markdown files (profile.md, personas/*.md) hot-reload — edit file, next eval reflects changes.
+- [ ] `config.json` does NOT hot-reload — document this; daemon restart required.
+- [ ] Zero impact on Phase 1 reactive sessions when `enabled=false`.
 
 ---
 
 ## Roadmap beyond v1.1
 
-- **v1.2**: `recall.md` daily logs + `recall_search` tool; weekly compaction → `archive/YYYY-WW.md`; effect tracking (outcome column in push-log); built-in trigger templates for `git-uncommitted-eod`, `pr-review-request`.
-- **v1.3**: archival summarization automation; richer persona tools (`persona_create`, `persona_edit_via_tool`); multi-chat (broadcast-persona), multi-language profile.
-- **v2.0+**: dashboard, embedding-free semantic retrieval via periodic Claude-driven re-indexing, auto-suggest triggers based on user patterns.
-
----
-
-## Acceptance criteria for v1.1 Companion slice
-
-- [ ] `companion_enable` scaffolds the 4 files + directory structure correctly on a fresh install.
-- [ ] `persona_switch` → next user session (or the in-flight one, if re-spawned) loads the new persona's systemPrompt.
-- [ ] `trigger_add` + 1-minute scheduler tick → isolated eval session fires → push delivered in WeChat.
-- [ ] Rate limit enforced: after `max_pushes_per_day`, further triggers log `rate_limited` without pushing.
-- [ ] Quiet hours enforced: trigger during 23:00-08:00 (or whatever persona specifies) logs `quiet_hours` without pushing.
-- [ ] `companion_disable` halts the scheduler before the next tick; no rogue evaluations.
-- [ ] "别烦我" via WeChat → daemon pauses triggers for 3 hours; user gets acknowledgment.
-- [ ] All markdown files are hand-editable; edits are picked up at next session spawn.
-- [ ] Zero impact on reactive (non-Companion) user sessions if `enabled=false`.
+- **v1.2**: Recall layer — `recall/YYYY-MM-DD.md` daily logs auto-appended by daemon (mirror of incoming + outgoing messages). `recall_search` tool. Engagement tracking (did user reply to push? how fast?). Adaptive-budget feed into Claude's push decisions. Built-in trigger templates library.
+- **v1.3**: Archival — weekly QMD compaction (Claude writes `archive/YYYY-WW.md` summary). Embedding-free semantic retrieval via periodic Claude-driven re-indexing. `persona_create` tool (conversational creation of custom personas).
+- **v2.0**: Multi-account Companion, calendar/webhook external triggers, dashboard.
 
 ---
 
 ## Cross-cutting implications
 
-- **State dir footprint**: +1 directory tree under `companion/`; typical user after 1 month ≈ 50 KB (profile + 2 personas + config + 30 daily push-log entries).
-- **New dependencies**: none external. YAML front-matter can use a tiny parser (~20 lines) or bring in `gray-matter` (small, zero-dep).
-- **RFC alignment**: §4.1 Relationship Memory — profile.md is the v1.1 slice; recall + archive come in v1.2/v1.3 as planned. §4.2 Proactive Trigger — isolated-session pattern matches "Claude 自己判断". §4.3 Opt-in gating — `companion_enable` + rate limits match.
-- **Reuses Phase 1 patterns**: markdown files + state JSON + configure-by-conversation + tool-based daemon<->Claude interface.
-- **Foundation for later**: `emit_decision` JSON-response pattern is how any future agentic evaluator in the daemon reports back. `persona` abstraction lives naturally alongside future "skills" (domain-specific behavior packs).
+- **State-dir footprint** (1 month typical use): profile.md + 2 personas + config.json ≈ 20KB; runs.jsonl (one entry per eval, 6/hour × 24h × 30d) ≈ 400KB; push-log.jsonl (3-5 pushes/day) ≈ 30KB. Comfortable.
+- **New deps**: `croner` (or `node-cron`) for cron parsing. ~15KB. Runtime-only.
+- **RFC alignment**: §4.2 Proactive Trigger — isolated-session + Claude-judges pattern matches. §4.3 Opt-in gating — `companion_enable` + snooze match. §4.1 Relationship Memory — profile.md v1.1 slice; recall + archive deferred.
+- **Reuses Phase 1 patterns**: markdown files + config JSON + configure-by-conversation + tool-based daemon↔Claude interface + permission relay.
+- **Foundation for later**: the "daemon dispatches Claude task via isolated session" pattern generalizes to any future agentic evaluation (memory compaction, persona auto-tuning). Cron syntax + task prompts + runs log is a reusable substrate.
