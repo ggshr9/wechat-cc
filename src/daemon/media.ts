@@ -1,4 +1,4 @@
-import { createDecipheriv, createCipheriv } from 'node:crypto'
+import { createDecipheriv, createCipheriv, createHash, randomBytes } from 'node:crypto'
 import { readdirSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { Buffer } from 'node:buffer'
@@ -26,12 +26,7 @@ export function decryptAesEcb(ciphertext: Buffer, key: Buffer): Buffer {
   return Buffer.concat([decipher.update(ciphertext), decipher.final()])
 }
 
-/**
- * Test-only export — wechat-cc production doesn't encrypt for inbound;
- * outbound upload has its own path (src/daemon/media-outbound.ts, future).
- * Exported here so the AES ECB round-trip test can verify decryptAesEcb.
- */
-export function encryptAesEcbForTestOnly(plaintext: Buffer, key: Buffer): Buffer {
+export function encryptAesEcb(plaintext: Buffer, key: Buffer): Buffer {
   const cipher = createCipheriv('aes-128-ecb', key, null)
   return Buffer.concat([cipher.update(plaintext), cipher.final()])
 }
@@ -108,6 +103,120 @@ export function buildInboundFilePreview(path: string, fileName: string, buf: Buf
   return `${base}${moreLines}\n--- 前 ${shown.length} 行预览 ---\n${preview}\n---`
 }
 
+// ── Outbound helpers ──────────────────────────────────────────────────────
+import type { MessageItem } from '../../ilink.ts'
+import { ILINK_BASE_INFO, ilinkPost } from '../../ilink.ts'
+import { log } from '../../log.ts'
+
+export const UPLOAD_MEDIA_TYPE = { IMAGE: 1, VIDEO: 2, FILE: 3 } as const
+export const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024 // ilink hard cap is higher; 50MB is safe + avoids slow uploads
+
+export const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'])
+export const VIDEO_EXTS = new Set(['mp4', 'mov', 'avi', 'webm'])
+
+export function aesEcbPaddedSize(size: number): number {
+  return Math.ceil((size + 1) / 16) * 16
+}
+
+export function assertSendable(filePath: string): void {
+  let st: ReturnType<typeof statSync>
+  try { st = statSync(filePath) } catch { throw new Error(`file not found: ${filePath}`) }
+  if (!st.isFile()) throw new Error(`not a regular file: ${filePath}`)
+  if (st.size > MAX_ATTACHMENT_BYTES) {
+    throw new Error(`file too large: ${filePath} (${(st.size / 1024 / 1024).toFixed(1)}MB, max 50MB)`)
+  }
+}
+
+/** Upload a file to CDN + build the MessageItem ready for item_list. */
+export async function buildMediaItemFromFile(
+  filePath: string, chat_id: string, baseUrl: string, token: string,
+): Promise<MessageItem> {
+  const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
+  const mediaType = IMAGE_EXTS.has(ext) ? UPLOAD_MEDIA_TYPE.IMAGE
+    : VIDEO_EXTS.has(ext) ? UPLOAD_MEDIA_TYPE.VIDEO
+    : UPLOAD_MEDIA_TYPE.FILE
+
+  const uploaded = await uploadToCdn({ filePath, toUserId: chat_id, baseUrl, token, mediaType })
+  // See cc8f282: aes_key must be base64 of the 32-char hex string, not raw 16 bytes.
+  const aesKeyBase64 = Buffer.from(uploaded.aeskey).toString('base64')
+  const mediaRef: CDNMedia = { encrypt_query_param: uploaded.downloadParam, aes_key: aesKeyBase64, encrypt_type: 1 }
+
+  if (mediaType === UPLOAD_MEDIA_TYPE.IMAGE) {
+    return { type: 2, image_item: { media: mediaRef, mid_size: uploaded.fileSizeCiphertext } }
+  }
+  if (mediaType === UPLOAD_MEDIA_TYPE.VIDEO) {
+    return { type: 5, video_item: { media: mediaRef, video_size: uploaded.fileSizeCiphertext } }
+  }
+  const fileName = filePath.split('/').pop() ?? 'file'
+  return { type: 4, file_item: { media: mediaRef, file_name: fileName, len: String(uploaded.fileSize) } }
+}
+
+export async function uploadToCdnOnce(params: {
+  filePath: string; toUserId: string; baseUrl: string; token: string; mediaType: number
+}): Promise<{ downloadParam: string; aeskey: string; fileSize: number; fileSizeCiphertext: number }> {
+  const plaintext = Buffer.from(await Bun.file(params.filePath).arrayBuffer())
+  const rawsize = plaintext.length
+  const rawfilemd5 = createHash('md5').update(plaintext).digest('hex')
+  const filesize = aesEcbPaddedSize(rawsize)
+  const filekey = randomBytes(16).toString('hex')
+  const aeskey = randomBytes(16)
+
+  const uploadResp = JSON.parse(await ilinkPost(params.baseUrl, 'ilink/bot/getuploadurl', {
+    filekey, media_type: params.mediaType, to_user_id: params.toUserId,
+    rawsize, rawfilemd5, filesize, no_need_thumb: true, aeskey: aeskey.toString('hex'),
+    base_info: ILINK_BASE_INFO,
+  }, params.token)) as { upload_full_url?: string; upload_param?: string }
+
+  const uploadUrl = uploadResp.upload_full_url?.trim()
+    || (uploadResp.upload_param
+      ? `${CDN_BASE_URL}/upload?encrypted_query_param=${encodeURIComponent(uploadResp.upload_param)}&filekey=${encodeURIComponent(filekey)}`
+      : null)
+  if (!uploadUrl) throw new Error('getuploadurl returned no upload URL')
+
+  const ciphertext = encryptAesEcb(plaintext, aeskey)
+  // NOTE: do NOT attach AbortSignal to this fetch. Bun appears to switch
+  // the body encoding path when a signal is present, which the ilink CDN
+  // stores in a form the WeChat client can't decrypt. getuploadurl above
+  // already has API_TIMEOUT_MS (30s) via ilinkPost, and the retry wrapper
+  // below bounds total wall time, so a signal here is redundant anyway.
+  const cdnRes = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: new Uint8Array(ciphertext),
+  })
+  if (!cdnRes.ok) throw new Error(`CDN upload ${cdnRes.status}: ${await cdnRes.text()}`)
+
+  const downloadParam = cdnRes.headers.get('x-encrypted-param')
+  if (!downloadParam) throw new Error('CDN response missing x-encrypted-param header')
+
+  return { downloadParam, aeskey: aeskey.toString('hex'), fileSize: rawsize, fileSizeCiphertext: filesize }
+}
+
+// 对齐 ilinkSendMessage 的重试策略：AbortError（getuploadurl 超时）或
+// ilink/CDN 5xx 视为瞬时失败，最多 3 次，线性退避。ilink CDN 偶发 500，
+// 不重试会导致一次 flaky 就彻底发不出图。
+export async function uploadToCdn(params: {
+  filePath: string; toUserId: string; baseUrl: string; token: string; mediaType: number
+}): Promise<{ downloadParam: string; aeskey: string; fileSize: number; fileSizeCiphertext: number }> {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await uploadToCdnOnce(params)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      const name = err instanceof Error ? err.name : ''
+      const isRetryable = name === 'AbortError'
+        || /CDN upload 5\d\d/.test(msg)
+        || /^ilink.*5\d\d/.test(msg)
+        || /operation was aborted/i.test(msg)
+      if (!isRetryable || attempt === 3) throw err
+      log('RETRY', `uploadToCdn attempt ${attempt} failed, retrying in ${attempt}s: ${msg}`)
+      await new Promise(r => setTimeout(r, attempt * 1000))
+    }
+  }
+  throw new Error('uploadToCdn: exhausted retries') // unreachable
+}
+
+// ── Inbox cleanup ─────────────────────────────────────────────────────────
 const INBOX_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 export function cleanupOldInbox(inboxDir: string, now: number = Date.now()): number {

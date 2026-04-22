@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { parseAesKey, decryptAesEcb, encryptAesEcbForTestOnly, saveToInbox, buildInboundFilePreview } from './media'
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs'
+import { parseAesKey, decryptAesEcb, encryptAesEcb, saveToInbox, buildInboundFilePreview, aesEcbPaddedSize, assertSendable } from './media'
+import { mkdtempSync, readFileSync, existsSync, writeFileSync, mkdirSync, truncateSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Buffer } from 'node:buffer'
@@ -31,7 +31,7 @@ describe('AES ECB round trip', () => {
   it('encrypt then decrypt recovers the plaintext', () => {
     const key = Buffer.alloc(16, 0x42)
     const plain = Buffer.from('Hello, WeChat! This is a test message — 中文')
-    const cipher = encryptAesEcbForTestOnly(plain, key)
+    const cipher = encryptAesEcb(plain, key)
     const decoded = decryptAesEcb(cipher, key)
     expect(decoded.equals(plain)).toBe(true)
   })
@@ -65,6 +65,55 @@ describe('saveToInbox', () => {
     const p = await saveToInbox(Buffer.from('x'), 'a.txt', undefined, inbox)
     const userDir = p.slice(inbox.length).split(/[/\\]/).filter(Boolean)
     expect(userDir.length).toBe(1)  // just the filename, no userId subdir
+  })
+})
+
+describe('aesEcbPaddedSize', () => {
+  it('pads 0 bytes to 16 (PKCS#7 always adds at least 1 padding byte)', () => {
+    expect(aesEcbPaddedSize(0)).toBe(16)
+  })
+
+  it('pads 15 bytes to 16', () => {
+    expect(aesEcbPaddedSize(15)).toBe(16)
+  })
+
+  it('pads 16 bytes to 32 (block boundary + mandatory padding block)', () => {
+    expect(aesEcbPaddedSize(16)).toBe(32)
+  })
+
+  it('pads 17 bytes to 32', () => {
+    expect(aesEcbPaddedSize(17)).toBe(32)
+  })
+
+  it('pads 31 bytes to 32', () => {
+    expect(aesEcbPaddedSize(31)).toBe(32)
+  })
+})
+
+describe('assertSendable', () => {
+  it('accepts an existing regular file within size limit', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wcc-assert-'))
+    const p = join(dir, 'ok.txt')
+    writeFileSync(p, 'hello')
+    expect(() => assertSendable(p)).not.toThrow()
+  })
+
+  it('throws for a missing path', () => {
+    expect(() => assertSendable('/does/not/exist/ever.txt')).toThrow(/file not found/)
+  })
+
+  it('throws for a directory', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wcc-assert-'))
+    expect(() => assertSendable(dir)).toThrow(/not a regular file/)
+  })
+
+  it('throws for a file exceeding 50MB', () => {
+    // Use truncateSync to set file size past the limit without allocating RAM.
+    const dir = mkdtempSync(join(tmpdir(), 'wcc-assert-'))
+    const p = join(dir, 'big.bin')
+    writeFileSync(p, Buffer.alloc(1))
+    truncateSync(p, 50 * 1024 * 1024 + 1)
+    expect(() => assertSendable(p)).toThrow(/file too large/)
   })
 })
 
