@@ -221,6 +221,14 @@ wechat-cc install --user     # register wechat at user scope (works in every pro
 
 > `--fresh`, `--continue`, and `--dangerously` are accepted for backward compatibility but ignored with a warning. Session lifecycle is managed by the daemon.
 
+### Permission modes
+
+**Strict (default)**: `wechat-cc run` — every tool use prompts you on WeChat (`y abc12` to allow, `n abc12` to deny, 10-min timeout). Matches the Phase 1 permission relay.
+
+**Dangerously skip** (`wechat-cc run --dangerously`): no WeChat prompts; Claude runs tools with `bypassPermissions` mode. Matches `claude --dangerously-skip-permissions`. Claude is trained to confirm destructive ops via natural-language reply before acting. Use on a personal daemon where you also control the admin allowlist (`access.json`).
+
+> ⚠️ If you share the bot with less-trusted users via `access.json.allowFrom[]`, DO NOT run with `--dangerously` — any allowed chat gets bypass. Run strict mode for shared bots.
+
 ### CLI fallback: `wechat-cc reply`
 
 If the MCP channel is unavailable (server crashed, or Claude Code not running) you can still reply from any terminal:
