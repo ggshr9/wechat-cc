@@ -15,6 +15,35 @@ export interface ToolDeps {
     add(alias: string, path: string): Promise<void>
     remove(alias: string): Promise<void>
   }
+  voice: {
+    /** Returns {ok, msgId} or {ok:false, reason}. Generates audio, uploads via ilink, returns result. */
+    replyVoice(chatId: string, text: string): Promise<
+      | { ok: true; msgId: string }
+      | { ok: false; reason: string }
+    >
+    /** Validates input (test synth), then persists. Returns ok + tested_ms on success. */
+    saveConfig(input: {
+      provider: 'http_tts' | 'qwen'
+      base_url?: string
+      model?: string
+      api_key?: string
+      default_voice?: string
+    }): Promise<
+      | { ok: true; tested_ms: number; provider: string; default_voice: string }
+      | { ok: false; reason: string; detail?: string }
+    >
+    /** Returns current config status (does NOT leak api_key). */
+    configStatus():
+      | { configured: false }
+      | {
+          configured: true
+          provider: 'http_tts' | 'qwen'
+          default_voice: string
+          base_url?: string
+          model?: string
+          saved_at: string
+        }
+  }
 }
 
 export interface BuiltWechatMcp {
@@ -31,6 +60,15 @@ export interface BuiltWechatMcp {
     switch_project: (args: { alias: string }) => Promise<unknown>
     add_project: (args: { alias: string; path: string }) => Promise<unknown>
     remove_project: (args: { alias: string }) => Promise<unknown>
+    reply_voice: (args: { chat_id: string; text: string }) => Promise<unknown>
+    save_voice_config: (args: {
+      provider: 'http_tts' | 'qwen'
+      base_url?: string
+      model?: string
+      api_key?: string
+      default_voice?: string
+    }) => Promise<unknown>
+    voice_config_status: (args: Record<string, never>) => Promise<unknown>
   }
 }
 
@@ -157,6 +195,45 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
   )
   handlers.remove_project = async (a) => (await removeProjectDef.handler(a, undefined)) as unknown
 
+  const replyVoiceDef = tool(
+    'reply_voice',
+    '用语音回复用户。仅在用户明确要求语音回复时使用（"念一下"/"语音回复"/"speak it" 等）。文本 ≤ 500 字；不适合代码块、长 URL、结构化列表。',
+    { chat_id: z.string(), text: z.string() },
+    async ({ chat_id, text }) => {
+      if (text.length > 500) {
+        return okText(JSON.stringify({ ok: false, reason: 'too_long', limit: 500 }))
+      }
+      const r = await deps.voice.replyVoice(chat_id, text)
+      return okText(JSON.stringify(r))
+    },
+  )
+  handlers.reply_voice = async (a) => (await replyVoiceDef.handler(a, undefined)) as unknown
+
+  const saveVoiceConfigDef = tool(
+    'save_voice_config',
+    '保存 TTS 配置。provider=http_tts 时必须提供 base_url + model（常见：VoxCPM2 通过本地 vllm serve --omni 部署）；provider=qwen 时必须提供 api_key。保存前会做一次 1 秒测试合成验证。',
+    {
+      provider: z.enum(['http_tts', 'qwen']),
+      base_url: z.string().url().optional(),
+      model: z.string().optional(),
+      api_key: z.string().optional(),
+      default_voice: z.string().optional(),
+    },
+    async (args) => {
+      const r = await deps.voice.saveConfig(args)
+      return okText(JSON.stringify(r))
+    },
+  )
+  handlers.save_voice_config = async (a) => (await saveVoiceConfigDef.handler(a as any, undefined)) as unknown
+
+  const voiceConfigStatusDef = tool(
+    'voice_config_status',
+    '查询当前 TTS 配置状态。不返回 api_key，只返回 provider、默认音色、base_url/model（如果是 http_tts）、saved_at。',
+    {},
+    async () => okText(JSON.stringify(deps.voice.configStatus())),
+  )
+  handlers.voice_config_status = async (a) => (await voiceConfigStatusDef.handler(a, undefined)) as unknown
+
   const config = createSdkMcpServer({
     name: 'wechat',
     version: '1.0.0',
@@ -164,6 +241,7 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
       replyDef, editDef, setNameDef, sendFileDef, broadcastDef,
       shareDef, resurfaceDef,
       listProjectsDef, switchProjectDef, addProjectDef, removeProjectDef,
+      replyVoiceDef, saveVoiceConfigDef, voiceConfigStatusDef,
     ],
   })
 

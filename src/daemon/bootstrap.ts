@@ -58,6 +58,11 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     resurfacePage: deps.ilink.resurfacePage,
     setUserName: deps.ilink.setUserName,
     projects: deps.ilink.projects,
+    voice: {
+      replyVoice: async () => ({ ok: false, reason: 'not_implemented' }),
+      saveConfig: async () => ({ ok: false, reason: 'not_implemented' }),
+      configStatus: () => ({ configured: false }),
+    },
   }
   const mcp = buildWechatMcpServer(toolDeps)
   const canUseTool = makeCanUseTool({

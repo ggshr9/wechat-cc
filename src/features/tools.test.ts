@@ -16,6 +16,13 @@ function makeDeps(over: Partial<ToolDeps> = {}): ToolDeps {
       add: vi.fn().mockResolvedValue(undefined),
       remove: vi.fn().mockResolvedValue(undefined),
     },
+    voice: {
+      replyVoice: vi.fn().mockResolvedValue({ ok: true, msgId: 'v1' }),
+      saveConfig: vi.fn().mockResolvedValue({
+        ok: true, tested_ms: 800, provider: 'http_tts', default_voice: 'default',
+      }),
+      configStatus: () => ({ configured: false as const }),
+    },
     ...over,
   }
 }
@@ -65,6 +72,64 @@ describe('buildWechatMcpServer', () => {
     const parsed = JSON.parse(extractText(out)) as Array<{ alias: string }>
     expect(parsed).toHaveLength(1)
     expect(parsed[0]?.alias).toBe('P')
+  })
+
+  it('reply_voice delegates to deps.voice.replyVoice', async () => {
+    const deps = makeDeps()
+    const { handlers } = buildWechatMcpServer(deps)
+    const out = await handlers.reply_voice({ chat_id: 'c', text: '你好' })
+    expect(deps.voice.replyVoice).toHaveBeenCalledWith('c', '你好')
+    expect(extractText(out)).toContain('msgId')
+  })
+
+  it('reply_voice refuses text > 500 chars without calling deps', async () => {
+    const deps = makeDeps()
+    const { handlers } = buildWechatMcpServer(deps)
+    const long = 'x'.repeat(501)
+    const out = await handlers.reply_voice({ chat_id: 'c', text: long })
+    expect(deps.voice.replyVoice).not.toHaveBeenCalled()
+    expect(extractText(out)).toContain('too_long')
+  })
+
+  it('save_voice_config passes http_tts args through', async () => {
+    const deps = makeDeps()
+    const { handlers } = buildWechatMcpServer(deps)
+    const out = await handlers.save_voice_config({
+      provider: 'http_tts',
+      base_url: 'http://mac:8000/v1/audio/speech',
+      model: 'openbmb/VoxCPM2',
+    })
+    expect(deps.voice.saveConfig).toHaveBeenCalledWith({
+      provider: 'http_tts',
+      base_url: 'http://mac:8000/v1/audio/speech',
+      model: 'openbmb/VoxCPM2',
+    })
+    expect(extractText(out)).toContain('tested_ms')
+  })
+
+  it('voice_config_status returns current configured state as JSON', async () => {
+    const deps = makeDeps({
+      voice: {
+        replyVoice: vi.fn(),
+        saveConfig: vi.fn(),
+        configStatus: () => ({
+          configured: true as const,
+          provider: 'http_tts' as const,
+          default_voice: 'default',
+          base_url: 'http://mac:8000/v1/audio/speech',
+          model: 'openbmb/VoxCPM2',
+          saved_at: '2026-04-22T00:00:00Z',
+        }),
+      },
+    } as any)
+    const { handlers } = buildWechatMcpServer(deps)
+    const out = await handlers.voice_config_status({})
+    const parsed = JSON.parse(extractText(out))
+    expect(parsed.configured).toBe(true)
+    expect(parsed.provider).toBe('http_tts')
+    expect(parsed.base_url).toBe('http://mac:8000/v1/audio/speech')
+    // never return api_key
+    expect(parsed.api_key).toBeUndefined()
   })
 })
 
