@@ -8,6 +8,13 @@ import { ilinkGetUpdates } from '../../ilink'
 import { log } from '../../log'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
+import { startScheduler } from './companion/scheduler'
+import { makeEvalTrigger } from './companion/eval-session'
+import { makeRunsLogger, makePushLogger } from './companion/logs'
+import { loadCompanionConfig } from './companion/config'
+import { loadPersona } from './companion/persona'
+import { profilePath } from './companion/paths'
+import { readFileSync, existsSync } from 'node:fs'
 
 const STATE_DIR = join(homedir(), '.claude', 'channels', 'wechat')
 const PID_PATH = join(STATE_DIR, 'server.pid')
@@ -29,7 +36,7 @@ async function main() {
 
   const ilink = makeIlinkAdapter({ stateDir: STATE_DIR, accounts })
   const launchCwd = process.cwd()
-  const { sessionManager, resolve, formatInbound } = buildBootstrap({
+  const { sessionManager, resolve, formatInbound, sdkOptionsForProject } = buildBootstrap({
     stateDir: STATE_DIR,
     ilink,
     loadProjects: ilink.loadProjects,
@@ -38,6 +45,58 @@ async function main() {
     fallbackProject: () => ({ alias: '_default', path: launchCwd }),
     dangerouslySkipPermissions: DANGEROUSLY,
   })
+
+  // Companion scheduler (proactive push). Default-off via config.enabled=false;
+  // only fires when user opts in via `companion_enable` tool.
+  const companionRuns = makeRunsLogger(STATE_DIR)
+  const companionPushes = makePushLogger(STATE_DIR)
+
+  const evalTrigger = makeEvalTrigger({
+    sdkOptionsBase: () => {
+      const sample = sdkOptionsForProject('_default', launchCwd)
+      return {
+        cwd: launchCwd,
+        mcpServers: sample.mcpServers,
+      }
+    },
+    log: (tag, line) => log(tag, line),
+  })
+
+  const stopScheduler = startScheduler({
+    loadConfig: () => loadCompanionConfig(STATE_DIR),
+    runs: companionRuns,
+    pushes: companionPushes,
+    evalTrigger: async (trigger, { cfg }) => {
+      const personaName =
+        cfg.per_project_persona[trigger.project] ??
+        cfg.per_project_persona['_default'] ??
+        'assistant'
+      const persona = loadPersona(STATE_DIR, personaName)
+      if (!persona) {
+        log('SCHED', `persona '${personaName}' not found; skipping trigger ${trigger.id}`)
+        return { pushed: false, cost_usd: 0, tool_uses_count: 0, duration_ms: 0, error_message: `persona ${personaName} missing` }
+      }
+      const profileContent = existsSync(profilePath(STATE_DIR))
+        ? readFileSync(profilePath(STATE_DIR), 'utf8')
+        : ''
+      const result = await evalTrigger(trigger, {
+        recent_pushes: [],
+        recent_runs: [],
+        profile: profileContent,
+        persona,
+        chat_id: cfg.default_chat_id ?? '',
+      })
+      if (result.pushed && result.message && cfg.default_chat_id) {
+        try {
+          await ilink.sendMessage(cfg.default_chat_id, result.message)
+        } catch (err) {
+          log('PUSH', `delivery failed for trigger=${trigger.id}: ${err}`)
+        }
+      }
+      return result
+    },
+    now: () => new Date(),
+  }, (tag, line) => log(tag, line))
 
   const stopPolling = startLongPollLoops({
     accounts,
@@ -71,6 +130,7 @@ async function main() {
 
   const shutdown = async () => {
     log('DAEMON', 'shutdown initiated')
+    await stopScheduler()
     await stopPolling()
     await sessionManager.shutdown()
     await ilink.flush()
