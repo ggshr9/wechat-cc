@@ -11,6 +11,7 @@ import { homedir } from 'node:os'
 
 const STATE_DIR = join(homedir(), '.claude', 'channels', 'wechat')
 const PID_PATH = join(STATE_DIR, 'server.pid')
+const DANGEROUSLY = process.argv.includes('--dangerously')
 
 async function main() {
   const lock = acquireInstanceLock(PID_PATH)
@@ -35,6 +36,7 @@ async function main() {
     lastActiveChatId: ilink.lastActiveChatId,
     log: (tag, line) => log(tag, line),
     fallbackProject: () => ({ alias: '_default', path: launchCwd }),
+    dangerouslySkipPermissions: DANGEROUSLY,
   })
 
   const stopPolling = startLongPollLoops({
@@ -77,7 +79,13 @@ async function main() {
   }
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)
-  log('DAEMON', `started pid=${process.pid} accounts=${accounts.length}`)
+  const modeStr = DANGEROUSLY
+    ? 'mode=dangerouslySkipPermissions=true (no WeChat permission prompts will fire)'
+    : 'mode=strict (Phase 1 permission relay active)'
+  log('DAEMON', `started pid=${process.pid} accounts=${accounts.length} ${modeStr}`)
+  if (DANGEROUSLY) {
+    log('DAEMON', 'warning: Claude will still confirm destructive ops via natural-language reply, but no permission prompts will appear.')
+  }
 }
 
 main().catch((err) => {
