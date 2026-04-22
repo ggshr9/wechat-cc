@@ -5,7 +5,7 @@ describe('parseCliArgs', () => {
   beforeEach(() => vi.restoreAllMocks())
 
   it('recognizes run subcommand', () => {
-    expect(parseCliArgs(['run'])).toEqual({ cmd: 'run' })
+    expect(parseCliArgs(['run'])).toEqual({ cmd: 'run', dangerouslySkipPermissions: false })
   })
   it('recognizes setup subcommand', () => {
     expect(parseCliArgs(['setup'])).toEqual({ cmd: 'setup' })
@@ -26,17 +26,24 @@ describe('parseCliArgs', () => {
   it('unknown subcommand returns help', () => {
     expect(parseCliArgs(['whatever']).cmd).toBe('help')
   })
-  it('no longer accepts --fresh, --continue, --dangerously (warns instead)', () => {
-    const warn = vi.fn()
-    const out = parseCliArgs(['run', '--fresh', '--dangerously'], { warn })
-    expect(out).toEqual({ cmd: 'run' })
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('--fresh'))
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('--dangerously'))
+  it('accepts --dangerously on run subcommand', () => {
+    expect(parseCliArgs(['run', '--dangerously'])).toEqual({
+      cmd: 'run',
+      dangerouslySkipPermissions: true
+    })
   })
-  it('warns for --mcp-config and --channels too', () => {
+
+  it('run without --dangerously defaults dangerouslySkipPermissions to false', () => {
+    expect(parseCliArgs(['run'])).toEqual({
+      cmd: 'run',
+      dangerouslySkipPermissions: false
+    })
+  })
+
+  it('still warns on other legacy flags', () => {
     const warn = vi.fn()
-    parseCliArgs(['run', '--mcp-config=x', '--channels'], { warn })
+    parseCliArgs(['run', '--fresh', '--mcp-config=x'], { warn })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('--fresh'))
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('--mcp-config'))
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('--channels'))
   })
 })

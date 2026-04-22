@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { join, dirname } from 'node:path'
 
 export type CliArgs =
-  | { cmd: 'run' }
+  | { cmd: 'run'; dangerouslySkipPermissions: boolean }
   | { cmd: 'setup' }
   | { cmd: 'install'; userScope: boolean }
   | { cmd: 'status' }
@@ -17,15 +17,15 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
   if (!cmd || cmd === '--help' || cmd === '-h' || cmd === 'help') return { cmd: 'help' }
   switch (cmd) {
     case 'run': {
+      let dangerouslySkipPermissions = false
       for (const a of rest) {
-        if (
-          a === '--fresh' || a === '--continue' || a === '--dangerously' ||
-          a === '--channels' || a.startsWith('--mcp-config')
-        ) {
-          warn(`[wechat-cc] legacy flag ignored: ${a} (v1.0 daemon doesn't spawn claude directly)`)
+        if (a === '--dangerously') {
+          dangerouslySkipPermissions = true
+        } else if (a === '--fresh' || a === '--continue' || a === '--channels' || a.startsWith('--mcp-config')) {
+          warn(`[wechat-cc] legacy flag ignored: ${a} (v1.0+ daemon doesn't spawn claude directly)`)
         }
       }
-      return { cmd: 'run' }
+      return { cmd: 'run', dangerouslySkipPermissions }
     }
     case 'setup': return { cmd: 'setup' }
     case 'install': return { cmd: 'install', userScope: rest.includes('--user') }
@@ -39,13 +39,15 @@ const HELP_TEXT = `wechat-cc — WeChat bridge for Claude Code (Agent SDK daemon
 
 Usage:
   wechat-cc setup       Scan QR + bind a WeChat bot
-  wechat-cc run         Start the daemon (foreground)
+  wechat-cc run [--dangerously]   Start the daemon (foreground)
+                        --dangerously: skip permission prompts
+                        (matches claude --dangerously-skip-permissions)
   wechat-cc install [--user]   Register the MCP plugin entry for claude
   wechat-cc status      Show daemon status + accounts
   wechat-cc list        List bound accounts
 
 Notes for 0.x users:
-  * The old --fresh / --continue / --dangerously flags are ignored.
+  * The old --fresh / --continue flags are ignored; --dangerously is restored.
     v1.0 uses @anthropic-ai/claude-agent-sdk; daemon manages claude
     subprocesses internally, per-project session pool.
   * /restart from WeChat is removed. Use /project switch or restart
@@ -58,7 +60,8 @@ async function main() {
   switch (parsed.cmd) {
     case 'run': {
       const daemonPath = join(here, 'src', 'daemon', 'main.ts')
-      const r = spawnSync(process.execPath, [daemonPath], { stdio: 'inherit' })
+      const args = parsed.dangerouslySkipPermissions ? [daemonPath, '--dangerously'] : [daemonPath]
+      const r = spawnSync(process.execPath, args, { stdio: 'inherit' })
       process.exit(r.status ?? 1)
     }
     case 'setup': {
