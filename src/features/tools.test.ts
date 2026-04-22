@@ -41,7 +41,7 @@ describe('buildWechatMcpServer', () => {
     const { handlers } = buildWechatMcpServer(deps)
     const out = await handlers.share_page({ title: 't', content: '# hi' })
     expect(deps.sharePage).toHaveBeenCalledWith('t', '# hi')
-    expect(JSON.stringify(out)).toContain('https://x/abc')
+    expect(extractText(out)).toContain('https://x/abc')
   })
 
   it('switch_project surfaces failure reason', async () => {
@@ -55,13 +55,21 @@ describe('buildWechatMcpServer', () => {
     })
     const { handlers } = buildWechatMcpServer(deps)
     const out = await handlers.switch_project({ alias: 'ghost' })
-    expect(JSON.stringify(out)).toContain('alias not found')
+    expect(extractText(out)).toContain('alias not found')
   })
 
   it('list_projects returns JSON list', async () => {
     const deps = makeDeps()
     const { handlers } = buildWechatMcpServer(deps)
     const out = await handlers.list_projects({})
-    expect(JSON.stringify(out)).toContain('"P"')
+    const parsed = JSON.parse(extractText(out)) as Array<{ alias: string }>
+    expect(parsed).toHaveLength(1)
+    expect(parsed[0]?.alias).toBe('P')
   })
 })
+
+function extractText(result: unknown): string {
+  const block = (result as { content?: Array<{ type: string; text?: string }> })?.content?.[0]
+  if (!block || block.type !== 'text') throw new Error('expected MCP text content block')
+  return block.text ?? ''
+}

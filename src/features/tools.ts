@@ -125,9 +125,7 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
     {},
     async () => okText(JSON.stringify(deps.projects.list())),
   )
-  // Return the list as a plain object so JSON.stringify(out) contains unescaped alias strings.
-  // (The MCP transport calls listProjectsDef.handler directly; this wrapper is for test access.)
-  handlers.list_projects = async () => ({ list: deps.projects.list() })
+  handlers.list_projects = async (a) => (await listProjectsDef.handler(a, undefined)) as unknown
 
   const switchProjectDef = tool(
     'switch_project',
