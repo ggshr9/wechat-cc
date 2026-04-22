@@ -174,4 +174,50 @@ describe('makeIlinkAdapter (composed)', () => {
     const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct] })
     expect(a.projects.list()).toEqual([])
   })
+
+  it('voice.configStatus returns configured:false when voice-config.json absent', () => {
+    const adapter = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct] })
+    expect(adapter.voice.configStatus()).toEqual({ configured: false })
+  })
+
+  it('voice.configStatus reflects saved config (http_tts, no api_key leak)', async () => {
+    const stateDir = newStateDir()
+    const { saveVoiceConfig } = await import('./tts/voice-config')
+    await saveVoiceConfig(stateDir, {
+      provider: 'http_tts',
+      base_url: 'http://mac:8000/v1/audio/speech',
+      model: 'openbmb/VoxCPM2',
+      default_voice: 'default',
+      saved_at: '2026-04-22T00:00:00Z',
+    })
+    const adapter = makeIlinkAdapter({ stateDir, accounts: [acct] })
+    const status = adapter.voice.configStatus()
+    expect(status).toMatchObject({
+      configured: true, provider: 'http_tts',
+      base_url: 'http://mac:8000/v1/audio/speech',
+      model: 'openbmb/VoxCPM2',
+    })
+    // no api_key ever returned
+    expect((status as any).api_key).toBeUndefined()
+  })
+
+  it('voice.saveConfig rejects http_tts without base_url', async () => {
+    const adapter = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct] })
+    const r = await adapter.voice.saveConfig({ provider: 'http_tts', model: 'm' })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toMatch(/invalid|base_url/i)
+  })
+
+  it('voice.saveConfig rejects qwen without api_key', async () => {
+    const adapter = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct] })
+    const r = await adapter.voice.saveConfig({ provider: 'qwen' })
+    expect(r.ok).toBe(false)
+  })
+
+  it('voice.replyVoice returns not_configured when no config', async () => {
+    const adapter = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct] })
+    const r = await adapter.voice.replyVoice('chat-1', 'hello')
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toBe('not_configured')
+  })
 })

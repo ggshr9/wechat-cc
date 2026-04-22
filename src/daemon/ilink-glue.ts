@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, existsSync, mkdirSync } from 'node:fs'
+import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import type { InboundMsg } from '../core/prompt-format'
 import type { ToolDeps } from '../features/tools'
@@ -17,6 +17,10 @@ import {
   sharePage as docsShare,
   resurfacePage as docsResurface,
 } from '../../docs'
+import { loadVoiceConfig, saveVoiceConfig, type VoiceConfig } from './tts/voice-config'
+import { makeHttpTTSProvider } from './tts/http-tts'
+import { makeQwenProvider } from './tts/qwen'
+import type { TTSProvider } from './tts/types'
 
 export interface Account {
   id: string
@@ -37,6 +41,7 @@ export interface IlinkAdapter {
   setUserName(chatId: string, name: string): Promise<void>
   resolveUserName(chatId: string): string | undefined
   projects: ToolDeps['projects']
+  voice: ToolDeps['voice']
   askUser(chatId: string, prompt: string, hash: string, timeoutMs: number): Promise<'allow' | 'deny' | 'timeout'>
   loadProjects(): { projects: Record<string, { path: string; last_active: number }>; current: string | null }
   lastActiveChatId(): string | null
@@ -90,6 +95,111 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
     const persistedId = acctStore.get(chatId)
     const found = persistedId ? accounts.find(a => a.id === persistedId) : undefined
     return found ?? accounts[0] ?? (() => { throw new Error('no accounts configured') })()
+  }
+
+  // ── Voice helpers ──────────────────────────────────────────────────────────
+  function providerFromConfig(cfg: VoiceConfig): TTSProvider {
+    if (cfg.provider === 'http_tts') {
+      return makeHttpTTSProvider({
+        baseUrl: cfg.base_url,
+        model: cfg.model,
+        apiKey: cfg.api_key,
+        defaultVoice: cfg.default_voice,
+      })
+    }
+    return makeQwenProvider({ apiKey: cfg.api_key })
+  }
+
+  const voice: ToolDeps['voice'] = {
+    async replyVoice(chatId, text) {
+      const cfg = loadVoiceConfig(stateDir)
+      if (!cfg) return { ok: false as const, reason: 'not_configured' }
+      try {
+        const provider = providerFromConfig(cfg)
+        const { audio, mimeType } = await provider.synth(
+          text,
+          cfg.default_voice ?? (cfg.provider === 'qwen' ? 'Cherry' : 'default'),
+        )
+        const tmpDir = join(stateDir, 'tts-tmp')
+        mkdirSync(tmpDir, { recursive: true })
+        const ext = /wav/i.test(mimeType) ? '.wav' : '.mp3'
+        const tmpPath = join(tmpDir, `reply-${Date.now()}-${process.pid}${ext}`)
+        writeFileSync(tmpPath, audio)
+        try {
+          const acct = resolveAccount(chatId)
+          const item = await buildMediaItemFromFile(tmpPath, chatId, acct.baseUrl, acct.token)
+          const ctxToken = ctxStore.get(chatId)
+          await ilinkSendMessage(acct.baseUrl, acct.token, {
+            to_user_id: chatId,
+            message_type: 2,
+            message_state: 2,
+            item_list: [item],
+            context_token: ctxToken,
+          })
+          const msgId = `v-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+          return { ok: true as const, msgId }
+        } finally {
+          try { unlinkSync(tmpPath) } catch { /* best-effort */ }
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        const reason = /5\d\d/.test(msg) ? 'transient' : 'error'
+        return { ok: false as const, reason }
+      }
+    },
+
+    async saveConfig(input) {
+      if (input.provider === 'http_tts') {
+        if (!input.base_url || !input.model) {
+          return { ok: false as const, reason: 'invalid', detail: 'http_tts needs base_url + model' }
+        }
+      } else {
+        if (!input.api_key) {
+          return { ok: false as const, reason: 'invalid', detail: 'qwen needs api_key' }
+        }
+      }
+      const cfg: VoiceConfig = input.provider === 'http_tts'
+        ? {
+            provider: 'http_tts',
+            base_url: input.base_url!,
+            model: input.model!,
+            api_key: input.api_key,
+            default_voice: input.default_voice,
+            saved_at: new Date().toISOString(),
+          }
+        : {
+            provider: 'qwen',
+            api_key: input.api_key!,
+            default_voice: input.default_voice,
+            saved_at: new Date().toISOString(),
+          }
+      const provider = providerFromConfig(cfg)
+      const started = Date.now()
+      const test = await provider.test()
+      if (!test.ok) {
+        return { ok: false as const, reason: test.reason, detail: test.detail }
+      }
+      await saveVoiceConfig(stateDir, cfg)
+      return {
+        ok: true as const,
+        tested_ms: Date.now() - started,
+        provider: input.provider,
+        default_voice: input.default_voice ?? (input.provider === 'qwen' ? 'Cherry' : 'default'),
+      }
+    },
+
+    configStatus() {
+      const cfg = loadVoiceConfig(stateDir)
+      if (!cfg) return { configured: false as const }
+      return {
+        configured: true as const,
+        provider: cfg.provider,
+        default_voice: cfg.default_voice ?? (cfg.provider === 'qwen' ? 'Cherry' : 'default'),
+        base_url: cfg.provider === 'http_tts' ? cfg.base_url : undefined,
+        model: cfg.provider === 'http_tts' ? cfg.model : undefined,
+        saved_at: cfg.saved_at,
+      }
+    },
   }
 
   const adapter: IlinkAdapter = {
@@ -198,6 +308,9 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
         removeProject(projectsFile, alias)
       },
     },
+
+    // ── voice ─────────────────────────────────────────────────────────────
+    voice,
 
     // ── askUser ───────────────────────────────────────────────────────────
     async askUser(chatId, prompt, hash, timeoutMs) {
