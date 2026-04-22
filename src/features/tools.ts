@@ -77,6 +77,29 @@ export interface ToolDeps {
       runs_last_24h: number
     }
     snooze(minutes: number): Promise<{ ok: true; until: string }>
+    personaSwitch(params: { persona: string; project?: string }): Promise<
+      | { ok: true; project: string; persona: string }
+      | { ok: false; reason: string }
+    >
+    triggerAdd(params: {
+      id: string
+      project: string
+      schedule: string
+      task: string
+      personas?: string[]
+      on_failure?: 'silent' | 'notify-user' | 'retry-once'
+    }): Promise<
+      | { ok: true; next_fire_at: string }
+      | { ok: false; reason: string }
+    >
+    triggerRemove(id: string): Promise<
+      | { ok: true }
+      | { ok: false; reason: string }
+    >
+    triggerPause(id: string, minutes?: number): Promise<
+      | { ok: true; paused_until: string | null }
+      | { ok: false; reason: string }
+    >
   }
 }
 
@@ -107,6 +130,17 @@ export interface BuiltWechatMcp {
     companion_disable: (args: Record<string, never>) => Promise<unknown>
     companion_status: (args: Record<string, never>) => Promise<unknown>
     companion_snooze: (args: { minutes: number }) => Promise<unknown>
+    persona_switch: (args: { persona: string; project?: string }) => Promise<unknown>
+    trigger_add: (args: {
+      id: string
+      project: string
+      schedule: string
+      task: string
+      personas?: string[]
+      on_failure?: 'silent' | 'notify-user' | 'retry-once'
+    }) => Promise<unknown>
+    trigger_remove: (args: { id: string }) => Promise<unknown>
+    trigger_pause: (args: { id: string; minutes?: number }) => Promise<unknown>
   }
 }
 
@@ -304,6 +338,45 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
   )
   handlers.companion_snooze = async (a) => (await companionSnoozeDef.handler(a as any, undefined)) as unknown
 
+  const personaSwitchDef = tool(
+    'persona_switch',
+    '切换指定项目的人格。project 可选（不传时使用当前 session 的 project 或 _default）。返回 ok + 实际生效的 project/persona。',
+    { persona: z.string(), project: z.string().optional() },
+    async ({ persona, project }) => okText(JSON.stringify(await deps.companion.personaSwitch({ persona, project }))),
+  )
+  handlers.persona_switch = async (a) => (await personaSwitchDef.handler(a as any, undefined)) as unknown
+
+  const triggerAddDef = tool(
+    'trigger_add',
+    '注册一个新的主动触发器。schedule 是标准 5 字段 cron 表达式；task 是 Claude prompt（不是 shell 命令——描述要评估的事）。personas 不填默认 []（任何人格都会触发）。',
+    {
+      id: z.string(),
+      project: z.string(),
+      schedule: z.string(),
+      task: z.string(),
+      personas: z.array(z.string()).optional(),
+      on_failure: z.enum(['silent', 'notify-user', 'retry-once']).optional(),
+    },
+    async (args) => okText(JSON.stringify(await deps.companion.triggerAdd(args))),
+  )
+  handlers.trigger_add = async (a) => (await triggerAddDef.handler(a as any, undefined)) as unknown
+
+  const triggerRemoveDef = tool(
+    'trigger_remove',
+    '移除一个已注册的触发器。',
+    { id: z.string() },
+    async ({ id }) => okText(JSON.stringify(await deps.companion.triggerRemove(id))),
+  )
+  handlers.trigger_remove = async (a) => (await triggerRemoveDef.handler(a as any, undefined)) as unknown
+
+  const triggerPauseDef = tool(
+    'trigger_pause',
+    '暂停一个触发器若干分钟；不传 minutes 则无限期暂停。',
+    { id: z.string(), minutes: z.number().int().min(1).max(7 * 24 * 60).optional() },
+    async ({ id, minutes }) => okText(JSON.stringify(await deps.companion.triggerPause(id, minutes))),
+  )
+  handlers.trigger_pause = async (a) => (await triggerPauseDef.handler(a as any, undefined)) as unknown
+
   const config = createSdkMcpServer({
     name: 'wechat',
     version: '1.0.0',
@@ -313,6 +386,7 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
       listProjectsDef, switchProjectDef, addProjectDef, removeProjectDef,
       replyVoiceDef, saveVoiceConfigDef, voiceConfigStatusDef,
       companionEnableDef, companionDisableDef, companionStatusDef, companionSnoozeDef,
+      personaSwitchDef, triggerAddDef, triggerRemoveDef, triggerPauseDef,
     ],
   })
 

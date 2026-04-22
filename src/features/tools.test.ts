@@ -43,6 +43,10 @@ function makeDeps(over: Partial<ToolDeps> = {}): ToolDeps {
         runs_last_24h: 0,
       }),
       snooze: vi.fn().mockResolvedValue({ ok: true, until: '2026-04-22T13:00:00Z' }),
+      personaSwitch: vi.fn().mockResolvedValue({ ok: true, project: 'P', persona: 'assistant' }),
+      triggerAdd: vi.fn().mockResolvedValue({ ok: true, next_fire_at: '2026-04-22T10:10:00Z' }),
+      triggerRemove: vi.fn().mockResolvedValue({ ok: true }),
+      triggerPause: vi.fn().mockResolvedValue({ ok: true, paused_until: null }),
     },
     ...over,
   }
@@ -201,6 +205,55 @@ describe('buildWechatMcpServer', () => {
     const { handlers } = buildWechatMcpServer(deps)
     await handlers.companion_snooze({ minutes: 60 })
     expect(deps.companion.snooze).toHaveBeenCalledWith(60)
+  })
+
+  it('persona_switch passes persona + project through', async () => {
+    const deps = makeDeps()
+    const { handlers } = buildWechatMcpServer(deps)
+    const out = await handlers.persona_switch({ persona: 'companion', project: 'notes' })
+    expect(deps.companion.personaSwitch).toHaveBeenCalledWith({ persona: 'companion', project: 'notes' })
+    expect(extractText(out)).toContain('assistant')
+  })
+
+  it('trigger_add forwards all fields', async () => {
+    const deps = makeDeps()
+    const { handlers } = buildWechatMcpServer(deps)
+    const out = await handlers.trigger_add({
+      id: 'ci',
+      project: 'wechat-cc',
+      schedule: '*/10 * * * *',
+      task: 'check CI',
+      personas: ['assistant'],
+    })
+    expect(deps.companion.triggerAdd).toHaveBeenCalledWith({
+      id: 'ci',
+      project: 'wechat-cc',
+      schedule: '*/10 * * * *',
+      task: 'check CI',
+      personas: ['assistant'],
+    })
+    expect(extractText(out)).toContain('next_fire_at')
+  })
+
+  it('trigger_remove forwards id', async () => {
+    const deps = makeDeps()
+    const { handlers } = buildWechatMcpServer(deps)
+    await handlers.trigger_remove({ id: 'ci' })
+    expect(deps.companion.triggerRemove).toHaveBeenCalledWith('ci')
+  })
+
+  it('trigger_pause forwards id + minutes', async () => {
+    const deps = makeDeps()
+    const { handlers } = buildWechatMcpServer(deps)
+    await handlers.trigger_pause({ id: 'ci', minutes: 120 })
+    expect(deps.companion.triggerPause).toHaveBeenCalledWith('ci', 120)
+  })
+
+  it('trigger_pause allows omitted minutes', async () => {
+    const deps = makeDeps()
+    const { handlers } = buildWechatMcpServer(deps)
+    await handlers.trigger_pause({ id: 'ci' })
+    expect(deps.companion.triggerPause).toHaveBeenCalledWith('ci', undefined)
   })
 })
 

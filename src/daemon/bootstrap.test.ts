@@ -25,6 +25,10 @@ function makeIlinkStub() {
         runs_last_24h: 0,
       }),
       snooze: vi.fn(),
+      personaSwitch: vi.fn(),
+      triggerAdd: vi.fn(),
+      triggerRemove: vi.fn(),
+      triggerPause: vi.fn(),
     },
     askUser: vi.fn(),
   }

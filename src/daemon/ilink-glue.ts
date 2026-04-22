@@ -217,6 +217,18 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
     async snooze(_minutes) {
       throw new Error('companion.snooze: not yet implemented — Task 20')
     },
+    async personaSwitch(_params) {
+      throw new Error('companion.personaSwitch: not yet implemented — Task 20')
+    },
+    async triggerAdd(_params) {
+      throw new Error('companion.triggerAdd: not yet implemented — Task 20')
+    },
+    async triggerRemove(_id) {
+      throw new Error('companion.triggerRemove: not yet implemented — Task 20')
+    },
+    async triggerPause(_id, _minutes) {
+      throw new Error('companion.triggerPause: not yet implemented — Task 20')
+    },
   }
 
   const adapter: IlinkAdapter = {
