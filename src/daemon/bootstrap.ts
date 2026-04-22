@@ -21,6 +21,12 @@ export interface BootstrapDeps {
   loadProjects: () => { projects: Record<string, { path: string; last_active: number }>; current: string | null }
   lastActiveChatId: () => string | null
   log: (tag: string, line: string) => void
+  /**
+   * Used when projects.current is unset. Prevents silent message drops on
+   * fresh installs — matches v0.x UX where messages routed to the daemon's
+   * launch cwd by default.
+   */
+  fallbackProject?: () => { alias: string; path: string } | null
 }
 
 export interface Bootstrap {
@@ -38,7 +44,10 @@ const CHANNEL_SYSTEM_PROMPT = `你在 wechat-cc 的消息通道里接收来自�
 - 用户是个人开发者，偏好简短直接的中文回复。`
 
 export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
-  const resolve = makeResolver({ loadProjects: deps.loadProjects })
+  const resolve = makeResolver({
+    loadProjects: deps.loadProjects,
+    fallback: deps.fallbackProject,
+  })
   const toolDeps: ToolDeps = {
     sendReply: deps.ilink.sendMessage,
     sendFile: deps.ilink.sendFile,

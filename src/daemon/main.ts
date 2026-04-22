@@ -27,12 +27,14 @@ async function main() {
   }
 
   const ilink = makeIlinkAdapter({ stateDir: STATE_DIR, accounts })
+  const launchCwd = process.cwd()
   const { sessionManager, resolve, formatInbound } = buildBootstrap({
     stateDir: STATE_DIR,
     ilink,
     loadProjects: ilink.loadProjects,
     lastActiveChatId: ilink.lastActiveChatId,
     log: (tag, line) => log(tag, line),
+    fallbackProject: () => ({ alias: '_default', path: launchCwd }),
   })
 
   const stopPolling = startLongPollLoops({

@@ -5,15 +5,18 @@ export interface ProjectsSnapshot {
 
 export interface ResolverDeps {
   loadProjects: () => ProjectsSnapshot
+  /** Used when projects.current is unset or points at a missing alias. */
+  fallback?: () => { alias: string; path: string } | null
 }
 
 export function makeResolver(deps: ResolverDeps): (chatId: string) => { alias: string; path: string } | null {
   return (_chatId: string) => {
     const snap = deps.loadProjects()
     const alias = snap.current
-    if (!alias) return null
-    const entry = snap.projects[alias]
-    if (!entry) return null
-    return { alias, path: entry.path }
+    if (alias) {
+      const entry = snap.projects[alias]
+      if (entry) return { alias, path: entry.path }
+    }
+    return deps.fallback?.() ?? null
   }
 }
