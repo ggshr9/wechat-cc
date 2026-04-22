@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <img alt="version"  src="https://img.shields.io/badge/version-0.2.0-blue">
+  <img alt="version"  src="https://img.shields.io/badge/version-1.0.0-blue">
   <img alt="platform" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey">
   <img alt="runtime"  src="https://img.shields.io/badge/runtime-Bun-black">
   <img alt="license"  src="https://img.shields.io/badge/license-MIT-green">
@@ -17,6 +17,25 @@
 </p>
 
 <!-- TODO: add a 4-panel screenshot or 30s demo video here -->
+
+## What changed in v1.0
+
+wechat-cc has been rebuilt from the ground up as a standalone Bun daemon.
+
+- **Agent SDK daemon** — wechat-cc now drives Claude through `@anthropic-ai/claude-agent-sdk` (v0.2.116 pinned) instead of running as a Claude Code MCP Channel. There is no `--dangerously-load-development-channels` dialog on launch.
+- **Per-project session pool** — each registered project keeps a warm Claude session. Switching projects is instant; you don't restart Claude, you switch between running sessions.
+- **`/restart` removed from WeChat** — was a persistent source of death loops on Windows (ilink message replay + Windows process-tree semantics). Use `/project switch` or restart the daemon manually (`Ctrl+C` + `wechat-cc run`).
+- **`--fresh` / `--continue` / `--dangerously` CLI flags** — accepted but ignored with a warning. Sessions are managed by the daemon; use `/project switch` to start a fresh context in a different project, or wipe `~/.claude/channels/wechat/sessions/` manually.
+- **State files preserved** — `accounts/`, `projects.json`, `context_tokens.json`, `user_names.json`, `user_account_ids.json` are all backward compatible. No re-scan required.
+
+**Upgrading from v0.x:**
+```bash
+cd ~/.claude/plugins/local/wechat
+git pull && bun install
+wechat-cc run
+```
+
+---
 
 ## Why?
 
@@ -30,6 +49,7 @@
 
 ## Table of Contents
 
+- [What changed in v1.0](#what-changed-in-v10)
 - [Quick Start](#quick-start)
 - [Features](#features)
 - [Usage](#usage)
@@ -37,6 +57,7 @@
 - [State Layout](#state-layout)
 - [Known Limitations](#known-limitations)
 - [Uninstall](#uninstall)
+- [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
 - [Disclaimer](#disclaimer)
 
@@ -44,15 +65,30 @@
 
 ## Quick Start
 
-**Prerequisites:** [Bun](https://bun.sh) 1.1+ and [Claude Code CLI](https://github.com/anthropics/claude-code).
+**Prerequisites:** [Git](https://git-scm.com), [Bun](https://bun.sh) 1.1+, and [Claude Code CLI](https://github.com/anthropics/claude-code).
 
-Works on Linux, macOS, and Windows (PowerShell):
+- Install Bun (Linux/macOS): `curl -fsSL https://bun.sh/install | bash`
+- Install Bun (Windows PowerShell): `irm bun.sh/install.ps1 | iex`
+- Install Git (Windows): `winget install Git.Git`
 
+> After installing Bun or Git on Windows, **reopen your terminal** before continuing — the PATH doesn't update in the current session.
+
+**Linux / macOS:**
 ```bash
 git clone https://github.com/ggshr9/wechat-cc.git ~/.claude/plugins/local/wechat
 cd ~/.claude/plugins/local/wechat && bun install && bun link
 wechat-cc setup              # scan QR with WeChat
-wechat-cc run --fresh        # start Claude Code + WeChat channel
+wechat-cc run                # start the daemon
+```
+
+**Windows (PowerShell):**
+```powershell
+git clone https://github.com/ggshr9/wechat-cc.git "$env:USERPROFILE\.claude\plugins\local\wechat"
+cd "$env:USERPROFILE\.claude\plugins\local\wechat"
+bun install
+bun link
+wechat-cc setup              # scan QR with WeChat
+wechat-cc run                # start the daemon
 ```
 
 That's it. Send a message from WeChat and Claude will see it.
@@ -80,14 +116,10 @@ bun link
 wechat-cc setup
 
 # Start
-wechat-cc run --fresh
+wechat-cc run
 ```
 
-Optional: install `expect` for hands-free `/restart` from WeChat:
-```bash
-sudo apt install expect   # Ubuntu/Debian
-brew install expect       # macOS
-```
+After `bun link`, if `wechat-cc` is not found, open a new terminal (PATH refresh needed).
 </details>
 
 <details>
@@ -95,28 +127,29 @@ brew install expect       # macOS
 
 ```powershell
 # Clone directly into the Claude Code plugin directory
-git clone https://github.com/ggshr9/wechat-cc.git "%USERPROFILE%\.claude\plugins\local\wechat"
-cd "%USERPROFILE%\.claude\plugins\local\wechat"
+git clone https://github.com/ggshr9/wechat-cc.git "$env:USERPROFILE\.claude\plugins\local\wechat"
+cd "$env:USERPROFILE\.claude\plugins\local\wechat"
 bun install
 
 # Add the `wechat-cc` command to your PATH (creates wechat-cc.cmd)
 bun link
 
+# If `wechat-cc` is not found after `bun link`, open a new PowerShell window.
+
 # Bind your WeChat (scan the QR code that appears)
 wechat-cc setup
 
 # Start
-wechat-cc run --fresh
+wechat-cc run
 ```
 
-Everything works on Windows. The only difference: `/restart` from WeChat requires pressing Enter once in the terminal (no `expect` equivalent on Windows).
+Everything works on Windows. `/restart` from WeChat is not supported on Windows (removed in v1.0); restart the daemon manually with `Ctrl+C` + `wechat-cc run`.
 </details>
 
 ### Optional dependencies
 
 | Dependency | What it enables | Auto-installed? |
 |:---|:---|:---:|
-| `expect` | `/restart` auto-confirms the dev-channel dialog | No — `apt install expect` / `brew install expect` |
 | `cloudflared` | `share_page` publishes rendered markdown to a public URL | **Yes** — auto-downloaded on first use |
 
 ### Updating
@@ -125,7 +158,7 @@ Everything works on Windows. The only difference: `/restart` from WeChat require
 wechat-cc update    # git pull + bun install if needed
 ```
 
-Then send `/restart` from WeChat (or Ctrl+C + `wechat-cc run`) to pick up the new code. `/status` in WeChat shows your current version and whether updates are available.
+Then restart the daemon (`Ctrl+C` + `wechat-cc run`) to pick up the new code. `/status` in WeChat shows your current version and whether updates are available.
 
 ### Using with cc-switch
 
@@ -150,11 +183,10 @@ You still need to clone the repo + `bun install` + `wechat-cc setup` (QR scan) s
 
 - **WeChat as your Claude remote** — send text, images, files, and voice from your phone; Claude sees everything and replies in-chat
 - **share_page** — publish long markdown (plans, specs, reviews) as a rendered web page via cloudflared tunnel, with a one-tap Approve button for external reviewers
-- **`/restart` from WeChat** — restart your Claude session without touching the terminal; auto-confirms the startup dialog on Linux/macOS
+- **Multi-project switching** — send `切到 sidecar` or `/project switch sidecar`; the per-project session pool keeps all projects warm so switching is instant, and a handoff pointer lets conversations continue across projects
 - **Allowlist access control** — only approved WeChat users can reach your Claude session
 - **`wechat-cc update`** — one-command upgrade with version checking via `/status`
-- **CLI fallback** — `wechat-cc reply "..."` sends from any terminal using the same routing/session state, so you can still reach WeChat when the MCP channel is down
-- **Multi-project switching** — switch the active project by sending `切到 sidecar` in WeChat (or `/project switch sidecar`); wechat-cc respawns Claude in the target cwd and writes a lazy handoff pointer so you can keep conversations flowing
+- **CLI fallback** — `wechat-cc reply "..."` sends from any terminal using the same routing/session state, so you can still reach WeChat when the daemon is down
 
 <details>
 <summary><b>All features</b></summary>
@@ -166,11 +198,11 @@ You still need to clone the repo + `bun install` + `wechat-cc setup` (QR scan) s
 - Incoming media auto-downloaded to inbox (paths surfaced in message metadata)
 - Small text files (csv, json, md, code) get an inline 5-line preview on arrival
 - Live log monitor at `http://localhost:3456` (`wechat-cc logs`)
-- Built-in WeChat commands: `/help`, `/status`, `/ping`, `/users`, `/restart`, `@all`, `@<name>`
+- Built-in WeChat commands: `/help`, `/status`, `/ping`, `/users`, `@all`, `@<name>`
 - New users auto-prompted for their name; stored via `set_user_name`
 - Voice messages with ilink transcription displayed inline; untranscribed audio saved to inbox
 - Shared `.md` files auto-cleaned after 7 days; inbox media after 30 days; `channel.log` rotated at 10 MB
-- Cross-platform: Linux, macOS, Windows — zero platform-specific code in the restart path
+- Cross-platform: Linux, macOS, Windows
 </details>
 
 ---
@@ -179,15 +211,15 @@ You still need to clone the repo + `bun install` + `wechat-cc setup` (QR scan) s
 
 ```bash
 wechat-cc setup              # scan QR to bind a WeChat account
-wechat-cc run                # start (resumes last session)
-wechat-cc run --fresh        # start a new session
-wechat-cc run --dangerously  # skip all permission prompts
+wechat-cc run                # start the daemon (resumes warm sessions)
 wechat-cc list               # show bound accounts
 wechat-cc logs               # open live log viewer (http://localhost:3456)
 wechat-cc update             # pull latest code + reinstall deps
-wechat-cc reply "message"    # send from terminal when MCP channel is down
+wechat-cc reply "message"    # send from terminal when daemon is down
 wechat-cc install --user     # register wechat at user scope (works in every project)
 ```
+
+> `--fresh`, `--continue`, and `--dangerously` are accepted for backward compatibility but ignored with a warning. Session lifecycle is managed by the daemon.
 
 ### CLI fallback: `wechat-cc reply`
 
@@ -241,8 +273,6 @@ See `docs/specs/2026-04-18-project-switch-design.md` for the full design.
 | `/status` | Connection health + version + update check |
 | `/ping` | Connectivity test |
 | `/users` | List online users |
-| `/restart` | Restart session (admin-only) |
-| `/restart --fresh` | Restart with a brand-new session |
 | `/project add <path> <alias>` | Register a project (admin-only) |
 | `/project list` | List all registered projects |
 | `/project switch <alias>` | Switch to a registered project (admin-only) |
@@ -252,17 +282,17 @@ See `docs/specs/2026-04-18-project-switch-design.md` for the full design.
 | `@name msg` | Forward to a specific user |
 
 <details>
-<summary><b>How /restart works</b></summary>
+<summary><b>Restarting the daemon</b></summary>
 
-`wechat-cc run` runs a supervisor loop. When an admin sends `/restart`:
+In v1.0 there is no `/restart` WeChat command. To restart the daemon:
 
-1. Server writes `.restart-flag` + `.restart-ack` marker files
-2. Sends "正在重启…" acknowledgement via WeChat
-3. `cli.ts` detects the flag via 500ms polling, kills the `claude` child process
-4. Supervisor respawns claude (wrapped in `expect` on Linux/macOS to auto-confirm the dev-channel dialog)
-5. New server boots, reads `.restart-ack`, sends "已重连（flags）用时约 Ns" back to the requester
+```bash
+# Linux / macOS / Windows (any terminal)
+Ctrl+C
+wechat-cc run
+```
 
-Kill flows downward (cli.ts → claude → server) via `child.kill()` — zero platform-specific process-tree walking.
+All registered project sessions resume automatically. No re-scan required.
 </details>
 
 <details>
@@ -330,7 +360,7 @@ All state lives under `~/.claude/` — nothing is committed to the repo.
 ## Known limitations
 
 - **First contact** — you can't message a WeChat user who hasn't sent at least one message to the bot first (ilink requires a `context_token` from their side)
-- **Claude forgets WeChat context on restart** — your WeChat chat history stays on your phone, but Claude starts with a fresh context after `/restart` — it won't remember what was discussed in the previous session unless you use `--continue` (which resumes Claude's session, not the WeChat thread)
+- **Claude forgets WeChat context on daemon restart** — your WeChat chat history stays on your phone, but Claude starts with a fresh context after restarting the daemon — it won't remember what was discussed in the previous session (WeChat chat history is not replayed into Claude's context)
 
 ---
 
@@ -340,8 +370,8 @@ All state lives under `~/.claude/` — nothing is committed to the repo.
 <summary>Linux / macOS</summary>
 
 ```bash
-rm ~/.claude/plugins/local/wechat     # remove plugin
-rm -rf ~/.claude/channels/wechat      # wipe all state, accounts, logs
+rm -rf ~/.claude/plugins/local/wechat     # remove plugin
+rm -rf ~/.claude/channels/wechat          # wipe all state, accounts, logs
 ```
 </details>
 
@@ -353,6 +383,25 @@ Remove-Item "$env:USERPROFILE\.claude\plugins\local\wechat"              # remov
 Remove-Item "$env:USERPROFILE\.claude\channels\wechat" -Recurse -Force   # wipe all state
 ```
 </details>
+
+---
+
+## Troubleshooting
+
+**`bun`, `git`, or `wechat-cc` not found after install**
+Reopen your terminal. PATH changes from `bun link` or a fresh Bun/Git install don't take effect in the current shell session.
+
+**Reading logs on Windows — Chinese characters show as garbage**
+PowerShell's default `Get-Content` reads files as ANSI (GBK). Use:
+```powershell
+Get-Content "$env:USERPROFILE\.claude\channels\wechat\channel.log" -Tail 60 -Encoding UTF8
+```
+
+**Windows Firewall popup on first `share_page`**
+Fixed in v1.0 — `docs.ts` now binds `127.0.0.1` instead of `0.0.0.0`. If you see this popup on an older install, upgrade with `wechat-cc update`.
+
+**`wechat-cc update` fails with "git not found"**
+`wechat-cc update` runs `git pull`. Make sure Git is in your PATH. On Windows: `winget install Git.Git`, then reopen the terminal.
 
 ---
 
