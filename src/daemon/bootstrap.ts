@@ -136,8 +136,9 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
 
   const sdkOptionsForProject = (_alias: string, path: string): Options => {
     const cstatus = deps.ilink.companion.status()
-    const currentPersona = cstatus.per_project_persona[_alias] ?? cstatus.per_project_persona['_default'] ?? null
-    const systemPrompt = buildChannelSystemPrompt(cstatus.enabled, currentPersona)
+    // Companion v2 dropped per_project_persona — Claude self-adjusts tone from
+    // memory/ notes instead. currentPersona is no longer passed.
+    const systemPrompt = buildChannelSystemPrompt(cstatus.enabled, null)
     const common: Options = {
       cwd: path,
       mcpServers: { wechat: mcp.config },
