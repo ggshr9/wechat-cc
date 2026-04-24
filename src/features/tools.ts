@@ -1,5 +1,6 @@
 import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
+import type { MemoryFS } from '../daemon/memory/fs-api'
 
 export interface ToolDeps {
   sendReply(chatId: string, text: string): Promise<{ msgId: string; error?: string }>
@@ -9,6 +10,7 @@ export interface ToolDeps {
   sharePage(title: string, content: string): Promise<{ url: string; slug: string }>
   resurfacePage(q: { slug?: string; title_fragment?: string }): Promise<{ url: string; slug: string } | null>
   setUserName(chatId: string, name: string): Promise<void>
+  memory: MemoryFS
   projects: {
     list(): { alias: string; path: string; current: boolean }[]
     switchTo(alias: string): Promise<{ ok: true; path: string } | { ok: false; reason: string }>
@@ -141,6 +143,9 @@ export interface BuiltWechatMcp {
     }) => Promise<unknown>
     trigger_remove: (args: { id: string }) => Promise<unknown>
     trigger_pause: (args: { id: string; minutes?: number }) => Promise<unknown>
+    memory_read: (args: { path: string }) => Promise<unknown>
+    memory_write: (args: { path: string; content: string }) => Promise<unknown>
+    memory_list: (args: { dir?: string }) => Promise<unknown>
   }
 }
 
@@ -380,6 +385,59 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
   )
   handlers.trigger_pause = async (a) => (await triggerPauseDef.handler(a as any, undefined)) as unknown
 
+  // ── Memory: Claude's long-term persistent notes (Companion v2 "wings") ──
+  //
+  // Sandboxed to ~/.claude/channels/wechat/memory/. Only .md files. Claude
+  // decides file layout, naming, and when to consolidate. The three tools
+  // are deliberately minimal: read / write / list. No schema, no helpers.
+  // See docs/specs/2026-04-24-companion-memory.md for philosophy.
+
+  const memoryReadDef = tool(
+    'memory_read',
+    '读 memory/ 下的一个文件。不存在返回 exists:false。相对路径，只允许 .md。',
+    { path: z.string() },
+    async ({ path }) => {
+      try {
+        const content = deps.memory.read(path)
+        return okText(JSON.stringify(content === null
+          ? { exists: false }
+          : { exists: true, content }))
+      } catch (err) {
+        return okText(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+      }
+    },
+  )
+  handlers.memory_read = async (a) => (await memoryReadDef.handler(a as any, undefined)) as unknown
+
+  const memoryWriteDef = tool(
+    'memory_write',
+    '写 memory/ 下的一个文件（atomic, 覆盖）。相对路径，只允许 .md。单文件 100KB 上限。父目录自动创建。',
+    { path: z.string(), content: z.string() },
+    async ({ path, content }) => {
+      try {
+        deps.memory.write(path, content)
+        return okText(JSON.stringify({ ok: true }))
+      } catch (err) {
+        return okText(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }))
+      }
+    },
+  )
+  handlers.memory_write = async (a) => (await memoryWriteDef.handler(a as any, undefined)) as unknown
+
+  const memoryListDef = tool(
+    'memory_list',
+    '列 memory/ 下所有 .md 文件（递归）。传 dir 只列该子目录。返回相对路径数组。',
+    { dir: z.string().optional() },
+    async ({ dir }) => {
+      try {
+        return okText(JSON.stringify({ files: deps.memory.list(dir) }))
+      } catch (err) {
+        return okText(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+      }
+    },
+  )
+  handlers.memory_list = async (a) => (await memoryListDef.handler(a as any, undefined)) as unknown
+
   const config = createSdkMcpServer({
     name: 'wechat',
     version: '1.0.0',
@@ -390,6 +448,7 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
       replyVoiceDef, saveVoiceConfigDef, voiceConfigStatusDef,
       companionEnableDef, companionDisableDef, companionStatusDef, companionSnoozeDef,
       personaSwitchDef, triggerAddDef, triggerRemoveDef, triggerPauseDef,
+      memoryReadDef, memoryWriteDef, memoryListDef,
     ],
   })
 

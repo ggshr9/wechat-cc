@@ -9,6 +9,7 @@ import { findOnPath } from '../../util'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { makeMemoryFS } from './memory/fs-api'
 
 /**
  * Locate a working Claude Code binary. The SDK's own native-binary detection
@@ -64,7 +65,7 @@ export interface Bootstrap {
   sdkOptionsForProject: (alias: string, path: string) => Options
 }
 
-function buildChannelSystemPrompt(companionEnabled: boolean, currentPersona: string | null): string {
+function buildChannelSystemPrompt(companionEnabled: boolean, _currentPersona: string | null): string {
   const base = `你在 wechat-cc 的消息通道里接收来自作者个人微信的消息。规则：
 - 每条入站消息用 <wechat chat_id="..." user="..." account="..." msg_type="..." ts="...">...</wechat> 包裹。回复时用 reply 工具（不要直接生成文本）。
 - chat_id 是路由键；多条连续对话可能来自同一个 chat_id。
@@ -72,23 +73,26 @@ function buildChannelSystemPrompt(companionEnabled: boolean, currentPersona: str
 - /project 相关意图可以调 list_projects / switch_project / add_project / remove_project。
 - 用户是个人开发者，偏好简短直接的中文回复。
 - reply_voice 仅在用户明确要求语音回复时使用（消息中含 "语音回复" / "念一下" / "speak it" / "say it aloud" 等）。其他情况一律用 reply 回复文本。reply_voice 不适合代码块、URL、长列表。
-- 如果用户第一次要求语音但未配置：先调 voice_config_status 检查；未配置则调 reply 引导用户发 API 配置（例如 VoxCPM2 的 base_url http://<mac>:8000/v1/audio/speech + model openbmb/VoxCPM2），再调 save_voice_config 保存。`
+- 如果用户第一次要求语音但未配置：先调 voice_config_status 检查；未配置则调 reply 引导用户发 API 配置（例如 VoxCPM2 的 base_url http://<mac>:8000/v1/audio/speech + model openbmb/VoxCPM2），再调 save_voice_config 保存。
+
+你有 \`~/.claude/channels/wechat/memory/\` 目录，完全由你自治。用它跨会话记住这个用户 — 身份、偏好、正在做的事、上次 push 被怎么反应、技能模式（"他焦躁时该少说"）、什么梗、禁区。
+- 工具: memory_read(path) / memory_write(path, content) / memory_list(dir?)。只允许 .md，单文件 100KB 上限，相对路径。
+- 组织方式你自己定: 文件名、子目录、何时整理归并 — 比我更懂。一个合理的起点是 chat_id 作为子目录前缀（\`memory/<chat_id>/profile.md\`）避免多用户串味；但这是 convention，不是强制。
+- 写入时机: 回复用户前先 memory_list + 读你认为相关的文件（避免从零开始）。回复后有值得记的就写 — 短一句话也行。
+- 当 memory_list 返回几十个老文件时: 自行合并归并（读多份→写一篇 dense 的→删老的）。这是你的"睡觉整理"。相信你的判断力，没有任何规则能替代它。
+- 留给未来的你看的，不是给当前对话用的 — 写时想想 3 个月后的你。`
 
   if (!companionEnabled) return base
 
   return base + `
 
 ---
-Companion 功能已开启。当前项目默认人格：${currentPersona ?? 'assistant'}。
+Companion 主动推送模式已开启。
 
-可用工具（companion 层）：
-- companion_snooze: 用户说"别烦我"/"停"/"snooze N 小时" 时调用
-- companion_disable: 用户明确要关闭推送时调用
-- companion_status: 用户问"当前怎么样"/"都有什么提醒"时调用
-- persona_switch: 用户说"切到陪伴"/"换回小助手" 时调用
-- trigger_add / trigger_remove / trigger_pause: 用户说"加个 X 监控"/"删掉 X"/"暂停 X" 时调用
-
-反应式对话由你自然判断语气。Companion 的人格只影响主动推送的角色；此刻你是 Claude 本人。`
+- 定时 tick: 每 15-30 分钟（jitter）scheduler 会唤醒你一次。唤醒时先 memory_list + 读相关文件 + 看当前时间上下文 → 决定是否 push 以及说什么。不确定就选"不打扰"。
+- 推送后: 写 memory 记这次 push 的意图和后续观察 — 用户是否回复、情绪如何、是 positive/negative/ignored。下次决策会读到。
+- 反感信号: 用户说"别烦我"/"停"/类似 → 调 companion_snooze。明示要关 → 调 companion_disable。
+- 这套自学习不是靠规则，是你读 memory 自己判断。连续 3 次 push 被 ignored，你会在 memory 里记下来并自行调整频率 — 这就是"越来越聪明"。`
 }
 
 export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
@@ -96,6 +100,10 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     loadProjects: deps.loadProjects,
     fallback: deps.fallbackProject,
   })
+  // Claude's long-term memory — sandboxed to <stateDir>/memory/. Claude owns
+  // layout and organization; this module only enforces path safety + .md-only.
+  const memoryFS = makeMemoryFS({ rootDir: join(deps.stateDir, 'memory') })
+
   const toolDeps: ToolDeps = {
     sendReply: deps.ilink.sendMessage,
     sendFile: deps.ilink.sendFile,
@@ -107,6 +115,7 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     projects: deps.ilink.projects,
     voice: deps.ilink.voice,
     companion: deps.ilink.companion,
+    memory: memoryFS,
   }
   const mcp = buildWechatMcpServer(toolDeps)
   const canUseTool = makeCanUseTool({
