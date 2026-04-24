@@ -7,6 +7,7 @@
  * so grouping them keeps the ilink-glue composer leaner.
  */
 import { ilinkSendTyping, ilinkGetConfig, ilinkGetUpdates } from '../../../ilink'
+import { log } from '../../../log'
 import type { IlinkContext } from './context'
 
 export interface TransportMethods {
@@ -33,7 +34,7 @@ export function makeTransport(ctx: IlinkContext): TransportMethods {
               return id ? accounts.find(a => a.id === id) : undefined
             })()
         if (!acct) {
-          console.error(`wechat channel: [TYPING] skip — no account resolvable for chat=${chatId}`)
+          log('TYPING', `skip — no account resolvable for chat=${chatId}`)
           return
         }
         const now = Date.now()
@@ -44,16 +45,16 @@ export function makeTransport(ctx: IlinkContext): TransportMethods {
           source = 'fresh'
           const cfg = await ilinkGetConfig(acct.baseUrl, acct.token, chatId, ctxStore.get(chatId))
           if (!cfg.typing_ticket) {
-            console.error(`wechat channel: [TYPING] getconfig returned no typing_ticket for chat=${chatId} acct=${acct.id} raw=${JSON.stringify(cfg).slice(0, 200)}`)
+            log('TYPING', `getconfig returned no typing_ticket for chat=${chatId} acct=${acct.id} raw=${JSON.stringify(cfg).slice(0, 200)}`)
             return
           }
           ticket = cfg.typing_ticket
           typingTickets.set(chatId, { ticket, ts: now })
         }
         await ilinkSendTyping(acct.baseUrl, acct.token, chatId, ticket)
-        console.error(`wechat channel: [TYPING] sent chat=${chatId} acct=${acct.id} ticket=${source}`)
+        log('TYPING', `sent chat=${chatId} acct=${acct.id} ticket=${source}`)
       } catch (err) {
-        console.error(`wechat channel: [TYPING] error chat=${chatId}: ${err instanceof Error ? err.message : err}`)
+        log('TYPING', `error chat=${chatId}: ${err instanceof Error ? err.message : err}`)
       }
     },
 
@@ -65,7 +66,7 @@ export function makeTransport(ctx: IlinkContext): TransportMethods {
       if (resp.errcode === -14 || resp.ret === -14) {
         const transitioned = sessionState.markExpired(accountId, `ilink/getupdates errcode=-14: ${resp.errmsg ?? ''}`)
         if (transitioned) {
-          console.error(`wechat channel: [SESSION_EXPIRED] ${accountId} — marked expired (silent; visible via /health)`)
+          log('SESSION_EXPIRED', `${accountId} — marked expired (visible via /health; cleanup with 清理 ${accountId})`)
         }
         return { expired: true }
       }
