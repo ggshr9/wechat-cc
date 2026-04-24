@@ -9,13 +9,8 @@ import { isAdmin } from '../../access'
 import { makeAdminCommands } from './admin-commands'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { startScheduler } from './companion/scheduler'
-import { makeEvalTrigger } from './companion/eval-session'
-import { makeRunsLogger, makePushLogger } from './companion/logs'
+import { startCompanionScheduler } from './companion/scheduler'
 import { loadCompanionConfig } from './companion/config'
-import { loadPersona } from './companion/persona'
-import { profilePath } from './companion/paths'
-import { readFileSync, existsSync } from 'node:fs'
 
 const STATE_DIR = join(homedir(), '.claude', 'channels', 'wechat')
 const PID_PATH = join(STATE_DIR, 'server.pid')
@@ -47,57 +42,48 @@ async function main() {
     dangerouslySkipPermissions: DANGEROUSLY,
   })
 
-  // Companion scheduler (proactive push). Default-off via config.enabled=false;
-  // only fires when user opts in via `companion_enable` tool.
-  const companionRuns = makeRunsLogger(STATE_DIR)
-  const companionPushes = makePushLogger(STATE_DIR)
+  // Companion v2 scheduler — simple interval+jitter tick. When enabled +
+  // not snoozed, dispatches a companion_tick message into the current
+  // project's live session. Claude reads memory/, checks context, decides
+  // whether to push — no hardcoded rules, no isolated eval session. See
+  // docs/specs/2026-04-24-companion-memory.md for rationale.
+  const COMPANION_TICK_INTERVAL_MS = 20 * 60 * 1000  // 20 min base
+  const COMPANION_TICK_JITTER = 0.3                  // ±30%
 
-  const evalTrigger = makeEvalTrigger({
-    sdkOptionsBase: () => {
-      const sample = sdkOptionsForProject('_default', launchCwd)
-      return {
-        cwd: launchCwd,
-        mcpServers: sample.mcpServers,
-      }
+  const stopScheduler = startCompanionScheduler({
+    intervalMs: COMPANION_TICK_INTERVAL_MS,
+    jitterRatio: COMPANION_TICK_JITTER,
+    isEnabled: () => loadCompanionConfig(STATE_DIR).enabled,
+    isSnoozed: () => {
+      const snooze = loadCompanionConfig(STATE_DIR).snooze_until
+      return !!snooze && Date.parse(snooze) > Date.now()
     },
     log: (tag, line) => log(tag, line),
-  })
-
-  const stopScheduler = startScheduler({
-    loadConfig: () => loadCompanionConfig(STATE_DIR),
-    runs: companionRuns,
-    pushes: companionPushes,
-    evalTrigger: async (trigger, { cfg }) => {
-      const personaName =
-        cfg.per_project_persona[trigger.project] ??
-        cfg.per_project_persona['_default'] ??
-        'assistant'
-      const persona = loadPersona(STATE_DIR, personaName)
-      if (!persona) {
-        log('SCHED', `persona '${personaName}' not found; skipping trigger ${trigger.id}`)
-        return { pushed: false, cost_usd: 0, tool_uses_count: 0, duration_ms: 0, error_message: `persona ${personaName} missing` }
+    onTick: async () => {
+      const cfg = loadCompanionConfig(STATE_DIR)
+      if (!cfg.default_chat_id) {
+        log('SCHED', 'skip tick — no default_chat_id configured')
+        return
       }
-      const profileContent = existsSync(profilePath(STATE_DIR))
-        ? readFileSync(profilePath(STATE_DIR), 'utf8')
-        : ''
-      const result = await evalTrigger(trigger, {
-        recent_pushes: [],
-        recent_runs: [],
-        profile: profileContent,
-        persona,
-        chat_id: cfg.default_chat_id ?? '',
-      })
-      if (result.pushed && result.message && cfg.default_chat_id) {
-        try {
-          await ilink.sendMessage(cfg.default_chat_id, result.message)
-        } catch (err) {
-          log('PUSH', `delivery failed for trigger=${trigger.id}: ${err}`)
-        }
+      const snapshot = ilink.loadProjects()
+      const currentAlias = snapshot.current && snapshot.projects[snapshot.current] ? snapshot.current : null
+      const proj = currentAlias
+        ? { alias: currentAlias, path: snapshot.projects[currentAlias]!.path }
+        : { alias: '_default', path: launchCwd }
+      const handle = await sessionManager.acquire(proj.alias, proj.path)
+      const tickText =
+        `<companion_tick ts="${new Date().toISOString()}" default_chat_id="${cfg.default_chat_id}" />\n` +
+        `定时唤醒。先 memory_list + memory_read 你觉得相关的文件。` +
+        `再看当前时间和用户最近状态。决定是否向 ${cfg.default_chat_id} push，或保持沉默。` +
+        `不确定就选不打扰。push 后写一条 memory 记下决策和意图（便于下次 tick 读到效果）。`
+      try {
+        await handle.dispatch(tickText)
+        log('SCHED', `companion tick dispatched to project=${proj.alias} chat=${cfg.default_chat_id}`)
+      } catch (err) {
+        log('SCHED', `companion tick dispatch failed: ${err instanceof Error ? err.message : err}`)
       }
-      return result
     },
-    now: () => new Date(),
-  }, (tag, line) => log(tag, line))
+  })
 
   const startedAtIso = new Date().toISOString()
 

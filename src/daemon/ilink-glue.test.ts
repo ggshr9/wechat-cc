@@ -221,22 +221,20 @@ describe('makeIlinkAdapter (composed)', () => {
     if (!r.ok) expect(r.reason).toBe('not_configured')
   })
 
-  it('companion.enable scaffolds files + returns welcome on first call', async () => {
+  it('companion.enable creates config + returns welcome on first call (no personas)', async () => {
     const stateDir = mkdtempSync(join(tmpdir(), 'wcc-comp-'))
     const adapter = makeIlinkAdapter({ stateDir, accounts: [acct] })
     const r = await adapter.companion.enable()
     expect(r.ok).toBe(true)
     if (!('already_configured' in r)) {
-      expect(r.personas_scaffolded).toContain('assistant')
-      expect(r.personas_scaffolded).toContain('companion')
-      expect(r.welcome_message).toContain('小助手')
+      expect(r.welcome_message).toContain('主动提醒')
+      expect(r.welcome_message).toContain('memory')
     }
-    // files exist
     const fs = await import('node:fs')
-    expect(fs.existsSync(join(stateDir, 'companion', 'profile.md'))).toBe(true)
-    expect(fs.existsSync(join(stateDir, 'companion', 'personas', 'assistant.md'))).toBe(true)
-    expect(fs.existsSync(join(stateDir, 'companion', 'personas', 'companion.md'))).toBe(true)
     expect(fs.existsSync(join(stateDir, 'companion', 'config.json'))).toBe(true)
+    // v2 does NOT scaffold personas/profile.md — Claude owns memory/ instead
+    expect(fs.existsSync(join(stateDir, 'companion', 'profile.md'))).toBe(false)
+    expect(fs.existsSync(join(stateDir, 'companion', 'personas'))).toBe(false)
   })
 
   it('companion.enable is idempotent', async () => {
@@ -256,19 +254,18 @@ describe('makeIlinkAdapter (composed)', () => {
     expect(adapter.companion.status().enabled).toBe(false)
   })
 
-  it('companion.status returns personas + triggers with next_fire_at', async () => {
+  it('companion.status returns minimal v2 shape (enabled/tz/chat_id/snooze)', async () => {
     const stateDir = mkdtempSync(join(tmpdir(), 'wcc-comp-'))
     const adapter = makeIlinkAdapter({ stateDir, accounts: [acct] })
     await adapter.companion.enable()
-    await adapter.companion.triggerAdd({
-      id: 'ci', project: 'wechat-cc', schedule: '*/10 * * * *',
-      task: 'check CI', personas: ['assistant'],
-    })
     const s = adapter.companion.status()
     expect(s.enabled).toBe(true)
-    expect(s.personas_available.map(p => p.name).sort()).toEqual(['assistant', 'companion'])
-    expect(s.triggers).toHaveLength(1)
-    expect(s.triggers[0]?.next_fire_at).not.toBeNull()
+    expect(typeof s.timezone).toBe('string')
+    expect('snooze_until' in s).toBe(true)
+    expect('default_chat_id' in s).toBe(true)
+    // v2 dropped: per_project_persona, personas_available, triggers, pushes_*
+    expect('triggers' in s).toBe(false)
+    expect('personas_available' in s).toBe(false)
   })
 
   it('companion.snooze writes snooze_until in future', async () => {
@@ -280,72 +277,5 @@ describe('makeIlinkAdapter (composed)', () => {
     const until = new Date(r.until).getTime()
     expect(until).toBeGreaterThan(before + 59 * 60_000)
     expect(until).toBeLessThan(before + 61 * 60_000)
-  })
-
-  it('companion.personaSwitch rejects unknown persona', async () => {
-    const stateDir = mkdtempSync(join(tmpdir(), 'wcc-comp-'))
-    const adapter = makeIlinkAdapter({ stateDir, accounts: [acct] })
-    await adapter.companion.enable()
-    const r = await adapter.companion.personaSwitch({ persona: 'ghost', project: 'P' })
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.reason).toMatch(/unknown persona/i)
-  })
-
-  it('companion.personaSwitch persists to config.json', async () => {
-    const stateDir = mkdtempSync(join(tmpdir(), 'wcc-comp-'))
-    const adapter = makeIlinkAdapter({ stateDir, accounts: [acct] })
-    await adapter.companion.enable()
-    const r = await adapter.companion.personaSwitch({ persona: 'companion', project: 'notes' })
-    expect(r.ok).toBe(true)
-    const s = adapter.companion.status()
-    expect(s.per_project_persona.notes).toBe('companion')
-  })
-
-  it('companion.triggerAdd rejects duplicate id', async () => {
-    const stateDir = mkdtempSync(join(tmpdir(), 'wcc-comp-'))
-    const adapter = makeIlinkAdapter({ stateDir, accounts: [acct] })
-    await adapter.companion.enable()
-    await adapter.companion.triggerAdd({
-      id: 'x', project: 'P', schedule: '* * * * *', task: 't',
-    })
-    const r = await adapter.companion.triggerAdd({
-      id: 'x', project: 'P', schedule: '* * * * *', task: 't',
-    })
-    expect(r.ok).toBe(false)
-  })
-
-  it('companion.triggerAdd rejects invalid cron', async () => {
-    const stateDir = mkdtempSync(join(tmpdir(), 'wcc-comp-'))
-    const adapter = makeIlinkAdapter({ stateDir, accounts: [acct] })
-    await adapter.companion.enable()
-    const r = await adapter.companion.triggerAdd({
-      id: 'bad', project: 'P', schedule: 'not-cron', task: 't',
-    })
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.reason).toMatch(/invalid schedule/i)
-  })
-
-  it('companion.triggerRemove returns false for unknown id', async () => {
-    const stateDir = mkdtempSync(join(tmpdir(), 'wcc-comp-'))
-    const adapter = makeIlinkAdapter({ stateDir, accounts: [acct] })
-    await adapter.companion.enable()
-    const r = await adapter.companion.triggerRemove('ghost')
-    expect(r.ok).toBe(false)
-  })
-
-  it('companion.triggerPause sets paused_until', async () => {
-    const stateDir = mkdtempSync(join(tmpdir(), 'wcc-comp-'))
-    const adapter = makeIlinkAdapter({ stateDir, accounts: [acct] })
-    await adapter.companion.enable()
-    await adapter.companion.triggerAdd({
-      id: 't', project: 'P', schedule: '* * * * *', task: 'x',
-    })
-    const r = await adapter.companion.triggerPause('t', 30)
-    expect(r.ok).toBe(true)
-    if (r.ok) {
-      expect(r.paused_until).not.toBeNull()
-      const until = new Date(r.paused_until!).getTime()
-      expect(until).toBeGreaterThan(Date.now())
-    }
   })
 })

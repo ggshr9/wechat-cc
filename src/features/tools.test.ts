@@ -35,18 +35,17 @@ function makeDeps(over: Partial<ToolDeps> = {}): ToolDeps {
       status: () => ({
         enabled: false,
         timezone: 'Asia/Shanghai',
-        per_project_persona: {},
-        personas_available: [],
-        triggers: [],
+        default_chat_id: null,
         snooze_until: null,
-        pushes_last_24h: 0,
-        runs_last_24h: 0,
       }),
       snooze: vi.fn().mockResolvedValue({ ok: true, until: '2026-04-22T13:00:00Z' }),
-      personaSwitch: vi.fn().mockResolvedValue({ ok: true, project: 'P', persona: 'assistant' }),
-      triggerAdd: vi.fn().mockResolvedValue({ ok: true, next_fire_at: '2026-04-22T10:10:00Z' }),
-      triggerRemove: vi.fn().mockResolvedValue({ ok: true }),
-      triggerPause: vi.fn().mockResolvedValue({ ok: true, paused_until: null }),
+    },
+    memory: {
+      read: vi.fn(() => null),
+      write: vi.fn(),
+      list: vi.fn(() => []),
+      delete: vi.fn(),
+      rootDir: () => '/tmp/fake-memory',
     },
     ...over,
   }
@@ -207,53 +206,38 @@ describe('buildWechatMcpServer', () => {
     expect(deps.companion.snooze).toHaveBeenCalledWith(60)
   })
 
-  it('persona_switch passes persona + project through', async () => {
+  it('memory_read forwards path', async () => {
     const deps = makeDeps()
+    deps.memory.read = vi.fn(() => '# hi\ncontent')
     const { handlers } = buildWechatMcpServer(deps)
-    const out = await handlers.persona_switch({ persona: 'companion', project: 'notes' })
-    expect(deps.companion.personaSwitch).toHaveBeenCalledWith({ persona: 'companion', project: 'notes' })
-    expect(extractText(out)).toContain('assistant')
+    const out = await handlers.memory_read({ path: 'profile.md' })
+    expect(deps.memory.read).toHaveBeenCalledWith('profile.md')
+    expect(extractText(out)).toContain('hi')
   })
 
-  it('trigger_add forwards all fields', async () => {
+  it('memory_read returns exists:false for missing', async () => {
     const deps = makeDeps()
+    deps.memory.read = vi.fn(() => null)
     const { handlers } = buildWechatMcpServer(deps)
-    const out = await handlers.trigger_add({
-      id: 'ci',
-      project: 'wechat-cc',
-      schedule: '*/10 * * * *',
-      task: 'check CI',
-      personas: ['assistant'],
-    })
-    expect(deps.companion.triggerAdd).toHaveBeenCalledWith({
-      id: 'ci',
-      project: 'wechat-cc',
-      schedule: '*/10 * * * *',
-      task: 'check CI',
-      personas: ['assistant'],
-    })
-    expect(extractText(out)).toContain('next_fire_at')
+    const out = await handlers.memory_read({ path: 'nope.md' })
+    expect(extractText(out)).toContain('"exists":false')
   })
 
-  it('trigger_remove forwards id', async () => {
+  it('memory_write forwards path + content', async () => {
     const deps = makeDeps()
+    deps.memory.write = vi.fn()
     const { handlers } = buildWechatMcpServer(deps)
-    await handlers.trigger_remove({ id: 'ci' })
-    expect(deps.companion.triggerRemove).toHaveBeenCalledWith('ci')
+    await handlers.memory_write({ path: 'notes/x.md', content: 'hello' })
+    expect(deps.memory.write).toHaveBeenCalledWith('notes/x.md', 'hello')
   })
 
-  it('trigger_pause forwards id + minutes', async () => {
+  it('memory_list returns file array', async () => {
     const deps = makeDeps()
+    deps.memory.list = vi.fn(() => ['a.md', 'b/c.md'])
     const { handlers } = buildWechatMcpServer(deps)
-    await handlers.trigger_pause({ id: 'ci', minutes: 120 })
-    expect(deps.companion.triggerPause).toHaveBeenCalledWith('ci', 120)
-  })
-
-  it('trigger_pause allows omitted minutes', async () => {
-    const deps = makeDeps()
-    const { handlers } = buildWechatMcpServer(deps)
-    await handlers.trigger_pause({ id: 'ci' })
-    expect(deps.companion.triggerPause).toHaveBeenCalledWith('ci', undefined)
+    const out = await handlers.memory_list({})
+    expect(extractText(out)).toContain('a.md')
+    expect(extractText(out)).toContain('b/c.md')
   })
 })
 

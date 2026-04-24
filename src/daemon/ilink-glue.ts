@@ -22,13 +22,8 @@ import { loadVoiceConfig, saveVoiceConfig, type VoiceConfig } from './tts/voice-
 import { makeHttpTTSProvider } from './tts/http-tts'
 import { makeQwenProvider } from './tts/qwen'
 import type { TTSProvider } from './tts/types'
-import {
-  companionDir, personasDir, profilePath, personaPath,
-} from './companion/paths'
+import { companionDir } from './companion/paths'
 import { loadCompanionConfig, saveCompanionConfig, defaultCompanionConfig } from './companion/config'
-import { listPersonas } from './companion/persona'
-import { PROFILE_TEMPLATE, PERSONA_ASSISTANT_TEMPLATE, PERSONA_COMPANION_TEMPLATE } from './companion/templates'
-import { Cron } from 'croner'
 
 export interface Account {
   id: string
@@ -237,61 +232,39 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
     },
   }
 
-  // ── Companion ──────────────────────────────────────────────────────────
+  // ── Companion v2 — memory-first, 4 methods only ──────────────────────
+  // Claude owns memory/. The daemon only provides the proactive-tick gate
+  // (enabled / snooze) and a destination hint (default_chat_id). Persona /
+  // trigger / status-of-triggers all gone — Claude tracks that in memory.
   const companion: ToolDeps['companion'] = {
     async enable() {
       const cfg = loadCompanionConfig(opts.stateDir)
-      const alreadyScaffolded =
-        existsSync(profilePath(opts.stateDir)) &&
-        existsSync(personaPath(opts.stateDir, 'assistant')) &&
-        existsSync(personaPath(opts.stateDir, 'companion'))
-      if (alreadyScaffolded && cfg.enabled) {
+      if (cfg.enabled) {
         return { ok: true as const, already_configured: true as const }
       }
 
-      // Scaffold missing files
       mkdirSync(companionDir(opts.stateDir), { recursive: true })
-      mkdirSync(personasDir(opts.stateDir), { recursive: true })
-      if (!existsSync(profilePath(opts.stateDir))) {
-        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC'
-        writeFileSync(
-          profilePath(opts.stateDir),
-          PROFILE_TEMPLATE.replace('{{TIMEZONE}}', tz),
-          'utf8',
-        )
-      }
-      if (!existsSync(personaPath(opts.stateDir, 'assistant'))) {
-        writeFileSync(personaPath(opts.stateDir, 'assistant'), PERSONA_ASSISTANT_TEMPLATE, 'utf8')
-      }
-      if (!existsSync(personaPath(opts.stateDir, 'companion'))) {
-        writeFileSync(personaPath(opts.stateDir, 'companion'), PERSONA_COMPANION_TEMPLATE, 'utf8')
-      }
-
-      // Flip enabled=true; preserve existing config fields if any
       const newCfg = {
         ...defaultCompanionConfig(),
         ...cfg,
         enabled: true,
-        per_project_persona: {
-          _default: 'assistant',
-          ...cfg.per_project_persona,
-        },
-        default_chat_id: cfg.default_chat_id ?? lastActive ?? (Object.keys(acctStore.all()).slice(-1)[0] ?? null),
+        default_chat_id:
+          cfg.default_chat_id
+          ?? lastActive
+          ?? (Object.keys(acctStore.all()).slice(-1)[0] ?? null),
       }
       await saveCompanionConfig(opts.stateDir, newCfg)
 
       return {
         ok: true as const,
         state_dir: companionDir(opts.stateDir),
-        personas_scaffolded: ['assistant', 'companion'],
         welcome_message:
-          '开启完成。两个人格已经装好：\n' +
-          '- **小助手**（当前默认）：干活为主，推送从严。CI / PR / 部署故障会提醒。\n' +
-          '- **陪伴**：聊天为主，推送更随性。下班时段切过去比较舒服。\n\n' +
-          '目前还没配任何触发器。要加提醒就说 "加个 CI 监控" / "每周五下午提醒我写周记" 这类。\n' +
-          '要切人格就说 "切到陪伴"。要暂停就说 "别烦我" 或 "snooze 3 小时"。',
+          '主动提醒已开启。我会每 15-30 分钟醒一次，决定是不是联系你。\n' +
+          '不确定时我会选不打扰；连续被 ignore/snooze 我会自己调整频率。\n' +
+          '随时说 "别烦我" / "snooze 2 小时" 让我歇；或 "关掉主动" 完全停。\n' +
+          '你对我的偏好（语气、作息、什么话题想聊）我会记在 memory 里，一点点学。',
         cost_estimate_note:
-          '主动推送每次评估走 Claude Agent SDK 一次短会话，典型成本约 $0.01/次。频率由你的触发器决定；默认只提醒明显需要动手的事。',
+          '每次主动 tick 评估一次 Claude（~$0.01/次）；默认 20 分钟一次有 jitter；不说话就不花钱。',
       }
     },
 
@@ -304,35 +277,11 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
 
     status() {
       const cfg = loadCompanionConfig(opts.stateDir)
-      const personas = listPersonas(opts.stateDir)
-      const triggers = cfg.triggers.map(t => {
-        let next_fire_at: string | null = null
-        try {
-          const c = new Cron(t.schedule, { timezone: cfg.timezone, paused: true }, () => {})
-          next_fire_at = c.nextRun()?.toISOString() ?? null
-        } catch {
-          // bad schedule — leave next_fire_at as null
-        }
-        return {
-          id: t.id,
-          project: t.project,
-          schedule: t.schedule,
-          personas: t.personas,
-          next_fire_at,
-        }
-      })
       return {
         enabled: cfg.enabled,
         timezone: cfg.timezone,
-        per_project_persona: cfg.per_project_persona,
-        personas_available: personas.map(p => ({
-          name: p.frontmatter.name,
-          display_name: p.frontmatter.display_name,
-        })),
-        triggers,
+        default_chat_id: cfg.default_chat_id,
         snooze_until: cfg.snooze_until,
-        pushes_last_24h: 0,
-        runs_last_24h: 0,
       }
     },
 
@@ -342,82 +291,6 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
       cfg.snooze_until = until
       await saveCompanionConfig(opts.stateDir, cfg)
       return { ok: true as const, until }
-    },
-
-    async personaSwitch(params: { persona: string; project?: string }) {
-      const cfg = loadCompanionConfig(opts.stateDir)
-      const available = listPersonas(opts.stateDir).map(p => p.frontmatter.name)
-      if (!available.includes(params.persona)) {
-        return {
-          ok: false as const,
-          reason: `unknown persona '${params.persona}'; available: ${available.join(', ') || '(none)'}`,
-        }
-      }
-      const proj = params.project ?? '_default'
-      cfg.per_project_persona = {
-        ...cfg.per_project_persona,
-        [proj]: params.persona,
-      }
-      await saveCompanionConfig(opts.stateDir, cfg)
-      return { ok: true as const, project: proj, persona: params.persona }
-    },
-
-    async triggerAdd(params: {
-      id: string
-      project: string
-      schedule: string
-      task: string
-      personas?: string[]
-      on_failure?: 'silent' | 'notify-user' | 'retry-once'
-    }) {
-      const cfg = loadCompanionConfig(opts.stateDir)
-      if (cfg.triggers.some(t => t.id === params.id)) {
-        return { ok: false as const, reason: `trigger id '${params.id}' already exists` }
-      }
-      // Validate cron syntax via croner (throws on bad pattern)
-      let next_fire_at = ''
-      try {
-        const c = new Cron(params.schedule, { timezone: cfg.timezone, paused: true }, () => {})
-        next_fire_at = c.nextRun()?.toISOString() ?? ''
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        return { ok: false as const, reason: `invalid schedule: ${msg}` }
-      }
-
-      cfg.triggers.push({
-        id: params.id,
-        project: params.project,
-        schedule: params.schedule,
-        task: params.task,
-        personas: params.personas ?? [],
-        on_failure: params.on_failure ?? 'silent',
-        created_at: new Date().toISOString(),
-      })
-      await saveCompanionConfig(opts.stateDir, cfg)
-      return { ok: true as const, next_fire_at }
-    },
-
-    async triggerRemove(id: string) {
-      const cfg = loadCompanionConfig(opts.stateDir)
-      const before = cfg.triggers.length
-      cfg.triggers = cfg.triggers.filter(t => t.id !== id)
-      if (cfg.triggers.length === before) {
-        return { ok: false as const, reason: `no trigger with id '${id}'` }
-      }
-      await saveCompanionConfig(opts.stateDir, cfg)
-      return { ok: true as const }
-    },
-
-    async triggerPause(id: string, minutes?: number) {
-      const cfg = loadCompanionConfig(opts.stateDir)
-      const t = cfg.triggers.find(x => x.id === id)
-      if (!t) return { ok: false as const, reason: `no trigger with id '${id}'` }
-      const until = minutes
-        ? new Date(Date.now() + minutes * 60_000).toISOString()
-        : '9999-12-31T23:59:59Z'
-      t.paused_until = until
-      await saveCompanionConfig(opts.stateDir, cfg)
-      return { ok: true as const, paused_until: until }
     },
   } satisfies ToolDeps['companion']
 

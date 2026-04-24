@@ -47,61 +47,25 @@ export interface ToolDeps {
         }
   }
   companion: {
-    /** On first call: scaffold profile.md + personas/*.md + config.json. Returns welcome message + cost estimate. Idempotent on subsequent calls. */
+    /** Turn on proactive tick. Idempotent. Scaffolds minimal config on first call. */
     enable(): Promise<
       | {
           ok: true
           state_dir: string
-          personas_scaffolded: string[]
           welcome_message: string
           cost_estimate_note: string
         }
       | { ok: true; already_configured: true }
     >
     disable(): Promise<{ ok: true; enabled: false }>
-    /** Consolidated status — replaces separate persona_list / trigger_list tools. */
+    /** Minimal status: are proactive ticks on? snoozed until when? */
     status(): {
       enabled: boolean
       timezone: string
-      per_project_persona: Record<string, string>
-      personas_available: { name: string; display_name: string }[]
-      triggers: {
-        id: string
-        project: string
-        schedule: string
-        personas: string[]
-        next_fire_at: string | null
-        last_run_at?: string | null
-        last_pushed_at?: string | null
-      }[]
+      default_chat_id: string | null
       snooze_until: string | null
-      pushes_last_24h: number
-      runs_last_24h: number
     }
     snooze(minutes: number): Promise<{ ok: true; until: string }>
-    personaSwitch(params: { persona: string; project?: string }): Promise<
-      | { ok: true; project: string; persona: string }
-      | { ok: false; reason: string }
-    >
-    triggerAdd(params: {
-      id: string
-      project: string
-      schedule: string
-      task: string
-      personas?: string[]
-      on_failure?: 'silent' | 'notify-user' | 'retry-once'
-    }): Promise<
-      | { ok: true; next_fire_at: string }
-      | { ok: false; reason: string }
-    >
-    triggerRemove(id: string): Promise<
-      | { ok: true }
-      | { ok: false; reason: string }
-    >
-    triggerPause(id: string, minutes?: number): Promise<
-      | { ok: true; paused_until: string | null }
-      | { ok: false; reason: string }
-    >
   }
 }
 
@@ -132,17 +96,6 @@ export interface BuiltWechatMcp {
     companion_disable: (args: Record<string, never>) => Promise<unknown>
     companion_status: (args: Record<string, never>) => Promise<unknown>
     companion_snooze: (args: { minutes: number }) => Promise<unknown>
-    persona_switch: (args: { persona: string; project?: string }) => Promise<unknown>
-    trigger_add: (args: {
-      id: string
-      project: string
-      schedule: string
-      task: string
-      personas?: string[]
-      on_failure?: 'silent' | 'notify-user' | 'retry-once'
-    }) => Promise<unknown>
-    trigger_remove: (args: { id: string }) => Promise<unknown>
-    trigger_pause: (args: { id: string; minutes?: number }) => Promise<unknown>
     memory_read: (args: { path: string }) => Promise<unknown>
     memory_write: (args: { path: string; content: string }) => Promise<unknown>
     memory_list: (args: { dir?: string }) => Promise<unknown>
@@ -316,7 +269,7 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
 
   const companionEnableDef = tool(
     'companion_enable',
-    '开启 Companion 主动推送功能。第一次调用会自动创建 profile.md + personas/assistant.md + personas/companion.md + config.json，并返回欢迎消息和成本提示。后续调用是幂等的。',
+    '开启 Companion 主动推送（定时 tick）。第一次调用会创建 config.json 并返回欢迎消息。幂等。',
     {},
     async () => okText(JSON.stringify(await deps.companion.enable())),
   )
@@ -324,7 +277,7 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
 
   const companionDisableDef = tool(
     'companion_disable',
-    '关闭 Companion 主动推送。scheduler 在下一次 tick 停止。',
+    '关闭 Companion 主动推送。下一次 scheduler tick 不再触发。',
     {},
     async () => okText(JSON.stringify(await deps.companion.disable())),
   )
@@ -332,7 +285,7 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
 
   const companionStatusDef = tool(
     'companion_status',
-    '查询 Companion 状态：是否开启、当前时区、每个项目的人格、已安装人格、已注册触发器（及下次触发时间）、snooze 状态、最近 24 小时推送/评估次数。',
+    '查询 Companion 状态：是否开启、时区、默认 chat_id、snooze 截止时间。人格 / 触发器等历史详情请从 memory/ 读。',
     {},
     async () => okText(JSON.stringify(deps.companion.status())),
   )
@@ -340,50 +293,11 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
 
   const companionSnoozeDef = tool(
     'companion_snooze',
-    '暂停所有主动推送若干分钟。用户说 "别烦我"/"停"/"snooze N 小时"/"shut up" 等时调用。默认 180 分钟（3 小时）。',
+    '暂停所有主动推送若干分钟。用户说 "别烦我"/"停"/"snooze N 小时"/"shut up" 等时调用。',
     { minutes: z.number().int().min(1).max(24 * 60) },
     async ({ minutes }) => okText(JSON.stringify(await deps.companion.snooze(minutes))),
   )
   handlers.companion_snooze = async (a) => (await companionSnoozeDef.handler(a as any, undefined)) as unknown
-
-  const personaSwitchDef = tool(
-    'persona_switch',
-    '切换指定项目的人格。project 可选（不传时使用当前 session 的 project 或 _default）。返回 ok + 实际生效的 project/persona。',
-    { persona: z.string(), project: z.string().optional() },
-    async ({ persona, project }) => okText(JSON.stringify(await deps.companion.personaSwitch({ persona, project }))),
-  )
-  handlers.persona_switch = async (a) => (await personaSwitchDef.handler(a as any, undefined)) as unknown
-
-  const triggerAddDef = tool(
-    'trigger_add',
-    '注册一个新的主动触发器。schedule 是标准 5 字段 cron 表达式；task 是 Claude prompt（不是 shell 命令——描述要评估的事）。personas 不填默认 []（任何人格都会触发）。',
-    {
-      id: z.string(),
-      project: z.string(),
-      schedule: z.string(),
-      task: z.string(),
-      personas: z.array(z.string()).optional(),
-      on_failure: z.enum(['silent', 'notify-user', 'retry-once']).optional(),
-    },
-    async (args) => okText(JSON.stringify(await deps.companion.triggerAdd(args))),
-  )
-  handlers.trigger_add = async (a) => (await triggerAddDef.handler(a as any, undefined)) as unknown
-
-  const triggerRemoveDef = tool(
-    'trigger_remove',
-    '移除一个已注册的触发器。',
-    { id: z.string() },
-    async ({ id }) => okText(JSON.stringify(await deps.companion.triggerRemove(id))),
-  )
-  handlers.trigger_remove = async (a) => (await triggerRemoveDef.handler(a as any, undefined)) as unknown
-
-  const triggerPauseDef = tool(
-    'trigger_pause',
-    '暂停一个触发器若干分钟；不传 minutes 则无限期暂停。',
-    { id: z.string(), minutes: z.number().int().min(1).max(7 * 24 * 60).optional() },
-    async ({ id, minutes }) => okText(JSON.stringify(await deps.companion.triggerPause(id, minutes))),
-  )
-  handlers.trigger_pause = async (a) => (await triggerPauseDef.handler(a as any, undefined)) as unknown
 
   // ── Memory: Claude's long-term persistent notes (Companion v2 "wings") ──
   //
@@ -447,7 +361,6 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
       listProjectsDef, switchProjectDef, addProjectDef, removeProjectDef,
       replyVoiceDef, saveVoiceConfigDef, voiceConfigStatusDef,
       companionEnableDef, companionDisableDef, companionStatusDef, companionSnoozeDef,
-      personaSwitchDef, triggerAddDef, triggerRemoveDef, triggerPauseDef,
       memoryReadDef, memoryWriteDef, memoryListDef,
     ],
   })

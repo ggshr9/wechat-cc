@@ -1,34 +1,32 @@
+/**
+ * Companion v2 config — radically simplified from v1.
+ *
+ * v1 had triggers[] + per_project_persona + personas[] — all deleted.
+ * Those responsibilities moved to Claude's memory/ (self-organized).
+ * This config keeps only the 3 knobs that MUST live in structured state
+ * because Claude can't observe them without help:
+ *
+ *   - enabled: is proactive tick allowed? (daemon-level gate)
+ *   - default_chat_id: where to push to by default
+ *   - snooze_until: temporary hard stop (set via companion_snooze)
+ *   - timezone: so the scheduler's jitter respects user locality
+ */
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs'
 import { companionDir, configPath } from './paths'
-
-export interface Trigger {
-  id: string
-  project: string
-  schedule: string       // cron pattern (croner)
-  task: string           // Claude prompt for isolated eval
-  personas: string[]     // empty = fires for any persona
-  on_failure: 'silent' | 'notify-user' | 'retry-once'
-  created_at: string     // ISO
-  paused_until?: string | null
-}
 
 export interface CompanionConfig {
   enabled: boolean
   timezone: string
-  per_project_persona: Record<string, string>
   default_chat_id: string | null
   snooze_until: string | null
-  triggers: Trigger[]
 }
 
 export function defaultCompanionConfig(): CompanionConfig {
   return {
     enabled: false,
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC',
-    per_project_persona: {},
     default_chat_id: null,
     snooze_until: null,
-    triggers: [],
   }
 }
 
@@ -46,17 +44,11 @@ export function loadCompanionConfig(stateDir: string): CompanionConfig {
     return {
       enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : d.enabled,
       timezone: typeof parsed.timezone === 'string' && parsed.timezone ? parsed.timezone : d.timezone,
-      per_project_persona: isObject(parsed.per_project_persona)
-        ? Object.fromEntries(
-            Object.entries(parsed.per_project_persona).filter(
-              (kv): kv is [string, string] => typeof kv[1] === 'string',
-            ),
-          )
-        : {},
       default_chat_id: typeof parsed.default_chat_id === 'string' ? parsed.default_chat_id : null,
       snooze_until: typeof parsed.snooze_until === 'string' ? parsed.snooze_until : null,
-      triggers: Array.isArray(parsed.triggers) ? (parsed.triggers as Trigger[]) : [],
     }
+    // Legacy triggers/per_project_persona/triggers fields (if any) are
+    // silently dropped on next save — migration path for v1.1 installs.
   } catch {
     return defaultCompanionConfig()
   }
