@@ -5,6 +5,30 @@ import { formatInbound } from '../core/prompt-format'
 import { buildWechatMcpServer, type ToolDeps } from '../features/tools'
 import type { IlinkAdapter } from './ilink-glue'
 import type { Options } from '@anthropic-ai/claude-agent-sdk'
+import { findOnPath } from '../../util'
+import { existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+/**
+ * Locate a working Claude Code binary. The SDK's own native-binary detection
+ * mis-picks the musl variant under bun on glibc Ubuntu (bug in libc probing);
+ * passing pathToClaudeCodeExecutable bypasses that. Preference order:
+ *   1. env var override
+ *   2. system claude on PATH (works in any CC-installed env)
+ *   3. bundled glibc variant shipped with the SDK itself
+ */
+function resolveClaudeBinary(): string | undefined {
+  if (process.env.CLAUDE_CODE_EXECUTABLE && existsSync(process.env.CLAUDE_CODE_EXECUTABLE)) {
+    return process.env.CLAUDE_CODE_EXECUTABLE
+  }
+  const fromPath = findOnPath('claude')
+  if (fromPath && existsSync(fromPath)) return fromPath
+  const here = dirname(fileURLToPath(import.meta.url))
+  const bundled = join(here, '..', '..', 'node_modules', '@anthropic-ai', 'claude-agent-sdk-linux-x64', 'claude')
+  if (existsSync(bundled)) return bundled
+  return undefined
+}
 
 export interface BootstrapDeps {
   stateDir: string
@@ -91,6 +115,13 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     log: deps.log,
   })
 
+  const claudeBin = resolveClaudeBinary()
+  if (!claudeBin) {
+    deps.log('BOOT', 'WARNING: no Claude Code binary found — install Claude Code (`claude`) or set CLAUDE_CODE_EXECUTABLE')
+  } else {
+    deps.log('BOOT', `claude binary: ${claudeBin}`)
+  }
+
   const sdkOptionsForProject = (_alias: string, path: string): Options => {
     const cstatus = deps.ilink.companion.status()
     const currentPersona = cstatus.per_project_persona[_alias] ?? cstatus.per_project_persona['_default'] ?? null
@@ -98,8 +129,13 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     const common: Options = {
       cwd: path,
       mcpServers: { wechat: mcp.config },
-      systemPrompt,
+      // Using preset+append (instead of raw string) keeps MCP tools inline in
+      // the system prompt — otherwise they're deferred behind ToolSearch,
+      // which adds a round-trip every time Claude wants to call `reply`
+      // (~10-15s per inbound). Extra ~2-4k tokens per turn is a fair trade.
+      systemPrompt: { type: 'preset', preset: 'claude_code', append: systemPrompt },
       settingSources: ['user', 'project', 'local'],
+      ...(claudeBin ? { pathToClaudeCodeExecutable: claudeBin } : {}),
     }
     if (deps.dangerouslySkipPermissions) {
       return { ...common, permissionMode: 'bypassPermissions' }

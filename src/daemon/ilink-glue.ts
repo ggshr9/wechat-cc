@@ -4,8 +4,8 @@ import type { InboundMsg } from '../core/prompt-format'
 import type { ToolDeps } from '../features/tools'
 import { makeStateStore } from './state-store'
 import { PendingPermissions, parsePermissionReply } from './pending-permissions'
-import { buildMediaItemFromFile, assertSendable } from './media'
-import { ilinkSendMessage, botTextMessage } from '../../ilink'
+import { buildMediaItemFromFile, buildVoiceItemFromWav, assertSendable } from './media'
+import { ilinkSendMessage, ilinkSendTyping, ilinkGetConfig, botTextMessage } from '../../ilink'
 import { sendReplyOnce } from '../../send-reply'
 import {
   addProject,
@@ -39,7 +39,7 @@ export interface Account {
 }
 
 export interface IlinkAdapter {
-  sendMessage(chatId: string, text: string): Promise<{ msgId: string }>
+  sendMessage(chatId: string, text: string): Promise<{ msgId: string; error?: string }>
   sendFile(chatId: string, path: string): Promise<void>
   editMessage(chatId: string, msgId: string, text: string): Promise<void>
   broadcast(text: string, accountId?: string): Promise<{ ok: number; failed: number }>
@@ -53,7 +53,8 @@ export interface IlinkAdapter {
   askUser(chatId: string, prompt: string, hash: string, timeoutMs: number): Promise<'allow' | 'deny' | 'timeout'>
   loadProjects(): { projects: Record<string, { path: string; last_active: number }>; current: string | null }
   lastActiveChatId(): string | null
-  markChatActive(chatId: string): void
+  markChatActive(chatId: string, accountId?: string): void
+  sendTyping(chatId: string, accountId?: string): Promise<void>
   handlePermissionReply(text: string): boolean
   flush(): Promise<void>
 }
@@ -96,6 +97,12 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
   // Last-active chat tracking (in-memory; fine — survives restarts via acctStore)
   let lastActive: string | null = null
 
+  // Typing ticket cache (per chat). ilink returns a short-lived typing_ticket
+  // from getconfig; we keep it warm for 60s to avoid a round-trip on every
+  // inbound. Same TTL as legacy server.ts.
+  const typingTickets = new Map<string, { ticket: string; ts: number }>()
+  const TYPING_TTL_MS = 60_000
+
   const projectsFile = join(stateDir, 'projects.json')
 
   // Resolve which account to use for a given chatId
@@ -135,7 +142,14 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
         writeFileSync(tmpPath, audio)
         try {
           const acct = resolveAccount(chatId)
-          const item = await buildMediaItemFromFile(tmpPath, chatId, acct.baseUrl, acct.token)
+          // For WAV: transcode to 24kHz mono MP3 via ffmpeg and send as
+          // voice_item (encode_type=7, sample_rate=24000) so WeChat renders a
+          // voice bubble. Non-WAV (Qwen MP3 etc.) still goes through the
+          // generic file-attachment path until we add duration parsing for
+          // those containers.
+          const item = ext === '.wav'
+            ? await buildVoiceItemFromWav(tmpPath, chatId, acct.baseUrl, acct.token, text)
+            : await buildMediaItemFromFile(tmpPath, chatId, acct.baseUrl, acct.token)
           const ctxToken = ctxStore.get(chatId)
           await ilinkSendMessage(acct.baseUrl, acct.token, {
             to_user_id: chatId,
@@ -399,12 +413,12 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
     async sendMessage(chatId, text) {
       const result = await sendReplyOnce(chatId, text)
       if (!result.ok) {
-        // Best-effort: don't throw so askUser callers don't fail at prompt time.
-        // Use a client-generated msgId since ilink doesn't return one.
-        return { msgId: `err:${Date.now()}` }
+        // Keep returning a dummy msgId for back-compat with callers that
+        // destructure blindly (e.g. askUser prompt send), but ALSO surface
+        // the error so tool handlers can tell Claude the send actually failed.
+        return { msgId: `err:${Date.now()}`, error: result.error ?? 'send failed' }
       }
-      const msgId = `sent:${Date.now()}`
-      return { msgId }
+      return { msgId: `sent:${Date.now()}` }
     },
 
     // ── sendFile ──────────────────────────────────────────────────────────
@@ -554,8 +568,53 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
     },
 
     // ── markChatActive ────────────────────────────────────────────────────
-    markChatActive(chatId) {
+    // accountId is the bot that just received a message from this chat —
+    // persist it so future replies route back via the same (live) bot even
+    // after daemon restart. Without this write the map goes stale the first
+    // time a user re-binds (new QR scan = new bot id), silently routing
+    // replies to a dead session.
+    markChatActive(chatId, accountId) {
       lastActive = chatId
+      if (accountId && acctStore.get(chatId) !== accountId) {
+        acctStore.set(chatId, accountId)
+      }
+    },
+
+    // ── sendTyping ────────────────────────────────────────────────────────
+    // Fire-and-forget UX hint. Best-effort — typing indicator is nice but not
+    // a correctness concern, but logging each step helps diagnose the silent-
+    // drop case where ilink doesn't return a typing_ticket.
+    async sendTyping(chatId, accountId) {
+      try {
+        const acct = accountId
+          ? accounts.find(a => a.id === accountId)
+          : (() => {
+              const id = acctStore.get(chatId)
+              return id ? accounts.find(a => a.id === id) : undefined
+            })()
+        if (!acct) {
+          console.error(`wechat channel: [TYPING] skip — no account resolvable for chat=${chatId}`)
+          return
+        }
+        const now = Date.now()
+        const cached = typingTickets.get(chatId)
+        let ticket = cached && now - cached.ts < TYPING_TTL_MS ? cached.ticket : undefined
+        let source = 'cache'
+        if (!ticket) {
+          source = 'fresh'
+          const cfg = await ilinkGetConfig(acct.baseUrl, acct.token, chatId, ctxStore.get(chatId))
+          if (!cfg.typing_ticket) {
+            console.error(`wechat channel: [TYPING] getconfig returned no typing_ticket for chat=${chatId} acct=${acct.id} raw=${JSON.stringify(cfg).slice(0, 200)}`)
+            return
+          }
+          ticket = cfg.typing_ticket
+          typingTickets.set(chatId, { ticket, ts: now })
+        }
+        await ilinkSendTyping(acct.baseUrl, acct.token, chatId, ticket)
+        console.error(`wechat channel: [TYPING] sent chat=${chatId} acct=${acct.id} ticket=${source}`)
+      } catch (err) {
+        console.error(`wechat channel: [TYPING] error chat=${chatId}: ${err instanceof Error ? err.message : err}`)
+      }
     },
 
     // ── handlePermissionReply ─────────────────────────────────────────────

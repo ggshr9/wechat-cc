@@ -1,5 +1,6 @@
 import { createDecipheriv, createCipheriv, createHash, randomBytes } from 'node:crypto'
-import { readdirSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readdirSync, rmSync, statSync, unlinkSync, writeFileSync, mkdirSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 import { Buffer } from 'node:buffer'
 
@@ -108,7 +109,7 @@ import type { MessageItem } from '../../ilink.ts'
 import { ILINK_BASE_INFO, ilinkPost } from '../../ilink.ts'
 import { log } from '../../log.ts'
 
-export const UPLOAD_MEDIA_TYPE = { IMAGE: 1, VIDEO: 2, FILE: 3 } as const
+export const UPLOAD_MEDIA_TYPE = { IMAGE: 1, VIDEO: 2, FILE: 3, VOICE: 4 } as const
 export const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024 // ilink hard cap is higher; 50MB is safe + avoids slow uploads
 
 export const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'])
@@ -149,6 +150,83 @@ export async function buildMediaItemFromFile(
   }
   const fileName = filePath.split('/').pop() ?? 'file'
   return { type: 4, file_item: { media: mediaRef, file_name: fileName, len: String(uploaded.fileSize) } }
+}
+
+/** Parse a standard RIFF/WAVE header (PCM only). Returns audio parameters
+ *  needed to populate ilink's voice_item. Assumes canonical fmt @ 12, data
+ *  chunk immediately after (which is what VoxCPM2 / soundfile produce). */
+export function parseWavHeader(buf: Buffer): {
+  sampleRate: number; bitsPerSample: number; channels: number; durationMs: number
+} {
+  const channels = buf.readUInt16LE(22)
+  const sampleRate = buf.readUInt32LE(24)
+  const bitsPerSample = buf.readUInt16LE(34)
+  // Data chunk size at offset 40 in canonical WAV. If non-canonical layout,
+  // fall back to (file - header) as an estimate.
+  let dataSize = buf.readUInt32LE(40)
+  if (dataSize <= 0 || dataSize > buf.length) dataSize = Math.max(0, buf.length - 44)
+  const bytesPerSec = sampleRate * channels * (bitsPerSample / 8)
+  const durationMs = bytesPerSec > 0 ? Math.round((dataSize / bytesPerSec) * 1000) : 0
+  return { sampleRate, bitsPerSample, channels, durationMs }
+}
+
+/** Upload a WAV + build a voice_item MessageItem so WeChat renders it as a
+ *  voice bubble (tap-to-play) instead of a generic file attachment.
+ *
+ *  First cut tried raw PCM WAV and WeChat silently dropped it. Per the
+ *  epiral/weixin-bot spec, voice_item expects a known codec via encode_type
+ *  (1=PCM, 2=ADPCM, 3=FEATURE, 4=SPEEX, 5=AMR, 6=SILK, 7=MP3, 8=OGG-SPEEX)
+ *  and incoming messages use encode_type=6 at sample_rate=24000.
+ *
+ *  SILK needs the Skype codec (not in standard ffmpeg). MP3 is a widely-
+ *  supported alternative — transcode WAV→MP3 via libmp3lame, declare
+ *  encode_type=7, sample_rate=24000. If WeChat client still won't render a
+ *  bubble for MP3, fall back to SILK in a follow-up. */
+export async function buildVoiceItemFromWav(
+  filePath: string, chat_id: string, baseUrl: string, token: string,
+  transcript?: string,
+): Promise<MessageItem> {
+  const plaintext = Buffer.from(await Bun.file(filePath).arrayBuffer())
+  const { durationMs } = parseWavHeader(plaintext)
+
+  // Transcode WAV → MP3 24kHz mono 32kbps to match WeChat voice expectations.
+  const mp3Path = filePath.replace(/\.wav$/i, '') + '.mp3'
+  const r = spawnSync('ffmpeg', [
+    '-hide_banner', '-loglevel', 'error', '-y',
+    '-i', filePath,
+    '-ar', '24000',
+    '-ac', '1',
+    '-b:a', '32k',
+    '-codec:a', 'libmp3lame',
+    mp3Path,
+  ], { stdio: ['ignore', 'pipe', 'pipe'] })
+  if (r.status !== 0) {
+    const stderr = r.stderr?.toString().slice(0, 300) ?? '(no stderr)'
+    throw new Error(`ffmpeg WAV→MP3 transcode failed (exit ${r.status}): ${stderr}`)
+  }
+
+  try {
+    const uploaded = await uploadToCdn({
+      filePath: mp3Path, toUserId: chat_id, baseUrl, token,
+      mediaType: UPLOAD_MEDIA_TYPE.VOICE,
+    })
+    const aesKeyBase64 = Buffer.from(uploaded.aeskey).toString('base64')
+    const mediaRef: CDNMedia = { encrypt_query_param: uploaded.downloadParam, aes_key: aesKeyBase64, encrypt_type: 1 }
+
+    return {
+      type: 3,
+      voice_item: {
+        media: mediaRef,
+        encode_type: 7,       // MP3
+        sample_rate: 24000,
+        bits_per_sample: 16,
+        playtime: durationMs,
+        ...(transcript ? { text: transcript } : {}),
+      },
+    }
+  } finally {
+    try { unlinkSync(mp3Path) } catch { /* best-effort */ }
+  }
 }
 
 export async function uploadToCdnOnce(params: {

@@ -156,6 +156,19 @@ while (Date.now() < deadline) {
           }
         }
 
+        // Notify the running daemon (if any) to pick up this new account
+        // without a restart. SIGUSR1 → main.ts reconcile handler. Best-effort;
+        // if no daemon is running or the pid is stale, users just `wechat-cc run`
+        // as normal.
+        try {
+          const pidPath = join(STATE_DIR, 'server.pid')
+          const pid = parseInt(readFileSync(pidPath, 'utf8').trim(), 10)
+          if (pid > 0) {
+            process.kill(pid, 'SIGUSR1')
+            console.log(`已通知运行中的 daemon (pid ${pid}) 热加载新账号`)
+          }
+        } catch { /* daemon not running; fine */ }
+
         console.log('')
         console.log('💡 提示：你可以把 wechat 安装到用户级 MCP 配置，这样所有 Claude Code 会话')
         console.log('   都能自动使用 wechat 通道（跨项目切换的前提）:')

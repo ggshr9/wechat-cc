@@ -74,21 +74,30 @@ export class SessionManager {
     ;(async () => {
       try {
         for await (const msg of q as AsyncGenerator<SDKMessage>) {
-          if ((msg as { type: string }).type === 'assistant') {
+          const t = (msg as { type: string }).type
+          if (t === 'assistant') {
             const content = (msg as any).message?.content
             const text = extractText(content)
             if (text) for (const cb of assistantListeners) cb(text)
-          } else if ((msg as { type: string }).type === 'result') {
+          } else if (t === 'result') {
             const r = msg as any
             for (const cb of resultListeners) cb({
               session_id: r.session_id,
               num_turns: r.num_turns,
               duration_ms: r.duration_ms,
             })
+            if (r.subtype && r.subtype !== 'success') {
+              console.error(`wechat channel: [SESSION_RESULT] alias=${alias} subtype=${r.subtype} result=${typeof r.result === 'string' ? r.result.slice(0, 400) : JSON.stringify(r).slice(0, 400)}`)
+            }
+          } else if (t === 'system') {
+            const sub = (msg as any).subtype
+            if (sub === 'init') {
+              console.error(`wechat channel: [SESSION_INIT] alias=${alias} session_id=${(msg as any).session_id}`)
+            }
           }
         }
       } catch (e) {
-        // iteration interrupted or failed
+        console.error(`wechat channel: [SESSION_ERROR] alias=${alias} ${e instanceof Error ? `${e.name}: ${e.message}\n${e.stack}` : String(e)}`)
       } finally {
         drainResolve?.()
       }

@@ -98,7 +98,7 @@ async function main() {
     now: () => new Date(),
   }, (tag, line) => log(tag, line))
 
-  const stopPolling = startLongPollLoops({
+  const pollHandle = startLongPollLoops({
     accounts,
     ilink: {
       getUpdates: async (baseUrl, token, syncBuf) => {
@@ -113,7 +113,11 @@ async function main() {
     resolveUserName: (chatId) => ilink.resolveUserName(chatId),
     log: (tag, line) => log(tag, line),
     onInbound: async (msg) => {
-      ilink.markChatActive(msg.chatId)
+      // accountId keeps the persisted user→bot route fresh (self-heals after re-bind).
+      ilink.markChatActive(msg.chatId, msg.accountId)
+      // Fire "正在输入..." immediately so the user sees activity during
+      // Claude's ~8-15s cold-start on first turn. Best-effort.
+      void ilink.sendTyping(msg.chatId, msg.accountId)
       // Short-circuit permission replies BEFORE routing to Claude
       if (ilink.handlePermissionReply(msg.text)) {
         log('PERMISSION', `consumed reply from chat=${msg.chatId}`)
@@ -131,7 +135,7 @@ async function main() {
   const shutdown = async () => {
     log('DAEMON', 'shutdown initiated')
     await stopScheduler()
-    await stopPolling()
+    await pollHandle.stop()
     await sessionManager.shutdown()
     await ilink.flush()
     releaseInstanceLock(PID_PATH)
@@ -139,6 +143,26 @@ async function main() {
   }
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)
+
+  // SIGUSR1 = "new account(s) bound; re-read accounts dir". Sent by
+  // `wechat-cc setup` after a successful QR-scan so the daemon starts
+  // polling the new bot without a restart. addAccount() is idempotent,
+  // so we simply re-attempt all; existing ids are skipped.
+  process.on('SIGUSR1', async () => {
+    try {
+      const latest = await loadAllAccounts(STATE_DIR)
+      const known = new Set(pollHandle.running())
+      const fresh = latest.filter(a => !known.has(a.id))
+      if (fresh.length === 0) {
+        log('RECONCILE', 'SIGUSR1 received; no new accounts')
+        return
+      }
+      for (const a of fresh) pollHandle.addAccount(a)
+      log('RECONCILE', `SIGUSR1 picked up ${fresh.length} new account(s): ${fresh.map(a => a.id).join(', ')}`)
+    } catch (err) {
+      log('RECONCILE', `SIGUSR1 reconcile failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  })
   const modeStr = DANGEROUSLY
     ? 'mode=dangerouslySkipPermissions=true (no WeChat permission prompts will fire)'
     : 'mode=strict (Phase 1 permission relay active)'

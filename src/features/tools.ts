@@ -2,7 +2,7 @@ import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance } from '@
 import { z } from 'zod'
 
 export interface ToolDeps {
-  sendReply(chatId: string, text: string): Promise<{ msgId: string }>
+  sendReply(chatId: string, text: string): Promise<{ msgId: string; error?: string }>
   sendFile(chatId: string, path: string): Promise<void>
   editMessage(chatId: string, msgId: string, text: string): Promise<void>
   broadcast(text: string, accountId?: string): Promise<{ ok: number; failed: number }>
@@ -157,8 +157,11 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
     '给当前微信用户回复文本。chat_id 必填。长文本会自动分段。',
     { chat_id: z.string(), text: z.string() },
     async ({ chat_id, text }) => {
-      const { msgId } = await deps.sendReply(chat_id, text)
-      return okText(JSON.stringify({ ok: true, msg_id: msgId }))
+      const r = await deps.sendReply(chat_id, text)
+      if (r.error) {
+        return okText(JSON.stringify({ ok: false, error: r.error }))
+      }
+      return okText(JSON.stringify({ ok: true, msg_id: r.msgId }))
     },
   )
   handlers.reply = async (a) => (await replyDef.handler(a, undefined)) as unknown

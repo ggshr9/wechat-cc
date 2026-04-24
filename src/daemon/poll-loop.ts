@@ -190,17 +190,30 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 /**
- * Start one long-poll loop per account.
- * Returns a stop() function that signals all loops to exit and awaits them.
+ * Handle returned by startLongPollLoops. Exposes `addAccount` for on-the-fly
+ * registration so `wechat-cc setup` can signal the daemon via SIGUSR1 to pick
+ * up a freshly-bound bot without a restart.
  */
-export function startLongPollLoops(opts: PollLoopOptions): () => Promise<void> {
-  const { accounts, onInbound, ilink, parse, log = () => {} } = opts
+export interface PollLoopHandle {
+  /** Register a new account; idempotent (re-adding an already-running id is a no-op). */
+  addAccount(account: Account): void
+  /** Signal all loops to exit and await them. */
+  stop(): Promise<void>
+  /** Read-only snapshot of currently-polling account ids. */
+  running(): string[]
+}
+
+/**
+ * Start one long-poll loop per account. Returns a handle that permits adding
+ * more accounts later (for hot-reload after setup).
+ */
+export function startLongPollLoops(opts: PollLoopOptions): PollLoopHandle {
+  const { onInbound, ilink, parse, log = () => {} } = opts
   const resolveUserName = opts.resolveUserName ?? (() => undefined)
 
   const controller = new AbortController()
   const { signal } = controller
-
-  const loopPromises = accounts.map(account => runLoop(account, signal))
+  const loops = new Map<string, Promise<void>>()
 
   async function runLoop(account: Account, sig: AbortSignal): Promise<void> {
     let syncBuf = account.syncBuf
@@ -242,8 +255,19 @@ export function startLongPollLoops(opts: PollLoopOptions): () => Promise<void> {
     log('POLL', `loop stopped for ${account.id}`)
   }
 
-  return async function stop(): Promise<void> {
-    controller.abort()
-    await Promise.all(loopPromises)
+  function addAccount(account: Account): void {
+    if (loops.has(account.id)) return
+    loops.set(account.id, runLoop(account, signal))
+  }
+
+  for (const account of opts.accounts) addAccount(account)
+
+  return {
+    addAccount,
+    running: () => Array.from(loops.keys()),
+    async stop(): Promise<void> {
+      controller.abort()
+      await Promise.all(loops.values())
+    },
   }
 }
