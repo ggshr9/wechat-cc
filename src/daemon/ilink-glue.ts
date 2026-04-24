@@ -1,12 +1,21 @@
-import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs'
+/**
+ * Ilink adapter — composition root for voice / companion / transport /
+ * messaging / projects / permissions. The individual concerns live in
+ * src/daemon/ilink/*; this file wires them together and exposes the
+ * IlinkAdapter surface that bootstrap.ts + main.ts consume.
+ *
+ * History: was one 550-line closure until the v1.2 ilink-glue split
+ * (RFC 02 §8.4). The split is a pure refactor — same public surface,
+ * same tests — but gives Task 3 (MCP tool split) cleaner module seams.
+ */
+import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { InboundMsg } from '../core/prompt-format'
 import type { ToolDeps } from '../features/tools'
-import { makeStateStore } from './state-store'
-import { PendingPermissions, parsePermissionReply } from './pending-permissions'
+import { parsePermissionReply } from './pending-permissions'
 import { buildMediaItemFromFile, assertSendable } from './media'
-import { ilinkSendMessage, ilinkSendTyping, ilinkGetConfig, ilinkGetUpdates, botTextMessage } from '../../ilink'
-import { makeSessionStateStore, type SessionStateStore } from './session-state'
+import { ilinkSendMessage } from '../../ilink'
+import type { SessionStateStore } from './session-state'
 import { sendReplyOnce } from '../../send-reply'
 import {
   addProject,
@@ -18,22 +27,12 @@ import {
   sharePage as docsShare,
   resurfacePage as docsResurface,
 } from '../../docs'
-import { log } from '../../log'
-import { loadVoiceConfig, saveVoiceConfig, type VoiceConfig } from './tts/voice-config'
-import { makeHttpTTSProvider } from './tts/http-tts'
-import { makeQwenProvider } from './tts/qwen'
-import type { TTSProvider } from './tts/types'
-import { companionDir } from './companion/paths'
-import { loadCompanionConfig, saveCompanionConfig, defaultCompanionConfig } from './companion/config'
+import { makeIlinkContext, type Account } from './ilink/context'
+import { makeVoice } from './ilink/voice'
+import { makeCompanion } from './ilink/companion'
+import { makeTransport } from './ilink/transport'
 
-export interface Account {
-  id: string
-  botId: string
-  userId: string
-  baseUrl: string
-  token: string
-  syncBuf: string
-}
+export type { Account } from './ilink/context'
 
 export interface IlinkAdapter {
   sendMessage(chatId: string, text: string): Promise<{ msgId: string; error?: string }>
@@ -86,219 +85,14 @@ export async function loadAllAccounts(stateDir: string): Promise<Account[]> {
 }
 
 export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }): IlinkAdapter {
-  const { stateDir, accounts } = opts
+  const ctx = makeIlinkContext(opts)
+  const { accounts, ctxStore, nameStore, acctStore, sessionState, pending, sweepTimer, projectsFile, resolveAccount } = ctx
 
-  // Ensure stateDir exists
-  mkdirSync(stateDir, { recursive: true })
-
-  // State stores
-  const ctxStore = makeStateStore(join(stateDir, 'context_tokens.json'), { debounceMs: 500 })
-  const nameStore = makeStateStore(join(stateDir, 'user_names.json'), { debounceMs: 500 })
-  const acctStore = makeStateStore(join(stateDir, 'user_account_ids.json'), { debounceMs: 500 })
-  const sessionState = makeSessionStateStore(join(stateDir, 'session-state.json'), { debounceMs: 500 })
-
-  // Pending permissions + periodic sweep
-  const pending = new PendingPermissions()
-  const sweepTimer = setInterval(() => { pending.sweep() }, 30_000)
-  // unref so sweep timer doesn't block process exit
-  if (typeof sweepTimer.unref === 'function') sweepTimer.unref()
-
-  // Last-active chat tracking (in-memory; fine — survives restarts via acctStore)
-  let lastActive: string | null = null
-
-  // Typing ticket cache (per chat). ilink returns a short-lived typing_ticket
-  // from getconfig; we keep it warm for 60s to avoid a round-trip on every
-  // inbound. Same TTL as legacy server.ts.
-  const typingTickets = new Map<string, { ticket: string; ts: number }>()
-  const TYPING_TTL_MS = 60_000
-
-  const projectsFile = join(stateDir, 'projects.json')
-
-  // Resolve which account to use for a given chatId
-  function resolveAccount(chatId: string): Account {
-    const persistedId = acctStore.get(chatId)
-    const found = persistedId ? accounts.find(a => a.id === persistedId) : undefined
-    return found ?? accounts[0] ?? (() => { throw new Error('no accounts configured') })()
-  }
-
-  // ── Voice helpers ──────────────────────────────────────────────────────────
-  function providerFromConfig(cfg: VoiceConfig): TTSProvider {
-    if (cfg.provider === 'http_tts') {
-      return makeHttpTTSProvider({
-        baseUrl: cfg.base_url,
-        model: cfg.model,
-        apiKey: cfg.api_key,
-        defaultVoice: cfg.default_voice,
-      })
-    }
-    return makeQwenProvider({ apiKey: cfg.api_key })
-  }
-
-  const voice: ToolDeps['voice'] = {
-    async replyVoice(chatId, text) {
-      const cfg = loadVoiceConfig(stateDir)
-      if (!cfg) return { ok: false as const, reason: 'not_configured' }
-      try {
-        const provider = providerFromConfig(cfg)
-        const { audio, mimeType } = await provider.synth(
-          text,
-          cfg.default_voice ?? (cfg.provider === 'qwen' ? 'Cherry' : 'default'),
-        )
-        const tmpDir = join(stateDir, 'tts-tmp')
-        mkdirSync(tmpDir, { recursive: true })
-        const ext = /wav/i.test(mimeType) ? '.wav' : '.mp3'
-        const tmpPath = join(tmpDir, `reply-${Date.now()}-${process.pid}${ext}`)
-        writeFileSync(tmpPath, audio)
-        try {
-          const acct = resolveAccount(chatId)
-          // Voice bubble path (voice_item, encode_type=7) is silently dropped
-          // by the WeChat client — confirmed 2026-04-23 Spike 4 4-config
-          // sweep; openclaw-weixin has VoiceItem types but no sendVoice;
-          // openclaw/#56225 open. Until Tencent ships sendVoice, always send
-          // as a file attachment so the user at least receives a playable
-          // WAV/MP3. buildVoiceItemFromWav kept in media.ts for forward-
-          // enablement.
-          const item = await buildMediaItemFromFile(tmpPath, chatId, acct.baseUrl, acct.token)
-          const ctxToken = ctxStore.get(chatId)
-          await ilinkSendMessage(acct.baseUrl, acct.token, {
-            to_user_id: chatId,
-            message_type: 2,
-            message_state: 2,
-            item_list: [item],
-            context_token: ctxToken,
-          })
-          const msgId = `v-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-          log('VOICE', `replyVoice sent chat=${chatId} chars=${text.length} bytes=${audio.length}`)
-          return { ok: true as const, msgId }
-        } finally {
-          try { unlinkSync(tmpPath) } catch { /* best-effort */ }
-        }
-      } catch (err) {
-        const errmsg = err instanceof Error ? err.message : String(err)
-        log('VOICE', `replyVoice FAILED chat=${chatId}: ${errmsg}`)
-        const reason = /5\d\d/.test(errmsg) ? 'transient' : 'error'
-        return { ok: false as const, reason }
-      }
-    },
-
-    async saveConfig(input) {
-      if (input.provider === 'http_tts') {
-        if (!input.base_url || !input.model) {
-          return { ok: false as const, reason: 'invalid', detail: 'http_tts needs base_url + model' }
-        }
-      } else {
-        if (!input.api_key) {
-          return { ok: false as const, reason: 'invalid', detail: 'qwen needs api_key' }
-        }
-      }
-      const cfg: VoiceConfig = input.provider === 'http_tts'
-        ? {
-            provider: 'http_tts',
-            base_url: input.base_url!,
-            model: input.model!,
-            api_key: input.api_key,
-            default_voice: input.default_voice,
-            saved_at: new Date().toISOString(),
-          }
-        : {
-            provider: 'qwen',
-            api_key: input.api_key!,
-            default_voice: input.default_voice,
-            saved_at: new Date().toISOString(),
-          }
-      const provider = providerFromConfig(cfg)
-      const started = Date.now()
-      const test = await provider.test()
-      if (!test.ok) {
-        return { ok: false as const, reason: test.reason, detail: test.detail }
-      }
-      await saveVoiceConfig(stateDir, cfg)
-      return {
-        ok: true as const,
-        tested_ms: Date.now() - started,
-        provider: input.provider,
-        default_voice: input.default_voice ?? (input.provider === 'qwen' ? 'Cherry' : 'default'),
-      }
-    },
-
-    configStatus() {
-      const cfg = loadVoiceConfig(stateDir)
-      if (!cfg) return { configured: false as const }
-      return {
-        configured: true as const,
-        provider: cfg.provider,
-        default_voice: cfg.default_voice ?? (cfg.provider === 'qwen' ? 'Cherry' : 'default'),
-        base_url: cfg.provider === 'http_tts' ? cfg.base_url : undefined,
-        model: cfg.provider === 'http_tts' ? cfg.model : undefined,
-        saved_at: cfg.saved_at,
-      }
-    },
-  }
-
-  // ── Companion v2 — memory-first, 4 methods only ──────────────────────
-  // Claude owns memory/. The daemon only provides the proactive-tick gate
-  // (enabled / snooze) and a destination hint (default_chat_id). Persona /
-  // trigger / status-of-triggers all gone — Claude tracks that in memory.
-  const companion: ToolDeps['companion'] = {
-    async enable() {
-      const cfg = loadCompanionConfig(opts.stateDir)
-      if (cfg.enabled) {
-        return { ok: true as const, already_configured: true as const }
-      }
-
-      mkdirSync(companionDir(opts.stateDir), { recursive: true })
-      const newCfg = {
-        ...defaultCompanionConfig(),
-        ...cfg,
-        enabled: true,
-        default_chat_id:
-          cfg.default_chat_id
-          ?? lastActive
-          ?? (Object.keys(acctStore.all()).slice(-1)[0] ?? null),
-      }
-      await saveCompanionConfig(opts.stateDir, newCfg)
-
-      return {
-        ok: true as const,
-        state_dir: companionDir(opts.stateDir),
-        welcome_message:
-          '主动提醒已开启。我会每 15-30 分钟醒一次，决定是不是联系你。\n' +
-          '不确定时我会选不打扰；连续被 ignore/snooze 我会自己调整频率。\n' +
-          '随时说 "别烦我" / "snooze 2 小时" 让我歇；或 "关掉主动" 完全停。\n' +
-          '你对我的偏好（语气、作息、什么话题想聊）我会记在 memory 里，一点点学。',
-        cost_estimate_note:
-          '每次主动 tick 评估一次 Claude（~$0.01/次）；默认 20 分钟一次有 jitter；不说话就不花钱。',
-      }
-    },
-
-    async disable() {
-      const cfg = loadCompanionConfig(opts.stateDir)
-      cfg.enabled = false
-      await saveCompanionConfig(opts.stateDir, cfg)
-      return { ok: true as const, enabled: false as const }
-    },
-
-    status() {
-      const cfg = loadCompanionConfig(opts.stateDir)
-      return {
-        enabled: cfg.enabled,
-        timezone: cfg.timezone,
-        default_chat_id: cfg.default_chat_id,
-        snooze_until: cfg.snooze_until,
-      }
-    },
-
-    async snooze(minutes: number) {
-      const cfg = loadCompanionConfig(opts.stateDir)
-      const until = new Date(Date.now() + minutes * 60_000).toISOString()
-      cfg.snooze_until = until
-      await saveCompanionConfig(opts.stateDir, cfg)
-      return { ok: true as const, until }
-    },
-  } satisfies ToolDeps['companion']
+  const voice = makeVoice(ctx)
+  const companion = makeCompanion(ctx)
+  const transport = makeTransport(ctx)
 
   const adapter: IlinkAdapter = {
-    // ── sendMessage ───────────────────────────────────────────────────────
     async sendMessage(chatId, text) {
       const result = await sendReplyOnce(chatId, text)
       if (!result.ok) {
@@ -310,7 +104,6 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
       return { msgId: `sent:${Date.now()}` }
     },
 
-    // ── sendFile ──────────────────────────────────────────────────────────
     async sendFile(chatId, filePath) {
       assertSendable(filePath)
       const acct = resolveAccount(chatId)
@@ -325,21 +118,17 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
       })
     },
 
-    // ── editMessage ───────────────────────────────────────────────────────
     // ilink has no true edit API. We send a new message prefixed with
-    // "(编辑后) " to emulate the behavior. This matches legacy server.ts
-    // which also had no real edit support.
+    // "(编辑后) " to emulate the behavior. Matches legacy server.ts.
     async editMessage(chatId, _msgId, text) {
       await adapter.sendMessage(chatId, `(编辑后) ${text}`)
     },
 
-    // ── broadcast ─────────────────────────────────────────────────────────
     async broadcast(text, accountId) {
       const allChats = Object.keys(acctStore.all())
       let ok = 0
       let failed = 0
       for (const chatId of allChats) {
-        // If accountId is specified, only broadcast to chats on that account
         if (accountId) {
           const chatAcct = acctStore.get(chatId)
           if (chatAcct && chatAcct !== accountId) continue
@@ -351,30 +140,25 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
       return { ok, failed }
     },
 
-    // ── sharePage ─────────────────────────────────────────────────────────
     async sharePage(title, content) {
       const r = await docsShare(title, content)
       return { url: r.url, slug: r.slug }
     },
 
-    // ── resurfacePage ─────────────────────────────────────────────────────
     async resurfacePage(q) {
       const r = await docsResurface(q)
       if (!r) return null
       return { url: r.url, slug: r.slug }
     },
 
-    // ── setUserName ───────────────────────────────────────────────────────
     async setUserName(chatId, name) {
       nameStore.set(chatId, name)
     },
 
-    // ── resolveUserName ───────────────────────────────────────────────────
     resolveUserName(chatId) {
       return nameStore.get(chatId)
     },
 
-    // ── projects ──────────────────────────────────────────────────────────
     projects: {
       list() {
         const views = listProjects(projectsFile)
@@ -387,7 +171,6 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
       async switchTo(alias) {
         try {
           setCurrent(projectsFile, alias)
-          // Resolve to get the path
           const views = listProjects(projectsFile)
           const entry = views.find(v => v.alias === alias)
           if (!entry) return { ok: false as const, reason: `alias '${alias}' not found after switch` }
@@ -404,13 +187,9 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
       },
     },
 
-    // ── voice ─────────────────────────────────────────────────────────────
     voice,
-
-    // ── companion ─────────────────────────────────────────────────────────
     companion,
 
-    // ── askUser ───────────────────────────────────────────────────────────
     async askUser(chatId, prompt, hash, timeoutMs) {
       // Register pending entry first so timeout can fire even if send fails.
       const resultPromise = pending.register(hash, timeoutMs)
@@ -424,7 +203,6 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
       return resultPromise
     },
 
-    // ── loadProjects ──────────────────────────────────────────────────────
     loadProjects() {
       if (!existsSync(projectsFile)) {
         return { projects: {}, current: null }
@@ -448,92 +226,19 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
       }
     },
 
-    // ── lastActiveChatId ──────────────────────────────────────────────────
-    lastActiveChatId() {
-      if (lastActive) return lastActive
-      // Fallback: scan acctStore for any key (last key = most recently set)
-      const keys = Object.keys(acctStore.all())
-      return keys.length > 0 ? keys[keys.length - 1]! : null
-    },
+    lastActiveChatId: transport.lastActiveChatId,
+    markChatActive: transport.markChatActive,
+    sendTyping: transport.sendTyping,
+    getUpdatesForLoop: transport.getUpdatesForLoop,
 
-    // ── markChatActive ────────────────────────────────────────────────────
-    // accountId is the bot that just received a message from this chat —
-    // persist it so future replies route back via the same (live) bot even
-    // after daemon restart. Without this write the map goes stale the first
-    // time a user re-binds (new QR scan = new bot id), silently routing
-    // replies to a dead session.
-    markChatActive(chatId, accountId) {
-      lastActive = chatId
-      if (accountId && acctStore.get(chatId) !== accountId) {
-        acctStore.set(chatId, accountId)
-      }
-    },
-
-    // ── sendTyping ────────────────────────────────────────────────────────
-    // Fire-and-forget UX hint. Best-effort — typing indicator is nice but not
-    // a correctness concern, but logging each step helps diagnose the silent-
-    // drop case where ilink doesn't return a typing_ticket.
-    async sendTyping(chatId, accountId) {
-      try {
-        const acct = accountId
-          ? accounts.find(a => a.id === accountId)
-          : (() => {
-              const id = acctStore.get(chatId)
-              return id ? accounts.find(a => a.id === id) : undefined
-            })()
-        if (!acct) {
-          console.error(`wechat channel: [TYPING] skip — no account resolvable for chat=${chatId}`)
-          return
-        }
-        const now = Date.now()
-        const cached = typingTickets.get(chatId)
-        let ticket = cached && now - cached.ts < TYPING_TTL_MS ? cached.ticket : undefined
-        let source = 'cache'
-        if (!ticket) {
-          source = 'fresh'
-          const cfg = await ilinkGetConfig(acct.baseUrl, acct.token, chatId, ctxStore.get(chatId))
-          if (!cfg.typing_ticket) {
-            console.error(`wechat channel: [TYPING] getconfig returned no typing_ticket for chat=${chatId} acct=${acct.id} raw=${JSON.stringify(cfg).slice(0, 200)}`)
-            return
-          }
-          ticket = cfg.typing_ticket
-          typingTickets.set(chatId, { ticket, ts: now })
-        }
-        await ilinkSendTyping(acct.baseUrl, acct.token, chatId, ticket)
-        console.error(`wechat channel: [TYPING] sent chat=${chatId} acct=${acct.id} ticket=${source}`)
-      } catch (err) {
-        console.error(`wechat channel: [TYPING] error chat=${chatId}: ${err instanceof Error ? err.message : err}`)
-      }
-    },
-
-    // ── getUpdatesForLoop ─────────────────────────────────────────────────
-    // poll-loop callback. Returns the usual {updates, sync_buf} but also
-    // catches ilink errcode=-14 (session timeout) and flips SessionStateStore
-    // so the /health admin command can surface it later. Silent on state
-    // transition per 2026-04-24 design decision (pull-based, no push).
-    async getUpdatesForLoop(accountId, baseUrl, token, syncBuf) {
-      const resp = await ilinkGetUpdates(baseUrl, token, syncBuf)
-      if (resp.errcode === -14 || resp.ret === -14) {
-        const transitioned = sessionState.markExpired(accountId, `ilink/getupdates errcode=-14: ${resp.errmsg ?? ''}`)
-        if (transitioned) {
-          console.error(`wechat channel: [SESSION_EXPIRED] ${accountId} — marked expired (silent; visible via /health)`)
-        }
-        return { expired: true }
-      }
-      return { updates: resp.msgs, sync_buf: resp.get_updates_buf }
-    },
-
-    // expose SessionStateStore for admin-commands
     sessionState,
 
-    // ── handlePermissionReply ─────────────────────────────────────────────
     handlePermissionReply(text) {
       const parsed = parsePermissionReply(text)
       if (!parsed) return false
       return pending.consume(parsed.hash, parsed.decision)
     },
 
-    // ── flush ─────────────────────────────────────────────────────────────
     async flush() {
       clearInterval(sweepTimer)
       await Promise.all([

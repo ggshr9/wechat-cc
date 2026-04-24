@@ -1,0 +1,84 @@
+/**
+ * Shared runtime context for the ilink adapter's sub-modules.
+ *
+ * makeIlinkAdapter used to construct everything inline in a single 550-line
+ * closure. Splitting out voice / companion / transport into their own files
+ * required a common bag of dependencies. IlinkContext is that bag.
+ */
+import { join } from 'node:path'
+import { mkdirSync } from 'node:fs'
+import { makeStateStore, type StateStore } from '../state-store'
+import { makeSessionStateStore, type SessionStateStore } from '../session-state'
+import { PendingPermissions } from '../pending-permissions'
+
+export interface Account {
+  id: string
+  botId: string
+  userId: string
+  baseUrl: string
+  token: string
+  syncBuf: string
+}
+
+export interface IlinkContext {
+  stateDir: string
+  accounts: Account[]
+  projectsFile: string
+
+  ctxStore: StateStore
+  nameStore: StateStore
+  acctStore: StateStore
+  sessionState: SessionStateStore
+
+  pending: PendingPermissions
+  sweepTimer: ReturnType<typeof setInterval>
+
+  // Typing ticket cache (per chat). ilink's typing_ticket has a short TTL;
+  // 60s keeps it warm across a message burst without a getconfig round-trip
+  // per inbound.
+  typingTickets: Map<string, { ticket: string; ts: number }>
+  typingTTLMs: number
+
+  // Mutable ref so modules that need to set/read lastActive share state.
+  lastActiveRef: { current: string | null }
+
+  resolveAccount(chatId: string): Account
+}
+
+export function makeIlinkContext(opts: { stateDir: string; accounts: Account[] }): IlinkContext {
+  const { stateDir, accounts } = opts
+  mkdirSync(stateDir, { recursive: true })
+
+  const ctxStore = makeStateStore(join(stateDir, 'context_tokens.json'), { debounceMs: 500 })
+  const nameStore = makeStateStore(join(stateDir, 'user_names.json'), { debounceMs: 500 })
+  const acctStore = makeStateStore(join(stateDir, 'user_account_ids.json'), { debounceMs: 500 })
+  const sessionState = makeSessionStateStore(join(stateDir, 'session-state.json'), { debounceMs: 500 })
+
+  const pending = new PendingPermissions()
+  const sweepTimer = setInterval(() => { pending.sweep() }, 30_000)
+  if (typeof sweepTimer.unref === 'function') sweepTimer.unref()
+
+  const typingTickets = new Map<string, { ticket: string; ts: number }>()
+
+  function resolveAccount(chatId: string): Account {
+    const persistedId = acctStore.get(chatId)
+    const found = persistedId ? accounts.find(a => a.id === persistedId) : undefined
+    return found ?? accounts[0] ?? (() => { throw new Error('no accounts configured') })()
+  }
+
+  return {
+    stateDir,
+    accounts,
+    projectsFile: join(stateDir, 'projects.json'),
+    ctxStore,
+    nameStore,
+    acctStore,
+    sessionState,
+    pending,
+    sweepTimer,
+    typingTickets,
+    typingTTLMs: 60_000,
+    lastActiveRef: { current: null },
+    resolveAccount,
+  }
+}
