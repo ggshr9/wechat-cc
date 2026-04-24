@@ -4,6 +4,7 @@ import { buildBootstrap } from './bootstrap'
 import { routeInbound } from '../core/message-router'
 import { loadAllAccounts, makeIlinkAdapter } from './ilink-glue'
 import { startLongPollLoops, parseUpdates } from './poll-loop'
+import { materializeAttachments } from './media'
 import { log } from '../../log'
 import { isAdmin } from '../../access'
 import { makeAdminCommands } from './admin-commands'
@@ -14,6 +15,7 @@ import { loadCompanionConfig } from './companion/config'
 
 const STATE_DIR = join(homedir(), '.claude', 'channels', 'wechat')
 const PID_PATH = join(STATE_DIR, 'server.pid')
+const INBOX_DIR = join(STATE_DIR, 'inbox')
 const DANGEROUSLY = process.argv.includes('--dangerously')
 
 async function main() {
@@ -137,6 +139,8 @@ async function main() {
         log('PERMISSION', `consumed reply from chat=${msg.chatId}`)
         return
       }
+      // Download CDN refs to inbox/ before Claude sees the message.
+      await materializeAttachments(msg, INBOX_DIR, (tag, line) => log(tag, line))
       await routeInbound({
         resolveProject: resolve,
         manager: sessionManager,

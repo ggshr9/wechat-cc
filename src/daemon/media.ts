@@ -104,6 +104,78 @@ export function buildInboundFilePreview(path: string, fileName: string, buf: Buf
   return `${base}${moreLines}\n--- 前 ${shown.length} 行预览 ---\n${preview}\n---`
 }
 
+// ── Inbound materialization ───────────────────────────────────────────────
+// parseUpdates emits attachments with `path: '<pending-cdn-ref>'` and the CDN
+// metadata serialized into `caption`. materializeAttachments downloads each
+// pending ref to inbox/<userId>/ and rewrites path. On per-attachment failure
+// we keep the pending placeholder and log, so one bad CDN fetch doesn't sink
+// the whole inbound message.
+
+export const PENDING_CDN_REF = '<pending-cdn-ref>'
+
+import type { InboundMsg } from '../core/prompt-format'
+
+interface PendingCaption {
+  media?: CDNMedia
+  file_name?: string
+  // poll-loop for image/voice/video serializes the media object directly
+  // (no wrapper), so the caption JSON may be either { media, file_name } (file)
+  // or { encrypt_query_param, aes_key, ... } (image/voice/video).
+  encrypt_query_param?: string
+  aes_key?: string
+  full_url?: string
+  encrypt_type?: number
+}
+
+function filenameFor(kind: 'image' | 'file' | 'voice', parsed: PendingCaption, ts: number): string {
+  if (kind === 'file') return parsed.file_name ?? `file-${ts}.bin`
+  if (kind === 'image') return `image-${ts}.jpg`
+  // voice: WeChat typical format is AMR; Claude reads ASR transcript instead
+  // when available, so the file rarely matters.
+  return `voice-${ts}.amr`
+}
+
+export async function materializeAttachments(
+  msg: InboundMsg,
+  inboxDir: string,
+  log: (tag: string, line: string) => void = () => {},
+): Promise<void> {
+  if (!msg.attachments || msg.attachments.length === 0) return
+
+  for (const att of msg.attachments) {
+    if (att.path !== PENDING_CDN_REF) continue
+
+    let parsed: PendingCaption
+    try { parsed = JSON.parse(att.caption ?? '{}') }
+    catch (err) {
+      log('MEDIA', `parse caption failed (kind=${att.kind}, user=${msg.userId}): ${err}`)
+      continue
+    }
+
+    const media: CDNMedia | undefined = parsed.media ?? (
+      parsed.encrypt_query_param || parsed.full_url
+        ? { encrypt_query_param: parsed.encrypt_query_param, aes_key: parsed.aes_key, full_url: parsed.full_url, encrypt_type: parsed.encrypt_type }
+        : undefined
+    )
+    if (!media || (!media.full_url && !media.encrypt_query_param)) {
+      log('MEDIA', `skip attachment with no CDN ref (kind=${att.kind}, user=${msg.userId})`)
+      continue
+    }
+
+    try {
+      const buf = await downloadCdnMedia(media)
+      const filename = filenameFor(att.kind, parsed, msg.createTimeMs || Date.now())
+      att.path = await saveToInbox(buf, filename, msg.userId, inboxDir)
+      att.caption = undefined
+      log('MEDIA', `materialized ${att.kind} → ${att.path} (${(buf.length / 1024).toFixed(1)}KB)`)
+    } catch (err) {
+      log('MEDIA', `download failed (kind=${att.kind}, user=${msg.userId}): ${err}`)
+      // Keep path as PENDING_CDN_REF + caption intact — caller still sees the
+      // pending ref and can decide what to do (currently: shown to Claude as-is).
+    }
+  }
+}
+
 // ── Outbound helpers ──────────────────────────────────────────────────────
 import type { MessageItem } from '../../ilink.ts'
 import { ILINK_BASE_INFO, ilinkPost } from '../../ilink.ts'

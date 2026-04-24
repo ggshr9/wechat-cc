@@ -1,9 +1,10 @@
-import { describe, it, expect } from 'vitest'
-import { parseAesKey, decryptAesEcb, encryptAesEcb, saveToInbox, buildInboundFilePreview, aesEcbPaddedSize, assertSendable } from './media'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { parseAesKey, decryptAesEcb, encryptAesEcb, saveToInbox, buildInboundFilePreview, aesEcbPaddedSize, assertSendable, materializeAttachments, PENDING_CDN_REF } from './media'
 import { mkdtempSync, readFileSync, existsSync, writeFileSync, mkdirSync, truncateSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Buffer } from 'node:buffer'
+import type { InboundMsg } from '../core/prompt-format'
 
 describe('parseAesKey', () => {
   it('accepts 16 raw bytes (base64-encoded)', () => {
@@ -114,6 +115,108 @@ describe('assertSendable', () => {
     writeFileSync(p, Buffer.alloc(1))
     truncateSync(p, 50 * 1024 * 1024 + 1)
     expect(() => assertSendable(p)).toThrow(/file too large/)
+  })
+})
+
+describe('materializeAttachments', () => {
+  const realFetch = globalThis.fetch
+  beforeEach(() => { globalThis.fetch = realFetch })
+  afterEach(() => { globalThis.fetch = realFetch; vi.restoreAllMocks() })
+
+  function makeMsg(attachments: InboundMsg['attachments']): InboundMsg {
+    return {
+      chatId: 'chat-1', userId: 'user-1', text: '', msgType: 'image',
+      createTimeMs: 1700000000000, accountId: 'acct-1', attachments,
+    }
+  }
+
+  it('downloads, decrypts, and rewrites image path; clears caption', async () => {
+    const inbox = mkdtempSync(join(tmpdir(), 'wcc-mat-'))
+    const key = Buffer.alloc(16, 0x42)
+    const plain = Buffer.from('PNG bytes here')
+    const cipher = encryptAesEcb(plain, key)
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      arrayBuffer: async () => cipher.buffer.slice(cipher.byteOffset, cipher.byteOffset + cipher.byteLength),
+    }) as any)
+
+    const msg = makeMsg([{
+      kind: 'image',
+      path: PENDING_CDN_REF,
+      caption: JSON.stringify({ encrypt_query_param: 'foo', aes_key: key.toString('base64') }),
+    }])
+    await materializeAttachments(msg, inbox)
+
+    expect(msg.attachments![0].path).not.toBe(PENDING_CDN_REF)
+    expect(msg.attachments![0].path).toContain(inbox)
+    expect(msg.attachments![0].path).toMatch(/image-\d+\.jpg$/)
+    expect(msg.attachments![0].caption).toBeUndefined()
+    expect(readFileSync(msg.attachments![0].path).equals(plain)).toBe(true)
+  })
+
+  it('keeps pending placeholder when CDN download fails', async () => {
+    const inbox = mkdtempSync(join(tmpdir(), 'wcc-mat-'))
+    globalThis.fetch = vi.fn(async () => ({ ok: false, status: 500, statusText: 'oops' }) as any)
+    const captured: string[] = []
+
+    const msg = makeMsg([{
+      kind: 'image',
+      path: PENDING_CDN_REF,
+      caption: JSON.stringify({ full_url: 'http://example/x' }),
+    }])
+    await materializeAttachments(msg, inbox, (_t, l) => captured.push(l))
+
+    expect(msg.attachments![0].path).toBe(PENDING_CDN_REF)
+    expect(captured.some(l => /download failed/.test(l))).toBe(true)
+  })
+
+  it('uses file_name from caption for files', async () => {
+    const inbox = mkdtempSync(join(tmpdir(), 'wcc-mat-'))
+    const key = Buffer.alloc(16, 0x10)
+    const plain = Buffer.from('hello.csv content')
+    const cipher = encryptAesEcb(plain, key)
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      arrayBuffer: async () => cipher.buffer.slice(cipher.byteOffset, cipher.byteOffset + cipher.byteLength),
+    }) as any)
+
+    const msg = makeMsg([{
+      kind: 'file',
+      path: PENDING_CDN_REF,
+      caption: JSON.stringify({
+        media: { encrypt_query_param: 'q', aes_key: key.toString('base64') },
+        file_name: 'report.csv',
+      }),
+    }])
+    await materializeAttachments(msg, inbox)
+
+    expect(msg.attachments![0].path).toMatch(/\d+-report\.csv$/)
+    expect(readFileSync(msg.attachments![0].path).toString('utf8')).toBe('hello.csv content')
+  })
+
+  it('skips already-materialized attachments and ones with no CDN ref', async () => {
+    const inbox = mkdtempSync(join(tmpdir(), 'wcc-mat-'))
+    const fetchSpy = vi.fn()
+    globalThis.fetch = fetchSpy as any
+
+    const msg = makeMsg([
+      { kind: 'image', path: '/already/here.jpg' },
+      { kind: 'voice', path: PENDING_CDN_REF, caption: '{}' },
+    ])
+    await materializeAttachments(msg, inbox)
+
+    expect(msg.attachments![0].path).toBe('/already/here.jpg')
+    expect(msg.attachments![1].path).toBe(PENDING_CDN_REF)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('is a no-op when message has no attachments', async () => {
+    const inbox = mkdtempSync(join(tmpdir(), 'wcc-mat-'))
+    const msg: InboundMsg = {
+      chatId: 'c', userId: 'u', text: 'hi', msgType: 'text',
+      createTimeMs: 0, accountId: 'a',
+    }
+    await expect(materializeAttachments(msg, inbox)).resolves.toBeUndefined()
   })
 })
 
