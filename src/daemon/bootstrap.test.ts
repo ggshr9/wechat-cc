@@ -50,7 +50,13 @@ describe('bootstrap', () => {
     expect(wechatCfg).toBeDefined()
     expect(wechatCfg!.type).toBe('sdk')
     expect(typeof opts.canUseTool).toBe('function')
-    expect(typeof opts.systemPrompt === 'string' || Array.isArray(opts.systemPrompt)).toBe(true)
+    // systemPrompt is now the preset+append form (we switched from raw string
+    // to avoid SDK ToolSearch deferring MCP tools). Accept string OR preset object.
+    const sp = opts.systemPrompt
+    const ok = typeof sp === 'string'
+      || Array.isArray(sp)
+      || (typeof sp === 'object' && sp !== null && (sp as { type?: string }).type === 'preset')
+    expect(ok).toBe(true)
   })
 
   it('resolve uses projects.current', () => {

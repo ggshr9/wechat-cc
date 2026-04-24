@@ -5,7 +5,8 @@ import type { ToolDeps } from '../features/tools'
 import { makeStateStore } from './state-store'
 import { PendingPermissions, parsePermissionReply } from './pending-permissions'
 import { buildMediaItemFromFile, buildVoiceItemFromWav, assertSendable } from './media'
-import { ilinkSendMessage, ilinkSendTyping, ilinkGetConfig, botTextMessage } from '../../ilink'
+import { ilinkSendMessage, ilinkSendTyping, ilinkGetConfig, ilinkGetUpdates, botTextMessage } from '../../ilink'
+import { makeSessionStateStore, type SessionStateStore } from './session-state'
 import { sendReplyOnce } from '../../send-reply'
 import {
   addProject,
@@ -55,7 +56,18 @@ export interface IlinkAdapter {
   lastActiveChatId(): string | null
   markChatActive(chatId: string, accountId?: string): void
   sendTyping(chatId: string, accountId?: string): Promise<void>
+  /**
+   * Long-poll wrapper for poll-loop. Detects errcode=-14 session timeout and
+   * flips SessionStateStore + returns { expired: true } so the loop stops.
+   */
+  getUpdatesForLoop(accountId: string, baseUrl: string, token: string, syncBuf: string): Promise<{
+    updates?: unknown[]
+    sync_buf?: string
+    expired?: boolean
+  }>
   handlePermissionReply(text: string): boolean
+  /** Session state accessor for admin commands (/health, cleanup). */
+  sessionState: SessionStateStore
   flush(): Promise<void>
 }
 
@@ -87,6 +99,7 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
   const ctxStore = makeStateStore(join(stateDir, 'context_tokens.json'), { debounceMs: 500 })
   const nameStore = makeStateStore(join(stateDir, 'user_names.json'), { debounceMs: 500 })
   const acctStore = makeStateStore(join(stateDir, 'user_account_ids.json'), { debounceMs: 500 })
+  const sessionState = makeSessionStateStore(join(stateDir, 'session-state.json'), { debounceMs: 500 })
 
   // Pending permissions + periodic sweep
   const pending = new PendingPermissions()
@@ -617,6 +630,26 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
       }
     },
 
+    // ── getUpdatesForLoop ─────────────────────────────────────────────────
+    // poll-loop callback. Returns the usual {updates, sync_buf} but also
+    // catches ilink errcode=-14 (session timeout) and flips SessionStateStore
+    // so the /health admin command can surface it later. Silent on state
+    // transition per 2026-04-24 design decision (pull-based, no push).
+    async getUpdatesForLoop(accountId, baseUrl, token, syncBuf) {
+      const resp = await ilinkGetUpdates(baseUrl, token, syncBuf)
+      if (resp.errcode === -14 || resp.ret === -14) {
+        const transitioned = sessionState.markExpired(accountId, `ilink/getupdates errcode=-14: ${resp.errmsg ?? ''}`)
+        if (transitioned) {
+          console.error(`wechat channel: [SESSION_EXPIRED] ${accountId} — marked expired (silent; visible via /health)`)
+        }
+        return { expired: true }
+      }
+      return { updates: resp.msgs, sync_buf: resp.get_updates_buf }
+    },
+
+    // expose SessionStateStore for admin-commands
+    sessionState,
+
     // ── handlePermissionReply ─────────────────────────────────────────────
     handlePermissionReply(text) {
       const parsed = parsePermissionReply(text)
@@ -631,6 +664,7 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
         ctxStore.flush(),
         nameStore.flush(),
         acctStore.flush(),
+        sessionState.flush(),
       ])
     },
   }

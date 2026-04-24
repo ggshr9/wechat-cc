@@ -169,10 +169,16 @@ export interface PollLoopOptions {
   accounts: Account[]
   onInbound: (msg: InboundMsg) => Promise<void>
   ilink: {
-    /** Returns { updates?, sync_buf? } — mapped from GetUpdatesResp */
-    getUpdates: (baseUrl: string, token: string, syncBuf: string) => Promise<{
+    /**
+     * Returns { updates?, sync_buf?, expired? } — mapped from GetUpdatesResp.
+     * When ilink reports errcode=-14 (session timeout), the adapter sets
+     * `expired: true` so the loop can self-terminate and flag the bot in
+     * SessionStateStore for the /health admin command.
+     */
+    getUpdates: (accountId: string, baseUrl: string, token: string, syncBuf: string) => Promise<{
       updates?: RawUpdate[]
       sync_buf?: string
+      expired?: boolean
     }>
   }
   parse: (updates: RawUpdate[], deps: ParseDeps) => InboundMsg[]
@@ -192,28 +198,36 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 /**
  * Handle returned by startLongPollLoops. Exposes `addAccount` for on-the-fly
  * registration so `wechat-cc setup` can signal the daemon via SIGUSR1 to pick
- * up a freshly-bound bot without a restart.
+ * up a freshly-bound bot without a restart; `stopAccount` so individual loops
+ * can be shut down (e.g. admin cleaning up a dead bot or getUpdates reporting
+ * errcode=-14 session timeout).
  */
 export interface PollLoopHandle {
   /** Register a new account; idempotent (re-adding an already-running id is a no-op). */
   addAccount(account: Account): void
+  /** Stop the loop for one account (idempotent; no-op if not running). */
+  stopAccount(accountId: string): void
   /** Signal all loops to exit and await them. */
   stop(): Promise<void>
   /** Read-only snapshot of currently-polling account ids. */
   running(): string[]
 }
 
+interface LoopRecord {
+  abort: AbortController
+  promise: Promise<void>
+}
+
 /**
  * Start one long-poll loop per account. Returns a handle that permits adding
- * more accounts later (for hot-reload after setup).
+ * more accounts later (for hot-reload after setup) or shutting down a single
+ * one (for cleanup).
  */
 export function startLongPollLoops(opts: PollLoopOptions): PollLoopHandle {
   const { onInbound, ilink, parse, log = () => {} } = opts
   const resolveUserName = opts.resolveUserName ?? (() => undefined)
 
-  const controller = new AbortController()
-  const { signal } = controller
-  const loops = new Map<string, Promise<void>>()
+  const loops = new Map<string, LoopRecord>()
 
   async function runLoop(account: Account, sig: AbortSignal): Promise<void> {
     let syncBuf = account.syncBuf
@@ -222,9 +236,17 @@ export function startLongPollLoops(opts: PollLoopOptions): PollLoopHandle {
 
     while (!sig.aborted) {
       try {
-        const resp = await ilink.getUpdates(account.baseUrl, account.token, syncBuf)
+        const resp = await ilink.getUpdates(account.id, account.baseUrl, account.token, syncBuf)
 
         if (sig.aborted) break
+
+        // Adapter has marked the bot session expired — self-terminate. The
+        // ilink-glue wrapper has already written to SessionStateStore, so
+        // /health admin command will show this bot as expired.
+        if (resp.expired) {
+          log('SESSION_EXPIRED', `bot ${account.id} — stopping loop (/health to view, "清理 ${account.id}" to remove)`)
+          break
+        }
 
         const rawUpdates = resp.updates ?? []
 
@@ -257,17 +279,30 @@ export function startLongPollLoops(opts: PollLoopOptions): PollLoopHandle {
 
   function addAccount(account: Account): void {
     if (loops.has(account.id)) return
-    loops.set(account.id, runLoop(account, signal))
+    const abort = new AbortController()
+    const promise = runLoop(account, abort.signal).finally(() => {
+      // Remove self on natural exit so addAccount can re-add under same id.
+      if (loops.get(account.id)?.abort === abort) loops.delete(account.id)
+    })
+    loops.set(account.id, { abort, promise })
+  }
+
+  function stopAccount(accountId: string): void {
+    const record = loops.get(accountId)
+    if (!record) return
+    record.abort.abort()
+    // Leave entry in map; runLoop.finally cleans up once it exits.
   }
 
   for (const account of opts.accounts) addAccount(account)
 
   return {
     addAccount,
+    stopAccount,
     running: () => Array.from(loops.keys()),
     async stop(): Promise<void> {
-      controller.abort()
-      await Promise.all(loops.values())
+      for (const record of loops.values()) record.abort.abort()
+      await Promise.all(Array.from(loops.values()).map(r => r.promise))
     },
   }
 }

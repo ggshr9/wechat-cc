@@ -143,7 +143,7 @@ describe('startLongPollLoops', () => {
       seen.push(m.text)
     }
 
-    const stop = startLongPollLoops({
+    const handle = startLongPollLoops({
       accounts: [baseAcct],
       onInbound,
       ilink: { getUpdates },
@@ -152,12 +152,12 @@ describe('startLongPollLoops', () => {
     })
     await new Promise(r => setTimeout(r, 30))
     expect(seen).toEqual(['a', 'b'])
-    expect(getUpdates).toHaveBeenCalledWith('https://x', 'T', '')
-    // second call uses updated syncBuf from first response
+    expect(getUpdates).toHaveBeenCalledWith('A1', 'https://x', 'T', '')
+    // second call uses updated syncBuf from first response (4th positional arg)
     if (getUpdates.mock.calls.length >= 2) {
-      expect(getUpdates.mock.calls[1]![2]).toBe('buf2')
+      expect(getUpdates.mock.calls[1]![3]).toBe('buf2')
     }
-    await stop()
+    await handle.stop()
   })
 
   it('swallows getUpdates errors and retries', async () => {
@@ -166,7 +166,7 @@ describe('startLongPollLoops', () => {
       .mockResolvedValue({ updates: [], sync_buf: '' })
     const onInbound = vi.fn()
 
-    const stop = startLongPollLoops({
+    const handle = startLongPollLoops({
       accounts: [baseAcct],
       onInbound,
       ilink: { getUpdates },
@@ -177,14 +177,14 @@ describe('startLongPollLoops', () => {
     await new Promise(r => setTimeout(r, 50))
     expect(getUpdates).toHaveBeenCalled()
     expect(onInbound).not.toHaveBeenCalled()  // no updates
-    await stop()
+    await handle.stop()
   })
 
   it('stops cleanly when stop() is called mid-loop', async () => {
     const getUpdates = vi.fn().mockImplementation(async () =>
       new Promise(r => setTimeout(() => r({ updates: [], sync_buf: '' }), 20)),
     )
-    const stop = startLongPollLoops({
+    const handle = startLongPollLoops({
       accounts: [baseAcct],
       onInbound: async () => {},
       ilink: { getUpdates },
@@ -193,7 +193,7 @@ describe('startLongPollLoops', () => {
     })
     await new Promise(r => setTimeout(r, 10))
     const start = Date.now()
-    await stop()
+    await handle.stop()
     expect(Date.now() - start).toBeLessThan(1000)  // resolves promptly
   })
 })

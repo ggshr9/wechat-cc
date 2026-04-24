@@ -4,8 +4,9 @@ import { buildBootstrap } from './bootstrap'
 import { routeInbound } from '../core/message-router'
 import { loadAllAccounts, makeIlinkAdapter } from './ilink-glue'
 import { startLongPollLoops, parseUpdates } from './poll-loop'
-import { ilinkGetUpdates } from '../../ilink'
 import { log } from '../../log'
+import { isAdmin } from '../../access'
+import { makeAdminCommands } from './admin-commands'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { startScheduler } from './companion/scheduler'
@@ -98,16 +99,39 @@ async function main() {
     now: () => new Date(),
   }, (tag, line) => log(tag, line))
 
-  const pollHandle = startLongPollLoops({
+  const startedAtIso = new Date().toISOString()
+
+  // pollHandle is created after we compose the admin-commands handler, but
+  // admin-commands needs a reference to it. Forward-declare a lazy wrapper so
+  // the handler can reach the handle that will be assigned below.
+  let pollHandle!: ReturnType<typeof startLongPollLoops>
+
+  const adminCommands = makeAdminCommands({
+    stateDir: STATE_DIR,
+    isAdmin,
+    sessionState: ilink.sessionState,
+    pollHandle: {
+      stopAccount: (id) => pollHandle.stopAccount(id),
+      running: () => pollHandle.running(),
+    },
+    resolveUserName: (chatId) => ilink.resolveUserName(chatId),
+    sendMessage: (chatId, text) => ilink.sendMessage(chatId, text),
+    log: (tag, line) => log(tag, line),
+    startedAt: startedAtIso,
+  })
+
+  pollHandle = startLongPollLoops({
     accounts,
     ilink: {
-      getUpdates: async (baseUrl, token, syncBuf) => {
-        const resp = await ilinkGetUpdates(baseUrl, token, syncBuf)
-        return {
-          updates: resp.msgs,
-          sync_buf: resp.get_updates_buf,
-        }
-      },
+      // Adapter wraps ilinkGetUpdates with errcode=-14 detection — returns
+      // { expired: true } when the bot's ilink session is dead so the loop
+      // self-terminates; SessionStateStore tracks the flag for /health.
+      getUpdates: (accountId, baseUrl, token, syncBuf) =>
+        ilink.getUpdatesForLoop(accountId, baseUrl, token, syncBuf) as Promise<{
+          updates?: unknown[]
+          sync_buf?: string
+          expired?: boolean
+        }>,
     },
     parse: parseUpdates,
     resolveUserName: (chatId) => ilink.resolveUserName(chatId),
@@ -118,6 +142,10 @@ async function main() {
       // Fire "正在输入..." immediately so the user sees activity during
       // Claude's ~8-15s cold-start on first turn. Best-effort.
       void ilink.sendTyping(msg.chatId, msg.accountId)
+      // Admin-only slash / natural-language commands (/health, 清理...) get
+      // intercepted BEFORE routing to Claude. Non-admin senders silently
+      // dropped (consistent with legacy /project command handling).
+      if (await adminCommands.handle(msg)) return
       // Short-circuit permission replies BEFORE routing to Claude
       if (ilink.handlePermissionReply(msg.text)) {
         log('PERMISSION', `consumed reply from chat=${msg.chatId}`)
