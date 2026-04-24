@@ -1,258 +1,283 @@
-# Spec · v2.0 Companion Soul Layer (Relationship Memory)
+# Spec · Companion v2 · Memory as Filesystem
 
-**Status**: Draft · 2026-04-24
-**Parent**: RFC 01 §3.L4 · RFC 02 §4
-**Depends on**: v1.2 shipped (session persistence + MCP split are prereqs)
-**Expected effort**: 3-4 weeks
-
----
-
-## Motivation
-
-v1.1 的 Companion 层做了**脚手架**（`src/daemon/companion/`：persona / scheduler / eval-session / logs / config），但 Claude 在里面没有"记忆"：每次 tick 只看**当下**的 `cfg` + `profile.md` + persona，不知道昨天 push 过什么、user 回了没、这个时段对方是否愿意被打扰。
-
-这是 cc-connect 生态位里**永远不会出现**的一层（cc-connect 哲学是 bridge，不是陪伴）。做扎实，就是 wechat-cc 的护城河。
+**Status**: Draft · 2026-04-24 (supersedes earlier 258-line RelationshipRecord design)
+**Parent**: RFC 02 §4 · 整合进 v1.2 一起做
+**Expected effort**: 1 week
+**Guiding principles**:
+- **Less is more** — 每行代码都是 Claude 能力的枷锁。
+- **LLM 会越来越强** — 为 2028 年的 Claude 设计，不是 2026 的。
+- **我们装翅膀，不建笼子** — 只提供 Claude 不具备的能力，别代替它思考。
 
 ---
 
-## 目标（v2.0 验收）
+## 0. 反省之前版本
 
-1. Claude 每条 proactive push 后，观察 user 反应并记录为"效果信号"（reply / ignore / 表示反感 / snooze）
-2. Claude 下次判断是否 push 时能引用过去 N 条 push 的效果平均值
-3. user 的 active_hours 从观察中**自动学习**，不用手配
-4. user 的 preferred_tone 由 Claude 感知并存下来，persona 选择时作为输入
-5. 所有上述状态 user 在 web UI 可读、可手动修正
+前一版 spec 258 行，设计了 28 字段的 `RelationshipRecord`、`outcome-tracker` 的 24h 规则、`inferActiveHours` 统计拟合、3 个专用 memory 工具。
 
----
+**这些 Claude 都已经会做**。我的 schema 约束反而限制它的表达。
 
-## 数据模型
-
-### `~/.claude/channels/wechat/relationship.json`
-
-```typescript
-interface RelationshipStore {
-  version: 1
-  chats: Record<ChatId, RelationshipRecord>
-}
-
-interface RelationshipRecord {
-  chat_id: string
-  // 身份 —— 基础识别
-  display_name?: string           // 用户告诉的昵称 or ilink 返回的 user_name
-  user_id: string                 // ilink user_id (o9cq8...@im.wechat)
-  first_interaction_at: string    // ISO timestamp
-  last_interaction_at: string     // ISO timestamp
-
-  // 观察学习 —— Claude 自己维护
-  profile: {
-    active_hours?: Array<{ start: string; end: string; confidence: number }>  // "09:00-11:30", "22:00-00:30"
-    preferred_tone?: 'formal' | 'casual' | 'cute' | 'pro'
-    projects_importance?: Record<ProjectAlias, number>  // 0-1 normalized
-    observed_topics?: string[]                           // ["rust", "数据库优化", "工厂排产"] — free-form
-  }
-
-  // 互动历史 —— 只保留近 90 天
-  interaction_history: {
-    recent_messages_count_24h: number       // 被动算出
-    reactive_reply_latency_ms_avg?: number  // user 平均响应时长 — "心流状态" 指标
-    push_events: PushEvent[]                // append-only, 90-day rolling window
-    topics_discussed: Array<{ topic: string; last_at: string; mentions: number }>
-  }
-
-  // 状态 —— 短期信号，Claude 每次互动后更新
-  state: {
-    mood_signal?: 'stressed' | 'excited' | 'neutral' | 'tired' | 'curious'
-    mood_inferred_at: string
-    last_completed_task?: string            // "写完了 v1.1 的 release notes"
-    open_loops?: string[]                   // "上次说要看 Rust async 文章还没反馈", "问了周末计划没回"
-    do_not_disturb_until?: string           // ISO — 显式 snooze 或 Claude 推断
-  }
-}
-
-interface PushEvent {
-  id: string
-  pushed_at: string
-  message_summary: string                   // 前 100 字预览
-  reason: string                            // Claude 当时的 push 理由
-  outcome: 'replied_positive' | 'replied_neutral' | 'replied_negative' | 'ignored' | 'snoozed' | 'pending'
-  user_reply_summary?: string               // 若回复，前 100 字
-  outcome_finalized_at?: string             // 24h cutoff
-}
-```
-
-### 存储策略
-
-- 单文件（非 per-chat 分文件）。个人场景最多几个 chat_id，总大小 <100KB。
-- 写入走 `state-store` pattern（500ms debounce + atomic rename，跟 context_tokens / acctStore 一致）
-- 读是 sync（memory cache + disk on miss），跟 access.ts 同风格
+本版把 spec 按到 Claude **真正欠缺**的三件事上：持久化、定时触发、跨会话检索。剩下的全交给 Claude。
 
 ---
 
-## 架构
+## 1. Claude 真正欠缺的（要我们的代码补的）
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  src/daemon/memory/  (新增模块)                              │
-│  ├── store.ts         — RelationshipStore load/save          │
-│  ├── observer.ts      — observeInbound(msg) 更新 history     │
-│  ├── updater.ts       — updateRecord(chat_id, patch) 给 MCP  │
-│  └── query.ts         — getRecord / activeChats / getRecent  │
-├─────────────────────────────────────────────────────────────┤
-│  src/daemon/companion/ (扩展)                                 │
-│  ├── eval-session.ts  — 传 relationship context 进 eval      │
-│  ├── scheduler.ts     — 不再 cron-only；支持 "tick with jitter" │
-│  └── outcome-tracker.ts (新增) — 监听 inbound 判定 push outcome │
-├─────────────────────────────────────────────────────────────┤
-│  src/features/companion-tools.ts (扩展 — Task 3 拆包后)       │
-│  ├── companion_memory_get    — Claude 读自己的记忆              │
-│  ├── companion_memory_update — Claude 写进度、偏好、心情        │
-│  └── companion_memory_debug  — admin 查完整状态              │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 三个新能力
-
-### 能力 1 · Outcome Feedback Loop
-
-**流程**：
-1. eval-session 决定 push → `scheduler` 发送 → 写 `PushEvent{ outcome: 'pending' }` 到 relationship.interaction_history
-2. `outcome-tracker` 订阅 inbound message bus（挂在 `onInbound`）：
-   - 24h 内 inbound from 同 chat_id → 让 Claude 单独做一次极轻的 eval："这条回复相对上次 push 是 positive/neutral/negative?"（低成本，只用 haiku，<500ms）
-   - 24h 内无 inbound → 自动标 `ignored`
-   - user 说 "/snooze" 类 → `snoozed`
-3. `PushEvent.outcome` 终态化写盘
-
-**接口**：
-```typescript
-// src/daemon/companion/outcome-tracker.ts
-export function makeOutcomeTracker(deps: {
-  memory: MemoryStore
-  quickEval: (pushSummary: string, userReply: string) => Promise<Outcome>
-  log: (tag: string, msg: string) => void
-}): {
-  onInbound(msg: InboundMsg): void    // 调于 main.ts onInbound
-  sweep(): void                        // 24h cutoff 检查；scheduler 每小时调
-}
-```
-
-### 能力 2 · Smart Tick（不是 cron）
-
-当前 scheduler 是 cron 驱动（`* */15 * * *` 每 15 分钟一次）。升级后：
-
-```typescript
-// src/daemon/companion/scheduler.ts (扩展)
-interface TickConfig {
-  base_interval_ms: number           // 15min = 900_000
-  jitter_ratio: number                // 0.3 → next tick ± 30%
-  quiet_hours?: Array<TimeRange>     // 从 relationship.profile.active_hours 反推
-}
-
-// 每 tick:
-async function tick() {
-  for (const chatId of activeChats()) {
-    const rel = memory.get(chatId)
-
-    // 硬规则先过滤
-    if (inQuietHours(rel.profile.active_hours)) continue
-    if (rel.state.do_not_disturb_until && now < rel.state.do_not_disturb_until) continue
-    if (recentPushThrottled(rel)) continue   // 默认 2h 一次 cap
-
-    // 交给 eval-session（用 full context）
-    const decision = await evalTrigger({
-      relationship: rel,
-      recent_pushes: rel.interaction_history.push_events.slice(-10),
-      current_time: now,
-    })
-
-    if (decision.should_push) {
-      await send(chatId, decision.message)
-      memory.appendPushEvent(chatId, { ...decision, outcome: 'pending' })
-    } else {
-      // 不 push 也记，便于 web UI 展示"Claude 决定不 push，理由：xxx"
-      memory.appendSkipDecision(chatId, decision.reason)
-    }
-  }
-}
-```
-
-### 能力 3 · Active Hours Auto-Learning
-
-**观察**：`observer.ts` 在每条 inbound 上更新 `hourly_message_count`（ring buffer 28 天）。每天 0 点做一次 aggregate → fit 出 peak hours。
-
-```typescript
-function inferActiveHours(hourlyBuckets: number[]): TimeRange[] {
-  // 简单实现：找 top 3 连续时段（count > mean + 0.5*std）
-  // v2.0 够用；v2.1 如需精准可 upgrade 到 Gaussian Mixture
-}
-```
-
-结果写进 `profile.active_hours`，置信度随样本量增长。Claude 在 persona prompt 里看到这段作为"what this user is usually doing right now"。
-
----
-
-## 与 v1.1 现有代码的 merge 策略
-
-- `src/daemon/companion/scheduler.ts` 现在是 croner-based；v2.0 保留 cron 模式作为 "固定时段" 触发选项（比如"每晚 22:30 问候"），新增 smart tick 作为默认。两种 trigger 类型并存。
-- `src/daemon/companion/eval-session.ts` 保持现有 `makeEvalTrigger` 接口；内部实现改为"把 relationship 切片作为 context 注入"。MCP 工具层不动。
-- `persona.ts` 不变；persona 选择改成 `persona = chooser(rel.profile.preferred_tone)`。
-- `profile.md` 模板保留（用户可手写偏好），优先级高于自动学习。
-
----
-
-## 新增 MCP 工具
-
-| 名称 | 说明 | 谁调用 |
+| 欠缺 | 我们补什么 | 代码量 |
 |---|---|---|
-| `companion_memory_get` | 读 chat_id 的 profile + state（不暴露 interaction_history raw） | Claude 自己在回复时参考 |
-| `companion_memory_update` | 写 profile / state 字段；不支持写 interaction_history（仅 outcome-tracker 能写） | Claude 每次回复后可调用 |
-| `companion_memory_debug` | 读完整记录包括所有历史 | admin 手动排查 |
+| 无状态 · 跨会话/窗口都忘 | 一个它能读写的**文件系统**（沙盒到 `memory/` 下） | ~80 行 |
+| 不能 `sleep()` / 设闹钟 | 一个**定时 tick**（15-30 分钟 jitter） | ~50 行 |
+| Context 放不下 n 年历史 | **按需 read** 的工具（Claude 决定读哪个文件） | 0 行（fs 读即是） |
 
-（这 3 个工具进 `wechat-companion` MCP server — 依赖 v1.2 Task 3 的拆包）
+### Claude 早就会做的（**不要**再代替它）
 
----
+- 理解"每天 9 点问我计划"的语义 ✓
+- 判断用户偏好的语气 / 长度 / 禁区 ✓
+- 在合适时机 push 或保持沉默 ✓
+- 写摘要 / 总结 / 蒸馏 ✓
+- 决定什么重要 / 什么该忘 ✓
+- 判断过去 push 的效果好坏 ✓
 
-## 隐私 & 安全考量
-
-- Relationship memory 是**敏感数据**（用户习惯 / 情绪 / 话题）。
-  - `~/.claude/channels/wechat/relationship.json` mode 0600（跟其它 state 一致）
-  - Web UI 不展示 mood_signal raw，只展示 aggregated（"今天主要 neutral"）
-  - 用户明示 "清空我的记忆" → `companion_memory_update({clear:true})` 归零 record
-- `outcome-tracker` 的 quickEval 用 haiku 就够，**不要**把完整 user reply 喂给云 API — 截断到 100 字摘要
-- relationship.json 永远不进 git（已在 `.gitignore` 的 `~/.claude/` 层级 implicit）
+**任何 schema / enum / rule 覆盖上面这些 = 在 Claude 手脚上加镣铐**。
 
 ---
 
-## 验收标准
+## 2. 架构：3 个 primitives
 
-- [ ] 连续 7 天真实使用后，`relationship.profile.active_hours` 能合理反映实际活跃时段（人工看一眼）
-- [ ] Claude push 后 24h，`outcome` 字段一定终态化（positive/neutral/negative/ignored/snoozed）
-- [ ] 连续 push 3 次都被 `ignored` → Claude 下次自动延长 base_interval × 2（learning kicks in）
-- [ ] user 发"别烦我" 类措辞 → mood/do_not_disturb 被捕捉，2h 内不再 push
-- [ ] Web UI dashboard 能查到某条 push 的"decision reason"
+```
+~/.claude/channels/wechat/memory/     # Claude 完全自治的目录
+   └── (Claude 自己决定放什么)
 
----
+src/daemon/memory/
+   └── fs-api.ts     # 沙盒文件系统 API  (~80 行)
 
-## Not in scope (v2.0)
+src/daemon/companion/
+   └── scheduler.ts  # 定时 tick        (~50 行)
+```
 
-- ❌ 跨 chat_id relationship graph（"旺仔跟顾时瑞是同事"）— 可能 v3
-- ❌ 图片 / 语音历史作为记忆输入 — 暂只文本
-- ❌ 跨机器 relationship.json 同步 — 单机使用
-- ❌ Claude 主动语音 push（voice 退役，等 Tencent）
+MCP 工具：
 
----
+```typescript
+memory_read(path: string)                    // 读 memory/ 下任意文件
+memory_write(path: string, content: string)  // 写 memory/ 下任意 .md 文件
+memory_list(dir?: string)                    // 列 memory/ 下目录内容
+```
 
-## Open questions
-
-1. quickEval 用 haiku 估每月成本？需要先算 push/day × outcome-eval 成本 × haiku 单价。
-2. Relationship memory 是否共享给**主 session**（即 user 主动对话时 Claude 能否 context 进来）？倾向 yes，但得控 tokens 预算。
-3. Active hours 推断的 sample 阈值多少天够？初判 7-14 天，需实验。
-4. 当 user 删对话 / 清空微信记录 → 我们的 memory 要不要跟着清？策略题，暂保留（用户可通过 web UI 手删）。
+**3 个工具。约 150 行代码。完毕。**
 
 ---
 
-## 依赖
+## 3. systemPrompt 的整段指令（**给 Claude 的全部"规则"**）
 
-- **v1.2 Task 3** MCP 拆包（companion 工具独立 server）— 必须先做
-- **v1.2 Task 4** session 持久化（memory 写入需要跨重启）— 模式可复用
+```
+你有个 ~/.claude/channels/wechat/memory/ 目录完全由你自治。
+
+用它做什么：跨会话记住这个用户的一切你觉得值得记的 —— 身份、偏好、在做的事、
+上次哪条 push 被 ignore、什么梗、禁区、技能模式（"他焦躁时该少说")。
+
+组织方式自己定：开什么文件、怎么命名、放什么内容、何时整理归并 —— 你都比我更懂。
+
+时机：
+- 回复用户前：先 memory_list + 读你觉得相关的文件，避免每次从零开始
+- 回复完之后：有值得记的就写。短一句话也行。
+- 定时 tick 被唤醒时：先读 memory，再看时间上下文，决定是否 push 以及说什么。
+  不确定就选"不打扰"。
+- memory 乱了或太多时：自己归并。比如 observations/ 下 50 条老的了，
+  读一遍合成一篇 profile.md，老的可以删。这是你的"睡觉整理"。
+
+原则：
+- memory 是给未来的你看的，不是给当前对话用的 —— 写的时候想想 3 个月后的你。
+- 被 ignore 或骂了，写下来作为将来决策的 input。
+- 你的判断力永远比任何我能写的规则更好。
+```
+
+**这 200 字替代了整个 v1 版本的 500 行 scaffold**。
+
+---
+
+## 4. 文件系统，不是 schema
+
+**我不规定 wiki/、observations/、push-log.md 长啥样**。Claude 自己决定：
+
+- 可能 Day 1 就写 `memory/profile.md`，一句话 "用户是 38 岁独立开发者"
+- 可能 Day 3 它觉得要细化，拆成 `memory/user/basic.md` + `memory/user/work.md`
+- 可能 Day 10 它整理出 `memory/patterns/push-timing.md` 记什么时段 push 好
+- 可能 Day 30 它做一次"睡眠整理"，把 50 个 observation 合成 3 篇 dense 的文章，老的删了
+- 这些全是 Claude 的行为，不是我的代码
+
+如果 Claude 自组织出来的结构跟我设想的像（profile / patterns / anti-patterns / active-projects），很好。如果它选了我没想到的结构（比如 `memory/by-date/` + `memory/themes/` 双索引），那也好 —— 它比我更懂自己该怎么记。
+
+**代码里没有任何地方 hardcode 文件名、字段名、格式**。
+
+---
+
+## 5. 自进化（你问的"越来越聪明"）
+
+Loop：
+
+```
+T0  memory/ 空，Claude 像白纸。
+T+1 互动  Claude 调 memory_list → []，随后写 profile.md  "顾时瑞，独立开发者"
+T+2 互动  Claude 读 profile.md 建立连续性，新观察追加或另起文件
+T+N 天    Claude 自己看得累了，做一次整理 read+merge+delete，老文件归档
+T+M 天    memory/ 变成这个用户的**活文档**，准确度逐月上升
+```
+
+Claude 蒸馏的触发点：
+
+- **每次 reply 后**（成本低，边看边记）
+- **定时 tick 时**（一天几次，有充足 context 思考）
+- **空闲时**（scheduler 发现 raw.jsonl 之类文件大了，发一个"你要不要整理"的 tick）
+
+**不是我定期调 `consolidate()` —— 是 Claude 自己看到 memory 大了觉得该清理**。当 LLM 更强，它会更聪明地整理，**我不动一行代码**，这就是"llm 越来越强我们不碍事"。
+
+---
+
+## 6. 代码细节（约 150 行）
+
+### `src/daemon/memory/fs-api.ts`
+
+```typescript
+// 沙盒所有路径到 MEMORY_ROOT 下。拒绝 .. / 绝对路径 / symlink 逃逸。
+// 只允许 .md 扩展（未来需要 .json 再放开；现在保持单格式利于 web UI）。
+// 单文件 cap 100KB，防失控大文件。
+export function makeMemoryFS(rootDir: string) {
+  const resolveSafe = (p: string): string => {
+    // normalize + realpath check + root enforcement
+    // throws if escape attempt
+  }
+  return {
+    read(path: string): string | null { /* fs.readFileSync if exists */ },
+    write(path: string, content: string): void { /* atomic write, mkdir -p, mode 0600 */ },
+    list(dir?: string): string[] { /* recursive readdir, returns relative paths */ },
+    delete(path: string): void { /* for memory_forget */ },
+  }
+}
+```
+
+### `src/daemon/companion/scheduler.ts`
+
+```typescript
+// 简单 interval + jitter，不要 cron 表达式
+// 每 tick 调一次 Claude，给它 chat_id + 当前时间 + memory list hint
+export function startCompanionScheduler(opts: {
+  intervalMs: number              // default 20 min
+  jitterRatio: number              // default 0.3
+  onTick: (chatId: string) => Promise<void>  // invoker 决定 Claude 怎么被叫
+  config: CompanionConfig          // enabled / default_chat_id
+}): () => Promise<void>
+```
+
+### MCP 工具 (3 个加到 wechat-companion server)
+
+```typescript
+memory_read (path)           → memoryFS.read()
+memory_write (path, content) → memoryFS.write()
+memory_list (dir?)           → memoryFS.list(dir)
+```
+
+### 删除
+
+```
+src/daemon/companion/
+  persona.ts          DELETE
+  persona.test.ts     DELETE
+  templates.ts        DELETE  # 3 个 persona 模板
+  eval-session.ts     DELETE  # 独立评估 session — 主 tick Claude 就够了
+```
+
+MCP 工具从 8 个 → 删 5 个：
+- `persona_switch` / `trigger_add` / `trigger_remove` / `trigger_pause` / `companion_status` 全删
+- 保留：`companion_enable` / `companion_disable` / `companion_snooze`（3 个极简开关）
+- 新增：`memory_read` / `memory_write` / `memory_list`（3 个）
+
+**最终 6 个 companion 工具**（原来 8 个）。总 MCP 工具数 22 → **20**（稍微缓解 Spike 6 的工具数担忧）。
+
+---
+
+## 7. 风险 + 回应
+
+| 风险 | 回应 |
+|---|---|
+| Claude 不调 memory_write，memory/ 一直空 | systemPrompt 明确；`/health` 显示 "memory: 3 files, 2.1KB, last written 5min ago"，异常告警 |
+| 写了垃圾 / 重复 / 矛盾 | Claude 自己会整理（见 §5）。**我不干预。** |
+| 无限增长 | Claude 自己归并。若真失控，`/health` 命令报告"memory 超 10MB"，admin 可以手动清理。日常没这个问题。 |
+| 幻觉写入 | 每次 write 在文件里带时间戳 header 可以审计。此外**接受幻觉**——人类记忆也幻觉，系统靠 Claude 后续自查。 |
+| 用户隐私 | `/forget` admin 命令（拦截在 daemon 层）清空 memory/。未来 v2.1 web UI 可视化编辑。 |
+| 升级 v1.1 丢 triggers/personas | 一次性迁移脚本读 `triggers.json` + persona 选择，写成 memory/profile.md 的几行 prose。 |
+| Web UI 没结构怎么展示 | `memory/` 本身就是 markdown 文件集合，用任何 markdown renderer 就是 UI。 |
+
+---
+
+## 8. 为什么这个架构**保持克制**
+
+用 FSD v12 类比：
+
+| Tesla FSD v11 (已淘汰) | Tesla FSD v12 (当前) |
+|---|---|
+| 30 万行 C++ 边界 rules | ~2000 行"喂数据给神经网络"的基础设施 |
+| 工程师定义"自行车在车道里该怎样" | 从驾驶录像学来的整体行为 |
+| 手动写新规则 = 新能力 | 模型升级 = 新能力 |
+
+我们：
+
+| Companion v1 + v2.0-old spec (要淘汰) | Companion v2 (本 spec) |
+|---|---|
+| `persona` / `trigger` / `outcome-tracker` / `RelationshipRecord` 28 字段 | `memory/` 目录 + 3 个 fs 工具 + scheduler |
+| 代码约束 Claude 怎么记 | Claude 自己决定怎么记 |
+| 加字段 / 改 schema = 新能力 | Claude 变强 = 新能力 |
+
+**装翅膀的几行代码**：fs-api + scheduler + systemPrompt。**剩下交给 Claude。**
+
+---
+
+## 9. 不做（scope 纪律）
+
+- ❌ 预定义 memory 文件结构（profile.md / push-log.md 这些都是 Claude 可能发明的，不是我约定的）
+- ❌ `RelationshipRecord` 结构化 schema —— 上版弃
+- ❌ `outcome-tracker` 自动统计 push 效果 —— Claude 自己记自己判断
+- ❌ `inferActiveHours` 统计拟合 —— Claude 读 memory 自己理解
+- ❌ `quickEval` 二次 LLM 调用评估效果 —— 主 tick 一次调用够了
+- ❌ 预定义 persona 模板 —— Claude 从 memory 里自己调整
+- ❌ `consolidate.ts` 规则触发整理 —— 让 Claude 看到 memory 大了自己整理
+- ❌ 跨用户关系图 / 社交网络 memory —— 个人场景不需要
+- ❌ 多模态 memory（图 / 音）—— 文本先做扎实
+
+---
+
+## 10. 开放问题（跟踪，不在 v1.2 阻塞）
+
+1. memory/ 超过 10MB 后 Claude 归并是否还有效？需要长期观察，可能得辅助 `memory_search(query)` 但**不提前实现**。
+2. 是否给 Claude 一个 `memory_move(old, new)` 便于重命名 / 整理？先不给，`read + write + delete` 组合能替代。
+3. 两个以上 chat_id 共享 memory 还是隔离？先按 chat_id 分根目录 (`memory/<chat_id>/...`)，隔离安全。
+4. Claude 往 `memory/.claude-internal/` 塞 debug 用的东西要不要允许？不额外限制，它想分就让它分。
+
+---
+
+## 11. 实施清单
+
+代码（~1 周）:
+- [ ] `src/daemon/memory/fs-api.ts` + 测试
+- [ ] `src/daemon/companion/scheduler.ts` 简化（删 cron，改 interval+jitter）
+- [ ] 3 个 MCP 工具（memory_read / write / list）加到 features/tools.ts
+- [ ] 删 persona.ts / templates.ts / eval-session.ts + 5 个旧 companion 工具
+- [ ] systemPrompt 里的 companion 段落改成本 spec §3 的内容
+- [ ] v1.1 → v2 迁移脚本（一次性：triggers.json + persona → memory/profile.md）
+
+文档:
+- [ ] 更新 `docs/rfc/02-post-v1.1-roadmap.md` 把 v2.0 Phase 3 合并到 v1.2
+- [ ] release notes 标 Companion v2 "memory-first"
+
+测试:
+- [ ] fs-api sandbox 逃逸测试（.., 绝对路径，symlink）
+- [ ] memory_write 大文件 reject 测试
+- [ ] scheduler jitter 测试
+- [ ] **不测 Claude 的组织能力** —— 那是 Claude 的事，不是我们代码的契约
+
+---
+
+## 修订历史
+
+| 日期 | 变更 |
+|---|---|
+| 2026-04-24 (v1) | 第一版：28 字段 RelationshipRecord + outcome-tracker + quickEval |
+| 2026-04-24 (v2, 本文) | **全重写**：3 个 fs primitives + scheduler + Claude 自治。删 258 → 150 行。指导原则：less is more，给翅膀不建笼子。 |
