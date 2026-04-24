@@ -26,6 +26,7 @@ import {
 import {
   sharePage as docsShare,
   resurfacePage as docsResurface,
+  onPdfRequest as docsOnPdfRequest,
 } from '../../docs'
 import { makeIlinkContext, type Account } from './ilink/context'
 import { makeVoice } from './ilink/voice'
@@ -39,7 +40,7 @@ export interface IlinkAdapter {
   sendFile(chatId: string, path: string): Promise<void>
   editMessage(chatId: string, msgId: string, text: string): Promise<void>
   broadcast(text: string, accountId?: string): Promise<{ ok: number; failed: number }>
-  sharePage(title: string, content: string, opts?: { needs_approval?: boolean }): Promise<{ url: string; slug: string }>
+  sharePage(title: string, content: string, opts?: { needs_approval?: boolean; chat_id?: string; account_id?: string }): Promise<{ url: string; slug: string }>
   resurfacePage(q: { slug?: string; title_fragment?: string }): Promise<{ url: string; slug: string } | null>
   setUserName(chatId: string, name: string): Promise<void>
   resolveUserName(chatId: string): string | undefined
@@ -249,6 +250,11 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
       ])
     },
   }
+
+  // Wire PDF delivery: docs server requests a PDF be sent to a chat.
+  docsOnPdfRequest(async ({ chatId, pdfPath }) => {
+    await adapter.sendFile(chatId, pdfPath)
+  })
 
   return adapter
 }

@@ -40,7 +40,7 @@ export interface BootstrapDeps {
     sendFile: (chatId: string, path: string) => Promise<void>
     editMessage: (chatId: string, msgId: string, text: string) => Promise<void>
     broadcast: (text: string, accountId?: string) => Promise<{ ok: number; failed: number }>
-    sharePage: (title: string, content: string, opts?: { needs_approval?: boolean }) => Promise<{ url: string; slug: string }>
+    sharePage: (title: string, content: string, opts?: { needs_approval?: boolean; chat_id?: string; account_id?: string }) => Promise<{ url: string; slug: string }>
     resurfacePage: (q: { slug?: string; title_fragment?: string }) => Promise<{ url: string; slug: string } | null>
     setUserName: (chatId: string, name: string) => Promise<void>
     projects: ToolDeps['projects']

@@ -73,7 +73,7 @@ function cleanupOldDocs(): number {
   }
   const now = Date.now()
   for (const name of entries) {
-    if (!name.endsWith('.md') && !name.endsWith('.decision.json') && !name.endsWith('.approval')) continue
+    if (!name.endsWith('.md') && !name.endsWith('.decision.json') && !name.endsWith('.approval') && !name.endsWith('.chat.json') && !name.endsWith('.pdf')) continue
     const full = join(DOCS_DIR, name)
     try {
       const st = statSync(full)
@@ -184,6 +184,45 @@ function slugNeedsApproval(slug: string): boolean {
   return existsSync(approvalFlagPath(slug))
 }
 
+// Sidecar mapping a slug → the chat that originally received the URL,
+// so the "📄 发我 PDF" button on the rendered page can route delivery
+// back to that chat (anyone with the URL can request, but the PDF only
+// goes to the original recipient).
+function chatLinkPath(slug: string): string {
+  return join(DOCS_DIR, `${slug}.chat.json`)
+}
+
+function linkSlugToChat(slug: string, chatId: string, accountId?: string): void {
+  writeFileSync(chatLinkPath(slug), JSON.stringify({ chatId, accountId: accountId ?? null }), { mode: 0o600 })
+}
+
+function getSlugChat(slug: string): { chatId: string; accountId: string | null } | null {
+  try {
+    const raw = readFileSync(chatLinkPath(slug), 'utf8')
+    return JSON.parse(raw) as { chatId: string; accountId: string | null }
+  } catch { return null }
+}
+
+function slugHasChatLink(slug: string): boolean {
+  return existsSync(chatLinkPath(slug))
+}
+
+// Callback wired in by ilink-glue: receives a request to deliver the
+// rendered PDF for a slug to the original chat. docs.ts stays agnostic
+// about ilink — same pattern as decisionCallback.
+export type PdfRequestCallback = (params: {
+  slug: string
+  title: string
+  chatId: string
+  accountId: string | null
+  pdfPath: string
+}) => Promise<void> | void
+
+let pdfRequestCallback: PdfRequestCallback | null = null
+export function onPdfRequest(cb: PdfRequestCallback): void {
+  pdfRequestCallback = cb
+}
+
 function decisionPath(slug: string): string {
   return join(DOCS_DIR, `${slug}.decision.json`)
 }
@@ -245,9 +284,10 @@ const DOC_CSS = `
   /* Footer affordance — flows with content, no overlay. Visible only at end-of-page,
      so reading is unobstructed. Tap target stays generous, weight stays low. */
   .page-foot { margin-top: 4em; padding-top: 1.5em; border-top: 1px solid #eee; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; color: #888; font-size: 0.85em; }
-  .page-foot a { display: inline-flex; align-items: center; gap: 6px; color: #555; text-decoration: none; padding: 6px 10px; border: 1px solid #e3e3e3; border-radius: 7px; transition: color .15s, border-color .15s; }
-  .page-foot a:hover { color: #111; border-color: #b8b8b8; }
-  .page-foot a svg { display: block; }
+  .page-foot a, .foot-btn { display: inline-flex; align-items: center; gap: 6px; color: #555; text-decoration: none; padding: 6px 10px; border: 1px solid #e3e3e3; border-radius: 7px; transition: color .15s, border-color .15s; background: transparent; cursor: pointer; font: inherit; }
+  .page-foot a:hover, .foot-btn:hover { color: #111; border-color: #b8b8b8; }
+  .foot-btn:disabled { opacity: 0.5; cursor: default; }
+  .page-foot a svg, .foot-btn svg { display: block; }
   .page-foot .pdf-hint { color: #999; font-size: 0.85em; }
 
   @media print {
@@ -331,7 +371,28 @@ ${slugNeedsApproval(slug) ? decisionSection(slug) : ''}
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12"/><path d="M7 11l5 5 5-5"/><path d="M5 20h14"/></svg>
     下载原文
   </a>
-  <span class="pdf-hint">需要 PDF？用浏览器"分享 → 打印"存为 PDF</span>
+  ${slugHasChatLink(slug) ? `<button type="button" id="pdf-btn" class="foot-btn" title="生成 PDF 并发到你的微信">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v6h6"/><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9l6 6v10a2 2 0 0 1-2 2z"/></svg>
+    <span id="pdf-btn-label">发 PDF 到微信</span>
+  </button>
+  <script>
+  (function () {
+    var btn = document.getElementById('pdf-btn');
+    var lbl = document.getElementById('pdf-btn-label');
+    btn.addEventListener('click', function () {
+      btn.disabled = true;
+      lbl.textContent = '生成中…';
+      fetch(window.location.pathname.replace(/\/$/, '') + '/send-pdf', { method: 'POST' })
+        .then(function (r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        })
+        .then(function () { lbl.textContent = '已发送到微信 ✓'; })
+        .catch(function (e) { btn.disabled = false; lbl.textContent = '失败：' + e.message; });
+    });
+  })();
+  </script>` : ''}
+  <span class="pdf-hint">需要本地 PDF？用浏览器"分享 → 打印"存为 PDF</span>
 </footer>
 </body>
 </html>`
@@ -353,6 +414,53 @@ let httpServer: Server | null = null
 let tunnelUrl: string | null = null
 let tunnelProc: ChildProcessWithoutNullStreams | null = null
 let tunnelPromise: Promise<string> | null = null
+
+const PDF_TIMEOUT_MS = 30_000
+
+function findChromeBinary(): string | null {
+  for (const cand of ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'chrome']) {
+    const p = findOnPath(cand)
+    if (p) return p
+  }
+  return null
+}
+
+/**
+ * Render a local URL to PDF using headless Chrome's --print-to-pdf.
+ * Uses --media-type=print so our @media print CSS kicks in (footer + decision UI hidden).
+ */
+async function renderPagePdf(pageUrl: string, outPath: string): Promise<void> {
+  const bin = findChromeBinary()
+  if (!bin) throw new Error('no chrome binary found on PATH (need google-chrome / chromium)')
+  return new Promise<void>((resolve, reject) => {
+    const args = [
+      '--headless=new',
+      '--disable-gpu',
+      '--no-sandbox',
+      '--no-pdf-header-footer',
+      '--default-background-color=00000000',
+      '--virtual-time-budget=10000',
+      `--print-to-pdf=${outPath}`,
+      pageUrl,
+    ]
+    const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    let stderr = ''
+    proc.stderr.on('data', (b) => { stderr += b.toString('utf8') })
+    const timeout = setTimeout(() => {
+      try { proc.kill('SIGKILL') } catch {}
+      reject(new Error(`chrome PDF timeout after ${PDF_TIMEOUT_MS}ms`))
+    }, PDF_TIMEOUT_MS)
+    proc.on('exit', (code) => {
+      clearTimeout(timeout)
+      if (code === 0 && existsSync(outPath)) resolve()
+      else reject(new Error(`chrome exited ${code}: ${stderr.slice(-300)}`))
+    })
+    proc.on('error', (err) => {
+      clearTimeout(timeout)
+      reject(err)
+    })
+  })
+}
 
 function startHttpServer(): Server {
   if (httpServer) return httpServer
@@ -401,6 +509,35 @@ function startHttpServer(): Server {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         })
+      }
+
+      // POST /docs/<slug>/send-pdf — render the doc to PDF, deliver to original chat
+      const pdfMatch = url.pathname.match(/^\/docs\/([a-zA-Z0-9_-]+)\/send-pdf\/?$/)
+      if (pdfMatch && req.method === 'POST') {
+        const slug = pdfMatch[1]!
+        const mdPath = join(DOCS_DIR, `${slug}.md`)
+        if (!existsSync(mdPath)) return new Response('slug not found', { status: 404 })
+        const link = getSlugChat(slug)
+        if (!link) return new Response('this page has no chat link', { status: 412 })
+        const pdfPath = join(DOCS_DIR, `${slug}.pdf`)
+        const pageUrl = `http://127.0.0.1:${httpServer?.port ?? ''}/docs/${slug}`
+        try {
+          await renderPagePdf(pageUrl, pdfPath)
+        } catch (err) {
+          process.stderr.write(`wechat channel: PDF render failed for ${slug}: ${err}\n`)
+          return new Response(JSON.stringify({ ok: false, error: String(err) }), { status: 500, headers: { 'Content-Type': 'application/json' } })
+        }
+        if (!pdfRequestCallback) {
+          return new Response(JSON.stringify({ ok: false, error: 'no PDF delivery callback registered' }), { status: 503, headers: { 'Content-Type': 'application/json' } })
+        }
+        try {
+          const title = titleFromMarkdown(readFileSync(mdPath, 'utf8'), slug)
+          await pdfRequestCallback({ slug, title, chatId: link.chatId, accountId: link.accountId, pdfPath })
+        } catch (err) {
+          process.stderr.write(`wechat channel: PDF deliver failed for ${slug}: ${err}\n`)
+          return new Response(JSON.stringify({ ok: false, error: String(err) }), { status: 500, headers: { 'Content-Type': 'application/json' } })
+        }
+        return new Response(JSON.stringify({ ok: true, slug }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       }
 
       // GET /docs/<slug>/download — serve the raw .md as an attachment
@@ -541,6 +678,14 @@ export interface ShareOpts {
    * back to Claude (the existing decision-callback path).
    */
   needs_approval?: boolean
+  /**
+   * Bind the page to a chat so the rendered footer can offer "📄 发我 PDF":
+   * server-side renders the page to PDF and pushes it to this chat via
+   * sendFile. Required for the PDF button to appear; without it the page
+   * is anonymous and the button is hidden.
+   */
+  chat_id?: string
+  account_id?: string
 }
 
 export async function sharePage(
@@ -555,6 +700,7 @@ export async function sharePage(
   const body = /^#\s+/m.test(content) ? content : `# ${title}\n\n${content}`
   writeFileSync(path, body, { mode: 0o600 })
   if (opts.needs_approval) markNeedsApproval(slug)
+  if (opts.chat_id) linkSlugToChat(slug, opts.chat_id, opts.account_id)
 
   const base = await ensureServing()
   return { url: `${base}/docs/${slug}`, slug, path }
