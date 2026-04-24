@@ -7,7 +7,7 @@ export interface ToolDeps {
   sendFile(chatId: string, path: string): Promise<void>
   editMessage(chatId: string, msgId: string, text: string): Promise<void>
   broadcast(text: string, accountId?: string): Promise<{ ok: number; failed: number }>
-  sharePage(title: string, content: string): Promise<{ url: string; slug: string }>
+  sharePage(title: string, content: string, opts?: { needs_approval?: boolean }): Promise<{ url: string; slug: string }>
   resurfacePage(q: { slug?: string; title_fragment?: string }): Promise<{ url: string; slug: string } | null>
   setUserName(chatId: string, name: string): Promise<void>
   memory: MemoryFS
@@ -77,7 +77,7 @@ export interface BuiltWechatMcp {
     set_user_name: (args: { chat_id: string; name: string }) => Promise<unknown>
     send_file: (args: { chat_id: string; path: string }) => Promise<unknown>
     broadcast: (args: { text: string; account_id?: string }) => Promise<unknown>
-    share_page: (args: { title: string; content: string }) => Promise<unknown>
+    share_page: (args: { title: string; content: string; needs_approval?: boolean }) => Promise<unknown>
     resurface_page: (args: { slug?: string; title_fragment?: string }) => Promise<unknown>
     list_projects: (args: Record<string, never>) => Promise<unknown>
     switch_project: (args: { alias: string }) => Promise<unknown>
@@ -170,14 +170,14 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
 
   const shareDef = tool(
     'share_page',
-    '把 Markdown 内容发布为一次性 URL。返回 {url, slug}。',
-    { title: z.string(), content: z.string() },
-    async ({ title, content }) => {
-      const r = await deps.sharePage(title, content)
+    '把 Markdown 内容发布为一次性 URL。返回 {url, slug}。needs_approval=true 时页面会渲染 ✓ Approve 按钮（默认 false，纯内容文档不带按钮）。',
+    { title: z.string(), content: z.string(), needs_approval: z.boolean().optional() },
+    async ({ title, content, needs_approval }) => {
+      const r = await deps.sharePage(title, content, needs_approval ? { needs_approval: true } : undefined)
       return okText(JSON.stringify(r))
     },
   )
-  handlers.share_page = async (a) => (await shareDef.handler(a, undefined)) as unknown
+  handlers.share_page = async (a) => (await shareDef.handler(a as any, undefined)) as unknown
 
   const resurfaceDef = tool(
     'resurface_page',

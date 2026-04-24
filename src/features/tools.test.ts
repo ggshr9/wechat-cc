@@ -67,12 +67,26 @@ describe('buildWechatMcpServer', () => {
     expect(out).toMatchObject({ content: [{ type: 'text' }] })
   })
 
-  it('share_page returns URL', async () => {
+  it('share_page returns URL (no needs_approval → undefined opts)', async () => {
     const deps = makeDeps()
     const { handlers } = buildWechatMcpServer(deps)
     const out = await handlers.share_page({ title: 't', content: '# hi' })
-    expect(deps.sharePage).toHaveBeenCalledWith('t', '# hi')
+    expect(deps.sharePage).toHaveBeenCalledWith('t', '# hi', undefined)
     expect(extractText(out)).toContain('https://x/abc')
+  })
+
+  it('share_page passes needs_approval through to deps when true', async () => {
+    const deps = makeDeps()
+    const { handlers } = buildWechatMcpServer(deps)
+    await handlers.share_page({ title: 't', content: '# hi', needs_approval: true })
+    expect(deps.sharePage).toHaveBeenCalledWith('t', '# hi', { needs_approval: true })
+  })
+
+  it('share_page omits opts when needs_approval is false (default off)', async () => {
+    const deps = makeDeps()
+    const { handlers } = buildWechatMcpServer(deps)
+    await handlers.share_page({ title: 't', content: '# hi', needs_approval: false })
+    expect(deps.sharePage).toHaveBeenCalledWith('t', '# hi', undefined)
   })
 
   it('switch_project surfaces failure reason', async () => {

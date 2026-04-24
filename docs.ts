@@ -73,7 +73,7 @@ function cleanupOldDocs(): number {
   }
   const now = Date.now()
   for (const name of entries) {
-    if (!name.endsWith('.md') && !name.endsWith('.decision.json')) continue
+    if (!name.endsWith('.md') && !name.endsWith('.decision.json') && !name.endsWith('.approval')) continue
     const full = join(DOCS_DIR, name)
     try {
       const st = statSync(full)
@@ -167,6 +167,21 @@ async function ensureCloudflared(): Promise<string> {
 export interface Decision {
   decision: 'approve'
   timestamp: number
+}
+
+// Sidecar file present iff the page was published with needs_approval=true.
+// Default behavior (no flag) is "no approve button" — most share_page calls
+// are content-only summaries with nothing to OK.
+function approvalFlagPath(slug: string): string {
+  return join(DOCS_DIR, `${slug}.approval`)
+}
+
+function markNeedsApproval(slug: string): void {
+  writeFileSync(approvalFlagPath(slug), '', { mode: 0o600 })
+}
+
+function slugNeedsApproval(slug: string): boolean {
+  return existsSync(approvalFlagPath(slug))
 }
 
 function decisionPath(slug: string): string {
@@ -295,7 +310,7 @@ function renderDoc(slug: string): { body: string; status: number } {
 </head>
 <body>
 ${html}
-${decisionSection(slug)}
+${slugNeedsApproval(slug) ? decisionSection(slug) : ''}
 </body>
 </html>`
   return { body, status: 200 }
@@ -476,13 +491,29 @@ export interface SharePageResult {
  * Publish a new markdown document to a cloudflared quick-tunnel URL.
  * Old .md files beyond the 7-day TTL are cleaned up before writing.
  */
-export async function sharePage(title: string, content: string): Promise<SharePageResult> {
+export interface ShareOpts {
+  /**
+   * Render the one-tap "✓ Approve" button on the page.
+   * Default false — most pages are content-only summaries; the approve
+   * button on those is misleading because there's nothing to ok.
+   * Set true for pages that genuinely want a soft acknowledgement signal
+   * back to Claude (the existing decision-callback path).
+   */
+  needs_approval?: boolean
+}
+
+export async function sharePage(
+  title: string,
+  content: string,
+  opts: ShareOpts = {},
+): Promise<SharePageResult> {
   cleanupOldDocs()
 
   const slug = slugify(title)
   const path = join(DOCS_DIR, `${slug}.md`)
   const body = /^#\s+/m.test(content) ? content : `# ${title}\n\n${content}`
   writeFileSync(path, body, { mode: 0o600 })
+  if (opts.needs_approval) markNeedsApproval(slug)
 
   const base = await ensureServing()
   return { url: `${base}/docs/${slug}`, slug, path }
