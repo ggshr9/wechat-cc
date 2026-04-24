@@ -242,16 +242,17 @@ const DOC_CSS = `
   .decision-banner { padding: 1em; border-radius: 6px; font-weight: 600; text-align: center; margin-top: 3em; background: #e8f5e9; color: #2e7d32; border: 1px solid #4caf50; }
   .decision-banner .ts { margin-top: 4px; font-weight: 400; color: #999; font-size: 0.8em; }
 
-  /* Floating action group — top-right, monochrome, minimal */
-  .actions { position: fixed; top: 16px; right: 16px; display: flex; gap: 6px; z-index: 10; }
-  .action { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border: 1px solid #e3e3e3; background: rgba(255, 255, 255, 0.78); backdrop-filter: saturate(180%) blur(10px); -webkit-backdrop-filter: saturate(180%) blur(10px); border-radius: 9px; color: #555; cursor: pointer; text-decoration: none; transition: color .15s, border-color .15s, transform .15s, box-shadow .15s; }
-  .action:hover { color: #111; border-color: #b8b8b8; transform: translateY(-1px); box-shadow: 0 2px 6px rgba(0,0,0,0.06); }
-  .action:active { transform: translateY(0); }
-  .action svg { display: block; }
+  /* Footer affordance — flows with content, no overlay. Visible only at end-of-page,
+     so reading is unobstructed. Tap target stays generous, weight stays low. */
+  .page-foot { margin-top: 4em; padding-top: 1.5em; border-top: 1px solid #eee; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; color: #888; font-size: 0.85em; }
+  .page-foot a { display: inline-flex; align-items: center; gap: 6px; color: #555; text-decoration: none; padding: 6px 10px; border: 1px solid #e3e3e3; border-radius: 7px; transition: color .15s, border-color .15s; }
+  .page-foot a:hover { color: #111; border-color: #b8b8b8; }
+  .page-foot a svg { display: block; }
+  .page-foot .pdf-hint { color: #999; font-size: 0.85em; }
 
   @media print {
     body { max-width: none; margin: 0; padding: 0 1cm; }
-    .actions, .decision-zone, .decision-banner, button { display: none !important; }
+    .page-foot, .decision-zone, .decision-banner, button { display: none !important; }
     a { color: #222; text-decoration: none; }
     pre, blockquote, table, img { page-break-inside: avoid; }
   }
@@ -323,16 +324,15 @@ function renderDoc(slug: string): { body: string; status: number } {
 <style>${DOC_CSS}</style>
 </head>
 <body>
-<div class="actions" role="group" aria-label="页面操作">
-  <a class="action" href="/docs/${slug}/download" download title="下载 Markdown 原文" aria-label="下载 Markdown 原文">
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12"/><path d="M7 11l5 5 5-5"/><path d="M5 20h14"/></svg>
-  </a>
-  <button type="button" class="action" onclick="window.print()" title="打印 / 存为 PDF" aria-label="打印为 PDF">
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V3h12v6"/><rect x="6" y="14" width="12" height="7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/></svg>
-  </button>
-</div>
 ${html}
 ${slugNeedsApproval(slug) ? decisionSection(slug) : ''}
+<footer class="page-foot">
+  <a href="/docs/${slug}/download" download title="下载 Markdown 原文">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12"/><path d="M7 11l5 5 5-5"/><path d="M5 20h14"/></svg>
+    下载原文
+  </a>
+  <span class="pdf-hint">需要 PDF？用浏览器"分享 → 打印"存为 PDF</span>
+</footer>
 </body>
 </html>`
   return { body, status: 200 }
