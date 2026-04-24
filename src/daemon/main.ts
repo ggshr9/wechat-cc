@@ -32,7 +32,7 @@ async function main() {
 
   const ilink = makeIlinkAdapter({ stateDir: STATE_DIR, accounts })
   const launchCwd = process.cwd()
-  const { sessionManager, resolve, formatInbound, sdkOptionsForProject } = buildBootstrap({
+  const { sessionManager, sessionStore, resolve, formatInbound, sdkOptionsForProject } = buildBootstrap({
     stateDir: STATE_DIR,
     ilink,
     loadProjects: ilink.loadProjects,
@@ -151,6 +151,7 @@ async function main() {
     await stopScheduler()
     await pollHandle.stop()
     await sessionManager.shutdown()
+    await sessionStore.flush()
     await ilink.flush()
     releaseInstanceLock(PID_PATH)
     process.exit(0)

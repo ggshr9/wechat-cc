@@ -10,6 +10,8 @@ import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { makeMemoryFS } from './memory/fs-api'
+import { makeSessionStore } from '../core/session-store'
+import { homedir } from 'node:os'
 
 /**
  * Locate a working Claude Code binary. The SDK's own native-binary detection
@@ -60,6 +62,7 @@ export interface BootstrapDeps {
 
 export interface Bootstrap {
   sessionManager: SessionManager
+  sessionStore: import('../core/session-store').SessionStore
   resolve: (chatId: string) => { alias: string; path: string } | null
   formatInbound: typeof formatInbound
   sdkOptionsForProject: (alias: string, path: string) => Options
@@ -152,14 +155,32 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     return { ...common, permissionMode: 'default', canUseTool }
   }
 
+  // Persistent session_id map — enables `resume` after daemon restart.
+  // Claude Code stores its session jsonl at ~/.claude/projects/<cwd>/<id>.jsonl;
+  // we check that file exists before trying to resume (avoids hard error if
+  // Claude Code rotated or user cleared history).
+  const sessionStore = makeSessionStore(join(deps.stateDir, 'sessions.json'), { debounceMs: 500 })
+  const HOME = homedir()
+  function sessionJsonlPath(cwd: string, sessionId: string): string {
+    const encoded = cwd.replace(/\//g, '-')
+    return join(HOME, '.claude', 'projects', encoded, `${sessionId}.jsonl`)
+  }
+  function canResumeSession(cwd: string, sessionId: string): boolean {
+    return existsSync(sessionJsonlPath(cwd, sessionId))
+  }
+
   const sessionManager = new SessionManager({
     maxConcurrent: 6,
     idleEvictMs: 30 * 60_000,
     sdkOptionsForProject,
+    sessionStore,
+    canResume: canResumeSession,
+    resumeTTLMs: 7 * 24 * 60 * 60_000,
   })
 
   return {
     sessionManager,
+    sessionStore,
     resolve,
     formatInbound,
     sdkOptionsForProject,

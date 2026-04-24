@@ -1,9 +1,25 @@
 import { query, type Options, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import type { SessionStore } from './session-store'
 
 export interface SessionManagerOptions {
   maxConcurrent: number
   idleEvictMs: number
   sdkOptionsForProject: (alias: string, path: string) => Options
+  /**
+   * When present, the manager persists the SDK-reported session_id per
+   * alias and passes it back as `resume` on the next spawn — slashing
+   * daemon-restart cold-start from ~10 s to <3 s. Absent → disabled.
+   */
+  sessionStore?: SessionStore
+  /**
+   * Optional disk check for the resume candidate. The SDK stores its
+   * conversation history as jsonl under `~/.claude/projects/<cwd>/<id>.jsonl`;
+   * if the file is gone (user wiped history or Claude Code rotated), we
+   * can't resume — fall back to fresh. Absent → skip this safety.
+   */
+  canResume?: (cwd: string, sessionId: string) => boolean
+  /** Stored session_id older than this is treated as stale. Default 7 d. */
+  resumeTTLMs?: number
 }
 
 export interface SessionHandle {
@@ -43,6 +59,24 @@ export class SessionManager {
   private async spawn(alias: string, path: string): Promise<SessionHandle> {
     const queue = new AsyncQueue<SDKUserMessage>()
     const options = this.opts.sdkOptionsForProject(alias, path)
+
+    // Check for a recent session_id to resume — cut cold-start latency.
+    const ttl = this.opts.resumeTTLMs ?? 7 * 24 * 60 * 60_000
+    const record = this.opts.sessionStore?.get(alias) ?? null
+    if (record) {
+      const age = Date.now() - Date.parse(record.last_used_at)
+      const jsonlStillThere = this.opts.canResume
+        ? this.opts.canResume(path, record.session_id)
+        : true
+      if (age < ttl && jsonlStillThere) {
+        ;(options as Options & { resume?: string }).resume = record.session_id
+        console.error(`wechat channel: [SESSION_RESUME] alias=${alias} sid=${record.session_id} age=${Math.round(age / 1000)}s`)
+      } else {
+        // stale — forget so we don't keep retrying
+        this.opts.sessionStore?.delete(alias)
+      }
+    }
+
     const q = query({ prompt: queue.iterable(), options })
     const assistantListeners = new Set<(t: string) => void>()
     const resultListeners = new Set<(r: { session_id: string; num_turns: number; duration_ms: number }) => void>()
@@ -86,6 +120,11 @@ export class SessionManager {
               num_turns: r.num_turns,
               duration_ms: r.duration_ms,
             })
+            // Persist the session_id the SDK actually used so the next
+            // spawn (possibly after daemon restart) can resume this thread.
+            if (r.session_id && this.opts.sessionStore) {
+              this.opts.sessionStore.set(alias, r.session_id)
+            }
             if (r.subtype && r.subtype !== 'success') {
               console.error(`wechat channel: [SESSION_RESULT] alias=${alias} subtype=${r.subtype} result=${typeof r.result === 'string' ? r.result.slice(0, 400) : JSON.stringify(r).slice(0, 400)}`)
             }
