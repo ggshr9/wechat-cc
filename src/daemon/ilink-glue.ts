@@ -4,7 +4,7 @@ import type { InboundMsg } from '../core/prompt-format'
 import type { ToolDeps } from '../features/tools'
 import { makeStateStore } from './state-store'
 import { PendingPermissions, parsePermissionReply } from './pending-permissions'
-import { buildMediaItemFromFile, buildVoiceItemFromWav, assertSendable } from './media'
+import { buildMediaItemFromFile, assertSendable } from './media'
 import { ilinkSendMessage, ilinkSendTyping, ilinkGetConfig, ilinkGetUpdates, botTextMessage } from '../../ilink'
 import { makeSessionStateStore, type SessionStateStore } from './session-state'
 import { sendReplyOnce } from '../../send-reply'
@@ -18,6 +18,7 @@ import {
   sharePage as docsShare,
   resurfacePage as docsResurface,
 } from '../../docs'
+import { log } from '../../log'
 import { loadVoiceConfig, saveVoiceConfig, type VoiceConfig } from './tts/voice-config'
 import { makeHttpTTSProvider } from './tts/http-tts'
 import { makeQwenProvider } from './tts/qwen'
@@ -150,14 +151,14 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
         writeFileSync(tmpPath, audio)
         try {
           const acct = resolveAccount(chatId)
-          // For WAV: transcode to 24kHz mono MP3 via ffmpeg and send as
-          // voice_item (encode_type=7, sample_rate=24000) so WeChat renders a
-          // voice bubble. Non-WAV (Qwen MP3 etc.) still goes through the
-          // generic file-attachment path until we add duration parsing for
-          // those containers.
-          const item = ext === '.wav'
-            ? await buildVoiceItemFromWav(tmpPath, chatId, acct.baseUrl, acct.token, text)
-            : await buildMediaItemFromFile(tmpPath, chatId, acct.baseUrl, acct.token)
+          // Voice bubble path (voice_item, encode_type=7) is silently dropped
+          // by the WeChat client — confirmed 2026-04-23 Spike 4 4-config
+          // sweep; openclaw-weixin has VoiceItem types but no sendVoice;
+          // openclaw/#56225 open. Until Tencent ships sendVoice, always send
+          // as a file attachment so the user at least receives a playable
+          // WAV/MP3. buildVoiceItemFromWav kept in media.ts for forward-
+          // enablement.
+          const item = await buildMediaItemFromFile(tmpPath, chatId, acct.baseUrl, acct.token)
           const ctxToken = ctxStore.get(chatId)
           await ilinkSendMessage(acct.baseUrl, acct.token, {
             to_user_id: chatId,
@@ -167,13 +168,15 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
             context_token: ctxToken,
           })
           const msgId = `v-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+          log('VOICE', `replyVoice sent chat=${chatId} chars=${text.length} bytes=${audio.length}`)
           return { ok: true as const, msgId }
         } finally {
           try { unlinkSync(tmpPath) } catch { /* best-effort */ }
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        const reason = /5\d\d/.test(msg) ? 'transient' : 'error'
+        const errmsg = err instanceof Error ? err.message : String(err)
+        log('VOICE', `replyVoice FAILED chat=${chatId}: ${errmsg}`)
+        const reason = /5\d\d/.test(errmsg) ? 'transient' : 'error'
         return { ok: false as const, reason }
       }
     },
