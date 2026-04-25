@@ -448,13 +448,22 @@ function renderDoc(slug: string): { body: string; status: number } {
 <script type="module">
   import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.esm.min.mjs';
   var dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-  document.querySelectorAll('pre code.language-mermaid').forEach(function (el) {
-    var div = document.createElement('div');
-    div.className = 'mermaid';
-    div.textContent = el.textContent;
-    el.parentElement.replaceWith(div);
-  });
-  mermaid.initialize({ startOnLoad: true, theme: dark ? 'dark' : 'default' });
+  mermaid.initialize({ startOnLoad: false, securityLevel: 'loose', theme: dark ? 'dark' : 'default' });
+
+  function convertAndRun() {
+    var nodes = document.querySelectorAll('pre code.language-mermaid');
+    if (nodes.length === 0) return;
+    nodes.forEach(function (el) {
+      var div = document.createElement('div');
+      div.className = 'mermaid';
+      // textContent decodes HTML entities — so --&gt; comes back as -->.
+      div.textContent = el.textContent;
+      el.parentElement.replaceWith(div);
+    });
+    mermaid.run({ querySelector: '.mermaid' }).catch(function (e) { console.error('[mermaid]', e); });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', convertAndRun);
+  else convertAndRun();
 </script>
 </head>
 <body>
