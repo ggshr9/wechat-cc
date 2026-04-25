@@ -256,45 +256,119 @@ export function onDecision(cb: DecisionCallback): void {
 // ── Local Bun doc server ───────────────────────────────────────────────────
 
 const DOC_CSS = `
-  body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", Arial, sans-serif; max-width: 720px; margin: 2em auto; padding: 0 1em; color: #222; line-height: 1.6; }
-  h1 { border-bottom: 2px solid #eee; padding-bottom: .3em; }
-  h2 { margin-top: 1.6em; color: #333; }
-  h3 { margin-top: 1.4em; color: #444; }
-  code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-family: Menlo, Consolas, monospace; font-size: 0.9em; }
-  pre { background: #f8f8f8; padding: 1em; border-radius: 6px; overflow-x: auto; border-left: 3px solid #6cf; }
-  pre code { background: none; padding: 0; }
-  blockquote { border-left: 4px solid #ddd; padding-left: 1em; color: #666; margin-left: 0; }
+  /* ── Theme tokens (light by default, dark via prefers-color-scheme) ────── */
+  :root {
+    --bg: #ffffff;
+    --fg: #1f2328;
+    --fg-soft: #4a5159;
+    --muted: #8b939c;
+    --border: #e6e8eb;
+    --code-bg: #f4f5f7;
+    --pre-bg: #f7f8f9;
+    --pre-accent: #6cf;
+    --link: #0366d6;
+    --quote: #6a737d;
+    --th-bg: #f4f5f7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181d;
+      --fg: #e6edf3;
+      --fg-soft: #c4ccd3;
+      --muted: #8b929a;
+      --border: #2a2f37;
+      --code-bg: #22272e;
+      --pre-bg: #1c2026;
+      --pre-accent: #4ea3df;
+      --link: #58a6ff;
+      --quote: #9ea7b3;
+      --th-bg: #22272e;
+    }
+  }
+
+  html, body { background: var(--bg); color: var(--fg); }
+  body {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+    max-width: 720px; margin: 2em auto; padding: 0 1em; line-height: 1.65;
+    font-size: 16px; -webkit-text-size-adjust: 100%;
+  }
+  @media (max-width: 600px) {
+    body { font-size: 17px; padding: 0 1.2em; margin: 1.2em auto; }
+  }
+  h1 { border-bottom: 2px solid var(--border); padding-bottom: .3em; line-height: 1.25; }
+  h2 { margin-top: 1.6em; color: var(--fg); line-height: 1.3; }
+  h3 { margin-top: 1.4em; color: var(--fg-soft); }
+  p, li { color: var(--fg); }
+  code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-family: "JetBrains Mono", "SF Mono", "Menlo", Consolas, monospace; font-size: 0.88em; }
+  pre { background: var(--pre-bg); padding: 1em 1.1em; border-radius: 8px; overflow-x: auto; border-left: 3px solid var(--pre-accent); }
+  pre code { background: none; padding: 0; font-size: 0.9em; line-height: 1.55; }
+  blockquote { border-left: 4px solid var(--border); padding-left: 1em; color: var(--quote); margin-left: 0; }
   ul, ol { padding-left: 1.5em; }
   table { border-collapse: collapse; width: 100%; margin: 1em 0; }
-  th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-  th { background: #f4f4f4; }
-  a { color: #0366d6; }
+  th, td { border: 1px solid var(--border); padding: 8px; text-align: left; }
+  th { background: var(--th-bg); }
+  a { color: var(--link); }
   img { max-width: 100%; height: auto; }
-  hr { border: none; border-top: 1px solid #eee; margin: 2em 0; }
-  .meta { color: #888; font-size: 0.85em; margin-top: -0.5em; margin-bottom: 1em; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
+  .meta { color: var(--muted); font-size: 0.85em; margin-top: -0.5em; margin-bottom: 1em; }
 
-  .decision-zone { margin-top: 3em; padding: 1.5em; background: #fafafa; border: 1px solid #eee; border-radius: 8px; text-align: center; }
-  .decision-zone p { color: #666; font-size: 0.9em; margin: 0 0 1em 0; }
-  .decision-zone button { padding: 14px 40px; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: 600; background: #4caf50; color: white; }
+  /* Mermaid containers — let SVG breathe + center */
+  .mermaid { text-align: center; margin: 1.4em 0; }
+
+  /* ── Decision (approve) UI ────────────────────────────────────────────── */
+  .decision-zone { margin-top: 3em; padding: 1.5em; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; text-align: center; }
+  .decision-zone p { color: var(--quote); font-size: 0.9em; margin: 0 0 1em 0; }
+  .decision-zone button { padding: 14px 40px; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: 600; background: #4caf50; color: white; min-height: 48px; }
   .decision-zone button:hover { opacity: 0.9; }
   .decision-zone button:disabled { opacity: 0.6; cursor: default; }
   .decision-banner { padding: 1em; border-radius: 6px; font-weight: 600; text-align: center; margin-top: 3em; background: #e8f5e9; color: #2e7d32; border: 1px solid #4caf50; }
-  .decision-banner .ts { margin-top: 4px; font-weight: 400; color: #999; font-size: 0.8em; }
+  .decision-banner .ts { margin-top: 4px; font-weight: 400; color: var(--muted); font-size: 0.8em; }
 
-  /* Footer affordance — flows with content, no overlay. Visible only at end-of-page,
-     so reading is unobstructed. Tap target stays generous, weight stays low. */
-  .page-foot { margin-top: 4em; padding-top: 1.5em; border-top: 1px solid #eee; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; color: #888; font-size: 0.85em; }
-  .page-foot a, .foot-btn { display: inline-flex; align-items: center; gap: 6px; color: #555; text-decoration: none; padding: 6px 10px; border: 1px solid #e3e3e3; border-radius: 7px; transition: color .15s, border-color .15s; background: transparent; cursor: pointer; font: inherit; }
-  .page-foot a:hover, .foot-btn:hover { color: #111; border-color: #b8b8b8; }
+  /* ── Footer affordance ────────────────────────────────────────────────── */
+  .page-foot { margin-top: 4em; padding-top: 1.5em; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: 0.85em; }
+  .page-foot a, .foot-btn { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-soft); text-decoration: none; padding: 8px 12px; border: 1px solid var(--border); border-radius: 7px; transition: color .15s, border-color .15s; background: transparent; cursor: pointer; font: inherit; min-height: 40px; }
+  .page-foot a:hover, .foot-btn:hover { color: var(--fg); border-color: var(--muted); }
   .foot-btn:disabled { opacity: 0.5; cursor: default; }
   .page-foot a svg, .foot-btn svg { display: block; }
-  .page-foot .pdf-hint { color: #999; font-size: 0.85em; }
+  .page-foot .pdf-hint { color: var(--muted); font-size: 0.85em; }
+
+  /* ── Back-to-top floating button (visible after scroll, hidden in print) ── */
+  .to-top { position: fixed; bottom: 22px; right: 22px; width: 44px; height: 44px; border-radius: 50%; background: var(--bg); border: 1px solid var(--border); color: var(--fg-soft); display: none; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.08); z-index: 50; transition: transform .15s, color .15s; }
+  .to-top.visible { display: inline-flex; }
+  .to-top:hover { color: var(--fg); transform: translateY(-2px); }
+
+  /* ── Print / PDF — force light, neat margins, page numbers via @page ──── */
+  @page {
+    size: A4;
+    margin: 18mm 16mm 22mm 16mm;
+    @bottom-center {
+      content: counter(page) " / " counter(pages);
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 9pt;
+      color: #999;
+    }
+    @top-right {
+      content: string(doc-title);
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 9pt;
+      color: #999;
+    }
+  }
+  h1 { string-set: doc-title content(); }
 
   @media print {
-    body { max-width: none; margin: 0; padding: 0 1cm; }
-    .page-foot, .decision-zone, .decision-banner, button { display: none !important; }
-    a { color: #222; text-decoration: none; }
-    pre, blockquote, table, img { page-break-inside: avoid; }
+    /* Force light theme regardless of system pref — PDFs need to print on paper */
+    :root {
+      --bg: #ffffff; --fg: #1f2328; --fg-soft: #3a4047; --muted: #6a737d;
+      --border: #d8dbde; --code-bg: #f4f5f7; --pre-bg: #f7f8f9; --pre-accent: #6cf;
+      --link: #2a4f8d; --quote: #555; --th-bg: #f4f5f7;
+    }
+    body { max-width: none; margin: 0; padding: 0; font-size: 11pt; line-height: 1.5; }
+    .page-foot, .decision-zone, .decision-banner, .to-top, button { display: none !important; }
+    a { color: var(--fg); text-decoration: none; }
+    pre, blockquote, table, img, .mermaid { page-break-inside: avoid; }
+    h1, h2, h3 { page-break-after: avoid; }
+    pre { border-left-width: 2px; }
   }
 `
 
@@ -362,9 +436,31 @@ function renderDoc(slug: string): { body: string; status: number } {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${escapeHtml(title)}</title>
 <style>${DOC_CSS}</style>
+<!-- highlight.js: code syntax highlighting (themes auto-switch via prefers-color-scheme) -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css" media="(prefers-color-scheme: light)">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css" media="(prefers-color-scheme: dark)">
+<script defer src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<!-- KaTeX: $inline$ and $$display$$ math -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<!-- Mermaid: mermaid code blocks -> SVG diagrams -->
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.esm.min.mjs';
+  var dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  document.querySelectorAll('pre code.language-mermaid').forEach(function (el) {
+    var div = document.createElement('div');
+    div.className = 'mermaid';
+    div.textContent = el.textContent;
+    el.parentElement.replaceWith(div);
+  });
+  mermaid.initialize({ startOnLoad: true, theme: dark ? 'dark' : 'default' });
+</script>
 </head>
 <body>
+<main>
 ${html}
+</main>
 ${slugNeedsApproval(slug) ? decisionSection(slug) : ''}
 <footer class="page-foot">
   <a href="/docs/${slug}/download" download title="下载 Markdown 原文">
@@ -396,6 +492,47 @@ ${slugNeedsApproval(slug) ? decisionSection(slug) : ''}
   </script>` : ''}
   <span class="pdf-hint">需要本地 PDF？用浏览器"分享 → 打印"存为 PDF</span>
 </footer>
+<button type="button" class="to-top" id="to-top" title="回到顶部" aria-label="回到顶部">
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="18 15 12 9 6 15"/></svg>
+</button>
+<script>
+(function () {
+  function runHighlight() {
+    if (!window.hljs) return;
+    document.querySelectorAll('pre code').forEach(function (b) {
+      if (b.classList && b.classList.contains('language-mermaid')) return;
+      window.hljs.highlightElement(b);
+    });
+  }
+  if (window.hljs) runHighlight();
+  else window.addEventListener('load', runHighlight);
+
+  function runKatex() {
+    if (!window.renderMathInElement) return;
+    window.renderMathInElement(document.body, {
+      delimiters: [
+        { left: '$$', right: '$$', display: true },
+        { left: '$',  right: '$',  display: false },
+        { left: '\\(', right: '\\)', display: false },
+        { left: '\\[', right: '\\]', display: true }
+      ],
+      throwOnError: false,
+      ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+    });
+  }
+  if (window.renderMathInElement) runKatex();
+  else window.addEventListener('load', runKatex);
+
+  var top = document.getElementById('to-top');
+  function onScroll() {
+    if ((window.scrollY || document.documentElement.scrollTop) > 600) top.classList.add('visible');
+    else top.classList.remove('visible');
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+  top.addEventListener('click', function () { window.scrollTo({ top: 0, behavior: 'smooth' }); });
+})();
+</script>
 </body>
 </html>`
   return { body, status: 200 }
