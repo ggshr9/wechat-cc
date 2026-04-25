@@ -10,6 +10,8 @@
  */
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { homedir } from 'node:os'
+import { ingestFromChannel } from 'hearth'
 import type { InboundMsg } from '../core/prompt-format'
 import type { SessionStateStore, ExpiredBot } from './session-state'
 
@@ -31,12 +33,15 @@ export interface AdminCommands {
 }
 
 const CLEANUP_RE = /^\s*清理\s*(all-expired|所有过期|[a-zA-Z0-9-]+-im-bot)\s*$/
+const HEARTH_INGEST_RE = /^\s*\/hearth\s+ingest\s+([\s\S]+)$/
+const HEARTH_HELP_RE = /^\s*\/hearth(\s+help)?\s*$/
 
 export function makeAdminCommands(deps: AdminCommandsDeps): AdminCommands {
   return {
     async handle(msg) {
       const text = msg.text.trim()
-      if (text !== '/health' && !CLEANUP_RE.test(text)) return false
+      const isCmd = text === '/health' || CLEANUP_RE.test(text) || HEARTH_INGEST_RE.test(text) || HEARTH_HELP_RE.test(text)
+      if (!isCmd) return false
 
       if (!deps.isAdmin(msg.chatId)) {
         deps.log('ADMIN_CMD', `non-admin ${msg.chatId} sent "${text.slice(0, 30)}" — dropped`)
@@ -48,15 +53,89 @@ export function makeAdminCommands(deps: AdminCommandsDeps): AdminCommands {
         return true
       }
 
-      const m = CLEANUP_RE.exec(text)
-      if (m) {
-        await runCleanup(deps, msg.chatId, m[1]!)
+      const cleanup = CLEANUP_RE.exec(text)
+      if (cleanup) {
+        await runCleanup(deps, msg.chatId, cleanup[1]!)
+        return true
+      }
+
+      const hearthIngest = HEARTH_INGEST_RE.exec(text)
+      if (hearthIngest) {
+        await runHearthIngest(deps, msg, hearthIngest[1]!)
+        return true
+      }
+
+      if (HEARTH_HELP_RE.test(text)) {
+        await sendHearthHelp(deps, msg.chatId)
         return true
       }
 
       return false
     },
   }
+}
+
+async function runHearthIngest(deps: AdminCommandsDeps, msg: InboundMsg, content: string): Promise<void> {
+  const vault = process.env.HEARTH_VAULT
+  if (!vault) {
+    await deps.sendMessage(msg.chatId, '❌ HEARTH_VAULT 未设置。daemon 启动时加 env：HEARTH_VAULT=/path/to/vault')
+    return
+  }
+  const agent = (process.env.HEARTH_AGENT === 'claude' ? 'claude' : 'mock') as 'mock' | 'claude'
+  const trimmed = content.trim()
+  if (trimmed.length === 0) {
+    await deps.sendMessage(msg.chatId, '用法：/hearth ingest <text>  （把 text 喂给 hearth ingest，落到 pending）')
+    return
+  }
+  try {
+    const result = await ingestFromChannel(
+      {
+        channel: 'wechat',
+        message_id: `wechat-${msg.accountId}-${Date.now()}`,
+        from: msg.chatId,
+        text: trimmed,
+        received_at: new Date(msg.createTimeMs || Date.now()).toISOString(),
+      },
+      { vaultRoot: vault, agent, hearthStateDir: join(homedir(), '.hearth') },
+    )
+    if (result.ok) {
+      const lines = [
+        '🔥 hearth: ' + result.summary,
+        '',
+        `source: ${result.source_path}`,
+      ]
+      if (result.requires_review) lines.push('💡 这是一个 ChangePlan，apply 之前在 CLI 跑：hearth pending show ' + result.change_id)
+      await deps.sendMessage(msg.chatId, lines.join('\n'))
+    } else {
+      await deps.sendMessage(msg.chatId, '❌ hearth ingest 失败: ' + result.summary + (result.error ? '\n详情: ' + result.error.slice(0, 500) : ''))
+    }
+    deps.log('HEARTH', `${msg.chatId} ingest agent=${agent} ok=${result.ok}`)
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    await deps.sendMessage(msg.chatId, '❌ hearth ingest 异常: ' + detail.slice(0, 500))
+    deps.log('HEARTH', `ingest threw: ${detail}`)
+  }
+}
+
+async function sendHearthHelp(deps: AdminCommandsDeps, adminChatId: string): Promise<void> {
+  const vault = process.env.HEARTH_VAULT ?? '(未设置 HEARTH_VAULT)'
+  const agent = process.env.HEARTH_AGENT === 'claude' ? 'claude' : 'mock'
+  const lines = [
+    '🔥 hearth (v0.3.0 channel adapter spike)',
+    '',
+    'vault: ' + vault,
+    'agent: ' + agent,
+    '',
+    '命令：',
+    '  /hearth ingest <text>   把 text 喂给 hearth，生成 pending ChangePlan',
+    '  /hearth                 显示这条 help',
+    '',
+    'apply / list / show 走 CLI（v0.3.1 会上 wechat 内 /hearth list/apply）：',
+    '  hearth pending list',
+    '  hearth pending show <change_id>',
+    '  hearth pending apply <change_id> --vault ' + vault,
+  ]
+  await deps.sendMessage(adminChatId, lines.join('\n'))
 }
 
 async function sendHealthReport(deps: AdminCommandsDeps, adminChatId: string): Promise<void> {
