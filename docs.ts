@@ -382,7 +382,9 @@ ${slugNeedsApproval(slug) ? decisionSection(slug) : ''}
     btn.addEventListener('click', function () {
       btn.disabled = true;
       lbl.textContent = '生成中…';
-      fetch(window.location.pathname.replace(/\/$/, '') + '/send-pdf', { method: 'POST' })
+      var p = window.location.pathname;
+      if (p.charAt(p.length - 1) === '/') p = p.substring(0, p.length - 1);
+      fetch(p + '/send-pdf', { method: 'POST' })
         .then(function (r) {
           if (!r.ok) throw new Error('HTTP ' + r.status);
           return r.json();
