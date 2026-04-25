@@ -33,7 +33,7 @@ export interface AdminCommands {
 }
 
 const CLEANUP_RE = /^\s*清理\s*(all-expired|所有过期|[a-zA-Z0-9-]+-im-bot)\s*$/
-const HEARTH_INGEST_RE = /^\s*\/hearth\s+ingest\s+([\s\S]+)$/
+const HEARTH_INGEST_RE = /^\s*\/hearth\s+ingest(?:\s+([\s\S]+))?$/
 const HEARTH_HELP_RE = /^\s*\/hearth(\s+help)?\s*$/
 
 export function makeAdminCommands(deps: AdminCommandsDeps): AdminCommands {
@@ -61,7 +61,7 @@ export function makeAdminCommands(deps: AdminCommandsDeps): AdminCommands {
 
       const hearthIngest = HEARTH_INGEST_RE.exec(text)
       if (hearthIngest) {
-        await runHearthIngest(deps, msg, hearthIngest[1]!)
+        await runHearthIngest(deps, msg, hearthIngest[1] ?? '')
         return true
       }
 
