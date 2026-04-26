@@ -11,7 +11,7 @@
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { ingestFromChannel, listPending, showPending, applyForOwner } from 'hearth'
+import { ingestFromChannel, listPending, showPending, applyForOwner, renderPlanMarkdown } from 'hearth'
 import type { InboundMsg } from '../core/prompt-format'
 import type { SessionStateStore, ExpiredBot } from './session-state'
 
@@ -22,6 +22,8 @@ export interface AdminCommandsDeps {
   pollHandle: { stopAccount: (id: string) => void; running: () => string[] }
   resolveUserName: (chatId: string) => string | undefined
   sendMessage: (chatId: string, text: string) => Promise<{ msgId: string; error?: string }>
+  /** Optional. When wired, /hearth ingest publishes the plan as a share-page card. */
+  sharePage?: (title: string, content: string, opts?: { needs_approval?: boolean; chat_id?: string; account_id?: string }) => Promise<{ url: string; slug: string }>
   log: (tag: string, line: string) => void
   /** ISO timestamp when the daemon booted (for uptime display). */
   startedAt: string
@@ -121,10 +123,25 @@ async function runHearthIngest(deps: AdminCommandsDeps, msg: InboundMsg, content
     if (result.ok) {
       const lines = [
         '🔥 hearth: ' + result.summary,
-        '',
-        `source: ${result.source_path}`,
       ]
-      if (result.requires_review) lines.push('💡 这是一个 ChangePlan，apply 之前在 CLI 跑：hearth pending show ' + result.change_id)
+      // If the daemon is wired with share_page, publish a richer review card
+      // and surface the URL alongside. The plan stays in pending either way —
+      // share is a presentation surface, not a commit step.
+      if (deps.sharePage && result.change_id) {
+        try {
+          const md = renderPlanMarkdown(result.change_id, { hearthStateDir: join(homedir(), '.hearth') })
+          if (md.ok) {
+            const card = await deps.sharePage(md.title ?? 'Hearth ChangePlan', md.markdown, {
+              needs_approval: true,
+              chat_id: msg.chatId,
+            })
+            lines.push('', '📄 review: ' + card.url)
+          }
+        } catch (err) {
+          deps.log('HEARTH', `share_page failed: ${err instanceof Error ? err.message : err}`)
+        }
+      }
+      lines.push('', '↪ apply: /hearth apply ' + result.change_id)
       await deps.sendMessage(msg.chatId, lines.join('\n'))
     } else {
       await deps.sendMessage(msg.chatId, '❌ hearth ingest 失败: ' + result.summary + (result.error ? '\n详情: ' + result.error.slice(0, 500) : ''))

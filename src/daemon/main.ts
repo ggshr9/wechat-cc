@@ -104,6 +104,7 @@ async function main() {
     },
     resolveUserName: (chatId) => ilink.resolveUserName(chatId),
     sendMessage: (chatId, text) => ilink.sendMessage(chatId, text),
+    sharePage: (title, content, opts) => ilink.sharePage(title, content, opts),
     log: (tag, line) => log(tag, line),
     startedAt: startedAtIso,
   })
