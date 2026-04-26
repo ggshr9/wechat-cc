@@ -18,6 +18,46 @@
 
 <!-- TODO: 加一张 4 格截图或 30 秒演示视频 -->
 
+## v1.2 —— Hearth 集成（手机上做 vault 治理）
+
+捕获到个人 markdown vault — 并且审 / 批 / apply 变更 — 全程不离开微信。
+基于 [hearth](https://github.com/ggshr9/hearth)，agent-native 的 vault
+治理层。
+
+```
+/hearth ingest <text>      → 生成 ChangePlan，发一张 review 卡片
+/hearth list               → 列最近 10 条 pending
+/hearth show <change_id>   → 预览某条 plan 的 ops + 内容
+/hearth apply <change_id>  → kernel apply（owner 直发即授权，无需 token）
+/hearth                    → 帮助
+```
+
+每次 `/hearth ingest` 回复里带一条 `share_page` URL，点开就是渲染好的
+ChangePlan，带一键 **✓ Approve** 按钮。vault 永远不被 channel 直写；
+所有写入都过 hearth kernel + 人工审批。
+
+**配置：**
+
+```bash
+# 1. 把 hearth clone 一份装好（一次性）
+git clone https://github.com/ggshr9/hearth.git ~/Documents/hearth
+cd ~/Documents/hearth && bun install
+bun src/cli/index.ts setup    # 交互式：自动探 Obsidian vault，跑 adopt
+
+# 2. 把 wechat-cc 指向你的 vault
+export HEARTH_VAULT=/path/to/your/vault
+export HEARTH_AGENT=mock        # 配 Anthropic key 后可改成 "claude"
+```
+
+仅限 owner：`/hearth` 一类命令跟 `/health` 共用 admin 白名单
+（`access.ts::isAdmin`）。非 owner 静默丢弃。
+
+也可以把 hearth 接到 Claude Code / Cursor / Codex / Continue.dev — 见
+[hearth INTEGRATIONS 指南](https://github.com/ggshr9/hearth/blob/main/docs/INTEGRATIONS.md)。
+wechat-cc 只是众多入口之一。
+
+---
+
 ## v1.1 —— 语音 + Companion
 
 在 v1.0 daemon 之上加了三个能力：

@@ -18,6 +18,48 @@
 
 <!-- TODO: add a 4-panel screenshot or 30s demo video here -->
 
+## v1.2 — Hearth integration (vault governance from your phone)
+
+Capture into a personal markdown vault — and review / approve / apply
+the changes — without leaving WeChat. Built on top of [hearth](https://github.com/ggshr9/hearth),
+the agent-native vault governance layer.
+
+```
+/hearth ingest <text>      → propose a ChangePlan, publish a review card
+/hearth list               → show pending plans (newest 10)
+/hearth show <change_id>   → preview ops + body for one plan
+/hearth apply <change_id>  → kernel apply (owner-direct, no token needed)
+/hearth                    → help
+```
+
+Each `/hearth ingest` reply now includes a `share_page` URL — tap it to see
+the rendered ChangePlan with a one-tap **✓ Approve** button. The vault is
+never written by the channel; all writes go through hearth's kernel after
+human approval.
+
+**Setup:**
+
+```bash
+# 1. clone + install hearth somewhere (one-time)
+git clone https://github.com/ggshr9/hearth.git ~/Documents/hearth
+cd ~/Documents/hearth && bun install
+bun src/cli/index.ts setup    # interactive: detects Obsidian vaults, runs adopt
+
+# 2. point wechat-cc at your vault
+export HEARTH_VAULT=/path/to/your/vault
+export HEARTH_AGENT=mock        # or "claude" once you have an Anthropic key
+```
+
+Owner-only: `/hearth` commands are admin-gated through the same
+allowlist as `/health` (`access.ts::isAdmin`). Non-owners are silently
+dropped.
+
+See [hearth's INTEGRATIONS guide](https://github.com/ggshr9/hearth/blob/main/docs/INTEGRATIONS.md)
+for mounting hearth in Claude Code / Cursor / Codex / Continue.dev too —
+the wechat-cc adapter is one of several entry points.
+
+---
+
 ## v1.1 — Voice + Companion
 
 Three new capabilities layered on top of the v1.0 daemon:
