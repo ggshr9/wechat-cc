@@ -11,7 +11,7 @@
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { ingestFromChannel } from 'hearth'
+import { ingestFromChannel, listPending, showPending, applyForOwner } from 'hearth'
 import type { InboundMsg } from '../core/prompt-format'
 import type { SessionStateStore, ExpiredBot } from './session-state'
 
@@ -34,13 +34,16 @@ export interface AdminCommands {
 
 const CLEANUP_RE = /^\s*清理\s*(all-expired|所有过期|[a-zA-Z0-9-]+-im-bot)\s*$/
 const HEARTH_INGEST_RE = /^\s*\/hearth\s+ingest(?:\s+([\s\S]+))?$/
+const HEARTH_LIST_RE = /^\s*\/hearth\s+list\s*$/
+const HEARTH_SHOW_RE = /^\s*\/hearth\s+show\s+([A-Za-z0-9_-]+)\s*$/
+const HEARTH_APPLY_RE = /^\s*\/hearth\s+apply\s+([A-Za-z0-9_-]+)\s*$/
 const HEARTH_HELP_RE = /^\s*\/hearth(\s+help)?\s*$/
 
 export function makeAdminCommands(deps: AdminCommandsDeps): AdminCommands {
   return {
     async handle(msg) {
       const text = msg.text.trim()
-      const isCmd = text === '/health' || CLEANUP_RE.test(text) || HEARTH_INGEST_RE.test(text) || HEARTH_HELP_RE.test(text)
+      const isCmd = text === '/health' || CLEANUP_RE.test(text) || HEARTH_INGEST_RE.test(text) || HEARTH_LIST_RE.test(text) || HEARTH_SHOW_RE.test(text) || HEARTH_APPLY_RE.test(text) || HEARTH_HELP_RE.test(text)
       if (!isCmd) return false
 
       if (!deps.isAdmin(msg.chatId)) {
@@ -62,6 +65,23 @@ export function makeAdminCommands(deps: AdminCommandsDeps): AdminCommands {
       const hearthIngest = HEARTH_INGEST_RE.exec(text)
       if (hearthIngest) {
         await runHearthIngest(deps, msg, hearthIngest[1] ?? '')
+        return true
+      }
+
+      if (HEARTH_LIST_RE.test(text)) {
+        await runHearthList(deps, msg.chatId)
+        return true
+      }
+
+      const hearthShow = HEARTH_SHOW_RE.exec(text)
+      if (hearthShow) {
+        await runHearthShow(deps, msg.chatId, hearthShow[1]!)
+        return true
+      }
+
+      const hearthApply = HEARTH_APPLY_RE.exec(text)
+      if (hearthApply) {
+        await runHearthApply(deps, msg, hearthApply[1]!)
         return true
       }
 
@@ -117,23 +137,64 @@ async function runHearthIngest(deps: AdminCommandsDeps, msg: InboundMsg, content
   }
 }
 
+async function runHearthList(deps: AdminCommandsDeps, adminChatId: string): Promise<void> {
+  try {
+    const r = listPending({ hearthStateDir: join(homedir(), '.hearth'), limit: 10 })
+    await deps.sendMessage(adminChatId, r.rendered)
+    deps.log('HEARTH', `${adminChatId} list — ${r.items.length} shown`)
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    await deps.sendMessage(adminChatId, '❌ /hearth list 异常: ' + detail.slice(0, 500))
+  }
+}
+
+async function runHearthShow(deps: AdminCommandsDeps, adminChatId: string, changeId: string): Promise<void> {
+  try {
+    const r = showPending(changeId, { hearthStateDir: join(homedir(), '.hearth') })
+    await deps.sendMessage(adminChatId, r.rendered)
+    deps.log('HEARTH', `${adminChatId} show ${changeId} ok=${r.ok}`)
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    await deps.sendMessage(adminChatId, '❌ /hearth show 异常: ' + detail.slice(0, 500))
+  }
+}
+
+async function runHearthApply(deps: AdminCommandsDeps, msg: InboundMsg, changeId: string): Promise<void> {
+  const vault = process.env.HEARTH_VAULT
+  if (!vault) {
+    await deps.sendMessage(msg.chatId, '❌ HEARTH_VAULT 未设置')
+    return
+  }
+  try {
+    const r = await applyForOwner(changeId, {
+      vaultRoot: vault,
+      hearthStateDir: join(homedir(), '.hearth'),
+      ownerId: msg.chatId,
+      channel: 'wechat',
+    })
+    await deps.sendMessage(msg.chatId, r.rendered)
+    deps.log('HEARTH', `${msg.chatId} apply ${changeId} ok=${r.ok}`)
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    await deps.sendMessage(msg.chatId, '❌ /hearth apply 异常: ' + detail.slice(0, 500))
+  }
+}
+
 async function sendHearthHelp(deps: AdminCommandsDeps, adminChatId: string): Promise<void> {
   const vault = process.env.HEARTH_VAULT ?? '(未设置 HEARTH_VAULT)'
   const agent = process.env.HEARTH_AGENT === 'claude' ? 'claude' : 'mock'
   const lines = [
-    '🔥 hearth (v0.3.0 channel adapter spike)',
+    '🔥 hearth (v0.3.1 channel review surface)',
     '',
     'vault: ' + vault,
     'agent: ' + agent,
     '',
     '命令：',
-    '  /hearth ingest <text>   把 text 喂给 hearth，生成 pending ChangePlan',
-    '  /hearth                 显示这条 help',
-    '',
-    'apply / list / show 走 CLI（v0.3.1 会上 wechat 内 /hearth list/apply）：',
-    '  hearth pending list',
-    '  hearth pending show <change_id>',
-    '  hearth pending apply <change_id> --vault ' + vault,
+    '  /hearth ingest <text>      把 text 喂给 hearth，生成 pending ChangePlan',
+    '  /hearth list               看一下当前 pending 队列',
+    '  /hearth show <change_id>   预览某一份 ChangePlan',
+    '  /hearth apply <change_id>  apply 到 vault（owner 直发即授权）',
+    '  /hearth                    显示这条 help',
   ]
   await deps.sendMessage(adminChatId, lines.join('\n'))
 }
