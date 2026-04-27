@@ -30,12 +30,29 @@ First slice implemented:
 Desktop app rule: call these commands and render JSON. Do not reimplement
 state inspection or provider selection inside the GUI.
 
-Next slices:
+Status:
 
-1. Add `wechat-cc update --json` for one-click GUI upgrades.
-2. Build `apps/desktop` with Tauri after the CLI contracts above are stable.
-3. Add signed release packaging: macOS `.dmg`, Windows `.exe`, Linux
-   `.AppImage`/`.deb`.
+1. ✅ `wechat-cc update [--check] [--json]` — shipped 2026-04-27 (commits
+   bf94ee1 → 880d2bf). GUI surfaces an Update card with launch-time
+   probe + manual check + apply, all reject reasons mapped to user
+   copy. See `docs/specs/2026-04-27-wechat-cc-update.md`.
+2. ✅ `apps/desktop` built with Tauri 2 — first public alpha
+   `desktop-v0.1.0` published 2026-04-27 (Linux + macOS aarch64 + Windows
+   bundles attached to GitHub Release).
+3. ⏳ Signed release packaging — pending Apple Developer ID + Windows
+   EV cert provisioning. Current builds use ad-hoc signing on macOS and
+   are unsigned on Windows; first-run requires a one-time Gatekeeper /
+   SmartScreen bypass documented in README.
+
+Open follow-ups:
+
+- macOS Intel (x86_64) bundle — current build is aarch64 only because
+  `macos-latest` runner moved to Apple Silicon. Add `macos-13` to the
+  matrix in a v0.1.1.
+- Inline editing of `memory/*.md` in the desktop pane (currently
+  read-only renders via vendored marked).
+- `actions/checkout@v4` etc. on Node 20 — GitHub deprecation deadline
+  2026-09-16; bump to @v5 (Node 24) before then.
 
 GUI QR loop:
 

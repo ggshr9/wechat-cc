@@ -18,6 +18,39 @@
 
 <!-- TODO: add a 4-panel screenshot or 30s demo video here -->
 
+## Desktop installer (alpha) — [`desktop-v0.1.0`](https://github.com/ggshr9/wechat-cc/releases/tag/desktop-v0.1.0)
+
+Don't want to type CLI commands? A Tauri 2 desktop app wraps the whole setup
+flow — QR scan, agent picker, service install — in a 4-step wizard, then
+hands you a dashboard with bound accounts, Companion memory, and one-click
+upgrades via `wechat-cc update`.
+
+| Platform | Bundle | Notes |
+|:---|:---|:---|
+| **macOS** (Apple Silicon) | [`wechat-cc_0.1.0_aarch64.dmg`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc_0.1.0_aarch64.dmg) | Right-click → Open on first launch |
+| **Windows** (x64) | [`.exe`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc_0.1.0_x64-setup.exe) · [`.msi`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc_0.1.0_x64_en-US.msi) | SmartScreen → More info → Run anyway |
+| **Linux** (x64) | [`.deb`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc_0.1.0_amd64.deb) · [`.AppImage`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc_0.1.0_amd64.AppImage) · [`.rpm`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc-0.1.0-1.x86_64.rpm) | No warning |
+
+> Bundles are unsigned for now (Apple Developer ID + Windows EV cert
+> not yet provisioned). See [Desktop bundles — first-run warnings](#desktop-bundles--first-run-warnings)
+> for the per-platform "Open anyway" steps.
+
+**Prerequisite**: the desktop app shells out to the `wechat-cc` CLI, so
+the source needs to be available somewhere. Recommended path:
+
+```bash
+git clone https://github.com/ggshr9/wechat-cc.git ~/.local/share/wechat-cc
+cd ~/.local/share/wechat-cc && bun install
+```
+
+Or set `WECHAT_CC_ROOT` env var to a custom location.
+
+**macOS Intel users**: this build is Apple Silicon only. x86_64 Mac
+support coming in a follow-up release. For now, install via Quick Start
+(below) and run from terminal.
+
+---
+
 ## v1.2 — Hearth integration (vault governance from your phone)
 
 Capture into a personal markdown vault — and review / approve / apply
@@ -138,6 +171,7 @@ wechat-cc run
 
 ## Table of Contents
 
+- [Desktop installer (alpha)](#desktop-installer-alpha--desktop-v010)
 - [What changed in v1.0](#what-changed-in-v10)
 - [Quick Start](#quick-start)
 - [Features](#features)

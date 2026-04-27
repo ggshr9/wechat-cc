@@ -18,6 +18,36 @@
 
 <!-- TODO: 加一张 4 格截图或 30 秒演示视频 -->
 
+## 桌面安装器 (alpha) — [`desktop-v0.1.0`](https://github.com/ggshr9/wechat-cc/releases/tag/desktop-v0.1.0)
+
+不想敲 CLI？Tauri 2 桌面 app 把整套配置流（扫码 / 选 agent / 装服务）
+做成一个 4 步向导，然后给你一个有绑定账号、Companion 记忆、`wechat-cc update`
+一键升级的控制面板。
+
+| 平台 | 安装包 | 说明 |
+|:---|:---|:---|
+| **macOS** (Apple Silicon) | [`wechat-cc_0.1.0_aarch64.dmg`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc_0.1.0_aarch64.dmg) | 第一次开右键 → 打开 |
+| **Windows** (x64) | [`.exe`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc_0.1.0_x64-setup.exe) · [`.msi`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc_0.1.0_x64_en-US.msi) | SmartScreen → 更多信息 → 仍要运行 |
+| **Linux** (x64) | [`.deb`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc_0.1.0_amd64.deb) · [`.AppImage`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc_0.1.0_amd64.AppImage) · [`.rpm`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc-0.1.0-1.x86_64.rpm) | 没警告 |
+
+> 当前 bundle 都未签名（Apple Developer ID + Windows EV 证书暂未配齐）。
+> 各平台「打开警告」处理方式见 [桌面 bundle —— 首次运行警告](#桌面-bundle--首次运行警告)。
+
+**前置条件**：桌面 app 是壳，运行时调 `wechat-cc` CLI，所以源码得先放到本地。
+推荐路径：
+
+```bash
+git clone https://github.com/ggshr9/wechat-cc.git ~/.local/share/wechat-cc
+cd ~/.local/share/wechat-cc && bun install
+```
+
+或者设 `WECHAT_CC_ROOT` 环境变量到你想放的位置。
+
+**Intel Mac 用户**：当前 bundle 仅支持 Apple Silicon，x86_64 后续版本补。
+现在请走 Quick Start（下面）从终端起。
+
+---
+
 ## v1.2 —— Hearth 集成（手机上做 vault 治理）
 
 捕获到个人 markdown vault — 并且审 / 批 / apply 变更 — 全程不离开微信。
@@ -136,6 +166,7 @@ wechat-cc run
 
 ## 目录
 
+- [桌面安装器 (alpha)](#桌面安装器-alpha--desktop-v010)
 - [v1.0 有什么变化](#v10-有什么变化)
 - [快速开始](#快速开始)
 - [功能](#功能)
@@ -242,10 +273,23 @@ Windows 上所有功能正常。微信端 `/restart` 在 v1.0 已移除；需要
 ### 更新
 
 ```bash
-wechat-cc update    # git pull + 按需 bun install
+wechat-cc update             # pull + 重装依赖 + 重启服务
+wechat-cc update --check     # 仅探测，无副作用
 ```
 
-然后在终端 `Ctrl+C` 后重新 `wechat-cc run` 生效。微信端 `/status` 显示当前版本和是否有更新。
+`--check` 是桌面 GUI 启动时和点「检查更新」按钮时调的——根据它决定是否高亮「立即升级」。
+
+如果 daemon 是以服务方式跑的（LaunchAgent / systemd / Scheduled Task —— 走过桌面安装器或 `wechat-cc service install`），`update` 会自动 stop → pull → 必要时 `bun install` → 重启服务。如果你是 `wechat-cc run` 在终端前台跑的，命令会拒绝（`daemon_running_not_service`），不会杀掉你的 shell —— 先 Ctrl+C 退出前台进程再升级。
+
+### 桌面 bundle —— 首次运行警告
+
+桌面 bundle 当前未签名（Apple Developer ID + Windows EV 证书未配齐），首次运行会有一次性 OS 警告：
+
+- **macOS**：「无法验证开发者」。右键 `.dmg`（或里面的 app）→ **打开** → 确认。第二次开就不弹了。
+- **Windows**：SmartScreen「无法识别的应用」。点「**更多信息**」→「**仍要运行**」。
+- **Linux**：`.AppImage` / `.deb` / `.rpm` 没警告。
+
+未签名的 bundle 跟 GitHub Actions 出产的字节级一致，只是少了证书。后续签名版本（拿到证书后）会消除这些提示。
 
 ### 通过 cc-switch 配置
 
