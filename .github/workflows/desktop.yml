@@ -23,13 +23,10 @@ jobs:
         include:
           - os: ubuntu-latest
             label: linux
-            bundle_glob: 'apps/desktop/src-tauri/target/release/bundle/{deb,appimage,rpm}/*'
           - os: macos-latest
             label: macos
-            bundle_glob: 'apps/desktop/src-tauri/target/release/bundle/{dmg,macos}/*'
           - os: windows-latest
             label: windows
-            bundle_glob: 'apps/desktop/src-tauri/target/release/bundle/{nsis,msi}/*'
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -120,7 +117,19 @@ jobs:
         if: always()
         with:
           name: wechat-cc-${{ matrix.label }}
-          path: ${{ matrix.bundle_glob }}
+          # actions/upload-artifact uses @actions/glob, which does NOT expand
+          # `{a,b,c}` brace patterns — earlier `bundle/{dmg,macos}/*` matched
+          # zero files. Listing each subdir on its own line is the supported
+          # multi-path syntax. Only the subset relevant to each platform exists
+          # at runtime; the rest are silently ignored.
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/dmg/*
+            apps/desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz
+            apps/desktop/src-tauri/target/release/bundle/nsis/*
+            apps/desktop/src-tauri/target/release/bundle/msi/*
+            apps/desktop/src-tauri/target/release/bundle/deb/*
+            apps/desktop/src-tauri/target/release/bundle/appimage/*
+            apps/desktop/src-tauri/target/release/bundle/rpm/*
           if-no-files-found: warn
           retention-days: 14
 
