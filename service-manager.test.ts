@@ -86,4 +86,48 @@ describe('service-manager', () => {
     })
     expect(plan.fileContent).toContain('cli.ts run --dangerously')
   })
+
+  it('macOS plist sets RunAtLoad/KeepAlive true by default (autoStart=true)', () => {
+    const plan = buildServicePlan({
+      platform: 'darwin', homeDir: '/Users/alice', cwd: '/Users/alice/.wechat-cc', bunPath: '/opt/homebrew/bin/bun',
+    })
+    expect(plan.fileContent).toContain('<key>RunAtLoad</key><true/>')
+    expect(plan.fileContent).toContain('<key>KeepAlive</key><true/>')
+  })
+
+  it('macOS plist sets RunAtLoad/KeepAlive false when autoStart=false', () => {
+    const plan = buildServicePlan({
+      platform: 'darwin', homeDir: '/Users/alice', cwd: '/Users/alice/.wechat-cc', bunPath: '/opt/homebrew/bin/bun',
+      autoStart: false,
+    })
+    expect(plan.fileContent).toContain('<key>RunAtLoad</key><false/>')
+    expect(plan.fileContent).toContain('<key>KeepAlive</key><false/>')
+  })
+
+  it('Linux install runs `start` (not `enable --now`) when autoStart=false', () => {
+    const plan = buildServicePlan({
+      platform: 'linux', homeDir: '/home/alice', cwd: '/home/alice/.wechat-cc', bunPath: '/home/alice/.bun/bin/bun',
+      autoStart: false,
+    })
+    expect(plan.installCommands).toContainEqual(['systemctl', '--user', 'start', 'wechat-cc.service'])
+    expect(plan.installCommands).not.toContainEqual(['systemctl', '--user', 'enable', '--now', 'wechat-cc.service'])
+  })
+
+  it('Linux uninstall stops (not disable) when autoStart=false (no enable to undo)', () => {
+    const plan = buildServicePlan({
+      platform: 'linux', homeDir: '/home/alice', cwd: '/home/alice/.wechat-cc', bunPath: '/home/alice/.bun/bin/bun',
+      autoStart: false,
+    })
+    expect(plan.uninstallCommands).toContainEqual(['systemctl', '--user', 'stop', 'wechat-cc.service'])
+    expect(plan.uninstallCommands.find(c => c.includes('disable'))).toBeUndefined()
+  })
+
+  it('Windows installCommands include /Change /DISABLE step when autoStart=false', () => {
+    const plan = buildServicePlan({
+      platform: 'win32', homeDir: 'C:\\Users\\alice', cwd: 'C:\\app', bunPath: 'C:\\bun.exe',
+      autoStart: false,
+    })
+    const disable = plan.installCommands.find(c => c.includes('/Change') && c.includes('/DISABLE'))
+    expect(disable).toBeDefined()
+  })
 })

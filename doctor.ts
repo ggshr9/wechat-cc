@@ -21,12 +21,20 @@ export interface DaemonSnapshot {
   pid: number | null
 }
 
+export interface ExpiredBotEntry {
+  botId: string
+  firstSeenExpiredAt: string
+  lastReason?: string
+}
+
 export interface DoctorDeps {
   stateDir: string
   findOnPath: (cmd: string) => string | null
   readAccounts: () => BoundAccount[]
   readAccess: () => AccessSnapshot
   readAgentConfig: () => AgentConfig
+  readUserNames: () => Record<string, string>
+  readExpiredBots: () => ExpiredBotEntry[]
   daemon: () => DaemonSnapshot
 }
 
@@ -43,6 +51,8 @@ export interface DoctorReport {
     provider: { ok: boolean; provider: AgentConfig['provider']; model?: string; binaryPath: string | null }
     daemon: DaemonSnapshot
   }
+  userNames: Record<string, string>
+  expiredBots: ExpiredBotEntry[]
   nextActions: string[]
 }
 
@@ -94,6 +104,8 @@ export function analyzeDoctor(deps: DoctorDeps): DoctorReport {
       && daemon.alive,
     stateDir: deps.stateDir,
     checks,
+    userNames: deps.readUserNames(),
+    expiredBots: deps.readExpiredBots(),
     nextActions,
   }
 }
@@ -130,7 +142,44 @@ export function defaultDoctorDeps(stateDir = STATE_DIR): DoctorDeps {
     readAccounts: () => readAccounts(stateDir),
     readAccess: () => readAccess(stateDir),
     readAgentConfig: () => loadAgentConfig(stateDir),
+    readUserNames: () => readUserNames(stateDir),
+    readExpiredBots: () => readExpiredBots(stateDir),
     daemon: () => readDaemon(stateDir),
+  }
+}
+
+export function readExpiredBots(stateDir: string): ExpiredBotEntry[] {
+  try {
+    const parsed = JSON.parse(readFileSync(join(stateDir, 'session-state.json'), 'utf8')) as {
+      bots?: Record<string, { status?: string; first_seen_expired_at?: string; last_reason?: string }>
+    }
+    if (!parsed.bots) return []
+    const out: ExpiredBotEntry[] = []
+    for (const [botId, entry] of Object.entries(parsed.bots)) {
+      if (entry?.status !== 'expired' || typeof entry.first_seen_expired_at !== 'string') continue
+      out.push({
+        botId,
+        firstSeenExpiredAt: entry.first_seen_expired_at,
+        ...(typeof entry.last_reason === 'string' ? { lastReason: entry.last_reason } : {}),
+      })
+    }
+    out.sort((a, b) => a.firstSeenExpiredAt.localeCompare(b.firstSeenExpiredAt))
+    return out
+  } catch {
+    return []
+  }
+}
+
+export function readUserNames(stateDir: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(readFileSync(join(stateDir, 'user_names.json'), 'utf8')) as Record<string, unknown>
+    const out: Record<string, string> = {}
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === 'string') out[k] = v
+    }
+    return out
+  } catch {
+    return {}
   }
 }
 

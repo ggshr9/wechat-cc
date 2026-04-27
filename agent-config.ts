@@ -11,6 +11,11 @@ export interface AgentConfig {
   // Wizard-installed daemons need this on by default — there is no human
   // to answer permission prompts triggered by inbound WeChat messages.
   dangerouslySkipPermissions: boolean
+  // When true, `service install` registers the unit for auto-start at
+  // login/boot (macOS RunAtLoad+KeepAlive, systemd `enable`, schtasks
+  // ONLOGON). When false (default), the daemon is started this session
+  // only — opt-in design per user request 2026-04-26.
+  autoStart: boolean
 }
 
 const CONFIG_FILE = 'agent-config.json'
@@ -20,14 +25,15 @@ export function loadAgentConfig(stateDir: string): AgentConfig {
     const raw = readFileSync(join(stateDir, CONFIG_FILE), 'utf8')
     const parsed = JSON.parse(raw) as Partial<AgentConfig>
     const dangerouslySkipPermissions = parsed.dangerouslySkipPermissions ?? true
+    const autoStart = parsed.autoStart ?? false
     if (parsed.provider === 'codex') {
       return parsed.model
-        ? { provider: 'codex', model: parsed.model, dangerouslySkipPermissions }
-        : { provider: 'codex', dangerouslySkipPermissions }
+        ? { provider: 'codex', model: parsed.model, dangerouslySkipPermissions, autoStart }
+        : { provider: 'codex', dangerouslySkipPermissions, autoStart }
     }
-    return { provider: 'claude', dangerouslySkipPermissions }
+    return { provider: 'claude', dangerouslySkipPermissions, autoStart }
   } catch {
-    return { provider: 'claude', dangerouslySkipPermissions: true }
+    return { provider: 'claude', dangerouslySkipPermissions: true, autoStart: false }
   }
 }
 

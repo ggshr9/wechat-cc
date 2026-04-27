@@ -9,6 +9,8 @@ describe('doctor installer JSON', () => {
       readAccounts: () => [],
       readAccess: () => ({ dmPolicy: 'allowlist', allowFrom: [] }),
       readAgentConfig: () => ({ provider: 'claude', dangerouslySkipPermissions: true }),
+      readUserNames: () => ({}),
+      readExpiredBots: () => [],
       daemon: () => ({ alive: false, pid: null }),
     })
 
@@ -26,10 +28,16 @@ describe('doctor installer JSON', () => {
       readAccounts: () => [{ id: 'bot-1', botId: 'bot-1', userId: 'u1', baseUrl: 'https://ilink' }],
       readAccess: () => ({ dmPolicy: 'allowlist', allowFrom: ['u1'] }),
       readAgentConfig: () => ({ provider: 'codex', model: 'gpt-5.3-codex', dangerouslySkipPermissions: true }),
+      readUserNames: () => ({ u1: '丸子' }),
+      readExpiredBots: () => [{ botId: 'bot-2-im-bot', firstSeenExpiredAt: '2026-04-26T10:00:00Z', lastReason: 'test' }],
       daemon: () => ({ alive: true, pid: 123 }),
     })
 
     expect(report.ready).toBe(true)
+    expect(report.userNames).toEqual({ u1: '丸子' })
+    expect(report.expiredBots).toEqual([
+      { botId: 'bot-2-im-bot', firstSeenExpiredAt: '2026-04-26T10:00:00Z', lastReason: 'test' },
+    ])
     expect(report.checks.provider.provider).toBe('codex')
     expect(report.checks.provider.ok).toBe(true)
     expect(report.nextActions).toEqual([])

@@ -16,9 +16,13 @@ export type CliArgs =
   | { cmd: 'list' }
   | { cmd: 'doctor'; json: boolean }
   | { cmd: 'setup-status'; json: boolean }
-  | { cmd: 'service'; action: 'status' | 'install' | 'start' | 'stop' | 'uninstall'; json: boolean; unattended?: boolean }
+  | { cmd: 'service'; action: 'status' | 'install' | 'start' | 'stop' | 'uninstall'; json: boolean; unattended?: boolean; autoStart?: boolean }
   | { cmd: 'provider-set'; provider: AgentProviderKind; model?: string; unattended?: boolean }
   | { cmd: 'provider-show'; json: boolean }
+  | { cmd: 'account-remove'; botId: string; json: boolean }
+  | { cmd: 'daemon-kill'; pid: number; json: boolean }
+  | { cmd: 'memory-list'; json: boolean }
+  | { cmd: 'memory-read'; userId: string; path: string; json: boolean }
   | { cmd: 'help' }
 
 export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void }): CliArgs {
@@ -55,7 +59,32 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
     case 'setup-status': return { cmd: 'setup-status', json: rest.includes('--json') }
     case 'service': {
       if (rest[0] === 'status' || rest[0] === 'install' || rest[0] === 'start' || rest[0] === 'stop' || rest[0] === 'uninstall') {
-        return { cmd: 'service', action: rest[0], json: rest.includes('--json'), unattended: parseBoolFlag(rest, '--unattended') }
+        return {
+          cmd: 'service', action: rest[0], json: rest.includes('--json'),
+          unattended: parseBoolFlag(rest, '--unattended'),
+          autoStart: parseBoolFlag(rest, '--auto-start'),
+        }
+      }
+      return { cmd: 'help' }
+    }
+    case 'account': {
+      if (rest[0] === 'remove' && rest[1]) {
+        return { cmd: 'account-remove', botId: rest[1], json: rest.includes('--json') }
+      }
+      return { cmd: 'help' }
+    }
+    case 'daemon': {
+      if (rest[0] === 'kill' && rest[1]) {
+        const pid = Number.parseInt(rest[1], 10)
+        if (!Number.isFinite(pid) || pid <= 0) return { cmd: 'help' }
+        return { cmd: 'daemon-kill', pid, json: rest.includes('--json') }
+      }
+      return { cmd: 'help' }
+    }
+    case 'memory': {
+      if (rest[0] === 'list') return { cmd: 'memory-list', json: rest.includes('--json') }
+      if (rest[0] === 'read' && rest[1] && rest[2]) {
+        return { cmd: 'memory-read', userId: rest[1], path: rest[2], json: rest.includes('--json') }
       }
       return { cmd: 'help' }
     }
@@ -100,9 +129,25 @@ Usage:
   wechat-cc list        List bound accounts
   wechat-cc doctor [--json]        Diagnose install/setup state
   wechat-cc setup-status [--json]  Machine-readable setup status for desktop UI
-  wechat-cc service <status|install|start|stop|uninstall> [--json] [--unattended true|false]
+  wechat-cc service <status|install|start|stop|uninstall> [--json] [--unattended true|false] [--auto-start true|false]
                         --unattended: persist into agent-config and re-write plist.
                                       Idempotent: install replaces any existing daemon.
+                        --auto-start: register for boot/login auto-start
+                                      (macOS RunAtLoad+KeepAlive, systemd enable,
+                                      schtasks ONLOGON). Default false: opt-in.
+  wechat-cc account remove <bot-id> [--json]
+                        Decommission a bound bot — wipes its account dir,
+                        context_token, user_account_id, session-state entry.
+                        Restart the daemon afterwards for it to take effect.
+  wechat-cc daemon kill <pid> [--json]
+                        Force-kill a daemon process by pid. Verifies cmdline
+                        contains cli.ts or src/daemon/main.ts before signaling.
+                        SIGTERM (1.5s grace) then SIGKILL.
+  wechat-cc memory list [--json]
+                        List Companion v2 memory files (per user).
+  wechat-cc memory read <user-id> <path> [--json]
+                        Read one .md memory file. Path is relative to the
+                        user's memory dir, traversal-safe.
   wechat-cc provider show [--json]  Show selected agent provider
   wechat-cc provider set <claude|codex> [--model MODEL] [--unattended true|false]
                         --unattended: when true (default for new installs), the
@@ -182,14 +227,19 @@ async function main() {
       return
     }
     case 'service': {
-      // If the caller passed --unattended, persist it into agent-config first
-      // so this is the source of truth (re-installs from the GUI re-pick the same value).
-      if (parsed.unattended !== undefined) {
+      // If the caller passed --unattended or --auto-start, persist them into
+      // agent-config first so this is the source of truth (re-installs from
+      // the GUI re-pick the same values).
+      if (parsed.unattended !== undefined || parsed.autoStart !== undefined) {
         const existing = loadAgentConfig(STATE_DIR)
-        saveAgentConfig(STATE_DIR, { ...existing, dangerouslySkipPermissions: parsed.unattended })
+        saveAgentConfig(STATE_DIR, {
+          ...existing,
+          ...(parsed.unattended !== undefined ? { dangerouslySkipPermissions: parsed.unattended } : {}),
+          ...(parsed.autoStart !== undefined ? { autoStart: parsed.autoStart } : {}),
+        })
       }
       const config = loadAgentConfig(STATE_DIR)
-      const plan = buildServicePlan({ cwd: here, dangerouslySkipPermissions: config.dangerouslySkipPermissions })
+      const plan = buildServicePlan({ cwd: here, dangerouslySkipPermissions: config.dangerouslySkipPermissions, autoStart: config.autoStart })
       if (parsed.action === 'status') {
         const status = serviceStatus(defaultDoctorDeps())
         if (parsed.json) console.log(JSON.stringify({ ...status, plan, agentConfig: config }, null, 2))
@@ -214,6 +264,61 @@ async function main() {
       const out = { ok: true, action: parsed.action, plan, agentConfig: config, dryRun }
       if (parsed.json) console.log(JSON.stringify(out, null, 2))
       else console.log(`service ${parsed.action}: ok${dryRun ? ' (dry-run)' : ''}`)
+      return
+    }
+    case 'memory-list': {
+      const { listAllMemory } = await import('./memory.ts')
+      const users = listAllMemory(STATE_DIR)
+      if (parsed.json) console.log(JSON.stringify(users, null, 2))
+      else {
+        if (users.length === 0) console.log('(no memory files)')
+        for (const u of users) {
+          console.log(`${u.userId}  (${u.fileCount} 文件 · ${u.totalBytes} 字节)`)
+          for (const f of u.files) console.log(`  - ${f.path}  (${f.size}B)`)
+        }
+      }
+      return
+    }
+    case 'memory-read': {
+      const { readMemoryFile } = await import('./memory.ts')
+      try {
+        const content = readMemoryFile(STATE_DIR, parsed.userId, parsed.path)
+        if (parsed.json) console.log(JSON.stringify({ ok: true, userId: parsed.userId, path: parsed.path, content }, null, 2))
+        else process.stdout.write(content)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (parsed.json) console.log(JSON.stringify({ ok: false, error: msg }))
+        else console.error(`memory read failed: ${msg}`)
+        process.exit(1)
+      }
+      return
+    }
+    case 'daemon-kill': {
+      const { killDaemonByPid, defaultKillDeps } = await import('./daemon-kill.ts')
+      const result = await killDaemonByPid(defaultKillDeps(), parsed.pid)
+      if (parsed.json) console.log(JSON.stringify(result, null, 2))
+      else console.log(result.killed ? `killed pid ${result.pid}` : `failed: ${result.message}`)
+      if (!result.killed) process.exit(1)
+      return
+    }
+    case 'account-remove': {
+      const { removeAccount } = await import('./account-remove.ts')
+      try {
+        const result = removeAccount({ stateDir: STATE_DIR }, parsed.botId)
+        if (parsed.json) {
+          console.log(JSON.stringify({ ok: true, ...result, restartRequired: true }, null, 2))
+        } else {
+          console.log(`removed: ${result.botId}`)
+          for (const r of result.removed) console.log(`  - ${r}`)
+          for (const w of result.warnings) console.log(`  ! ${w}`)
+          console.log('\nrestart daemon for the change to take effect.')
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (parsed.json) console.log(JSON.stringify({ ok: false, error: msg }))
+        else console.error(`account remove failed: ${msg}`)
+        process.exit(1)
+      }
       return
     }
     case 'provider-show': {

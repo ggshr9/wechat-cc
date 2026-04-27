@@ -8,6 +8,7 @@ import { materializeAttachments } from './media'
 import { log } from '../../log'
 import { isAdmin, loadAccess } from '../../access'
 import { makeAdminCommands } from './admin-commands'
+import { makeOnboardingHandler } from './onboarding'
 import { notifyStartup } from './notify-startup'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
@@ -95,6 +96,18 @@ async function main() {
   // the handler can reach the handle that will be assigned below.
   let pollHandle!: ReturnType<typeof startLongPollLoops>
 
+  // Deterministic first-time greeting: when an unknown wechat user (not in
+  // user_names.json) sends their first message, the daemon answers with a
+  // greeting + nickname prompt INSTEAD of routing to Claude. Prevents the
+  // common case where Claude jumps straight into the task and never learns
+  // who's talking. State is in-memory (30 min window). See onboarding.ts.
+  const onboarding = makeOnboardingHandler({
+    isKnownUser: (userId) => ilink.resolveUserName(userId) !== undefined,
+    setUserName: (chatId, name) => ilink.setUserName(chatId, name),
+    sendMessage: (chatId, text) => ilink.sendMessage(chatId, text),
+    log: (tag, line) => log(tag, line),
+  })
+
   const adminCommands = makeAdminCommands({
     stateDir: STATE_DIR,
     isAdmin,
@@ -134,8 +147,13 @@ async function main() {
       void ilink.sendTyping(msg.chatId, msg.accountId)
       // Admin-only slash / natural-language commands (/health, 清理...) get
       // intercepted BEFORE routing to Claude. Non-admin senders silently
-      // dropped (consistent with legacy /project command handling).
+      // dropped (consistent with legacy /project command handling). Admins
+      // run before onboarding so an admin can use /health on the first
+      // message without being held up by the nickname prompt.
       if (await adminCommands.handle(msg)) return
+      // First-time onboarding for unknown users — capture nickname before
+      // anything reaches Claude.
+      if (await onboarding.handle(msg)) return
       // Short-circuit permission replies BEFORE routing to Claude
       if (ilink.handlePermissionReply(msg.text)) {
         log('PERMISSION', `consumed reply from chat=${msg.chatId}`)

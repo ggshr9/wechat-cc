@@ -1,0 +1,114 @@
+name: Desktop Build
+
+# Three-platform Tauri build matrix. Verifies the desktop app compiles on
+# Linux / macOS / Windows and uploads each runner's bundle artefacts so we
+# can sanity-check installers without spinning up the actual platforms.
+#
+# Trigger:
+#   - manual (Actions tab → Run workflow)
+#   - push to a tag matching desktop-v*  (e.g. desktop-v0.1.0)
+
+on:
+  workflow_dispatch: {}
+  push:
+    tags:
+      - 'desktop-v*'
+
+jobs:
+  build:
+    name: build · ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux
+            bundle_glob: 'apps/desktop/src-tauri/target/release/bundle/{deb,appimage,rpm}/*'
+          - os: macos-latest
+            label: macos
+            bundle_glob: 'apps/desktop/src-tauri/target/release/bundle/{dmg,macos}/*'
+          - os: windows-latest
+            label: windows
+            bundle_glob: 'apps/desktop/src-tauri/target/release/bundle/{nsis,msi}/*'
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux system deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libxdo-dev \
+            libayatana-appindicator3-dev \
+            file \
+            build-essential \
+            pkg-config
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + git
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ matrix.os }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ matrix.os }}-
+
+      - name: Cache Tauri target
+        uses: actions/cache@v4
+        with:
+          path: apps/desktop/src-tauri/target
+          key: tauri-target-${{ matrix.os }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock', 'apps/desktop/src-tauri/src/**', 'apps/desktop/src-tauri/build.rs') }}
+          restore-keys: |
+            tauri-target-${{ matrix.os }}-
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install desktop deps
+        working-directory: apps/desktop
+        run: bun install --frozen-lockfile
+
+      - name: Install root deps (for vitest)
+        run: bun install --frozen-lockfile
+
+      - name: Run vitest (touched suites only)
+        run: |
+          bun x vitest run \
+            cli.test.ts \
+            agent-config.test.ts \
+            doctor.test.ts \
+            account-remove.test.ts \
+            daemon-kill.test.ts \
+            memory.test.ts \
+            src/daemon/onboarding.test.ts \
+            apps/desktop/src/view.test.ts
+
+      - name: Tauri build
+        working-directory: apps/desktop
+        run: bun run tauri build
+        env:
+          # Tauri's bundler tries to sign on macOS by default; skip for CI
+          # builds (we just want to verify it compiles + bundles).
+          APPLE_SIGNING_IDENTITY: ''
+
+      - name: Upload bundle artefacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wechat-cc-${{ matrix.label }}
+          path: ${{ matrix.bundle_glob }}
+          if-no-files-found: warn
+          retention-days: 14

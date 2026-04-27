@@ -32,6 +32,8 @@ const ROOT = process.env.WECHAT_CC_ROOT ?? join(import.meta.dir, '..', '..')
 const SRC = join(import.meta.dir, 'src')
 const PORT = Number(process.env.WECHAT_CC_SHIM_PORT ?? 4174)
 
+const dryRun = process.env.WECHAT_CC_DRY_RUN === '1'
+
 const POLYFILL = `<script>
 window.__TAURI__ = window.__TAURI__ ?? { core: {
   invoke: async (command, args) => {
@@ -46,6 +48,7 @@ window.__TAURI__ = window.__TAURI__ ?? { core: {
   }
 }}
 window.__WECHAT_CC_SHIM__ = true
+window.__WECHAT_CC_DRY_RUN__ = ${dryRun ? 'true' : 'false'}
 </script>`
 
 async function runCli(args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
@@ -121,7 +124,6 @@ Bun.serve({
   },
 })
 
-const dryRun = process.env.WECHAT_CC_DRY_RUN === '1'
 console.log(`shim: http://localhost:${PORT}  root=${ROOT}  dry-run=${dryRun ? 'on' : 'off'}`)
 if (!dryRun) {
   console.log('  ⚠️  WECHAT_CC_DRY_RUN is off — service install/uninstall will hit launchctl.')

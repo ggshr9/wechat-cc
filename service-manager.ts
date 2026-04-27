@@ -16,6 +16,11 @@ export interface ServicePlanInput {
   // `cli.ts run --dangerously`. Defaults true: wizard-installed daemons must
   // bypass permission prompts since no human will be there to answer them.
   dangerouslySkipPermissions?: boolean
+  // When true (default), the unit registers for auto-start: macOS plist gets
+  // RunAtLoad+KeepAlive, systemd is `enable --now`, schtasks uses ONLOGON.
+  // When false, the daemon is installed + started ONCE this session but
+  // won't come back after reboot (and on macOS won't restart on crash).
+  autoStart?: boolean
 }
 
 export interface ServicePlan {
@@ -35,16 +40,20 @@ export function buildServicePlan(input: ServicePlanInput): ServicePlan {
   const bunPath = input.bunPath ?? findOnPath('bun') ?? 'bun'
   const serviceName = 'wechat-cc'
   const dangerously = input.dangerouslySkipPermissions ?? true
+  const autoStart = input.autoStart ?? true
   const runArgs = dangerously ? ['run', '--dangerously'] : ['run']
 
   if (pf === 'darwin') {
     const serviceFile = join(homeDir, 'Library', 'LaunchAgents', 'com.wechat-cc.daemon.plist')
     const gui = `gui/${typeof process.getuid === 'function' ? process.getuid() : 501}`
+    // autoStart=false: bootstrap+enable+kickstart still runs the daemon now
+    // (user clicked "install AND start"), but plist omits RunAtLoad+KeepAlive
+    // so it won't auto-start at next login or auto-restart on crash.
     return {
       kind: 'launchagent',
       serviceName,
       serviceFile,
-      fileContent: launchAgentPlist({ bunPath, cwd: input.cwd, runArgs }),
+      fileContent: launchAgentPlist({ bunPath, cwd: input.cwd, runArgs, autoStart }),
       installCommands: [['launchctl', 'bootstrap', gui, serviceFile], ['launchctl', 'enable', `${gui}/com.wechat-cc.daemon`], ['launchctl', 'kickstart', '-k', `${gui}/com.wechat-cc.daemon`]],
       startCommands: [['launchctl', 'kickstart', '-k', `${gui}/com.wechat-cc.daemon`]],
       stopCommands: [['launchctl', 'bootout', gui, serviceFile]],
@@ -54,12 +63,17 @@ export function buildServicePlan(input: ServicePlanInput): ServicePlan {
 
   if (pf === 'win32') {
     const taskRun = `"${bunPath}" "${join(input.cwd, 'cli.ts')}" ${runArgs.join(' ')}`
+    // autoStart=false on Windows: create the task disabled (no ONLOGON
+    // trigger fires), then explicitly /Run it once for this session.
+    const installCommands: string[][] = [['schtasks', '/Create', '/TN', serviceName, '/SC', 'ONLOGON', '/TR', taskRun, '/F']]
+    if (!autoStart) installCommands.push(['schtasks', '/Change', '/TN', serviceName, '/DISABLE'])
+    installCommands.push(['schtasks', '/Run', '/TN', serviceName])
     return {
       kind: 'scheduled-task',
       serviceName,
       serviceFile: null,
       fileContent: null,
-      installCommands: [['schtasks', '/Create', '/TN', serviceName, '/SC', 'ONLOGON', '/TR', taskRun, '/F']],
+      installCommands,
       startCommands: [['schtasks', '/Run', '/TN', serviceName]],
       stopCommands: [['schtasks', '/End', '/TN', serviceName]],
       uninstallCommands: [['schtasks', '/Delete', '/TN', serviceName, '/F']],
@@ -67,15 +81,25 @@ export function buildServicePlan(input: ServicePlanInput): ServicePlan {
   }
 
   const serviceFile = join(homeDir, '.config', 'systemd', 'user', 'wechat-cc.service')
+  // autoStart=true → enable --now (boot-time + start now). autoStart=false
+  // → just start (no `enable`, won't come back after reboot). Restart=always
+  // is in the unit either way, so crash recovery within a session works
+  // regardless of the toggle.
+  const installCommands: string[][] = [['systemctl', '--user', 'daemon-reload']]
+  if (autoStart) installCommands.push(['systemctl', '--user', 'enable', '--now', 'wechat-cc.service'])
+  else installCommands.push(['systemctl', '--user', 'start', 'wechat-cc.service'])
+  const uninstallCommands: string[][] = autoStart
+    ? [['systemctl', '--user', 'disable', '--now', 'wechat-cc.service'], ['systemctl', '--user', 'daemon-reload']]
+    : [['systemctl', '--user', 'stop', 'wechat-cc.service'], ['systemctl', '--user', 'daemon-reload']]
   return {
     kind: 'systemd-user',
     serviceName,
     serviceFile,
     fileContent: systemdUnit({ bunPath, cwd: input.cwd, runArgs }),
-    installCommands: [['systemctl', '--user', 'daemon-reload'], ['systemctl', '--user', 'enable', '--now', 'wechat-cc.service']],
+    installCommands,
     startCommands: [['systemctl', '--user', 'start', 'wechat-cc.service']],
     stopCommands: [['systemctl', '--user', 'stop', 'wechat-cc.service']],
-    uninstallCommands: [['systemctl', '--user', 'disable', '--now', 'wechat-cc.service'], ['systemctl', '--user', 'daemon-reload']],
+    uninstallCommands,
   }
 }
 
@@ -121,10 +145,13 @@ function runCommands(commands: string[][]): void {
   }
 }
 
-function launchAgentPlist(opts: { bunPath: string; cwd: string; runArgs: string[] }): string {
+function launchAgentPlist(opts: { bunPath: string; cwd: string; runArgs: string[]; autoStart: boolean }): string {
   const argsXml = [opts.bunPath, join(opts.cwd, 'cli.ts'), ...opts.runArgs]
     .map(arg => `    <string>${escapeXml(arg)}</string>`)
     .join('\n')
+  const autoLines = opts.autoStart
+    ? '  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>'
+    : '  <key>RunAtLoad</key><false/>\n  <key>KeepAlive</key><false/>'
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -133,8 +160,7 @@ function launchAgentPlist(opts: { bunPath: string; cwd: string; runArgs: string[
 ${argsXml}
   </array>
   <key>WorkingDirectory</key><string>${escapeXml(opts.cwd)}</string>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
+${autoLines}
 </dict></plist>
 `
 }

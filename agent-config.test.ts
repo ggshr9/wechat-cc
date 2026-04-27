@@ -8,7 +8,7 @@ describe('agent-config', () => {
   it('defaults to claude with unattended=true when no config exists', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agent-config-'))
     try {
-      expect(loadAgentConfig(dir)).toEqual({ provider: 'claude', dangerouslySkipPermissions: true })
+      expect(loadAgentConfig(dir)).toEqual({ provider: 'claude', dangerouslySkipPermissions: true, autoStart: false })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -17,8 +17,8 @@ describe('agent-config', () => {
   it('persists codex provider and model', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agent-config-'))
     try {
-      saveAgentConfig(dir, { provider: 'codex', model: 'gpt-5.3-codex', dangerouslySkipPermissions: true })
-      expect(loadAgentConfig(dir)).toEqual({ provider: 'codex', model: 'gpt-5.3-codex', dangerouslySkipPermissions: true })
+      saveAgentConfig(dir, { provider: 'codex', model: 'gpt-5.3-codex', dangerouslySkipPermissions: true, autoStart: false })
+      expect(loadAgentConfig(dir)).toEqual({ provider: 'codex', model: 'gpt-5.3-codex', dangerouslySkipPermissions: true, autoStart: false })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -27,8 +27,8 @@ describe('agent-config', () => {
   it('persists dangerouslySkipPermissions=false when explicitly opted out', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agent-config-'))
     try {
-      saveAgentConfig(dir, { provider: 'claude', dangerouslySkipPermissions: false })
-      expect(loadAgentConfig(dir)).toEqual({ provider: 'claude', dangerouslySkipPermissions: false })
+      saveAgentConfig(dir, { provider: 'claude', dangerouslySkipPermissions: false, autoStart: false })
+      expect(loadAgentConfig(dir)).toEqual({ provider: 'claude', dangerouslySkipPermissions: false, autoStart: false })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -41,7 +41,17 @@ describe('agent-config', () => {
     try {
       const fs = require('node:fs') as typeof import('node:fs')
       fs.writeFileSync(join(dir, 'agent-config.json'), JSON.stringify({ provider: 'codex', model: 'foo' }))
-      expect(loadAgentConfig(dir)).toEqual({ provider: 'codex', model: 'foo', dangerouslySkipPermissions: true })
+      expect(loadAgentConfig(dir)).toEqual({ provider: 'codex', model: 'foo', dangerouslySkipPermissions: true, autoStart: false })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('persists autoStart=true when set, defaults to false otherwise', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agent-config-'))
+    try {
+      saveAgentConfig(dir, { provider: 'claude', dangerouslySkipPermissions: true, autoStart: true })
+      expect(loadAgentConfig(dir).autoStart).toBe(true)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

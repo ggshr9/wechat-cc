@@ -29,11 +29,15 @@ describe('parseCliArgs', () => {
     expect(parseCliArgs(['doctor']).cmd).toBe('doctor')
     expect(parseCliArgs(['doctor', '--json'])).toEqual({ cmd: 'doctor', json: true })
     expect(parseCliArgs(['setup-status', '--json'])).toEqual({ cmd: 'setup-status', json: true })
-    expect(parseCliArgs(['service', 'status', '--json'])).toEqual({ cmd: 'service', action: 'status', json: true })
-    expect(parseCliArgs(['service', 'install', '--json'])).toEqual({ cmd: 'service', action: 'install', json: true })
-    expect(parseCliArgs(['service', 'start'])).toEqual({ cmd: 'service', action: 'start', json: false })
-    expect(parseCliArgs(['service', 'stop'])).toEqual({ cmd: 'service', action: 'stop', json: false })
-    expect(parseCliArgs(['service', 'uninstall', '--json'])).toEqual({ cmd: 'service', action: 'uninstall', json: true })
+    expect(parseCliArgs(['service', 'status', '--json'])).toEqual({ cmd: 'service', action: 'status', json: true, unattended: undefined, autoStart: undefined })
+    expect(parseCliArgs(['service', 'install', '--json'])).toEqual({ cmd: 'service', action: 'install', json: true, unattended: undefined, autoStart: undefined })
+    expect(parseCliArgs(['service', 'start'])).toEqual({ cmd: 'service', action: 'start', json: false, unattended: undefined, autoStart: undefined })
+    expect(parseCliArgs(['service', 'stop'])).toEqual({ cmd: 'service', action: 'stop', json: false, unattended: undefined, autoStart: undefined })
+    expect(parseCliArgs(['service', 'uninstall', '--json'])).toEqual({ cmd: 'service', action: 'uninstall', json: true, unattended: undefined, autoStart: undefined })
+    expect(parseCliArgs(['service', 'install', '--unattended', 'true', '--auto-start', 'true']))
+      .toMatchObject({ cmd: 'service', action: 'install', unattended: true, autoStart: true })
+    expect(parseCliArgs(['service', 'install', '--auto-start', 'false']))
+      .toMatchObject({ cmd: 'service', action: 'install', autoStart: false })
     expect(parseCliArgs(['provider', 'set', 'codex', '--model', 'gpt-5.3-codex'])).toEqual({
       cmd: 'provider-set',
       provider: 'codex',
@@ -46,6 +50,41 @@ describe('parseCliArgs', () => {
   })
   it('unknown subcommand returns help', () => {
     expect(parseCliArgs(['whatever']).cmd).toBe('help')
+  })
+  it('parses account remove <bot-id> [--json]', () => {
+    expect(parseCliArgs(['account', 'remove', 'abc-im-bot'])).toEqual({
+      cmd: 'account-remove', botId: 'abc-im-bot', json: false,
+    })
+    expect(parseCliArgs(['account', 'remove', 'abc-im-bot', '--json'])).toEqual({
+      cmd: 'account-remove', botId: 'abc-im-bot', json: true,
+    })
+  })
+  it('account without remove falls through to help', () => {
+    expect(parseCliArgs(['account']).cmd).toBe('help')
+    expect(parseCliArgs(['account', 'remove']).cmd).toBe('help')
+  })
+  it('parses daemon kill <pid> [--json]', () => {
+    expect(parseCliArgs(['daemon', 'kill', '12345'])).toEqual({
+      cmd: 'daemon-kill', pid: 12345, json: false,
+    })
+    expect(parseCliArgs(['daemon', 'kill', '12345', '--json'])).toEqual({
+      cmd: 'daemon-kill', pid: 12345, json: true,
+    })
+  })
+  it('daemon kill rejects non-numeric or missing pid', () => {
+    expect(parseCliArgs(['daemon']).cmd).toBe('help')
+    expect(parseCliArgs(['daemon', 'kill']).cmd).toBe('help')
+    expect(parseCliArgs(['daemon', 'kill', 'abc']).cmd).toBe('help')
+    expect(parseCliArgs(['daemon', 'kill', '0']).cmd).toBe('help')
+  })
+  it('parses memory list / read subcommands', () => {
+    expect(parseCliArgs(['memory', 'list', '--json'])).toEqual({ cmd: 'memory-list', json: true })
+    expect(parseCliArgs(['memory', 'read', 'u@x', 'profile.md'])).toEqual({
+      cmd: 'memory-read', userId: 'u@x', path: 'profile.md', json: false,
+    })
+    expect(parseCliArgs(['memory']).cmd).toBe('help')
+    expect(parseCliArgs(['memory', 'read']).cmd).toBe('help')
+    expect(parseCliArgs(['memory', 'read', 'u@x']).cmd).toBe('help')
   })
   it('accepts --dangerously on run subcommand', () => {
     expect(parseCliArgs(['run', '--dangerously'])).toEqual({
