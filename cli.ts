@@ -156,6 +156,10 @@ Usage:
   wechat-cc memory read <user-id> <path> [--json]
                         Read one .md memory file. Path is relative to the
                         user's memory dir, traversal-safe.
+  wechat-cc update [--check] [--json]
+                        Pull latest + reinstall deps + restart service.
+                        --check probes only (no side effects); GUI calls
+                        this on a timer to surface the Update button.
   wechat-cc provider show [--json]  Show selected agent provider
   wechat-cc provider set <claude|codex> [--model MODEL] [--unattended true|false]
                         --unattended: when true (default for new installs), the
@@ -326,6 +330,35 @@ async function main() {
         if (parsed.json) console.log(JSON.stringify({ ok: false, error: msg }))
         else console.error(`account remove failed: ${msg}`)
         process.exit(1)
+      }
+      return
+    }
+    case 'update': {
+      const { analyzeUpdate, applyUpdate, defaultUpdateDeps } = await import('./update.ts')
+      const deps = defaultUpdateDeps(here, STATE_DIR)
+      if (parsed.check) {
+        const probe = analyzeUpdate(deps)
+        if (parsed.json) {
+          console.log(JSON.stringify(probe, null, 2))
+        } else if (!probe.ok) {
+          console.error(`update check: ${probe.reason} — ${probe.message}`)
+          process.exit(1)
+        } else {
+          console.log(probe.updateAvailable
+            ? `update available: ${probe.currentCommit} → ${probe.latestCommit} (${probe.behind} commits${probe.lockfileWillChange ? ', lockfile changes' : ''})`
+            : `up to date (${probe.currentCommit})`)
+        }
+        return
+      }
+      const result = await applyUpdate(deps)
+      if (parsed.json) {
+        console.log(JSON.stringify(result, null, 2))
+      } else if (!result.ok) {
+        console.error(`update failed: ${result.reason} — ${result.message}`)
+        process.exit(1)
+      } else {
+        const lockNote = result.lockfileChanged ? ', deps reinstalled' : ''
+        console.log(`updated: ${result.fromCommit} → ${result.toCommit}${lockNote}, daemon=${result.daemonAction} (${result.elapsedMs}ms)`)
       }
       return
     }
