@@ -1,6 +1,6 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, platform, userInfo } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, posix } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { findOnPath } from './util'
 
@@ -21,6 +21,10 @@ export interface ServicePlanInput {
   // When false, the daemon is installed + started ONCE this session but
   // won't come back after reboot (and on macOS won't restart on crash).
   autoStart?: boolean
+  // macOS-only: override the uid used in the launchctl `gui/<uid>` domain.
+  // Tests on non-macOS platforms inject a fixed uid so assertions are
+  // deterministic; production reads `process.getuid()`.
+  uid?: number
 }
 
 export interface ServicePlan {
@@ -44,8 +48,12 @@ export function buildServicePlan(input: ServicePlanInput): ServicePlan {
   const runArgs = dangerously ? ['run', '--dangerously'] : ['run']
 
   if (pf === 'darwin') {
-    const serviceFile = join(homeDir, 'Library', 'LaunchAgents', 'com.wechat-cc.daemon.plist')
-    const gui = `gui/${typeof process.getuid === 'function' ? process.getuid() : 501}`
+    // posix.join so plan builds the correct path even when invoked from a
+    // Windows test harness (CI cross-platform sweep). The darwin plist path
+    // is consumed by launchctl on macOS and must be POSIX regardless of where
+    // buildServicePlan() runs.
+    const serviceFile = posix.join(homeDir, 'Library', 'LaunchAgents', 'com.wechat-cc.daemon.plist')
+    const gui = `gui/${input.uid ?? (typeof process.getuid === 'function' ? process.getuid() : 501)}`
     // autoStart=false: bootstrap+enable+kickstart still runs the daemon now
     // (user clicked "install AND start"), but plist omits RunAtLoad+KeepAlive
     // so it won't auto-start at next login or auto-restart on crash.
@@ -80,7 +88,9 @@ export function buildServicePlan(input: ServicePlanInput): ServicePlan {
     }
   }
 
-  const serviceFile = join(homeDir, '.config', 'systemd', 'user', 'wechat-cc.service')
+  // posix.join — same rationale as darwin branch above. systemd consumes
+  // a POSIX path on Linux regardless of the host where the plan was built.
+  const serviceFile = posix.join(homeDir, '.config', 'systemd', 'user', 'wechat-cc.service')
   // autoStart=true → enable --now (boot-time + start now). autoStart=false
   // → just start (no `enable`, won't come back after reboot). Restart=always
   // is in the unit either way, so crash recovery within a session works

@@ -8,6 +8,7 @@ describe('service-manager', () => {
       homeDir: '/Users/alice',
       cwd: '/Users/alice/.wechat-cc',
       bunPath: '/opt/homebrew/bin/bun',
+      uid: 501,
     })
 
     expect(plan.kind).toBe('launchagent')

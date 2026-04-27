@@ -19,7 +19,7 @@ import {
   existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { dirname, join, relative, resolve } from 'node:path'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 
 export interface MemoryFS {
   /** Read a memory file. Returns null if not present (no throw). */
@@ -125,7 +125,9 @@ export function makeMemoryFS(opts: MemoryFSOptions): MemoryFS {
           const p = join(dir, entry.name)
           if (entry.isDirectory()) stack.push(p)
           else if (entry.isFile() && exts.has(extOf(entry.name))) {
-            out.push(relative(root, p))
+            // Normalize to POSIX so the public API (paths shown to Claude
+            // and consumed by `memory_read`) is identical on Windows + POSIX.
+            out.push(relative(root, p).split(sep).join('/'))
           }
         }
       }

@@ -51,6 +51,10 @@ beforeEach(() => {
   git(upstream, 'init', '-q', '-b', 'master')
   git(upstream, 'config', 'user.email', 'test@example.com')
   git(upstream, 'config', 'user.name', 'Test')
+  // Disable CRLF normalization so file content round-trips byte-exact on
+  // Windows runners (default `core.autocrlf=true` on git-for-Windows turns
+  // checked-out LF into CRLF, breaking the bun.lock content assertion).
+  git(upstream, 'config', 'core.autocrlf', 'false')
   commit(upstream, 'README.md', 'v1\n', 'initial')
   commit(upstream, 'bun.lock', 'lock-v1\n', 'add lockfile')
 
@@ -58,6 +62,7 @@ beforeEach(() => {
   execFileSync('git', ['clone', '-q', upstream, local])
   git(local, 'config', 'user.email', 'test@example.com')
   git(local, 'config', 'user.name', 'Test')
+  git(local, 'config', 'core.autocrlf', 'false')
 })
 
 afterEach(() => {
