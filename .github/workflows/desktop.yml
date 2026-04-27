@@ -93,6 +93,8 @@ jobs:
             account-remove.test.ts \
             daemon-kill.test.ts \
             memory.test.ts \
+            update.test.ts \
+            update.e2e.test.ts \
             src/daemon/onboarding.test.ts \
             apps/desktop/src/view.test.ts
 
