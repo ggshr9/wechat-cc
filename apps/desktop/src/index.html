@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>wechat-cc</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">微</div>
+          <div>
+            <h1>wechat-cc</h1>
+            <p id="runtime-label">Desktop setup</p>
+          </div>
+        </div>
+        <nav class="steps" aria-label="Setup progress">
+          <button class="step active" data-step="doctor">检查</button>
+          <button class="step" data-step="provider">Agent</button>
+          <button class="step" data-step="wechat">微信</button>
+          <button class="step" data-step="service">后台</button>
+        </nav>
+        <div class="status-strip">
+          <span id="service-dot" class="dot"></span>
+          <span id="service-text">服务状态未知</span>
+        </div>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <h2 id="screen-title">检查环境</h2>
+            <p id="screen-subtitle">确认本机可以运行 wechat-cc。</p>
+          </div>
+          <button id="refresh-btn" class="icon-button" title="刷新">↻</button>
+        </header>
+
+        <section id="screen-doctor" class="screen active">
+          <div id="checks" class="check-grid"></div>
+          <div class="actions">
+            <button id="continue-provider" class="primary">继续</button>
+            <button id="copy-diagnostics" class="secondary">复制诊断</button>
+          </div>
+        </section>
+
+        <section id="screen-provider" class="screen">
+          <div class="provider-grid">
+            <button class="provider-option" data-provider="claude">
+              <span class="provider-name">Claude Code</span>
+              <span class="provider-meta" id="claude-meta">检测中</span>
+            </button>
+            <button class="provider-option" data-provider="codex">
+              <span class="provider-name">Codex</span>
+              <span class="provider-meta" id="codex-meta">检测中</span>
+            </button>
+          </div>
+          <label class="field">
+            <span>Codex model</span>
+            <input id="codex-model" value="gpt-5.3-codex" />
+          </label>
+          <div class="actions">
+            <button id="continue-wechat" class="primary">继续扫码</button>
+          </div>
+        </section>
+
+        <section id="screen-wechat" class="screen">
+          <div class="qr-layout">
+            <div class="qr-panel">
+              <div id="qr-box" class="qr-box">QR</div>
+              <button id="qr-refresh" class="secondary">刷新二维码</button>
+            </div>
+            <div class="qr-state">
+              <h3 id="qr-title">等待二维码</h3>
+              <p id="qr-message">点击刷新二维码开始绑定。</p>
+              <pre id="qr-raw"></pre>
+            </div>
+          </div>
+          <div class="actions">
+            <button id="continue-service" class="primary" disabled>继续后台运行</button>
+          </div>
+        </section>
+
+        <section id="screen-service" class="screen">
+          <div class="service-panel">
+            <div>
+              <h3>后台服务</h3>
+              <p id="service-summary">准备安装开机自动启动。</p>
+            </div>
+            <div class="service-actions">
+              <button id="service-install" class="primary">安装并启动</button>
+              <button id="service-stop" class="secondary">停止</button>
+            </div>
+          </div>
+          <label class="field unattended-toggle">
+            <input type="checkbox" id="unattended-toggle" checked />
+            <span class="unattended-label">
+              <strong>无人值守模式（推荐）</strong>
+              <span class="unattended-hint">
+                daemon 启动时带 <code>--dangerously</code>。手机消息触发的工具调用会自动批准（包括文件改写和命令执行）。<strong>关闭则 daemon 会在第一次工具调用时永远 hang——因为没人能去答权限提示。</strong>
+              </span>
+            </span>
+          </label>
+          <pre id="service-plan" class="log"></pre>
+        </section>
+      </section>
+    </main>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

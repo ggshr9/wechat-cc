@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { buildBootstrap } from './bootstrap'
+import { saveAgentConfig } from '../../agent-config'
 
 function makeIlinkStub() {
   return {
@@ -109,5 +113,45 @@ describe('bootstrap', () => {
     const opts = b.sdkOptionsForProject('P', '/p')
     expect(opts.permissionMode).toBe('default')
     expect(typeof opts.canUseTool).toBe('function')
+  })
+
+  it('defaults to the Claude agent provider', () => {
+    const b = buildBootstrap({
+      stateDir: '/tmp/state',
+      ilink: makeIlinkStub() as any,
+      loadProjects: () => ({ projects: {}, current: null }),
+      lastActiveChatId: () => null,
+      log: () => {},
+    })
+    expect(b.agentProviderKind).toBe('claude')
+  })
+
+  it('can select the Codex agent provider explicitly', () => {
+    const b = buildBootstrap({
+      stateDir: '/tmp/state',
+      ilink: makeIlinkStub() as any,
+      loadProjects: () => ({ projects: {}, current: null }),
+      lastActiveChatId: () => null,
+      log: () => {},
+      agentProviderKind: 'codex',
+    })
+    expect(b.agentProviderKind).toBe('codex')
+  })
+
+  it('reads provider selection from agent-config.json', () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'wechat-bootstrap-'))
+    try {
+      saveAgentConfig(stateDir, { provider: 'codex', model: 'gpt-5.3-codex', dangerouslySkipPermissions: true })
+      const b = buildBootstrap({
+        stateDir,
+        ilink: makeIlinkStub() as any,
+        loadProjects: () => ({ projects: {}, current: null }),
+        lastActiveChatId: () => null,
+        log: () => {},
+      })
+      expect(b.agentProviderKind).toBe('codex')
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true })
+    }
   })
 })

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { SessionManager } from './session-manager'
+import { createClaudeAgentProvider } from './claude-agent-provider'
 import type { Options, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 
 // Module-level spy injected via vi.mock so SessionManager uses our fake query()
@@ -26,12 +27,45 @@ beforeEach(() => {
   fakeQuery.mockImplementation(() => makeFakeQuery())
 })
 
+function claudeProvider(sdkOptionsForProject: (alias: string, path: string) => Options) {
+  return createClaudeAgentProvider({ sdkOptionsForProject })
+}
+
+function firstQueryArgs(): any {
+  return fakeQuery.mock.calls[0]![0] as any
+}
+
 describe('SessionManager', () => {
+  it('uses an injected agent provider to spawn and dispatch project sessions', async () => {
+    const dispatched: string[] = []
+    const close = vi.fn()
+    const spawn = vi.fn(async () => ({
+      dispatch: async (text: string) => { dispatched.push(text) },
+      close,
+      onAssistantText: () => () => {},
+      onResult: () => () => {},
+    }))
+
+    const mgr = new SessionManager({
+      maxConcurrent: 4,
+      idleEvictMs: 60_000,
+      provider: { spawn },
+    } as any)
+
+    const h = await mgr.acquire('codex-proj', '/repo')
+    await h.dispatch('hello codex')
+
+    expect(spawn).toHaveBeenCalledWith({ alias: 'codex-proj', path: '/repo' })
+    expect(dispatched).toEqual(['hello codex'])
+    await mgr.shutdown()
+    expect(close).toHaveBeenCalledOnce()
+  })
+
   it('does not spawn until acquire() is called', async () => {
     const mgr = new SessionManager({
       maxConcurrent: 4,
       idleEvictMs: 60_000,
-      sdkOptionsForProject: () => ({ cwd: '/tmp/x' } as Options),
+      provider: claudeProvider(() => ({ cwd: '/tmp/x' } as Options)),
     })
     expect(fakeQuery).not.toHaveBeenCalled()
     expect(mgr.list()).toEqual([])
@@ -42,7 +76,7 @@ describe('SessionManager', () => {
     const mgr = new SessionManager({
       maxConcurrent: 4,
       idleEvictMs: 60_000,
-      sdkOptionsForProject: (alias, path) => ({ cwd: path } as Options),
+      provider: claudeProvider((_alias, path) => ({ cwd: path } as Options)),
     })
     const a = await mgr.acquire('proj-a', '/home/nate/proj-a')
     expect(fakeQuery).toHaveBeenCalledTimes(1)
@@ -69,7 +103,7 @@ describe('SessionManager', () => {
     const mgr = new SessionManager({
       maxConcurrent: 4,
       idleEvictMs: 60_000,
-      sdkOptionsForProject: () => ({ cwd: '/tmp/x' } as Options),
+      provider: claudeProvider(() => ({ cwd: '/tmp/x' } as Options)),
     })
     const h = await mgr.acquire('a', '/tmp/x')
     await h.dispatch('first')
@@ -83,7 +117,7 @@ describe('SessionManager', () => {
     const mgr = new SessionManager({
       maxConcurrent: 2,
       idleEvictMs: 60_000,
-      sdkOptionsForProject: () => ({ cwd: '/tmp/x' } as Options),
+      provider: claudeProvider(() => ({ cwd: '/tmp/x' } as Options)),
     })
     await mgr.acquire('a', '/a')
     await mgr.acquire('b', '/b')
@@ -102,7 +136,7 @@ describe('SessionManager', () => {
     const mgr = new SessionManager({
       maxConcurrent: 10,
       idleEvictMs: 1000,
-      sdkOptionsForProject: () => ({ cwd: '/tmp/x' } as Options),
+      provider: claudeProvider(() => ({ cwd: '/tmp/x' } as Options)),
     })
     await mgr.acquire('a', '/a')
     vi.advanceTimersByTime(2000)
@@ -132,13 +166,13 @@ describe('SessionManager', () => {
       const mgr = new SessionManager({
         maxConcurrent: 4,
         idleEvictMs: 60_000,
-        sdkOptionsForProject: (alias, path) => ({ cwd: path } as Options),
+        provider: claudeProvider((_alias, path) => ({ cwd: path } as Options)),
         sessionStore: store,
         canResume,
       })
       await mgr.acquire('compass', '/p')
       expect(fakeQuery).toHaveBeenCalledOnce()
-      const args = fakeQuery.mock.calls[0][0] as any
+      const args = firstQueryArgs()
       expect(args.options.resume).toBe('sid-abc')
       expect(canResume).toHaveBeenCalledWith('/p', 'sid-abc')
       await mgr.shutdown()
@@ -152,12 +186,12 @@ describe('SessionManager', () => {
       const mgr = new SessionManager({
         maxConcurrent: 4,
         idleEvictMs: 60_000,
-        sdkOptionsForProject: (alias, path) => ({ cwd: path } as Options),
+        provider: claudeProvider((_alias, path) => ({ cwd: path } as Options)),
         sessionStore: store,
         resumeTTLMs: 7 * 24 * 60 * 60_000,
       })
       await mgr.acquire('compass', '/p')
-      const args = fakeQuery.mock.calls[0][0] as any
+      const args = firstQueryArgs()
       expect(args.options.resume).toBeUndefined()
       expect(store.delete).toHaveBeenCalledWith('compass')
       await mgr.shutdown()
@@ -171,12 +205,12 @@ describe('SessionManager', () => {
       const mgr = new SessionManager({
         maxConcurrent: 4,
         idleEvictMs: 60_000,
-        sdkOptionsForProject: (alias, path) => ({ cwd: path } as Options),
+        provider: claudeProvider((_alias, path) => ({ cwd: path } as Options)),
         sessionStore: store,
         canResume,
       })
       await mgr.acquire('compass', '/p')
-      const args = fakeQuery.mock.calls[0][0] as any
+      const args = firstQueryArgs()
       expect(args.options.resume).toBeUndefined()
       expect(store.delete).toHaveBeenCalledWith('compass')
       await mgr.shutdown()
@@ -198,7 +232,7 @@ describe('SessionManager', () => {
       const mgr = new SessionManager({
         maxConcurrent: 4,
         idleEvictMs: 60_000,
-        sdkOptionsForProject: () => ({ cwd: '/p' } as Options),
+        provider: claudeProvider(() => ({ cwd: '/p' } as Options)),
         sessionStore: store,
       })
       await mgr.acquire('compass', '/p')
@@ -211,11 +245,11 @@ describe('SessionManager', () => {
       const mgr = new SessionManager({
         maxConcurrent: 4,
         idleEvictMs: 60_000,
-        sdkOptionsForProject: (alias, path) => ({ cwd: path } as Options),
+        provider: claudeProvider((_alias, path) => ({ cwd: path } as Options)),
         // sessionStore omitted
       })
       await mgr.acquire('proj', '/p')
-      const args = fakeQuery.mock.calls[0][0] as any
+      const args = firstQueryArgs()
       expect(args.options.resume).toBeUndefined()
       await mgr.shutdown()
     })

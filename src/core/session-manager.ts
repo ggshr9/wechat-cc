@@ -1,10 +1,10 @@
-import { query, type Options, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { SessionStore } from './session-store'
+import type { AgentProvider, AgentResult, AgentSession } from './agent-provider'
 
 export interface SessionManagerOptions {
   maxConcurrent: number
   idleEvictMs: number
-  sdkOptionsForProject: (alias: string, path: string) => Options
+  provider: AgentProvider
   /**
    * When present, the manager persists the SDK-reported session_id per
    * alias and passes it back as `resume` on the next spawn — slashing
@@ -26,7 +26,7 @@ export interface SessionHandle {
   readonly alias: string
   readonly path: string
   lastUsedAt: number
-  dispatch(text: string): Promise<void>
+  dispatch(text: string): Promise<{ assistantText?: string[] } | void>
   close(): Promise<void>
   onAssistantText(cb: (text: string) => void): () => void
   onResult(cb: (r: { session_id: string; num_turns: number; duration_ms: number }) => void): () => void
@@ -34,9 +34,7 @@ export interface SessionHandle {
 
 interface Internal {
   handle: SessionHandle
-  queue: AsyncQueue<SDKUserMessage>
-  q: Query
-  drainPromise: Promise<void>
+  session: AgentSession
 }
 
 export class SessionManager {
@@ -57,19 +55,17 @@ export class SessionManager {
   }
 
   private async spawn(alias: string, path: string): Promise<SessionHandle> {
-    const queue = new AsyncQueue<SDKUserMessage>()
-    const options = this.opts.sdkOptionsForProject(alias, path)
-
     // Check for a recent session_id to resume — cut cold-start latency.
     const ttl = this.opts.resumeTTLMs ?? 7 * 24 * 60 * 60_000
     const record = this.opts.sessionStore?.get(alias) ?? null
+    let resumeSessionId: string | undefined
     if (record) {
       const age = Date.now() - Date.parse(record.last_used_at)
       const jsonlStillThere = this.opts.canResume
         ? this.opts.canResume(path, record.session_id)
         : true
       if (age < ttl && jsonlStillThere) {
-        ;(options as Options & { resume?: string }).resume = record.session_id
+        resumeSessionId = record.session_id
         console.error(`wechat channel: [SESSION_RESUME] alias=${alias} sid=${record.session_id} age=${Math.round(age / 1000)}s`)
       } else {
         // stale — forget so we don't keep retrying
@@ -77,72 +73,33 @@ export class SessionManager {
       }
     }
 
-    const q = query({ prompt: queue.iterable(), options })
-    const assistantListeners = new Set<(t: string) => void>()
-    const resultListeners = new Set<(r: { session_id: string; num_turns: number; duration_ms: number }) => void>()
-    let drainResolve: (() => void) | undefined
-    const drainPromise = new Promise<void>(res => { drainResolve = res })
+    const project = { alias, path }
+    const session = resumeSessionId
+      ? await this.opts.provider.spawn(project, { resumeSessionId })
+      : await this.opts.provider.spawn(project)
 
     const handle: SessionHandle = {
       alias,
       path,
       lastUsedAt: Date.now(),
       async dispatch(text: string) {
-        queue.push({
-          type: 'user',
-          parent_tool_use_id: null,
-          message: { role: 'user', content: [{ type: 'text', text }] },
-        } as SDKUserMessage)
+        await session.dispatch(text)
         handle.lastUsedAt = Date.now()
       },
       async close() {
-        queue.end()
-        ;(q as unknown as { close?: () => void }).close?.()
-        ;(q as unknown as { interrupt?: () => void }).interrupt?.()
-        drainResolve?.()
+        await session.close()
       },
-      onAssistantText(cb) { assistantListeners.add(cb); return () => { assistantListeners.delete(cb) } },
-      onResult(cb) { resultListeners.add(cb); return () => { resultListeners.delete(cb) } },
+      onAssistantText(cb) { return session.onAssistantText(cb) },
+      onResult(cb) { return session.onResult(cb) },
     }
 
-    ;(async () => {
-      try {
-        for await (const msg of q as AsyncGenerator<SDKMessage>) {
-          const t = (msg as { type: string }).type
-          if (t === 'assistant') {
-            const content = (msg as any).message?.content
-            const text = extractText(content)
-            if (text) for (const cb of assistantListeners) cb(text)
-          } else if (t === 'result') {
-            const r = msg as any
-            for (const cb of resultListeners) cb({
-              session_id: r.session_id,
-              num_turns: r.num_turns,
-              duration_ms: r.duration_ms,
-            })
-            // Persist the session_id the SDK actually used so the next
-            // spawn (possibly after daemon restart) can resume this thread.
-            if (r.session_id && this.opts.sessionStore) {
-              this.opts.sessionStore.set(alias, r.session_id)
-            }
-            if (r.subtype && r.subtype !== 'success') {
-              console.error(`wechat channel: [SESSION_RESULT] alias=${alias} subtype=${r.subtype} result=${typeof r.result === 'string' ? r.result.slice(0, 400) : JSON.stringify(r).slice(0, 400)}`)
-            }
-          } else if (t === 'system') {
-            const sub = (msg as any).subtype
-            if (sub === 'init') {
-              console.error(`wechat channel: [SESSION_INIT] alias=${alias} session_id=${(msg as any).session_id}`)
-            }
-          }
-        }
-      } catch (e) {
-        console.error(`wechat channel: [SESSION_ERROR] alias=${alias} ${e instanceof Error ? `${e.name}: ${e.message}\n${e.stack}` : String(e)}`)
-      } finally {
-        drainResolve?.()
+    session.onResult((r: AgentResult) => {
+      if (r.session_id && this.opts.sessionStore) {
+        this.opts.sessionStore.set(alias, r.session_id)
       }
-    })()
+    })
 
-    this.sessions.set(alias, { handle, queue, q, drainPromise })
+    this.sessions.set(alias, { handle, session })
     await this.enforceCapacity()
     return handle
   }
@@ -152,7 +109,6 @@ export class SessionManager {
     if (!s) return
     this.sessions.delete(alias)
     await s.handle.close()
-    await s.drainPromise
   }
 
   list() {
@@ -191,46 +147,6 @@ export class SessionManager {
       if (now - s.handle.lastUsedAt >= this.opts.idleEvictMs) {
         await this.release(alias)
       }
-    }
-  }
-}
-
-function extractText(content: unknown): string {
-  if (typeof content === 'string') return content
-  if (Array.isArray(content)) {
-    return content.map(b => (b && typeof b === 'object' && (b as any).type === 'text' ? (b as any).text ?? '' : '')).join('')
-  }
-  return ''
-}
-
-class AsyncQueue<T> {
-  private buf: T[] = []
-  private resolvers: ((v: IteratorResult<T>) => void)[] = []
-  private closed = false
-  push(v: T) {
-    if (this.closed) return
-    const r = this.resolvers.shift()
-    if (r) r({ value: v, done: false })
-    else this.buf.push(v)
-  }
-  end() {
-    this.closed = true
-    const r = this.resolvers.shift()
-    if (r) r({ value: undefined as unknown as T, done: true })
-  }
-  iterable(): AsyncIterable<T> {
-    const self = this
-    return {
-      [Symbol.asyncIterator](): AsyncIterator<T> {
-        return {
-          next() {
-            if (self.buf.length > 0) return Promise.resolve({ value: self.buf.shift() as T, done: false })
-            if (self.closed) return Promise.resolve({ value: undefined as unknown as T, done: true })
-            return new Promise<IteratorResult<T>>(res => self.resolvers.push(res))
-          },
-          async return() { self.end(); return { value: undefined as unknown as T, done: true } },
-        }
-      },
     }
   }
 }

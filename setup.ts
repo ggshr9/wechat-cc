@@ -2,69 +2,20 @@
 /**
  * WeChat channel setup — run this separately to do QR login.
  * Saves credentials to ~/.claude/channels/wechat/
- *
- * Usage: bun setup.ts
  */
 
-import { randomBytes } from 'crypto'
-import { readFileSync, writeFileSync, mkdirSync, renameSync, chmodSync } from 'fs'
-import { homedir } from 'os'
-import { join } from 'path'
-import { ILINK_BASE_URL, ILINK_APP_ID, ILINK_BOT_TYPE, LONG_POLL_TIMEOUT_MS } from './config.ts'
+import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { ILINK_BASE_URL, LONG_POLL_TIMEOUT_MS } from './config'
+import { ilinkGet, persistConfirmedAccount, requestSetupQrCode } from './setup-flow'
 
 const STATE_DIR = join(homedir(), '.claude', 'channels', 'wechat')
-const ACCOUNTS_DIR = join(STATE_DIR, 'accounts')
-const ACCESS_FILE = join(STATE_DIR, 'access.json')
-
-// Unified with server.ts/ilink.ts: 131335 = 0x00020107 = version 2.1.7.
-// Was '65547' (= 0x1000B = v1.0.11) before this change. The server poll
-// loop already uses 131335 for all runtime calls; if ilink gate-checks
-// version on the QR endpoint, the old value was stale and this unification
-// is correct. If QR scanning breaks after this change, revert this line.
-const ILINK_CLIENT_VERSION = '131335'
-const API_TIMEOUT_MS = 15_000
-
-async function ilinkGet(baseUrl: string, endpoint: string, timeoutMs = API_TIMEOUT_MS): Promise<string> {
-  const url = new URL(endpoint, baseUrl.endsWith('/') ? baseUrl : baseUrl + '/')
-  const ctrl = new AbortController()
-  const t = setTimeout(() => ctrl.abort(), timeoutMs)
-  try {
-    const res = await fetch(url.toString(), {
-      method: 'GET',
-      headers: { 'iLink-App-Id': ILINK_APP_ID, 'iLink-App-ClientVersion': ILINK_CLIENT_VERSION },
-      signal: ctrl.signal,
-    })
-    if (!res.ok) throw new Error(`${endpoint} ${res.status}: ${await res.text()}`)
-    return await res.text()
-  } finally { clearTimeout(t) }
-}
-
-interface Account {
-  baseUrl: string
-  userId: string
-  botId: string
-}
-
-interface Access {
-  dmPolicy: 'allowlist' | 'disabled'
-  allowFrom: string[]
-}
-
-// ── Main ───────────────────────────────────────────────────────────────────
 
 console.log('WeChat Channel Setup — 微信扫码登录\n')
-
-// Step 1: Get QR code
 console.log('正在获取二维码...')
-const raw = await ilinkGet(ILINK_BASE_URL, `ilink/bot/get_bot_qrcode?bot_type=${ILINK_BOT_TYPE}`)
-const qrData = JSON.parse(raw) as { qrcode?: string; qrcode_img_content?: string }
+const qrData = await requestSetupQrCode()
 
-if (!qrData.qrcode_img_content || !qrData.qrcode) {
-  console.error('无法获取二维码，请稍后重试。')
-  process.exit(1)
-}
-
-// Step 2: Display QR
 console.log('\n请用微信扫描以下二维码：\n')
 try {
   const qrt = await import('qrcode-terminal')
@@ -76,8 +27,7 @@ try {
 }
 console.log('等待扫码...\n')
 
-// Step 3: Poll for login
-const deadline = Date.now() + 480_000
+const deadline = Date.now() + qrData.expires_in_ms
 let currentBaseUrl = ILINK_BASE_URL
 let scannedPrinted = false
 
@@ -102,64 +52,27 @@ while (Date.now() < deadline) {
         break
       case 'scaned':
         if (!scannedPrinted) {
-          console.log('👀 已扫码，在微信继续操作...')
+          console.log('已扫码，在微信继续操作...')
           scannedPrinted = true
         }
         break
       case 'scaned_but_redirect':
-        if (status.redirect_host) {
-          currentBaseUrl = `https://${status.redirect_host}`
-        }
+        if (status.redirect_host) currentBaseUrl = `https://${status.redirect_host}`
         break
       case 'expired':
         console.error('二维码已过期，请重新运行 setup。')
         process.exit(1)
       case 'confirmed': {
-        if (!status.ilink_bot_id || !status.bot_token) {
-          console.error('登录失败：服务器未返回完整信息。')
-          process.exit(1)
-        }
+        const saved = persistConfirmedAccount({
+          stateDir: STATE_DIR,
+          currentBaseUrl,
+          status: { ...status, status: 'confirmed' },
+        })
 
-        console.log('\n✅ 与微信连接成功！\n')
+        console.log('\n与微信连接成功！\n')
+        console.log(`账号已保存: ${saved.accountId}`)
+        if (saved.userId) console.log(`已将 ${saved.userId} 加入 allowlist`)
 
-        // Save to accounts/<id>/ directory
-        const accountId = status.ilink_bot_id.replace(/[^a-zA-Z0-9_-]/g, '-')
-        const accountDir = join(ACCOUNTS_DIR, accountId)
-        mkdirSync(accountDir, { recursive: true, mode: 0o700 })
-
-        writeFileSync(join(accountDir, 'token'), status.bot_token, { mode: 0o600 })
-        console.log(`Token 已保存到 ${join(accountDir, 'token')}`)
-
-        const account: Account = {
-          baseUrl: status.baseurl ?? currentBaseUrl,
-          userId: status.ilink_user_id ?? '',
-          botId: status.ilink_bot_id,
-        }
-        const tmpAccount = join(accountDir, 'account.json.tmp')
-        writeFileSync(tmpAccount, JSON.stringify(account, null, 2) + '\n', { mode: 0o600 })
-        renameSync(tmpAccount, join(accountDir, 'account.json'))
-        console.log(`账号信息已保存到 ${join(accountDir, 'account.json')}`)
-
-        // Auto-add to allowlist
-        if (status.ilink_user_id) {
-          let access: Access = { dmPolicy: 'allowlist', allowFrom: [] }
-          try {
-            access = JSON.parse(readFileSync(ACCESS_FILE, 'utf8'))
-          } catch {}
-          if (!access.allowFrom) access.allowFrom = []
-          if (!access.allowFrom.includes(status.ilink_user_id)) {
-            access.allowFrom.push(status.ilink_user_id)
-            const tmpAccess = ACCESS_FILE + '.tmp'
-            writeFileSync(tmpAccess, JSON.stringify(access, null, 2) + '\n', { mode: 0o600 })
-            renameSync(tmpAccess, ACCESS_FILE)
-            console.log(`已将 ${status.ilink_user_id} 加入 allowlist`)
-          }
-        }
-
-        // Notify the running daemon (if any) to pick up this new account
-        // without a restart. SIGUSR1 → main.ts reconcile handler. Best-effort;
-        // if no daemon is running or the pid is stale, users just `wechat-cc run`
-        // as normal.
         try {
           const pidPath = join(STATE_DIR, 'server.pid')
           const pid = parseInt(readFileSync(pidPath, 'utf8').trim(), 10)
@@ -167,16 +80,11 @@ while (Date.now() < deadline) {
             process.kill(pid, 'SIGUSR1')
             console.log(`已通知运行中的 daemon (pid ${pid}) 热加载新账号`)
           }
-        } catch { /* daemon not running; fine */ }
+        } catch {}
 
         console.log('')
-        console.log('💡 提示：你可以把 wechat 安装到用户级 MCP 配置，这样所有 Claude Code 会话')
-        console.log('   都能自动使用 wechat 通道（跨项目切换的前提）:')
-        console.log('     wechat-cc install --user')
-        console.log('')
-        console.log('   如果只想在当前项目使用，跳过这步，按下面方式继续:')
-        console.log('     wechat-cc install    # 生成 .mcp.json')
-        console.log('     wechat-cc run')
+        console.log('下一步:')
+        console.log('  wechat-cc run')
         process.exit(0)
       }
     }

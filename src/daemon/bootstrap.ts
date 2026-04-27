@@ -1,4 +1,6 @@
 import { SessionManager } from '../core/session-manager'
+import { createClaudeAgentProvider } from '../core/claude-agent-provider'
+import { createCodexCliProvider } from '../core/codex-cli-provider'
 import { makeResolver } from '../core/project-resolver'
 import { makeCanUseTool } from '../core/permission-relay'
 import { formatInbound } from '../core/prompt-format'
@@ -12,6 +14,7 @@ import { fileURLToPath } from 'node:url'
 import { makeMemoryFS } from './memory/fs-api'
 import { makeSessionStore } from '../core/session-store'
 import { homedir } from 'node:os'
+import { loadAgentConfig } from '../../agent-config'
 
 /**
  * Locate a working Claude Code binary. The SDK's own native-binary detection
@@ -58,6 +61,7 @@ export interface BootstrapDeps {
    */
   fallbackProject?: () => { alias: string; path: string } | null
   dangerouslySkipPermissions?: boolean
+  agentProviderKind?: 'claude' | 'codex'
 }
 
 export interface Bootstrap {
@@ -66,6 +70,7 @@ export interface Bootstrap {
   resolve: (chatId: string) => { alias: string; path: string } | null
   formatInbound: typeof formatInbound
   sdkOptionsForProject: (alias: string, path: string) => Options
+  agentProviderKind: 'claude' | 'codex'
 }
 
 function buildChannelSystemPrompt(companionEnabled: boolean, _currentPersona: string | null): string {
@@ -170,10 +175,17 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     return existsSync(sessionJsonlPath(cwd, sessionId))
   }
 
+  const configuredAgent = loadAgentConfig(deps.stateDir)
+  const agentProviderKind = deps.agentProviderKind
+    ?? (process.env.WECHAT_AGENT_PROVIDER === 'codex' ? 'codex' : configuredAgent.provider)
+  const agentProvider = agentProviderKind === 'codex'
+    ? createCodexCliProvider({ model: process.env.CODEX_MODEL ?? configuredAgent.model })
+    : createClaudeAgentProvider({ sdkOptionsForProject })
+
   const sessionManager = new SessionManager({
     maxConcurrent: 6,
     idleEvictMs: 30 * 60_000,
-    sdkOptionsForProject,
+    provider: agentProvider,
     sessionStore,
     canResume: canResumeSession,
     resumeTTLMs: 7 * 24 * 60 * 60_000,
@@ -185,5 +197,6 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     resolve,
     formatInbound,
     sdkOptionsForProject,
+    agentProviderKind,
   }
 }

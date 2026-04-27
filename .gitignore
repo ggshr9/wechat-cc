@@ -24,3 +24,11 @@ inbox/
 dist/
 build/
 *.tsbuildinfo
+
+# Tauri / Rust desktop installer build output (gigabytes; never commit)
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/schemas/
+apps/desktop/src-tauri/WixTools/
+
+# Playwright MCP snapshots — local debugging artifacts
+.playwright-mcp/

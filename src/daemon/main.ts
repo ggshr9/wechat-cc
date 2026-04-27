@@ -3,11 +3,12 @@ import { acquireInstanceLock, releaseInstanceLock } from './single-instance'
 import { buildBootstrap } from './bootstrap'
 import { routeInbound } from '../core/message-router'
 import { loadAllAccounts, makeIlinkAdapter } from './ilink-glue'
-import { startLongPollLoops, parseUpdates } from './poll-loop'
+import { startLongPollLoops, parseUpdates, type RawUpdate } from './poll-loop'
 import { materializeAttachments } from './media'
 import { log } from '../../log'
-import { isAdmin } from '../../access'
+import { isAdmin, loadAccess } from '../../access'
 import { makeAdminCommands } from './admin-commands'
+import { notifyStartup } from './notify-startup'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { startCompanionScheduler } from './companion/scheduler'
@@ -117,7 +118,7 @@ async function main() {
       // self-terminates; SessionStateStore tracks the flag for /health.
       getUpdates: (accountId, baseUrl, token, syncBuf) =>
         ilink.getUpdatesForLoop(accountId, baseUrl, token, syncBuf) as Promise<{
-          updates?: unknown[]
+          updates?: RawUpdate[]
           sync_buf?: string
           expired?: boolean
         }>,
@@ -146,6 +147,7 @@ async function main() {
         resolveProject: resolve,
         manager: sessionManager,
         format: formatInbound,
+        sendAssistantText: async (chatId, text) => { await ilink.sendMessage(chatId, text) },
         log: (tag, line) => log(tag, line),
       }, msg)
     },
@@ -190,6 +192,21 @@ async function main() {
   if (DANGEROUSLY) {
     log('DAEMON', 'warning: Claude will still confirm destructive ops via natural-language reply, but no permission prompts will appear.')
   }
+
+  // Best-effort startup notification to the bound owner over WeChat. Throttled
+  // to avoid spamming on KeepAlive crash-loops; never blocks daemon readiness.
+  notifyStartup(
+    {
+      stateDir: STATE_DIR,
+      loadAccess: () => {
+        const a = loadAccess()
+        return { allowFrom: a.allowFrom, admins: a.admins }
+      },
+      send: (chatId, text) => ilink.sendMessage(chatId, text),
+      log: (tag, line) => log(tag, line),
+    },
+    { pid: process.pid, accounts: accounts.length, dangerously: DANGEROUSLY }
+  ).catch((err) => log('NOTIFY', `unhandled: ${err instanceof Error ? err.message : String(err)}`))
 }
 
 main().catch((err) => {

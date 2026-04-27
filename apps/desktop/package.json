@@ -1,0 +1,17 @@
+{
+  "name": "wechat-cc-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "preview": "python3 -m http.server 4173 -d src",
+    "shim": "WECHAT_CC_DRY_RUN=1 bun test-shim.ts",
+    "shim:live": "bun test-shim.ts"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

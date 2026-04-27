@@ -11,9 +11,9 @@
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { ingestFromChannel, listPending, showPending, applyForOwner, renderPlanMarkdown } from 'hearth'
 import type { InboundMsg } from '../core/prompt-format'
 import type { SessionStateStore, ExpiredBot } from './session-state'
+import { loadHearthApi, type HearthApi, type HearthLoadResult } from './hearth-adapter'
 
 export interface AdminCommandsDeps {
   stateDir: string
@@ -24,6 +24,8 @@ export interface AdminCommandsDeps {
   sendMessage: (chatId: string, text: string) => Promise<{ msgId: string; error?: string }>
   /** Optional. When wired, /hearth ingest publishes the plan as a share-page card. */
   sharePage?: (title: string, content: string, opts?: { needs_approval?: boolean; chat_id?: string; account_id?: string }) => Promise<{ url: string; slug: string }>
+  /** Optional loader for tests; production discovers hearth lazily. */
+  loadHearthApi?: () => Promise<HearthLoadResult>
   log: (tag: string, line: string) => void
   /** ISO timestamp when the daemon booted (for uptime display). */
   startedAt: string
@@ -98,6 +100,8 @@ export function makeAdminCommands(deps: AdminCommandsDeps): AdminCommands {
 }
 
 async function runHearthIngest(deps: AdminCommandsDeps, msg: InboundMsg, content: string): Promise<void> {
+  const hearth = await getHearthOrReply(deps, msg.chatId)
+  if (!hearth) return
   const vault = process.env.HEARTH_VAULT
   if (!vault) {
     await deps.sendMessage(msg.chatId, '❌ HEARTH_VAULT 未设置。daemon 启动时加 env：HEARTH_VAULT=/path/to/vault')
@@ -110,7 +114,7 @@ async function runHearthIngest(deps: AdminCommandsDeps, msg: InboundMsg, content
     return
   }
   try {
-    const result = await ingestFromChannel(
+    const result = await hearth.ingestFromChannel(
       {
         channel: 'wechat',
         message_id: `wechat-${msg.accountId}-${Date.now()}`,
@@ -129,7 +133,7 @@ async function runHearthIngest(deps: AdminCommandsDeps, msg: InboundMsg, content
       // share is a presentation surface, not a commit step.
       if (deps.sharePage && result.change_id) {
         try {
-          const md = renderPlanMarkdown(result.change_id, { hearthStateDir: join(homedir(), '.hearth') })
+          const md = hearth.renderPlanMarkdown(result.change_id, { hearthStateDir: join(homedir(), '.hearth') })
           if (md.ok) {
             const card = await deps.sharePage(md.title ?? 'Hearth ChangePlan', md.markdown, {
               needs_approval: true,
@@ -155,8 +159,10 @@ async function runHearthIngest(deps: AdminCommandsDeps, msg: InboundMsg, content
 }
 
 async function runHearthList(deps: AdminCommandsDeps, adminChatId: string): Promise<void> {
+  const hearth = await getHearthOrReply(deps, adminChatId)
+  if (!hearth) return
   try {
-    const r = listPending({ hearthStateDir: join(homedir(), '.hearth'), limit: 10 })
+    const r = hearth.listPending({ hearthStateDir: join(homedir(), '.hearth'), limit: 10 })
     await deps.sendMessage(adminChatId, r.rendered)
     deps.log('HEARTH', `${adminChatId} list — ${r.items.length} shown`)
   } catch (err) {
@@ -166,8 +172,10 @@ async function runHearthList(deps: AdminCommandsDeps, adminChatId: string): Prom
 }
 
 async function runHearthShow(deps: AdminCommandsDeps, adminChatId: string, changeId: string): Promise<void> {
+  const hearth = await getHearthOrReply(deps, adminChatId)
+  if (!hearth) return
   try {
-    const r = showPending(changeId, { hearthStateDir: join(homedir(), '.hearth') })
+    const r = hearth.showPending(changeId, { hearthStateDir: join(homedir(), '.hearth') })
     await deps.sendMessage(adminChatId, r.rendered)
     deps.log('HEARTH', `${adminChatId} show ${changeId} ok=${r.ok}`)
   } catch (err) {
@@ -177,13 +185,15 @@ async function runHearthShow(deps: AdminCommandsDeps, adminChatId: string, chang
 }
 
 async function runHearthApply(deps: AdminCommandsDeps, msg: InboundMsg, changeId: string): Promise<void> {
+  const hearth = await getHearthOrReply(deps, msg.chatId)
+  if (!hearth) return
   const vault = process.env.HEARTH_VAULT
   if (!vault) {
     await deps.sendMessage(msg.chatId, '❌ HEARTH_VAULT 未设置')
     return
   }
   try {
-    const r = await applyForOwner(changeId, {
+    const r = await hearth.applyForOwner(changeId, {
       vaultRoot: vault,
       hearthStateDir: join(homedir(), '.hearth'),
       ownerId: msg.chatId,
@@ -195,6 +205,25 @@ async function runHearthApply(deps: AdminCommandsDeps, msg: InboundMsg, changeId
     const detail = err instanceof Error ? err.message : String(err)
     await deps.sendMessage(msg.chatId, '❌ /hearth apply 异常: ' + detail.slice(0, 500))
   }
+}
+
+async function getHearthOrReply(deps: AdminCommandsDeps, chatId: string): Promise<HearthApi | null> {
+  const loaded = await (deps.loadHearthApi ?? loadHearthApi)()
+  if (loaded.ok) return loaded.api
+
+  const detail = loaded.error ? `\n详情: ${loaded.error.slice(0, 300)}` : ''
+  await deps.sendMessage(chatId, [
+    '❌ hearth 未安装或未配置，wechat-cc 其他功能不受影响。',
+    '',
+    '可选配置：',
+    '  export HEARTH_HOME=/path/to/hearth',
+    '  export HEARTH_MODULE=hearth',
+    '  export HEARTH_VAULT=/path/to/vault',
+    '',
+    '然后重启 wechat-cc，再使用 /hearth。' + detail,
+  ].join('\n'))
+  deps.log('HEARTH', `not available reason=${loaded.reason} checked=${loaded.checked.join(', ')}`)
+  return null
 }
 
 async function sendHearthHelp(deps: AdminCommandsDeps, adminChatId: string): Promise<void> {
