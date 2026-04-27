@@ -118,4 +118,26 @@ describe('analyzeUpdate', () => {
     const { deps } = makeFakeDeps({ behind: 1, head: 'a', remoteHead: 'b', lockfileDiff: '' })
     expect(analyzeUpdate(deps).lockfileWillChange).toBe(false)
   })
+
+  it('dirty tree → dirty=true with files list', () => {
+    const { deps } = makeFakeDeps({ porcelain: ' M cli.ts\n?? scratch.txt\n' })
+    const probe = analyzeUpdate(deps)
+    expect(probe.dirty).toBe(true)
+    expect(probe.dirtyFiles).toEqual(['cli.ts', 'scratch.txt'])
+  })
+
+  it('fetch failure → reason=fetch_failed', () => {
+    const { deps } = makeFakeDeps({ fetch: fail('network down', 128) })
+    const probe = analyzeUpdate(deps)
+    expect(probe.ok).toBe(false)
+    expect(probe.reason).toBe('fetch_failed')
+    expect(probe.details?.stderr).toContain('network down')
+  })
+
+  it('detached HEAD → reason=detached_head', () => {
+    const { deps } = makeFakeDeps({ detached: true })
+    const probe = analyzeUpdate(deps)
+    expect(probe.ok).toBe(false)
+    expect(probe.reason).toBe('detached_head')
+  })
 })
