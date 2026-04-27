@@ -208,7 +208,7 @@ export function defaultUpdateDeps(repoRoot: string, stateDir: string): UpdateDep
 17. happy path（service 在跑）→ stop / pull / install / start，`daemonAction="restarted"`
 18. happy path（daemon 没跑）→ 跳过 stop/start，`daemonAction="noop"`
 
-### 6.2 `update.e2e.test.ts`（vitest, 真 git，假 service，7 case）
+### 6.2 `update.e2e.test.ts`（vitest, 真 git，假 service，6 case）
 
 `mkdtemp` 起两个临时 repo（"upstream" + "local"），`git clone` 关系；service deps 用 spy。
 
@@ -216,9 +216,10 @@ export function defaultUpdateDeps(repoRoot: string, stateDir: string): UpdateDep
 2. **dirty tree** —— local 写未 commit 文件 → reject `dirty_tree`，HEAD 不变
 3. **diverged** —— local commit + upstream 不同 commit → reject `diverged`
 4. **no-op** —— upstream 无新 commit → `updateAvailable=false`，service 没动
-5. **pull conflict** —— local 与 upstream 改同一行 → `--ff-only` 失败 → reject `pull_conflict`，service 仍 stop
-6. **lockfile 不变** —— upstream 加非 lockfile commit → `installRan=false`
-7. **`--check` 不副作用** —— upstream 加 commit → `analyzeUpdate` → assert local HEAD 不变、working tree 干净
+5. **lockfile 不变** —— upstream 加非 lockfile commit → `installRan=false`
+6. **`--check` 不副作用** —— upstream 加 commit → `analyzeUpdate` → assert local HEAD 不变、working tree 干净
+
+`pull_conflict` 不进 e2e —— `aheadOfRemote > 0` 的 `diverged` 前置检查在真实场景里几乎覆盖所有非 ff 情况，剩下的需要 hook 失败 / 仓库损坏才能触发，e2e 复现脆弱、回报低。Task 6 的单元测试用假 `pull: fail(...)` 已经证明 applyUpdate 在 `git pull` 非零退出时的行为。
 
 ### 6.3 `cli.test.ts` 增量
 
