@@ -1,3 +1,8 @@
+import type { ServicePlan } from './service-manager'
+import { buildServicePlan, startService, stopService } from './service-manager'
+import { loadAgentConfig } from './agent-config'
+import { findOnPath } from './util'
+import { readDaemon } from './doctor'
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -219,4 +224,46 @@ export async function applyUpdate(deps: UpdateDeps): Promise<UpdateResult> {
     daemonAction,
     elapsedMs: ((deps.now ?? Date.now)() - startedAt),
   }
+}
+
+export function defaultUpdateDeps(repoRoot: string, stateDir: string): UpdateDeps {
+  const bunPath = findOnPath('bun')
+  const config = loadAgentConfig(stateDir)
+  const plan = buildServicePlan({
+    cwd: repoRoot,
+    dangerouslySkipPermissions: config.dangerouslySkipPermissions,
+    autoStart: config.autoStart,
+  })
+
+  return {
+    repoRoot,
+    stateDir,
+    runGit(args) {
+      const r = spawnSync('git', args, { cwd: repoRoot, encoding: 'utf8' })
+      return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', code: r.status ?? 1 }
+    },
+    bun: {
+      path: bunPath,
+      install: () => {
+        if (!bunPath) return { stdout: '', stderr: 'bun not on PATH', code: 127 }
+        const r = spawnSync(bunPath, ['install', '--frozen-lockfile'], { cwd: repoRoot, encoding: 'utf8' })
+        return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', code: r.status ?? 1 }
+      },
+    },
+    daemon: () => readDaemon(stateDir),
+    service: {
+      installed: () => isServiceInstalled(plan),
+      stop: () => stopService(plan),
+      start: () => startService(plan),
+    },
+  }
+}
+
+function isServiceInstalled(plan: ServicePlan): boolean {
+  if (plan.serviceFile) return existsSync(plan.serviceFile)
+  if (plan.kind === 'scheduled-task') {
+    const r = spawnSync('schtasks', ['/Query', '/TN', plan.serviceName], { encoding: 'utf8' })
+    return (r.status ?? 1) === 0
+  }
+  return false
 }
