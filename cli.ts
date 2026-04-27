@@ -23,6 +23,7 @@ export type CliArgs =
   | { cmd: 'daemon-kill'; pid: number; json: boolean }
   | { cmd: 'memory-list'; json: boolean }
   | { cmd: 'memory-read'; userId: string; path: string; json: boolean }
+  | { cmd: 'update'; check: boolean; json: boolean }
   | { cmd: 'help' }
 
 export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void }): CliArgs {
@@ -100,6 +101,13 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
         return base
       }
       return { cmd: 'help' }
+    }
+    case 'update': {
+      return {
+        cmd: 'update',
+        check: rest.includes('--check'),
+        json: rest.includes('--json'),
+      }
     }
     default: return { cmd: 'help' }
   }

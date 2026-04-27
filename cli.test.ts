@@ -106,4 +106,11 @@ describe('parseCliArgs', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('--fresh'))
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('--mcp-config'))
   })
+
+  it('parses update / update --check / update --json / update --check --json', () => {
+    expect(parseCliArgs(['update'])).toEqual({ cmd: 'update', check: false, json: false })
+    expect(parseCliArgs(['update', '--json'])).toEqual({ cmd: 'update', check: false, json: true })
+    expect(parseCliArgs(['update', '--check'])).toEqual({ cmd: 'update', check: true, json: false })
+    expect(parseCliArgs(['update', '--check', '--json'])).toEqual({ cmd: 'update', check: true, json: true })
+  })
 })
