@@ -141,3 +141,51 @@ describe('analyzeUpdate', () => {
     expect(probe.reason).toBe('detached_head')
   })
 })
+
+describe('applyUpdate — early rejects', () => {
+  it('dirty tree → reject without touching service or pull', async () => {
+    const { deps, runGit, stop, start, install } = makeFakeDeps({ porcelain: ' M cli.ts\n' })
+    const result = await applyUpdate(deps)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toBe('dirty_tree')
+    expect(result.details?.dirtyFiles).toEqual(['cli.ts'])
+    expect(stop).not.toHaveBeenCalled()
+    expect(start).not.toHaveBeenCalled()
+    expect(install).not.toHaveBeenCalled()
+    expect(runGit).not.toHaveBeenCalledWith(expect.arrayContaining(['pull']))
+  })
+
+  it('diverged (ahead > 0) → reject', async () => {
+    const { deps, stop } = makeFakeDeps({ ahead: 2, behind: 1, head: 'a', remoteHead: 'b' })
+    const result = await applyUpdate(deps)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toBe('diverged')
+    expect(result.details).toMatchObject({ aheadBy: 2, behindBy: 1 })
+    expect(stop).not.toHaveBeenCalled()
+  })
+
+  it('daemon alive but not installed as service → reject', async () => {
+    const { deps, stop, runGit } = makeFakeDeps({
+      behind: 1, head: 'a', remoteHead: 'b',
+      daemon: { alive: true, pid: 4242 },
+      serviceInstalled: false,
+    })
+    const result = await applyUpdate(deps)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toBe('daemon_running_not_service')
+    expect(result.details).toMatchObject({ pid: 4242 })
+    expect(stop).not.toHaveBeenCalled()
+    expect(runGit).not.toHaveBeenCalledWith(expect.arrayContaining(['pull']))
+  })
+
+  it('detached HEAD → reject', async () => {
+    const { deps } = makeFakeDeps({ detached: true })
+    const result = await applyUpdate(deps)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toBe('detached_head')
+  })
+})

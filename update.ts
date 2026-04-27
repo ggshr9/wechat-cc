@@ -116,6 +116,43 @@ function parseCount(s: string): number {
   return Number.isFinite(n) ? n : 0
 }
 
-export async function applyUpdate(_deps: UpdateDeps): Promise<UpdateResult> {
-  throw new Error('not implemented')
+export async function applyUpdate(deps: UpdateDeps): Promise<UpdateResult> {
+  const startedAt = (deps.now ?? Date.now)()
+  const probe = analyzeUpdate(deps)
+  if (!probe.ok) {
+    return { ok: false, mode: 'apply', reason: probe.reason!, message: probe.message ?? 'probe failed', ...(probe.details ? { details: probe.details } : {}) }
+  }
+  if (probe.dirty) {
+    return {
+      ok: false, mode: 'apply', reason: 'dirty_tree',
+      message: 'working tree has uncommitted changes; commit/stash/discard then retry',
+      details: { dirtyFiles: probe.dirtyFiles ?? [] },
+    }
+  }
+  if ((probe.aheadOfRemote ?? 0) > 0) {
+    return {
+      ok: false, mode: 'apply', reason: 'diverged',
+      message: 'local branch has commits not on origin; push or rebase then retry',
+      details: { aheadBy: probe.aheadOfRemote, behindBy: probe.behind },
+    }
+  }
+  const daemon = deps.daemon()
+  let wasService = false
+  if (daemon.alive) {
+    if (!deps.service.installed()) {
+      return {
+        ok: false, mode: 'apply', reason: 'daemon_running_not_service',
+        message: 'daemon is running outside the installed service; stop it manually then retry',
+        details: { pid: daemon.pid },
+      }
+    }
+    wasService = true
+  }
+
+  // Steps 5-9: continue in later tasks (no-op for now to satisfy types).
+  return {
+    ok: false, mode: 'apply', reason: 'fetch_failed',
+    message: 'apply continuation not yet implemented',
+    details: { wasService, startedAt },
+  }
 }
