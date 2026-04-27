@@ -85,6 +85,11 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run vitest (touched suites only)
+        # Force bash shell — git-for-Windows ships it, and PowerShell doesn't
+        # honor the trailing-backslash line continuations we use below, which
+        # would silently invoke `vitest run` with no file args and then try to
+        # execute `cli.test.ts` as a separate command.
+        shell: bash
         run: |
           bun x vitest run \
             cli.test.ts \
@@ -102,9 +107,13 @@ jobs:
         working-directory: apps/desktop
         run: bun run tauri build
         env:
-          # Tauri's bundler tries to sign on macOS by default; skip for CI
-          # builds (we just want to verify it compiles + bundles).
-          APPLE_SIGNING_IDENTITY: ''
+          # Use ad-hoc signing on macOS ("-" tells codesign to sign with an
+          # ephemeral identity instead of looking for a Developer ID in the
+          # keychain). This produces a runnable .app/.dmg without requiring
+          # Apple Developer credentials in CI. Setting this to '' makes Tauri
+          # fall through to default signing which fails when no identity is
+          # provisioned.
+          APPLE_SIGNING_IDENTITY: '-'
 
       - name: Upload bundle artefacts
         uses: actions/upload-artifact@v4
