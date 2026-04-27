@@ -149,10 +149,21 @@ export async function applyUpdate(deps: UpdateDeps): Promise<UpdateResult> {
     wasService = true
   }
 
-  // Steps 5-9: continue in later tasks (no-op for now to satisfy types).
+  if (wasService) {
+    try {
+      deps.service.stop()
+    } catch (err) {
+      return {
+        ok: false, mode: 'apply', reason: 'service_stop_failed',
+        message: 'service.stop() threw',
+        details: { stderr: err instanceof Error ? err.message : String(err) },
+      }
+    }
+  }
+
+  // Step 7-10 implemented in later tasks; for now stub to keep types happy.
   return {
-    ok: false, mode: 'apply', reason: 'fetch_failed',
-    message: 'apply continuation not yet implemented',
-    details: { wasService, startedAt },
+    ok: false, mode: 'apply', reason: 'pull_conflict',
+    message: 'pull/install/start continuation not yet implemented',
   }
 }

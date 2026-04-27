@@ -189,3 +189,20 @@ describe('applyUpdate — early rejects', () => {
     expect(result.reason).toBe('detached_head')
   })
 })
+
+describe('applyUpdate — service stop', () => {
+  it('service.stop throws → reject service_stop_failed, pull never runs', async () => {
+    const { deps, stop, runGit } = makeFakeDeps({
+      behind: 1, head: 'a', remoteHead: 'b',
+      daemon: { alive: true, pid: 1 },
+      serviceInstalled: true,
+    })
+    stop.mockImplementation(() => { throw new Error('launchctl bootout failed') })
+    const result = await applyUpdate(deps)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toBe('service_stop_failed')
+    expect(result.details?.stderr).toContain('launchctl bootout failed')
+    expect(runGit).not.toHaveBeenCalledWith(expect.arrayContaining(['pull']))
+  })
+})
