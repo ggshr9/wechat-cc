@@ -253,3 +253,71 @@ describe('applyUpdate — pull/install', () => {
     expect(install).not.toHaveBeenCalled()
   })
 })
+
+describe('applyUpdate — completion paths', () => {
+  it('happy path with service → restarted, install ran when lockfile changed', async () => {
+    const { deps, stop, start, install } = makeFakeDeps({
+      behind: 1, head: 'a', remoteHead: 'b',
+      lockfileDiff: 'bun.lock\n',
+      daemon: { alive: true, pid: 1 },
+      serviceInstalled: true,
+    })
+    const result = await applyUpdate(deps)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.daemonAction).toBe('restarted')
+    expect(result.installRan).toBe(true)
+    expect(result.lockfileChanged).toBe(true)
+    expect(result.fromCommit).toBe('a')
+    expect(result.toCommit).toBe('b')
+    expect(stop).toHaveBeenCalledOnce()
+    expect(install).toHaveBeenCalledOnce()
+    expect(start).toHaveBeenCalledOnce()
+  })
+
+  it('happy path daemon not running → noop, no install if lockfile unchanged', async () => {
+    const { deps, stop, start, install } = makeFakeDeps({
+      behind: 1, head: 'a', remoteHead: 'b',
+      lockfileDiff: '',
+      daemon: { alive: false, pid: null },
+    })
+    const result = await applyUpdate(deps)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.daemonAction).toBe('noop')
+    expect(result.installRan).toBe(false)
+    expect(result.lockfileChanged).toBe(false)
+    expect(stop).not.toHaveBeenCalled()
+    expect(start).not.toHaveBeenCalled()
+    expect(install).not.toHaveBeenCalled()
+  })
+
+  it('service.start throws after successful pull → ok=true with restart_failed', async () => {
+    const { deps, start } = makeFakeDeps({
+      behind: 1, head: 'a', remoteHead: 'b',
+      daemon: { alive: true, pid: 1 },
+      serviceInstalled: true,
+    })
+    start.mockImplementation(() => { throw new Error('launchctl bootstrap failed') })
+    const result = await applyUpdate(deps)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.daemonAction).toBe('restart_failed')
+  })
+
+  it('no update available → fast path returns ok with daemonAction=noop', async () => {
+    const { deps, stop, start, install } = makeFakeDeps({
+      behind: 0, head: 'x', remoteHead: 'x',
+      daemon: { alive: true, pid: 1 },
+      serviceInstalled: true,
+    })
+    const result = await applyUpdate(deps)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.daemonAction).toBe('noop')
+    expect(result.installRan).toBe(false)
+    expect(stop).not.toHaveBeenCalled()
+    expect(start).not.toHaveBeenCalled()
+    expect(install).not.toHaveBeenCalled()
+  })
+})

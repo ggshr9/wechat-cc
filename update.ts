@@ -136,6 +136,17 @@ export async function applyUpdate(deps: UpdateDeps): Promise<UpdateResult> {
       details: { aheadBy: probe.aheadOfRemote, behindBy: probe.behind },
     }
   }
+  if (!probe.updateAvailable) {
+    return {
+      ok: true, mode: 'apply',
+      fromCommit: probe.currentCommit!,
+      toCommit: probe.latestCommit!,
+      lockfileChanged: false,
+      installRan: false,
+      daemonAction: 'noop',
+      elapsedMs: ((deps.now ?? Date.now)() - startedAt),
+    }
+  }
   const daemon = deps.daemon()
   let wasService = false
   if (daemon.alive) {
@@ -189,14 +200,23 @@ export async function applyUpdate(deps: UpdateDeps): Promise<UpdateResult> {
     }
   }
 
-  // Step 9-10 (start + return) come in next task.
+  let daemonAction: DaemonAction = 'noop'
+  if (wasService) {
+    try {
+      deps.service.start()
+      daemonAction = 'restarted'
+    } catch {
+      daemonAction = 'restart_failed'
+    }
+  }
+
   return {
     ok: true, mode: 'apply',
     fromCommit: probe.currentCommit!,
     toCommit: probe.latestCommit!,
     lockfileChanged: !!probe.lockfileWillChange,
     installRan,
-    daemonAction: 'noop',
+    daemonAction,
     elapsedMs: ((deps.now ?? Date.now)() - startedAt),
   }
 }
