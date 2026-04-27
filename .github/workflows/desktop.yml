@@ -114,3 +114,41 @@ jobs:
           path: ${{ matrix.bundle_glob }}
           if-no-files-found: warn
           retention-days: 14
+
+  # Aggregate the three platform bundles into a single GitHub Release.
+  # Only runs on `desktop-v*` tag pushes (skipped on workflow_dispatch / non-tag
+  # runs since those are validation builds without a meaningful version).
+  # Creates the release as a *draft* — review notes + flip to published manually.
+  release:
+    name: Draft GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout (for release notes file)
+        uses: actions/checkout@v4
+
+      - name: Download all platform bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: bundles
+          pattern: wechat-cc-*
+          merge-multiple: false
+
+      - name: Flatten bundles for upload
+        run: |
+          mkdir -p release-files
+          find bundles -type f \( -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.deb' -o -name '*.AppImage' -o -name '*.rpm' -o -name '*.exe' -o -name '*.msi' -o -name '*.nsis.zip' \) -exec cp -v {} release-files/ \;
+          ls -la release-files
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          name: Desktop ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          body_path: docs/releases/${{ github.ref_name }}.md
+          files: release-files/*
+          fail_on_unmatched_files: false
