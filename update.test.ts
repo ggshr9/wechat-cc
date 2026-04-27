@@ -206,3 +206,50 @@ describe('applyUpdate — service stop', () => {
     expect(runGit).not.toHaveBeenCalledWith(expect.arrayContaining(['pull']))
   })
 })
+
+describe('applyUpdate — pull/install', () => {
+  it('pull --ff-only fails → reject pull_conflict, install not run, service stays stopped', async () => {
+    const { deps, stop, start, install } = makeFakeDeps({
+      behind: 1, head: 'a', remoteHead: 'b',
+      daemon: { alive: true, pid: 1 },
+      serviceInstalled: true,
+      pull: fail('Aborting', 1),
+    })
+    const result = await applyUpdate(deps)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toBe('pull_conflict')
+    expect(stop).toHaveBeenCalledOnce()
+    expect(install).not.toHaveBeenCalled()
+    expect(start).not.toHaveBeenCalled()
+  })
+
+  it('install fails → reject install_failed, service stays stopped', async () => {
+    const { deps, install, start } = makeFakeDeps({
+      behind: 1, head: 'a', remoteHead: 'b',
+      lockfileDiff: 'bun.lock\n',
+      daemon: { alive: true, pid: 1 },
+      serviceInstalled: true,
+      installResult: fail('lockfile mismatch', 1),
+    })
+    const result = await applyUpdate(deps)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toBe('install_failed')
+    expect(install).toHaveBeenCalledOnce()
+    expect(start).not.toHaveBeenCalled()
+  })
+
+  it('lockfile changed but bun missing → reject bun_missing', async () => {
+    const { deps, install } = makeFakeDeps({
+      behind: 1, head: 'a', remoteHead: 'b',
+      lockfileDiff: 'bun.lock\n',
+      bunPath: null,
+    })
+    const result = await applyUpdate(deps)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toBe('bun_missing')
+    expect(install).not.toHaveBeenCalled()
+  })
+})

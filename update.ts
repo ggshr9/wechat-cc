@@ -161,9 +161,42 @@ export async function applyUpdate(deps: UpdateDeps): Promise<UpdateResult> {
     }
   }
 
-  // Step 7-10 implemented in later tasks; for now stub to keep types happy.
+  const pulled = deps.runGit(['pull', '--ff-only'])
+  if (pulled.code !== 0) {
+    return {
+      ok: false, mode: 'apply', reason: 'pull_conflict',
+      message: 'git pull --ff-only failed',
+      details: { stderr: pulled.stderr },
+    }
+  }
+
+  let installRan = false
+  if (probe.lockfileWillChange) {
+    if (!deps.bun.path) {
+      return {
+        ok: false, mode: 'apply', reason: 'bun_missing',
+        message: 'bun.lock changed but `bun` is not on PATH; install Bun then retry',
+      }
+    }
+    const installed = deps.bun.install()
+    installRan = true
+    if (installed.code !== 0) {
+      return {
+        ok: false, mode: 'apply', reason: 'install_failed',
+        message: 'bun install --frozen-lockfile failed',
+        details: { stderr: installed.stderr },
+      }
+    }
+  }
+
+  // Step 9-10 (start + return) come in next task.
   return {
-    ok: false, mode: 'apply', reason: 'pull_conflict',
-    message: 'pull/install/start continuation not yet implemented',
+    ok: true, mode: 'apply',
+    fromCommit: probe.currentCommit!,
+    toCommit: probe.latestCommit!,
+    lockfileChanged: !!probe.lockfileWillChange,
+    installRan,
+    daemonAction: 'noop',
+    elapsedMs: ((deps.now ?? Date.now)() - startedAt),
   }
 }
