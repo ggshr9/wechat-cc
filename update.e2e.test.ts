@@ -58,11 +58,12 @@ beforeEach(() => {
   commit(upstream, 'README.md', 'v1\n', 'initial')
   commit(upstream, 'bun.lock', 'lock-v1\n', 'add lockfile')
 
-  // clone into local
-  execFileSync('git', ['clone', '-q', upstream, local])
+  // clone into local with autocrlf forced off via -c, otherwise git-for-Windows
+  // applies its system-level autocrlf=true during checkout *before* a repo-local
+  // setting could override it, leaving the working tree dirty after clone.
+  execFileSync('git', ['-c', 'core.autocrlf=false', 'clone', '-q', upstream, local])
   git(local, 'config', 'user.email', 'test@example.com')
   git(local, 'config', 'user.name', 'Test')
-  git(local, 'config', 'core.autocrlf', 'false')
 })
 
 afterEach(() => {
