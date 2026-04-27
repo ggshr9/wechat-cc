@@ -64,6 +64,11 @@ beforeEach(() => {
   execFileSync('git', ['-c', 'core.autocrlf=false', 'clone', '-q', upstream, local])
   git(local, 'config', 'user.email', 'test@example.com')
   git(local, 'config', 'user.name', 'Test')
+  // Persist autocrlf=false in the cloned repo. The `-c` on clone is op-scoped
+  // and doesn't survive into the local config, so the subsequent `git pull`
+  // (during applyUpdate) would otherwise re-apply system autocrlf=true and
+  // turn LF in the index back into CRLF in the working tree.
+  git(local, 'config', 'core.autocrlf', 'false')
 })
 
 afterEach(() => {
