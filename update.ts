@@ -72,8 +72,48 @@ export interface UpdateRejected {
 
 export type UpdateResult = UpdateApplied | UpdateRejected
 
-export function analyzeUpdate(_deps: UpdateDeps): UpdateProbe {
-  throw new Error('not implemented')
+export function analyzeUpdate(deps: UpdateDeps): UpdateProbe {
+  const probe: UpdateProbe = { ok: false, mode: 'check' }
+
+  const fetched = deps.runGit(['fetch', 'origin'])
+  if (fetched.code !== 0) {
+    return { ok: false, mode: 'check', reason: 'fetch_failed', message: 'git fetch origin failed', details: { stderr: fetched.stderr } }
+  }
+
+  const branchRes = deps.runGit(['symbolic-ref', '--short', 'HEAD'])
+  if (branchRes.code !== 0) {
+    const head = deps.runGit(['rev-parse', 'HEAD'])
+    return {
+      ok: false, mode: 'check', reason: 'detached_head',
+      message: 'HEAD is detached; checkout a branch and retry',
+      details: { currentCommit: head.stdout.trim() },
+    }
+  }
+  const branch = branchRes.stdout.trim()
+
+  const head = deps.runGit(['rev-parse', 'HEAD']).stdout.trim()
+  const remoteHead = deps.runGit(['rev-parse', `origin/${branch}`]).stdout.trim()
+  const behind = parseCount(deps.runGit(['rev-list', '--count', `${head}..${remoteHead}`]).stdout)
+  const ahead = parseCount(deps.runGit(['rev-list', '--count', `${remoteHead}..${head}`]).stdout)
+  const porcelain = deps.runGit(['status', '--porcelain']).stdout
+  const dirtyFiles = porcelain.split('\n').map((l) => l.slice(3).trim()).filter(Boolean)
+  const lockfileDiff = deps.runGit(['diff', '--name-only', 'HEAD', `origin/${branch}`, '--', 'bun.lock']).stdout
+
+  probe.ok = true
+  probe.currentCommit = head
+  probe.latestCommit = remoteHead
+  probe.behind = behind
+  probe.aheadOfRemote = ahead
+  probe.updateAvailable = behind > 0
+  probe.dirty = dirtyFiles.length > 0
+  probe.dirtyFiles = dirtyFiles
+  probe.lockfileWillChange = lockfileDiff.trim().length > 0
+  return probe
+}
+
+function parseCount(s: string): number {
+  const n = Number.parseInt(s.trim(), 10)
+  return Number.isFinite(n) ? n : 0
 }
 
 export async function applyUpdate(_deps: UpdateDeps): Promise<UpdateResult> {
