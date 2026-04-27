@@ -21,7 +21,7 @@ function commit(cwd: string, file: string, body: string, message: string): strin
   return git(cwd, 'rev-parse', 'HEAD')
 }
 
-function makeDeps(localRepo: string, opts: { daemonAlive?: boolean; serviceInstalled?: boolean; lockfileLines?: string[]; bun?: { path: string | null } } = {}) {
+function makeDeps(localRepo: string, opts: { daemonAlive?: boolean; serviceInstalled?: boolean; bun?: { path: string | null } } = {}) {
   const stop = vi.fn()
   const start = vi.fn()
   const install = vi.fn(() => ({ stdout: '', stderr: '', code: 0 }))

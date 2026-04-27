@@ -140,6 +140,19 @@ describe('analyzeUpdate', () => {
     expect(probe.ok).toBe(false)
     expect(probe.reason).toBe('detached_head')
   })
+
+  it('runGit throws on fetch (e.g. ENOENT) → reason=fetch_failed', () => {
+    const { deps } = makeFakeDeps({
+      extraGit: (args) => {
+        if (args[0] === 'fetch') throw new Error('spawn git ENOENT')
+        return undefined
+      },
+    })
+    const probe = analyzeUpdate(deps)
+    expect(probe.ok).toBe(false)
+    expect(probe.reason).toBe('fetch_failed')
+    expect(probe.details?.stderr).toContain('ENOENT')
+  })
 })
 
 describe('applyUpdate — early rejects', () => {

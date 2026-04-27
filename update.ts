@@ -5,7 +5,6 @@ import { findOnPath } from './util'
 import { readDaemon } from './doctor'
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
 
 export type UpdateReason =
   | 'dirty_tree'
@@ -80,7 +79,12 @@ export type UpdateResult = UpdateApplied | UpdateRejected
 export function analyzeUpdate(deps: UpdateDeps): UpdateProbe {
   const probe: UpdateProbe = { ok: false, mode: 'check' }
 
-  const fetched = deps.runGit(['fetch', 'origin'])
+  let fetched: RunResult
+  try {
+    fetched = deps.runGit(['fetch', 'origin'])
+  } catch (err) {
+    return { ok: false, mode: 'check', reason: 'fetch_failed', message: 'git fetch origin threw', details: { stderr: err instanceof Error ? err.message : String(err) } }
+  }
   if (fetched.code !== 0) {
     return { ok: false, mode: 'check', reason: 'fetch_failed', message: 'git fetch origin failed', details: { stderr: fetched.stderr } }
   }
