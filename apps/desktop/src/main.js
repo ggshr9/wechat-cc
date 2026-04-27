@@ -2,6 +2,7 @@ import { mockInvoke } from "./mock.js"
 import {
   doctorRows, pollAdvance, daemonStatusLine, escapeHtml,
   initialMode, dashboardHero, accountRows, configRows, formatRelativeTime,
+  updateProbeLine, updateApplyLine,
 } from "./view.js"
 
 const state = {
@@ -48,6 +49,14 @@ function setMode(mode) {
     if (!state.clockTimer) state.clockTimer = setInterval(updateClock, 1000)
     refreshDashboard()
     updateClock()
+    // Launch-time update probe — runs once per dashboard entry. The user can
+    // re-check manually via the "检查更新" button. We deliberately don't put
+    // this on the 5s tick: git fetch on a slow link or bad network would stack
+    // up calls, and the answer doesn't change that fast.
+    if (!state.updateProbed) {
+      state.updateProbed = true
+      loadUpdateProbe().catch(err => console.error("update probe failed", err))
+    }
   } else {
     if (state.dashTimer) { clearInterval(state.dashTimer); state.dashTimer = null }
     if (state.clockTimer) { clearInterval(state.clockTimer); state.clockTimer = null }
@@ -423,6 +432,8 @@ document.getElementById("service-plan-toggle").addEventListener("click", () => {
 document.getElementById("dash-refresh").addEventListener("click", () => refreshDashboard({ message: "已刷新" }))
 document.getElementById("dash-restart").addEventListener("click", restartDaemon)
 document.getElementById("memory-refresh")?.addEventListener("click", () => loadMemoryPane())
+document.getElementById("update-check-btn")?.addEventListener("click", () => loadUpdateProbe())
+document.getElementById("update-apply-btn")?.addEventListener("click", applyUpdate)
 
 // Account row inline two-step confirm (table version)
 document.getElementById("accounts-body").addEventListener("click", async (ev) => {
@@ -585,6 +596,72 @@ function formatBytes(n) {
   if (n < 1024) return `${n}B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}k`
   return `${(n / 1024 / 1024).toFixed(1)}M`
+}
+
+// ─── update card ─────────────────────────────────────────────────────
+
+const updateState = { busy: false, lastProbe: null }
+
+function renderUpdateCard(line, opts = {}) {
+  const card = document.getElementById("update-card")
+  const headline = document.getElementById("update-headline")
+  const body = document.getElementById("update-body")
+  const meta = document.getElementById("update-meta")
+  const checkBtn = document.getElementById("update-check-btn")
+  const applyBtn = document.getElementById("update-apply-btn")
+  if (!card) return
+  card.dataset.tone = line.tone
+  headline.textContent = line.headline
+  body.textContent = line.body
+  if (opts.metaText !== undefined) meta.textContent = opts.metaText
+  // Show "立即升级" only when the probe says updateAvailable AND not dirty/diverged.
+  const showApply = !!opts.canApply && !updateState.busy
+  applyBtn.hidden = !showApply
+  applyBtn.disabled = updateState.busy
+  checkBtn.disabled = updateState.busy
+}
+
+async function loadUpdateProbe(opts = {}) {
+  if (updateState.busy) return
+  updateState.busy = true
+  renderUpdateCard({ tone: "info", headline: "检查中…", body: "正在 git fetch + 比对 origin/master" }, { metaText: "检查中…", canApply: false })
+  let probe
+  try {
+    probe = await invoke("wechat_cli_json", { args: ["update", "--check", "--json"] })
+  } catch (err) {
+    updateState.busy = false
+    renderUpdateCard({ tone: "bad", headline: "检查失败", body: formatInvokeError(err) }, { metaText: "失败", canApply: false })
+    return
+  }
+  updateState.busy = false
+  updateState.lastProbe = probe
+  const line = updateProbeLine(probe)
+  const sha = (probe?.currentCommit || "").slice(0, 7) || "—"
+  const canApply = !!(probe?.ok && probe?.updateAvailable && !probe?.dirty && (probe?.aheadOfRemote ?? 0) === 0)
+  renderUpdateCard(line, { metaText: `at ${sha}`, canApply })
+  if (opts.afterApply) setPending("升级完成 · 已重新检查")
+}
+
+async function applyUpdate() {
+  if (updateState.busy) return
+  updateState.busy = true
+  renderUpdateCard({ tone: "info", headline: "升级中…", body: "停服务 → git pull → bun install → 重启服务" }, { metaText: "升级中…", canApply: false })
+  setPending("升级中…")
+  let result
+  try {
+    result = await invoke("wechat_cli_json", { args: ["update", "--json"] })
+  } catch (err) {
+    updateState.busy = false
+    renderUpdateCard({ tone: "bad", headline: "升级失败", body: formatInvokeError(err) }, { metaText: "失败", canApply: false })
+    setPending(`升级失败：${formatInvokeError(err)}`)
+    return
+  }
+  updateState.busy = false
+  const line = updateApplyLine(result)
+  renderUpdateCard(line, { metaText: result.ok ? "已完成" : "失败", canApply: false })
+  // Refresh dashboard (daemon may have been restarted) + re-probe to reflect new HEAD.
+  await refreshDashboard().catch(() => {})
+  await loadUpdateProbe({ afterApply: true }).catch(() => {})
 }
 
 // ─── boot ────────────────────────────────────────────────────────────

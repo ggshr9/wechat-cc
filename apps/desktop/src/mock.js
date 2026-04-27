@@ -36,6 +36,27 @@ export async function mockInvoke(command, args, state) {
   if (command === "wechat_cli_json" && args.args?.[0] === "provider" && args.args?.[1] === "show") {
     return { provider: state?.selectedProvider ?? "claude", dangerouslySkipPermissions: state?.unattended ?? true }
   }
+  if (command === "wechat_cli_json" && args.args?.[0] === "update" && args.args?.[1] === "--check") {
+    return {
+      ok: true, mode: "check",
+      currentCommit: "abc1234aaaaaaa",
+      latestCommit: "def5678bbbbbbb",
+      behind: 2, aheadOfRemote: 0,
+      lockfileWillChange: false,
+      dirty: false, dirtyFiles: [],
+      updateAvailable: true,
+    }
+  }
+  if (command === "wechat_cli_json" && args.args?.[0] === "update") {
+    return {
+      ok: true, mode: "apply",
+      fromCommit: "abc1234aaaaaaa",
+      toCommit: "def5678bbbbbbb",
+      lockfileChanged: false, installRan: false,
+      daemonAction: "restarted",
+      elapsedMs: 1200,
+    }
+  }
   if (command === "wechat_cli_text") return "ok"
   return {}
 }

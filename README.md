@@ -244,10 +244,23 @@ Everything works on Windows. `/restart` from WeChat is not supported on Windows 
 ### Updating
 
 ```bash
-wechat-cc update    # git pull + bun install if needed
+wechat-cc update             # pull + reinstall deps + restart service
+wechat-cc update --check     # probe only, no side effects
 ```
 
-Then restart the daemon (`Ctrl+C` + `wechat-cc run`) to pick up the new code. `/status` in WeChat shows your current version and whether updates are available.
+`--check` is what the desktop GUI calls on launch (and behind the **检查更新** button) to decide whether to surface **立即升级**.
+
+If the daemon is running as a service (LaunchAgent / systemd / Scheduled Task — i.e. you went through the desktop installer or `wechat-cc service install`), `update` automatically stops, pulls, reinstalls deps if `bun.lock` changed, and restarts. If you're running `wechat-cc run` in a foreground terminal, the command refuses with `daemon_running_not_service` so it won't kill your shell — Ctrl+C the foreground process first.
+
+### Desktop bundles — first-run warnings
+
+Until the desktop bundles are signed (Apple Developer ID + Windows EV certificate; not yet provisioned), the GUI installer triggers a one-time OS warning the first time you open it:
+
+- **macOS**: "无法验证开发者". Right-click the `.dmg` (or the app inside) → **Open** → confirm. After once, future launches are silent.
+- **Windows**: SmartScreen "无法识别的应用". Click **More info** → **Run anyway**.
+- **Linux**: `.AppImage` / `.deb` carries no warning.
+
+The unsigned bundles are byte-identical to what GitHub Actions builds — only the certificate is missing. Future signed releases (when certs are in place) will eliminate these prompts retroactively.
 
 ### Using with cc-switch
 

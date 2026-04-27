@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   doctorRows, pollAdvance, daemonStatusLine, escapeHtml,
   initialMode, dashboardHero, accountRows, configRows, formatRelativeTime,
+  updateProbeLine, updateApplyLine,
 } from './view.js'
 
 function fakeReport(overrides: Record<string, any> = {}): any {
@@ -186,5 +187,126 @@ describe('configRows', () => {
   it('returns the four config rows in stable order', () => {
     const rows = configRows(fakeReport(), '~/.claude/channels/wechat')
     expect(rows.map(r => r[0])).toEqual(['Provider', 'Provider binary', 'Allowlist', 'State directory'])
+  })
+})
+
+describe('updateProbeLine', () => {
+  it('clean + behind=3 → info tone with sha→sha and lockfile note', () => {
+    const line = updateProbeLine({
+      ok: true, mode: 'check', currentCommit: 'aaaaaaa1234', latestCommit: 'bbbbbbb5678',
+      behind: 3, aheadOfRemote: 0, lockfileWillChange: true, dirty: false, dirtyFiles: [], updateAvailable: true,
+    })
+    expect(line.tone).toBe('info')
+    expect(line.headline).toContain('3 commits')
+    expect(line.headline).toContain('依赖更新')
+    expect(line.body).toContain('aaaaaaa')
+    expect(line.body).toContain('bbbbbbb')
+  })
+
+  it('up to date → ok tone', () => {
+    const line = updateProbeLine({
+      ok: true, mode: 'check', currentCommit: 'abcdef0', latestCommit: 'abcdef0',
+      behind: 0, aheadOfRemote: 0, lockfileWillChange: false, dirty: false, dirtyFiles: [], updateAvailable: false,
+    })
+    expect(line.tone).toBe('ok')
+    expect(line.headline).toContain('已是最新')
+  })
+
+  it('dirty tree → warn tone with file count', () => {
+    const line = updateProbeLine({
+      ok: true, mode: 'check', currentCommit: 'abcdef0', latestCommit: 'fedcba9',
+      behind: 1, aheadOfRemote: 0, lockfileWillChange: false, dirty: true, dirtyFiles: ['cli.ts', 'README.md'], updateAvailable: true,
+    })
+    expect(line.tone).toBe('warn')
+    expect(line.headline).toContain('未提交')
+    expect(line.body).toContain('2')
+  })
+
+  it('aheadOfRemote > 0 → warn tone (would diverge)', () => {
+    const line = updateProbeLine({
+      ok: true, mode: 'check', currentCommit: 'abc', latestCommit: 'def',
+      behind: 0, aheadOfRemote: 5, lockfileWillChange: false, dirty: false, dirtyFiles: [], updateAvailable: false,
+    })
+    expect(line.tone).toBe('warn')
+    expect(line.headline).toContain('领先')
+    expect(line.headline).toContain('5')
+  })
+
+  it('fetch_failed → bad tone', () => {
+    const line = updateProbeLine({ ok: false, mode: 'check', reason: 'fetch_failed', message: 'x' })
+    expect(line.tone).toBe('bad')
+    expect(line.headline).toContain('检查失败')
+  })
+
+  it('null/undefined probe → warn placeholder', () => {
+    expect(updateProbeLine(null).tone).toBe('warn')
+    expect(updateProbeLine(undefined).tone).toBe('warn')
+  })
+})
+
+describe('updateApplyLine', () => {
+  it('happy path with restart → ok tone', () => {
+    const line = updateApplyLine({
+      ok: true, mode: 'apply', fromCommit: 'aaaaaaa1', toCommit: 'bbbbbbb2',
+      lockfileChanged: true, installRan: true, daemonAction: 'restarted', elapsedMs: 8000,
+    })
+    expect(line.tone).toBe('ok')
+    expect(line.headline).toContain('aaaaaaa')
+    expect(line.headline).toContain('bbbbbbb')
+    expect(line.body).toContain('依赖')
+  })
+
+  it('restart_failed → warn tone with manual recovery hint', () => {
+    const line = updateApplyLine({
+      ok: true, mode: 'apply', fromCommit: 'a', toCommit: 'b',
+      lockfileChanged: false, installRan: false, daemonAction: 'restart_failed', elapsedMs: 0,
+    })
+    expect(line.tone).toBe('warn')
+    expect(line.body).toContain('手动重启')
+  })
+
+  it('daemonAction=noop on success → ok tone, no restart text', () => {
+    const line = updateApplyLine({
+      ok: true, mode: 'apply', fromCommit: 'a', toCommit: 'b',
+      lockfileChanged: false, installRan: false, daemonAction: 'noop', elapsedMs: 0,
+    })
+    expect(line.tone).toBe('ok')
+    expect(line.body).toContain('未做重启')
+  })
+
+  it('dirty_tree reject → warn tone with file list (truncated)', () => {
+    const line = updateApplyLine({
+      ok: false, mode: 'apply', reason: 'dirty_tree',
+      message: 'working tree has uncommitted changes',
+      details: { dirtyFiles: ['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts'] },
+    })
+    expect(line.tone).toBe('warn')
+    expect(line.body).toContain('a.ts')
+    expect(line.body).toContain('5 个')
+  })
+
+  it('diverged reject → warn tone', () => {
+    const line = updateApplyLine({ ok: false, mode: 'apply', reason: 'diverged', message: 'x' })
+    expect(line.tone).toBe('warn')
+    expect(line.headline).toContain('领先')
+  })
+
+  it('daemon_running_not_service reject → bad tone with Ctrl+C hint', () => {
+    const line = updateApplyLine({ ok: false, mode: 'apply', reason: 'daemon_running_not_service', message: 'x' })
+    expect(line.tone).toBe('bad')
+    expect(line.body).toContain('Ctrl+C')
+  })
+
+  it('all 9 reasons map to a non-default headline', () => {
+    const reasons = [
+      'dirty_tree', 'diverged', 'detached_head', 'fetch_failed',
+      'pull_conflict', 'install_failed', 'bun_missing',
+      'daemon_running_not_service', 'service_stop_failed',
+    ]
+    for (const reason of reasons) {
+      const line = updateApplyLine({ ok: false, mode: 'apply', reason, message: 'x' })
+      expect(line.headline).not.toBe('升级失败')  // generic fallback
+      expect(['warn', 'bad']).toContain(line.tone)
+    }
   })
 })
