@@ -31,14 +31,12 @@ jobs:
             label: macos-aarch64
             bun_target: bun-darwin-arm64
             rust_triple: aarch64-apple-darwin
-          # macOS Intel — pinned to macos-13 (last GH runner with x86_64 support).
-          # Bumps to macos-14+ flip to Apple Silicon, which would silently drop
-          # Intel coverage. macos-13 stays available through GitHub's Actions
-          # support window; revisit when they sunset it.
-          - os: macos-13
-            label: macos-x86_64
-            bun_target: bun-darwin-x64
-            rust_triple: x86_64-apple-darwin
+          # macOS Intel skipped: macos-13 runners queue indefinitely on the
+          # free public-repo tier (33+ min and never picked up at v0.3.0
+          # cut time). Intel users have to use the source-mode CLI for
+          # now. Revisit when GH's macos-13 capacity recovers, or once
+          # cross-compile from macos-latest aarch64 → x64 is viable in
+          # `bun build --compile`.
           # Windows x86_64
           - os: windows-latest
             label: windows-x86_64

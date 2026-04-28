@@ -28,19 +28,17 @@ encodeURIComponent(body)))`). Tested across atomic writes, oversized
 bodies, traversal attempts, missing parent dirs, and concurrent-edit
 guards.
 
-### 2. macOS Intel bundle
+### 2. macOS Intel — deferred (capacity issues)
 
-CI matrix now includes `macos-13` (the last GitHub runner with x86_64
-support) alongside `macos-latest` (Apple Silicon). Releases ship two
-macOS bundles:
+Originally planned for v0.3.0 but pulled at cut time: GitHub's free-tier
+`macos-13` runners stayed queued indefinitely and never picked up the
+job. The compile pipeline is already parameterized via matrix vars
+(`bun_target`, `rust_triple`) so adding Intel back is one matrix row
+plus one runner that actually starts. v0.3.x will re-attempt.
 
-| File | For |
-|:---|:---|
-| `wechat-cc_0.3.0_aarch64.dmg` | Apple Silicon (M1 / M2 / M3) |
-| `wechat-cc_0.3.0_x64.dmg` | Intel Macs |
-
-The compile pipeline parameterized matrix vars (`bun_target`,
-`rust_triple`) so adding more arches in the future is one matrix row.
+In the meantime, Intel Mac users can install via source mode
+(`git clone … ~/.local/share/wechat-cc && bun install`) and use the
+CLI directly.
 
 ### 3. Daemon log tail in the dashboard
 
@@ -101,7 +99,6 @@ landed across master since v0.2.2:
 | Platform | Bundle | Notes |
 |:---|:---|:---|
 | **macOS (Apple Silicon)** | `wechat-cc_0.3.0_aarch64.dmg` | Right-click → Open on first launch (or `xattr -cr /Applications/wechat-cc.app`) |
-| **macOS (Intel)** | `wechat-cc_0.3.0_x64.dmg` | Same first-launch dance |
 | **Windows (x64)** | `.exe` (NSIS) · `.msi` | SmartScreen → 更多信息 → 仍要运行 |
 | **Linux (x64)** | `.deb` · `.rpm` | No warning |
 
