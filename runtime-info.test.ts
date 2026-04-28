@@ -8,7 +8,7 @@ import {
 
 const { detectCompiledBundle, resolveCompiledBinaryPath, resolveCompiledRepoRoot } = __testInternals
 
-describe('detectCompiledBundle', () => {
+describe('detectCompiledBundle — primary (argv[1] /$bunfs/ prefix)', () => {
   it('returns true when entry script lives under Bun virtual fs', () => {
     expect(detectCompiledBundle('/$bunfs/root/cli.ts')).toBe(true)
     expect(detectCompiledBundle('/$bunfs/root/anything')).toBe(true)
@@ -19,9 +19,31 @@ describe('detectCompiledBundle', () => {
     expect(detectCompiledBundle('/opt/bun/bin/bun')).toBe(false)
   })
 
-  it('returns false defensively when argv[1] is missing', () => {
+  it('returns false defensively when argv[1] is missing AND no dir hint', () => {
     expect(detectCompiledBundle(undefined)).toBe(false)
     expect(detectCompiledBundle('')).toBe(false)
+  })
+})
+
+describe('detectCompiledBundle — fallback (import.meta.dir existence)', () => {
+  it('falls back to true when argv[1] is unrecognized but module dir does not exist on disk', () => {
+    // Future-proofing: if Bun changes the virtual-fs prefix from /$bunfs/
+    // to something else, the primary check fails. The fallback probes
+    // import.meta.dir — in any compiled mode that path is virtual and
+    // doesn't exist on the real filesystem.
+    expect(detectCompiledBundle('/some/new/bun-virtual/cli.ts', '/some/new/bun-virtual')).toBe(true)
+    expect(detectCompiledBundle('/$bunjs/root/cli.ts', '/$bunjs/root')).toBe(true)
+  })
+
+  it('returns false when module dir is a real on-disk path (source mode)', () => {
+    // Source mode: import.meta.dir is the actual repo root, exists on disk.
+    // Use process.cwd() — guaranteed to exist on every test host.
+    expect(detectCompiledBundle('/some/non-bunfs/path', process.cwd())).toBe(false)
+  })
+
+  it('primary prefix wins over fallback — returns true even if module dir DOES exist', () => {
+    // Defensive: primary signal is unambiguous, secondary is just a backup.
+    expect(detectCompiledBundle('/$bunfs/root/cli.ts', '/tmp')).toBe(true)
   })
 })
 

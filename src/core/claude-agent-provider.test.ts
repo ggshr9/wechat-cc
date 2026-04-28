@@ -130,6 +130,39 @@ describe('claude-agent-provider', () => {
     expect(result.assistantText).toEqual([])
   })
 
+  it('assistant text arriving with no pending turn is dropped, not attributed to next dispatch', async () => {
+    const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
+    const session = await provider.spawn({ alias: 'p', path: '/p' })
+
+    // Suppress the [STREAM_DROP] warning the provider emits — we expect it
+    // and the assertion below counts on it being there. spy verifies it ran.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    // Pre-emit an assistant chunk before any dispatch is in flight. This
+    // should be dropped (the only "owner" of assistant text is an awaiting
+    // dispatch — attributing pre-pending chunks to a later dispatch would
+    // mix unrelated turns).
+    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
+      type: 'assistant', message: { content: [{ type: 'text', text: 'orphan' }] },
+    })
+    // Give the iterator loop a tick to consume the yielded message.
+    await new Promise(r => setTimeout(r, 10))
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('STREAM_DROP'))
+
+    // Now dispatch — the result must contain ONLY this turn's text, not
+    // the orphan from before.
+    const dispatched = session.dispatch('hello')
+    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
+      type: 'assistant', message: { content: [{ type: 'text', text: 'fresh' }] },
+    })
+    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
+      type: 'result', subtype: 'success', session_id: 'sid-1', num_turns: 1, duration_ms: 100,
+    })
+    const result = await dispatched
+    expect(result.assistantText).toEqual(['fresh'])
+    warnSpy.mockRestore()
+  })
+
   it('SDK iterator throwing rejects pending turns rather than hanging', async () => {
     const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
     const session = await provider.spawn({ alias: 'p', path: '/p' })

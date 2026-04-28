@@ -56,6 +56,13 @@ export function createClaudeAgentProvider(opts: ClaudeAgentProviderOptions): Age
       type Turn = { texts: string[]; resolve: (v: { assistantText: string[] }) => void; reject: (e: unknown) => void }
       const pendingTurns: Turn[] = []
 
+      // Counter for assistant chunks that arrive without a pending turn
+      // (no in-flight dispatch). Should normally stay 0 — if it climbs
+      // we have either an SDK quirk (trailing chunks after a `result`
+      // event) or a router contract violation. Surfaced via [STREAM_DROP]
+      // log so it's grep-able from channel.log.
+      let droppedAssistantChunks = 0
+
       ;(async () => {
         try {
           for await (const raw of q as AsyncGenerator<SDKMessage>) {
@@ -63,7 +70,15 @@ export function createClaudeAgentProvider(opts: ClaudeAgentProviderOptions): Age
             if (msg.type === 'assistant') {
               const text = extractText(msg.message?.content)
               if (text) {
-                if (pendingTurns[0]) pendingTurns[0].texts.push(text)
+                if (pendingTurns[0]) {
+                  pendingTurns[0].texts.push(text)
+                } else {
+                  // No in-flight turn — dispatch() couldn't have asked for
+                  // this. Drop it (attributing to the next turn would be
+                  // wrong) but log so we can see if it's actually happening.
+                  droppedAssistantChunks++
+                  console.warn(`wechat channel: [STREAM_DROP] alias=${project.alias} assistant text arrived without pending turn (count=${droppedAssistantChunks}) preview=${JSON.stringify(text.slice(0, 80))}`)
+                }
                 for (const cb of assistantListeners) cb(text)
               }
             } else if (msg.type === 'result') {
