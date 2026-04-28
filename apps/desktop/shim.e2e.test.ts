@@ -92,6 +92,8 @@ describe('apps/desktop shim — HTML structure', () => {
       'update-card', 'update-headline', 'update-body',  // update card
       'update-check-btn', 'update-apply-btn',           // update buttons
       'memory-sidebar', 'memory-rendered',              // memory pane
+      'memory-editor', 'memory-status',                 // memory edit mode
+      'memory-edit-btn', 'memory-save-btn', 'memory-cancel-btn',
       'dash-restart', 'dash-refresh',                   // dashboard actions
       'qr-box', 'qr-refresh', 'qr-poll',                // setup QR
       'service-install', 'service-stop',                // service controls
@@ -191,6 +193,17 @@ describe('apps/desktop shim — CLI invoke contracts', () => {
   it('memory list --json returns an array', async () => {
     const r = await invoke('wechat_cli_json', ['memory', 'list', '--json'])
     expect(Array.isArray(r)).toBe(true)
+  })
+
+  it('memory write --json returns ok:false with structured error on sandbox reject', async () => {
+    // We can't safely write to the user's real ~/.claude/channels/wechat
+    // memory dir from a test (would clobber actual notes), but we CAN
+    // assert the sandbox error path: a base64'd body for a non-.md
+    // extension MUST reject with `ok:false, error:<msg>` JSON. This locks
+    // the contract main.js's memory-edit save handler depends on.
+    const bodyB64 = Buffer.from('hello').toString('base64')
+    const r = await invoke('wechat_cli_json', ['memory', 'write', 'fake@example', 'note.txt', '--body-base64', bodyB64, '--json']) as Record<string, unknown>
+    expect(r).toMatchObject({ ok: false, error: expect.stringMatching(/only \.md files/) })
   })
 
   it('rejects an unknown command with a helpful error', async () => {

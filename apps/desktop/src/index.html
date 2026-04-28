@@ -340,10 +340,17 @@
                 <div class="crumb" id="memory-content-head" hidden>
                   <span id="memory-content-path">—</span>
                   <span class="mtime" id="memory-content-mtime">—</span>
+                  <span class="mem-actions">
+                    <button id="memory-edit-btn" class="btn ghost" hidden>编辑</button>
+                    <button id="memory-cancel-btn" class="btn ghost" hidden>取消</button>
+                    <button id="memory-save-btn" class="btn primary" hidden>保存</button>
+                  </span>
                 </div>
                 <div class="memory-rendered" id="memory-rendered">
                   <p class="empty-state">从左边选一个文件查看。</p>
                 </div>
+                <textarea id="memory-editor" class="memory-editor" spellcheck="false" hidden></textarea>
+                <div id="memory-status" class="memory-status" hidden></div>
               </section>
             </div>
           </article>

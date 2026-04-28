@@ -86,6 +86,20 @@ describe('parseCliArgs', () => {
     expect(parseCliArgs(['memory', 'read']).cmd).toBe('help')
     expect(parseCliArgs(['memory', 'read', 'u@x']).cmd).toBe('help')
   })
+  it('parses memory write <user> <path> --body-base64 <b64> [--json]', () => {
+    expect(parseCliArgs(['memory', 'write', 'u@x', 'profile.md', '--body-base64', 'IyBoaQ=='])).toEqual({
+      cmd: 'memory-write', userId: 'u@x', path: 'profile.md', bodyBase64: 'IyBoaQ==', json: false,
+    })
+    expect(parseCliArgs(['memory', 'write', 'u@x', 'sub/note.md', '--body-base64', 'eA==', '--json'])).toEqual({
+      cmd: 'memory-write', userId: 'u@x', path: 'sub/note.md', bodyBase64: 'eA==', json: true,
+    })
+  })
+  it('memory write rejects malformed args', () => {
+    expect(parseCliArgs(['memory', 'write', 'u@x', 'profile.md']).cmd).toBe('help')
+    expect(parseCliArgs(['memory', 'write', 'u@x', 'profile.md', '--body-base64']).cmd).toBe('help')
+    expect(parseCliArgs(['memory', 'write', 'u@x']).cmd).toBe('help')
+    expect(parseCliArgs(['memory', 'write']).cmd).toBe('help')
+  })
   it('accepts --dangerously on run subcommand', () => {
     expect(parseCliArgs(['run', '--dangerously'])).toEqual({
       cmd: 'run',

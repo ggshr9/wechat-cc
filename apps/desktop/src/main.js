@@ -10,7 +10,7 @@ import { renderDoctorWizard, refreshEnterDashboardButton, updateFooterStatus, sh
 import { refreshQr } from "./modules/qr.js"
 import { serviceAction, forceKillDaemon } from "./modules/service.js"
 import { renderDashboard, renderRestartButton, setPending, updateClock, restartDaemon, handleAccountRowClick } from "./modules/dashboard.js"
-import { loadMemoryPane } from "./modules/memory.js"
+import { loadMemoryPane, wireMemoryButtons } from "./modules/memory.js"
 import { loadUpdateProbe, applyUpdate } from "./modules/update.js"
 
 const state = {
@@ -183,6 +183,7 @@ function wireEvents() {
   })
   document.getElementById("dash-restart").addEventListener("click", () => restartDaemon(deps))
   document.getElementById("memory-refresh")?.addEventListener("click", () => loadMemoryPane(deps))
+  wireMemoryButtons(deps)
   document.getElementById("update-check-btn")?.addEventListener("click", () => loadUpdateProbe(deps))
   document.getElementById("update-apply-btn")?.addEventListener("click", () => applyUpdate(deps))
 

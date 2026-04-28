@@ -16,17 +16,34 @@ on:
 
 jobs:
   build:
-    name: build · ${{ matrix.os }}
+    name: build · ${{ matrix.label }}
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Linux x86_64
           - os: ubuntu-latest
-            label: linux
+            label: linux-x86_64
+            bun_target: bun-linux-x64
+            rust_triple: x86_64-unknown-linux-gnu
+          # macOS Apple Silicon (M1/M2/M3) — `macos-latest` runners are M-series
           - os: macos-latest
-            label: macos
+            label: macos-aarch64
+            bun_target: bun-darwin-arm64
+            rust_triple: aarch64-apple-darwin
+          # macOS Intel — pinned to macos-13 (last GH runner with x86_64 support).
+          # Bumps to macos-14+ flip to Apple Silicon, which would silently drop
+          # Intel coverage. macos-13 stays available through GitHub's Actions
+          # support window; revisit when they sunset it.
+          - os: macos-13
+            label: macos-x86_64
+            bun_target: bun-darwin-x64
+            rust_triple: x86_64-apple-darwin
+          # Windows x86_64
           - os: windows-latest
-            label: windows
+            label: windows-x86_64
+            bun_target: bun-windows-x64
+            rust_triple: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -122,27 +139,32 @@ jobs:
       # signature, clear quarantine xattrs, and re-sign ad-hoc so the runtime
       # passes Gatekeeper. Tauri's bundle step re-signs everything together
       # later with APPLE_SIGNING_IDENTITY=- (also ad-hoc), which is fine.
+      # Sidecar compile — matrix.bun_target picks the bun cross-target,
+      # matrix.rust_triple is the suffix Tauri's externalBin loader expects.
+      # Linux/macOS use no extension; Windows needs `.exe`. macOS additionally
+      # needs xattr/codesign massaging because bun-compiled binaries aren't
+      # codesign-compatible out of the box (Tauri's bundle step then re-signs
+      # everything ad-hoc with APPLE_SIGNING_IDENTITY=-).
       - name: Compile sidecar (Linux)
         if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
           mkdir -p apps/desktop/src-tauri/binaries
-          bun build --compile --target=bun-linux-x64 cli.ts \
-            --outfile apps/desktop/src-tauri/binaries/wechat-cc-cli-x86_64-unknown-linux-gnu
-          chmod +x apps/desktop/src-tauri/binaries/wechat-cc-cli-x86_64-unknown-linux-gnu
+          bun build --compile --target=${{ matrix.bun_target }} cli.ts \
+            --outfile apps/desktop/src-tauri/binaries/wechat-cc-cli-${{ matrix.rust_triple }}
+          chmod +x apps/desktop/src-tauri/binaries/wechat-cc-cli-${{ matrix.rust_triple }}
           ls -lh apps/desktop/src-tauri/binaries/
 
       - name: Compile sidecar (macOS)
-        if: matrix.os == 'macos-latest'
+        if: startsWith(matrix.os, 'macos')
         shell: bash
         run: |
           mkdir -p apps/desktop/src-tauri/binaries
-          bun build --compile --target=bun-darwin-arm64 cli.ts \
-            --outfile apps/desktop/src-tauri/binaries/wechat-cc-cli-aarch64-apple-darwin
-          xattr -cr apps/desktop/src-tauri/binaries/wechat-cc-cli-aarch64-apple-darwin || true
-          codesign --remove-signature apps/desktop/src-tauri/binaries/wechat-cc-cli-aarch64-apple-darwin || true
-          codesign --force --sign - --identifier=dev.wechat-cc.cli \
-            apps/desktop/src-tauri/binaries/wechat-cc-cli-aarch64-apple-darwin
+          OUT=apps/desktop/src-tauri/binaries/wechat-cc-cli-${{ matrix.rust_triple }}
+          bun build --compile --target=${{ matrix.bun_target }} cli.ts --outfile "$OUT"
+          xattr -cr "$OUT" || true
+          codesign --remove-signature "$OUT" || true
+          codesign --force --sign - --identifier=dev.wechat-cc.cli "$OUT"
           ls -lh apps/desktop/src-tauri/binaries/
 
       - name: Compile sidecar (Windows)
@@ -150,8 +172,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p apps/desktop/src-tauri/binaries
-          bun build --compile --target=bun-windows-x64 cli.ts \
-            --outfile apps/desktop/src-tauri/binaries/wechat-cc-cli-x86_64-pc-windows-msvc.exe
+          bun build --compile --target=${{ matrix.bun_target }} cli.ts \
+            --outfile apps/desktop/src-tauri/binaries/wechat-cc-cli-${{ matrix.rust_triple }}.exe
           ls -lh apps/desktop/src-tauri/binaries/
 
       - name: Tauri build

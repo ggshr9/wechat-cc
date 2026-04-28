@@ -119,6 +119,14 @@ input { font: inherit; color: inherit; }
 .dev-banner b { color: #ffe3b8; font-weight: 500; }
 
 /* ─── shared button vocabulary ───────────────────────────────────────── */
+/* Force [hidden] to always win — without !important, any class with an
+   explicit `display` property (e.g. `.btn { display: inline-flex }` below,
+   or `.dash-pane { display: flex }`) silently overrides the user-agent
+   `[hidden] { display: none }` rule because the class selector has higher
+   specificity. The memory edit-mode buttons hit this in v0.3.0 (initial
+   `<button hidden>` ignored, all 3 buttons visible) before this fix landed. */
+[hidden] { display: none !important; }
+
 .btn {
   display: inline-flex; align-items: center; gap: 6px;
   height: 32px; padding: 0 14px;
@@ -1027,3 +1035,37 @@ input { font: inherit; color: inherit; }
 .upd-headline { font-size: 13px; font-weight: 500; color: var(--ink); margin-bottom: 2px; }
 .upd-body-text { font-size: 11.5px; color: var(--ink-3); line-height: 1.5; word-break: break-word; }
 .upd-actions { display: flex; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--hair); }
+
+/* ─── memory edit mode ─────────────────────────────────────────────── */
+.mem-doc .crumb { display: flex; align-items: center; gap: 8px; }
+.mem-doc .crumb .mem-actions { margin-left: auto; display: inline-flex; gap: 6px; }
+.mem-doc .crumb .mem-actions .btn { font-size: 11px; padding: 4px 10px; }
+.memory-editor {
+  width: calc(100% - 36px);
+  margin: 18px;
+  padding: 14px 16px;
+  min-height: 320px;
+  height: calc(100vh - 320px);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--hair);
+  border-radius: 6px;
+  resize: vertical;
+  box-sizing: border-box;
+  outline: none;
+}
+.memory-editor:focus { border-color: var(--green-ink); box-shadow: 0 0 0 3px var(--green-soft); }
+.memory-editor[hidden] { display: none !important; }
+.memory-status {
+  margin: 0 18px 12px;
+  padding: 8px 12px;
+  font-size: 11.5px;
+  border-radius: 4px;
+}
+.memory-status[hidden] { display: none !important; }
+.memory-status[data-tone="ok"]   { background: var(--green-soft); color: var(--green-ink); }
+.memory-status[data-tone="bad"]  { background: var(--rouge-soft); color: var(--rouge); }
+.memory-status[data-tone="info"] { background: var(--paper-2); color: var(--ink-3); }

@@ -23,6 +23,7 @@ export type CliArgs =
   | { cmd: 'daemon-kill'; pid: number; json: boolean }
   | { cmd: 'memory-list'; json: boolean }
   | { cmd: 'memory-read'; userId: string; path: string; json: boolean }
+  | { cmd: 'memory-write'; userId: string; path: string; bodyBase64: string; json: boolean }
   | { cmd: 'update'; check: boolean; json: boolean }
   | { cmd: 'help' }
 
@@ -86,6 +87,11 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
       if (rest[0] === 'list') return { cmd: 'memory-list', json: rest.includes('--json') }
       if (rest[0] === 'read' && rest[1] && rest[2]) {
         return { cmd: 'memory-read', userId: rest[1], path: rest[2], json: rest.includes('--json') }
+      }
+      if (rest[0] === 'write' && rest[1] && rest[2]) {
+        const idx = rest.indexOf('--body-base64')
+        if (idx < 0 || !rest[idx + 1]) return { cmd: 'help' }
+        return { cmd: 'memory-write', userId: rest[1], path: rest[2], bodyBase64: rest[idx + 1], json: rest.includes('--json') }
       }
       return { cmd: 'help' }
     }
@@ -156,6 +162,11 @@ Usage:
   wechat-cc memory read <user-id> <path> [--json]
                         Read one .md memory file. Path is relative to the
                         user's memory dir, traversal-safe.
+  wechat-cc memory write <user-id> <path> --body-base64 <b64> [--json]
+                        Write/overwrite one .md memory file. Body is
+                        passed as base64 (avoids shell-quote pain with
+                        multi-line markdown). Sandboxed: .md only,
+                        ≤100KB, no traversal, atomic rename.
   wechat-cc update [--check] [--json]
                         Pull latest + reinstall deps + restart service.
                         --check probes only (no side effects); GUI calls
@@ -317,8 +328,38 @@ async function main() {
         else process.stdout.write(content)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        if (parsed.json) console.log(JSON.stringify({ ok: false, error: msg }))
-        else console.error(`memory read failed: ${msg}`)
+        // --json: emit ok:false on stdout + exit 0 so GUI callers can read
+        // the structured error. Non-JSON: stderr + exit 1 (matches the
+        // pattern in `update --json` and is what the GUI invoke path
+        // expects — error info travels via JSON.ok=false, not exit code).
+        if (parsed.json) {
+          console.log(JSON.stringify({ ok: false, error: msg }))
+          return
+        }
+        console.error(`memory read failed: ${msg}`)
+        process.exit(1)
+      }
+      return
+    }
+    case 'memory-write': {
+      const { writeMemoryFile } = await import('./memory.ts')
+      try {
+        // Body comes in via base64 to dodge shell-quoting hell on multi-line
+        // markdown content (Tauri sidecar IPC passes args as a list, but
+        // the underlying CLI would still see CRLF/quote/backtick sequences
+        // unsafely if we tried to inline the content). Decoder + UTF-8
+        // assumption matches the GUI's btoa(unescape(encodeURIComponent(body))).
+        const body = Buffer.from(parsed.bodyBase64, 'base64').toString('utf8')
+        const result = writeMemoryFile(STATE_DIR, parsed.userId, parsed.path, body)
+        if (parsed.json) console.log(JSON.stringify({ ok: true, userId: parsed.userId, path: parsed.path, ...result }, null, 2))
+        else console.log(`${result.created ? 'created' : 'updated'}: ${parsed.userId}/${parsed.path} (${result.bytesWritten}B)`)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (parsed.json) {
+          console.log(JSON.stringify({ ok: false, error: msg }))
+          return
+        }
+        console.error(`memory write failed: ${msg}`)
         process.exit(1)
       }
       return

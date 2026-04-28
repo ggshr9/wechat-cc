@@ -1,18 +1,28 @@
-// Memory pane module. Lists Companion v2 memory files (per-user grouping)
-// and renders selected .md files with the vendored `marked` parser.
+// Memory pane module. Lists Companion v2 memory files (per-user grouping),
+// renders selected .md files with the vendored `marked` parser, and lets
+// the user edit + save them in-place via `wechat-cc memory write`.
 //
 // Owns: #memory-sidebar, #memory-rendered, #memory-meta, #memory-count,
-//       #memory-content-head, #memory-content-path, #memory-content-mtime
-// Reads userNames from the doctor poller's current report (no fresh fetch).
+//       #memory-content-head, #memory-content-path, #memory-content-mtime,
+//       #memory-edit-btn, #memory-cancel-btn, #memory-save-btn,
+//       #memory-editor (textarea), #memory-status (save feedback)
 
 import { escapeHtml, formatRelativeTime } from "../view.js"
 
-const memoryState = { users: [], selected: null, marked: null }
+// `selected` doubles as the edit-target identity (userId + path) AND the
+// "we have a file open" flag for the edit button visibility. `editing`
+// flips the textarea/render visibility; `pristine` is the unsaved-content
+// snapshot used by the cancel path.
+const memoryState = {
+  users: [],
+  selected: null,
+  marked: null,
+  editing: false,
+  pristine: "",
+}
 
 async function loadMarked() {
   if (memoryState.marked) return memoryState.marked
-  // marked is vendored locally at ./vendor/marked.js (no CDN dependency
-  // at runtime, so the memory pane works offline + in a packaged app).
   try {
     const mod = await import("../vendor/marked.js")
     memoryState.marked = mod.marked || mod.default || mod
@@ -64,6 +74,13 @@ function renderMemorySidebar(deps) {
 }
 
 async function openMemoryFile(deps, userId, relPath, mtime) {
+  // Bail out cleanly if user clicks a different file mid-edit. We don't
+  // discard their text silently — surface the choice.
+  if (memoryState.editing) {
+    const proceed = window.confirm("当前文件有未保存的修改。切换会丢弃改动，确认继续？")
+    if (!proceed) return
+    setEditMode(false)
+  }
   document.querySelectorAll(".mem-file").forEach(el =>
     el.classList.toggle("active", el.dataset.user === userId && el.dataset.path === relPath)
   )
@@ -76,6 +93,7 @@ async function openMemoryFile(deps, userId, relPath, mtime) {
   pathEl.textContent = `${friendly} / ${relPath}`
   mtimeEl.textContent = `updated ${formatRelativeTime(mtime)}`
   head.hidden = false
+  setStatus(null)
   rendered.innerHTML = `<p class="empty-state">读取中…</p>`
   let result
   try {
@@ -91,6 +109,111 @@ async function openMemoryFile(deps, userId, relPath, mtime) {
   const marked = await loadMarked()
   rendered.innerHTML = marked.parse(result.content)
   memoryState.selected = { userId, path: relPath }
+  memoryState.pristine = result.content
+  // Show the edit button now that there's content to edit.
+  const editBtn = document.getElementById("memory-edit-btn")
+  if (editBtn) editBtn.hidden = false
+}
+
+// Toggle textarea ↔ rendered. `editing=true` swaps in the textarea
+// pre-filled with current content; `editing=false` shows the rendered
+// markdown. Save/cancel button visibility is gated on `editing`.
+function setEditMode(editing) {
+  memoryState.editing = editing
+  const rendered = document.getElementById("memory-rendered")
+  const editor = document.getElementById("memory-editor")
+  const editBtn = document.getElementById("memory-edit-btn")
+  const saveBtn = document.getElementById("memory-save-btn")
+  const cancelBtn = document.getElementById("memory-cancel-btn")
+  if (editing) {
+    editor.value = memoryState.pristine
+    editor.hidden = false
+    rendered.hidden = true
+    editBtn.hidden = true
+    saveBtn.hidden = false
+    cancelBtn.hidden = false
+    editor.focus()
+  } else {
+    editor.hidden = true
+    rendered.hidden = false
+    editBtn.hidden = !memoryState.selected  // keep hidden if nothing open
+    saveBtn.hidden = true
+    cancelBtn.hidden = true
+  }
+}
+
+function setStatus(message, tone) {
+  const el = document.getElementById("memory-status")
+  if (!el) return
+  if (!message) { el.hidden = true; return }
+  el.hidden = false
+  el.textContent = message
+  if (tone) el.dataset.tone = tone
+}
+
+async function saveCurrent(deps) {
+  if (!memoryState.selected || !memoryState.editing) return
+  const editor = document.getElementById("memory-editor")
+  const content = editor.value
+  if (content === memoryState.pristine) {
+    setStatus("内容未改动", "info")
+    setEditMode(false)
+    return
+  }
+  // Encode for shell-safe arg passing. The btoa(unescape(encodeURIComponent))
+  // dance handles UTF-8 chars (btoa alone fails on multibyte).
+  let bodyB64
+  try {
+    bodyB64 = btoa(unescape(encodeURIComponent(content)))
+  } catch (err) {
+    setStatus(`编码失败：${err}`, "bad")
+    return
+  }
+  setStatus("保存中…", "info")
+  const saveBtn = document.getElementById("memory-save-btn")
+  const cancelBtn = document.getElementById("memory-cancel-btn")
+  saveBtn.disabled = true
+  cancelBtn.disabled = true
+  let result
+  try {
+    result = await deps.invoke("wechat_cli_json", {
+      args: ["memory", "write", memoryState.selected.userId, memoryState.selected.path, "--body-base64", bodyB64, "--json"],
+    })
+  } catch (err) {
+    saveBtn.disabled = false
+    cancelBtn.disabled = false
+    setStatus(`保存失败：${deps.formatInvokeError(err)}`, "bad")
+    return
+  }
+  saveBtn.disabled = false
+  cancelBtn.disabled = false
+  if (!result.ok) {
+    setStatus(`保存失败：${result.error || "unknown"}`, "bad")
+    return
+  }
+  // Re-render the saved content + update pristine baseline + refresh
+  // the file list so size/mtime reflect the new state.
+  memoryState.pristine = content
+  const marked = await loadMarked()
+  document.getElementById("memory-rendered").innerHTML = marked.parse(content)
+  setEditMode(false)
+  setStatus(`已保存 (${result.bytesWritten}B)`, "ok")
+  setTimeout(() => setStatus(null), 2500)
+  await loadMemoryPane(deps).catch(() => {})
+}
+
+// Wire edit/save/cancel buttons. main.js calls this once at boot.
+export function wireMemoryButtons(deps) {
+  document.getElementById("memory-edit-btn")?.addEventListener("click", () => {
+    if (!memoryState.selected) return
+    setEditMode(true)
+    setStatus(null)
+  })
+  document.getElementById("memory-cancel-btn")?.addEventListener("click", () => {
+    setEditMode(false)
+    setStatus(null)
+  })
+  document.getElementById("memory-save-btn")?.addEventListener("click", () => saveCurrent(deps))
 }
 
 function formatBytes(n) {
