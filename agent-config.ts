@@ -12,10 +12,15 @@ export interface AgentConfig {
   // to answer permission prompts triggered by inbound WeChat messages.
   dangerouslySkipPermissions: boolean
   // When true, `service install` registers the unit for auto-start at
-  // login/boot (macOS RunAtLoad+KeepAlive, systemd `enable`, schtasks
-  // ONLOGON). When false (default), the daemon is started this session
-  // only — opt-in design per user request 2026-04-26.
+  // login/boot (macOS RunAtLoad, systemd `enable`, schtasks ONLOGON).
+  // When false (default), the daemon is started this session only —
+  // opt-in design per user request 2026-04-26.
   autoStart: boolean
+  // When true (default), the daemon is restarted automatically on crash
+  // (macOS KeepAlive, systemd Restart=always). Decoupled from autoStart
+  // per user request 2026-04-28: most users want crash-recovery on, but
+  // not everyone wants the daemon launched at every login.
+  keepAlive: boolean
 }
 
 const CONFIG_FILE = 'agent-config.json'
@@ -26,14 +31,18 @@ export function loadAgentConfig(stateDir: string): AgentConfig {
     const parsed = JSON.parse(raw) as Partial<AgentConfig>
     const dangerouslySkipPermissions = parsed.dangerouslySkipPermissions ?? true
     const autoStart = parsed.autoStart ?? false
+    // Migration: pre-2026-04-28 configs only have `autoStart`. Mirror it
+    // into `keepAlive` so existing installs preserve their crash-restart
+    // behavior. New configs written by the GUI set both explicitly.
+    const keepAlive = parsed.keepAlive ?? autoStart
     if (parsed.provider === 'codex') {
       return parsed.model
-        ? { provider: 'codex', model: parsed.model, dangerouslySkipPermissions, autoStart }
-        : { provider: 'codex', dangerouslySkipPermissions, autoStart }
+        ? { provider: 'codex', model: parsed.model, dangerouslySkipPermissions, autoStart, keepAlive }
+        : { provider: 'codex', dangerouslySkipPermissions, autoStart, keepAlive }
     }
-    return { provider: 'claude', dangerouslySkipPermissions, autoStart }
+    return { provider: 'claude', dangerouslySkipPermissions, autoStart, keepAlive }
   } catch {
-    return { provider: 'claude', dangerouslySkipPermissions: true, autoStart: false }
+    return { provider: 'claude', dangerouslySkipPermissions: true, autoStart: false, keepAlive: false }
   }
 }
 

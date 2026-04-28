@@ -20,6 +20,7 @@ export async function serviceAction(deps, state, action) {
   if (action === "install") {
     state.unattended = isToggleOn("unattended-toggle")
     state.autoStart = isToggleOn("autostart-toggle")
+    state.keepAlive = isToggleOn("keepalive-toggle")
     // Pre-install guard: if a daemon is currently running OUTSIDE any
     // installed service (foreground source-mode bun, e.g. PID 691574 from
     // before the GUI was installed), wedge it. Otherwise systemd will
@@ -40,6 +41,7 @@ export async function serviceAction(deps, state, action) {
   if (action === "install") {
     args.push("--unattended", state.unattended ? "true" : "false")
     args.push("--auto-start", state.autoStart ? "true" : "false")
+    args.push("--keep-alive", state.keepAlive ? "true" : "false")
   }
   let result
   try {

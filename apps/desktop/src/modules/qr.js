@@ -73,11 +73,17 @@ async function pollQr(deps, state) {
   if (advance.continueEnabled !== undefined) document.getElementById("continue-service").disabled = !advance.continueEnabled
   // After confirmed binding, hide the QR + TTL — leaving the code on screen
   // is confusing (user already scanned, the code is now invalid) and the
-  // primary CTA in the header ("继续后台运行") tells them what to do next.
+  // primary CTA in the header ("继续") tells them what to do next.
   if (result.status === "confirmed") {
     const box = document.getElementById("qr-box")
     if (box) box.innerHTML = `<div style="font-size: 13px; color: var(--green-ink); padding: 24px 12px; text-align: center; line-height: 1.6;">✓<br>已绑定<br><span style="font-family: var(--mono); font-size: 11px; color: var(--ink-3);">${escapeHtml(result.accountId || "")}</span></div>`
     const ttl = document.getElementById("qr-ttl")
     if (ttl) ttl.textContent = "—"
+    // The "已绑定" badge in the right column already conveys success —
+    // the raw-response toggle is debug noise after that.
+    const rawToggle = document.getElementById("qr-raw-toggle")
+    if (rawToggle) rawToggle.hidden = true
+    const raw = document.getElementById("qr-raw")
+    if (raw) { raw.classList.remove("show"); raw.hidden = true }
   }
 }

@@ -96,13 +96,49 @@ describe('service-manager', () => {
     expect(plan.fileContent).toContain('<key>KeepAlive</key><true/>')
   })
 
-  it('macOS plist sets RunAtLoad/KeepAlive false when autoStart=false', () => {
+  it('macOS plist sets RunAtLoad/KeepAlive false when autoStart=false (back-compat default)', () => {
     const plan = buildServicePlan({
       platform: 'darwin', homeDir: '/Users/alice', cwd: '/Users/alice/.wechat-cc', bunPath: '/opt/homebrew/bin/bun',
       autoStart: false,
     })
     expect(plan.fileContent).toContain('<key>RunAtLoad</key><false/>')
     expect(plan.fileContent).toContain('<key>KeepAlive</key><false/>')
+  })
+
+  it('macOS plist decouples KeepAlive from RunAtLoad (autoStart=false + keepAlive=true)', () => {
+    // 2026-04-28 split: 守护进程 (KeepAlive) is independent from 开机自启
+    // (RunAtLoad). User can opt out of login auto-launch but still want
+    // crash recovery within the session.
+    const plan = buildServicePlan({
+      platform: 'darwin', homeDir: '/Users/alice', cwd: '/Users/alice/.wechat-cc', bunPath: '/opt/homebrew/bin/bun',
+      autoStart: false, keepAlive: true,
+    })
+    expect(plan.fileContent).toContain('<key>RunAtLoad</key><false/>')
+    expect(plan.fileContent).toContain('<key>KeepAlive</key><true/>')
+  })
+
+  it('macOS plist allows autoStart=true + keepAlive=false (login launch, no crash respawn)', () => {
+    const plan = buildServicePlan({
+      platform: 'darwin', homeDir: '/Users/alice', cwd: '/Users/alice/.wechat-cc', bunPath: '/opt/homebrew/bin/bun',
+      autoStart: true, keepAlive: false,
+    })
+    expect(plan.fileContent).toContain('<key>RunAtLoad</key><true/>')
+    expect(plan.fileContent).toContain('<key>KeepAlive</key><false/>')
+  })
+
+  it('Linux unit omits Restart=always when keepAlive=false', () => {
+    const plan = buildServicePlan({
+      platform: 'linux', homeDir: '/home/alice', cwd: '/home/alice/.wechat-cc', bunPath: '/home/alice/.bun/bin/bun',
+      autoStart: true, keepAlive: false,
+    })
+    expect(plan.fileContent).not.toContain('Restart=always')
+  })
+
+  it('Linux unit includes Restart=always when keepAlive=true (default)', () => {
+    const plan = buildServicePlan({
+      platform: 'linux', homeDir: '/home/alice', cwd: '/home/alice/.wechat-cc', bunPath: '/home/alice/.bun/bin/bun',
+    })
+    expect(plan.fileContent).toContain('Restart=always')
   })
 
   it('Linux install runs `start` (not `enable --now`) when autoStart=false', () => {

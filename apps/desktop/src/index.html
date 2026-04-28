@@ -82,9 +82,9 @@
               </div>
             </div>
             <div class="wz-foot" style="border:0; padding: 4px 0 0;">
-              <div class="left">模型由各自 CLI 自管（Claude 见 <code>~/.claude/settings.json</code>，Codex 见自己的 config）。</div>
+              <div class="left">模型由各自 CLI 自管。</div>
               <div class="right">
-                <button id="continue-wechat" class="btn primary">继续扫码</button>
+                <button id="continue-wechat" class="btn primary">继续</button>
               </div>
             </div>
           </section>
@@ -115,9 +115,9 @@
               </div>
             </div>
             <div class="wz-foot" style="border:0; padding: 4px 0 0;">
-              <div class="left">扫码不会自动开始——点上方按钮再生成。</div>
+              <div class="left"></div>
               <div class="right">
-                <button id="continue-service" class="btn primary" disabled>继续后台运行</button>
+                <button id="continue-service" class="btn primary" disabled>继续</button>
               </div>
             </div>
           </section>
@@ -142,9 +142,17 @@
                 <div class="toggle-row">
                   <div>
                     <div class="lab">开机自启 · Launch at login</div>
-                    <div class="sub">勾选后随系统启动 + 崩溃自动拉起；不勾选则只本次运行，重启后需手动启动。</div>
+                    <div class="sub">完全无人值守：随系统登录启动。只要魔法（代理）提前开起来，daemon 自己会跑起来等消息。</div>
                   </div>
                   <button class="toggle" id="autostart-toggle" data-toggle aria-pressed="false"></button>
+                </div>
+
+                <div class="toggle-row">
+                  <div>
+                    <div class="lab">守护进程 · Keep alive<span style="color: var(--green-ink); font-size: 10.5px; margin-left: 6px; font-weight: 500;">推荐</span></div>
+                    <div class="sub">崩溃自动拉起，保证后台稳定。和「开机自启」独立：可以不开机自启，但开守护让本次会话稳定。</div>
+                  </div>
+                  <button class="toggle on" id="keepalive-toggle" data-toggle aria-pressed="true"></button>
                 </div>
 
                 <div class="toggle-row warn-edge">

@@ -111,9 +111,13 @@ async function loadAgentConfig() {
   const provider = config.provider === "codex" ? "codex" : "claude"
   state.unattended = config.dangerouslySkipPermissions !== false
   state.autoStart = config.autoStart === true
+  // keepAlive default: true (推荐打开). Pre-2026-04-28 configs lack the field —
+  // mirror autoStart so existing installs preserve their crash-restart setting.
+  state.keepAlive = config.keepAlive !== undefined ? config.keepAlive === true : state.autoStart
   applyProviderUI(provider)
   setToggle("unattended-toggle", state.unattended)
   setToggle("autostart-toggle", state.autoStart)
+  setToggle("keepalive-toggle", state.keepAlive)
 }
 
 function setToggle(id, on) {
@@ -176,6 +180,7 @@ function wireEvents() {
       t.setAttribute("aria-pressed", on ? "true" : "false")
       if (t.id === "unattended-toggle") state.unattended = on
       if (t.id === "autostart-toggle") state.autoStart = on
+      if (t.id === "keepalive-toggle") state.keepAlive = on
     })
   })
 
