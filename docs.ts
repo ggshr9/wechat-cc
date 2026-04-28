@@ -476,9 +476,9 @@ ${slugNeedsApproval(slug) ? decisionSection(slug) : ''}
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12"/><path d="M7 11l5 5 5-5"/><path d="M5 20h14"/></svg>
     下载原文
   </a>
-  ${slugHasChatLink(slug) ? `<button type="button" id="pdf-btn" class="foot-btn" title="生成 PDF 并发到你的微信">
+  ${slugHasChatLink(slug) ? `<button type="button" id="pdf-btn" class="foot-btn" title="生成 PDF 并发到对话">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v6h6"/><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9l6 6v10a2 2 0 0 1-2 2z"/></svg>
-    <span id="pdf-btn-label">发 PDF 到微信</span>
+    <span id="pdf-btn-label">发 pdf 到对话</span>
   </button>
   <script>
   (function () {
@@ -569,6 +569,20 @@ function findChromeBinary(): string | null {
   for (const cand of ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'chrome']) {
     const p = findOnPath(cand)
     if (p) return p
+  }
+  // macOS: Chrome installs as a .app bundle and isn't on $PATH by default.
+  // Fall back to known bundle paths so the GUI install "just works" without
+  // requiring `brew install --cask google-chrome` + symlinks.
+  if (platform() === 'darwin') {
+    for (const p of [
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Applications/Chromium.app/Contents/MacOS/Chromium',
+      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+      '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+      '/Applications/Arc.app/Contents/MacOS/Arc',
+    ]) {
+      if (existsSync(p)) return p
+    }
   }
   return null
 }
@@ -758,8 +772,27 @@ async function startTunnel(port: number): Promise<string> {
         settled = true
         clearTimeout(timeout)
         tunnelUrl = m[0]
-        process.stderr.write(`wechat channel: tunnel live at ${tunnelUrl}\n`)
-        resolve(tunnelUrl)
+        // cloudflared prints the URL the moment Cloudflare's API hands it
+        // out, but the edge can take ~1-3s to actually route requests. If
+        // we resolve right now, the user clicks the link and gets a 404
+        // (Cloudflare error page). Probe /healthz until it returns 200,
+        // then resolve. 8s budget — usually 1-2s is enough.
+        ;(async () => {
+          const deadline = Date.now() + 8_000
+          while (Date.now() < deadline) {
+            try {
+              const r = await fetch(`${tunnelUrl}/healthz`, { method: 'GET', signal: AbortSignal.timeout(2_000) })
+              if (r.ok) {
+                process.stderr.write(`wechat channel: tunnel live at ${tunnelUrl}\n`)
+                resolve(tunnelUrl!)
+                return
+              }
+            } catch { /* tunnel still propagating; retry */ }
+            await new Promise(r => setTimeout(r, 400))
+          }
+          process.stderr.write(`wechat channel: tunnel ${tunnelUrl} not reachable after 8s; resolving anyway\n`)
+          resolve(tunnelUrl!)
+        })()
       }
     }
     proc.stdout.on('data', onChunk)

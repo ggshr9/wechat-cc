@@ -609,20 +609,16 @@ input { font: inherit; color: inherit; }
 /* ═══════════════════════════════════════════════════════════════════════ */
 
 .dashboard {
-  max-width: 1280px;
-  margin: 16px auto;
-  padding: 0 24px 24px;
+  margin: 0;
+  padding: 0;
+  width: 100%;
 }
 
 .dash-window {
   background: var(--paper);
-  border: 1px solid rgba(0,0,0,.06);
-  border-radius: 12px;
-  box-shadow: var(--shadow);
-  overflow: hidden;
   display: grid;
   grid-template-columns: 196px 1fr;
-  min-height: calc(100vh - 48px);
+  min-height: 100vh;
 }
 
 .dash-rail {
@@ -1017,7 +1013,8 @@ input { font: inherit; color: inherit; }
   .mem-list { border-right: 0; border-bottom: 1px solid var(--hair); }
   .agent-grid { grid-template-columns: 1fr; }
   .qr-wrap { grid-template-columns: 1fr; }
-  .wizard, .dashboard { padding: 0 16px 32px; margin-top: 16px; }
+  .wizard { padding: 0 16px 32px; margin-top: 16px; }
+  .dashboard { padding: 0; margin: 0; }
 }
 
 /* ─── update card ──────────────────────────────────────────────────── */
