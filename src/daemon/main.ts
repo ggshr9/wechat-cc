@@ -1,4 +1,13 @@
 #!/usr/bin/env bun
+// Claude SDK stream-json input mode requires CLAUDE_CODE_ENTRYPOINT to be
+// set; otherwise the spawned `claude` binary ignores --input-format=stream-json
+// and waits for terminal input forever (silent hang — typing indicator goes
+// out, no reply ever lands). The SDK *should* set this on the child env, but
+// in the bun --compile build of wechat-cc the propagation is unreliable, so
+// we set it on the daemon's own env here, before any SDK spawn happens.
+if (!process.env.CLAUDE_CODE_ENTRYPOINT) {
+  process.env.CLAUDE_CODE_ENTRYPOINT = 'sdk-ts'
+}
 import { acquireInstanceLock, releaseInstanceLock } from './single-instance'
 import { buildBootstrap } from './bootstrap'
 import { routeInbound } from '../core/message-router'
