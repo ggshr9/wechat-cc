@@ -147,6 +147,7 @@ async function loadDoctor() {
   const report = await invoke("wechat_cli_json", { args: ["doctor", "--json"] })
   state.doctor = report
   renderDoctorWizard(report)
+  refreshEnterDashboardButton(report)
   return report
 }
 
@@ -208,6 +209,15 @@ async function pollQr() {
   if (advance.qrTitle !== undefined) document.getElementById("qr-title").textContent = advance.qrTitle
   if (advance.qrMessage !== undefined) document.getElementById("qr-message").textContent = advance.qrMessage
   if (advance.continueEnabled !== undefined) document.getElementById("continue-service").disabled = !advance.continueEnabled
+  // After confirmed binding, hide the QR + TTL — leaving the code on screen
+  // is confusing (user already scanned, the code is now invalid) and the
+  // primary CTA in the header ("继续后台运行") tells them what to do next.
+  if (result.status === "confirmed") {
+    const box = document.getElementById("qr-box")
+    if (box) box.innerHTML = `<div style="font-size: 13px; color: var(--green-ink); padding: 24px 12px; text-align: center; line-height: 1.6;">✓<br>已绑定<br><span style="font-family: var(--mono); font-size: 11px; color: var(--ink-3);">${escapeHtml(result.accountId || "")}</span></div>`
+    const ttl = document.getElementById("qr-ttl")
+    if (ttl) ttl.textContent = "—"
+  }
 }
 
 async function serviceAction(action) {
@@ -257,10 +267,54 @@ async function serviceAction(action) {
   } else if (result.alive || result.ok) {
     summaryEl.textContent = action === "stop" ? "服务已停止。" : "服务已启动。"
   }
+  // After install/start, the daemon takes 1-3s to spawn, write server.pid,
+  // and finish bootstrap. A single immediate loadDoctor() call would race
+  // against that write and report "未运行" even though the install
+  // succeeded. Poll up to 8s waiting for daemon.alive=true, refreshing the
+  // UI on each tick so the user sees the transition rather than a stale
+  // "stopped" state.
+  if (!result.dryRun && (action === "install" || action === "start")) {
+    await waitForDaemonAlive(8000)
+  }
   const post = await loadDoctor()
   if (action === "stop" && !result.dryRun && post?.checks.daemon.alive && post.checks.daemon.pid) {
     showPostStopAlert(post.checks.daemon.pid)
   }
+  if (!result.dryRun && (action === "install" || action === "start")) {
+    if (post?.checks.daemon.alive) {
+      summaryEl.textContent = `服务已启动 · pid ${post.checks.daemon.pid}`
+    } else if (post?.checks.service?.installed) {
+      summaryEl.textContent = "服务已安装但 daemon 未运行（systemctl 可能正在重试，30s 后再看）。"
+    }
+  }
+  refreshEnterDashboardButton(post)
+}
+
+// Poll loadDoctor every 500ms up to `timeoutMs`, returning when daemon goes
+// alive (or timeout — in which case the caller renders the not-yet-running
+// summary). Calls renderRestartButton on each successful poll so the
+// dashboard doesn't have stale state when the user navigates over.
+async function waitForDaemonAlive(timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const r = await loadDoctor().catch(() => null)
+    if (r?.checks?.daemon?.alive) return r
+    await new Promise(r2 => setTimeout(r2, 500))
+  }
+  return state.doctor
+}
+
+// Gate "进入控制台" on daemon.alive: it makes no sense to send the user to
+// a control panel that says "Daemon offline · press restart" — they came
+// from the wizard precisely to get the daemon UP. Disabled state with a
+// helper title gives them a clear reason instead of a dead-end click.
+function refreshEnterDashboardButton(report) {
+  const btn = document.getElementById("enter-dashboard")
+  if (!btn) return
+  const alive = !!report?.checks?.daemon?.alive
+  btn.disabled = !alive
+  if (alive) btn.removeAttribute("title")
+  else btn.title = "daemon 还没启动 · 先点「安装并启动」"
 }
 
 function isToggleOn(id) {

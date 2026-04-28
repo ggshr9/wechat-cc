@@ -106,11 +106,19 @@ describe('SessionManager', () => {
       provider: claudeProvider(() => ({ cwd: '/tmp/x' } as Options)),
     })
     const h = await mgr.acquire('a', '/tmp/x')
-    await h.dispatch('first')
-    await h.dispatch('second')
+    // Fire-and-forget: dispatch now awaits the SDK's `result` event before
+    // resolving (so message-router can forward the assistant text to ilink),
+    // but the fake query never yields one. The assertion target — that user
+    // messages get pushed into the prompt iterable — doesn't depend on
+    // resolution. shutdown() will resolve the dangling promises with empty
+    // assistantText, so we can attach .catch handlers to silence the unused-
+    // promise warning without losing visibility into spurious rejections.
+    const p1 = h.dispatch('first').catch(() => undefined)
+    const p2 = h.dispatch('second').catch(() => undefined)
     await new Promise(r => setTimeout(r, 10))
     expect(seen).toEqual(['first', 'second'])
     await mgr.shutdown()
+    await Promise.all([p1, p2])
   })
 
   it('evicts least-recently-used when capacity exceeded', async () => {

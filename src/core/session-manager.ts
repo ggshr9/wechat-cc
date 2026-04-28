@@ -83,8 +83,9 @@ export class SessionManager {
       path,
       lastUsedAt: Date.now(),
       async dispatch(text: string) {
-        await session.dispatch(text)
+        const result = await session.dispatch(text)
         handle.lastUsedAt = Date.now()
+        return result
       },
       async close() {
         await session.close()
