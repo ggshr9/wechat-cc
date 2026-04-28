@@ -18,22 +18,28 @@
 
 <!-- TODO: add a 4-panel screenshot or 30s demo video here -->
 
-## Desktop installer (alpha) — [`desktop-v0.1.0`](https://github.com/ggshr9/wechat-cc/releases/tag/desktop-v0.1.0)
+## Desktop installer (beta) — [`desktop-v0.3.1`](https://github.com/ggshr9/wechat-cc/releases/tag/desktop-v0.3.1)
 
 Don't want to type CLI commands? A Tauri 2 desktop app wraps the whole setup
 flow — QR scan, agent picker, service install — in a 4-step wizard, then
-hands you a dashboard with bound accounts, Companion memory, and one-click
-upgrades via `wechat-cc update`.
+hands you a dashboard with bound accounts, editable Companion memory, live
+log tail, and one-click upgrades via `wechat-cc update`.
 
 | Platform | Bundle | Notes |
 |:---|:---|:---|
-| **macOS** (Apple Silicon) | [`wechat-cc_0.1.0_aarch64.dmg`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc_0.1.0_aarch64.dmg) | Right-click → Open on first launch |
-| **Windows** (x64) | [`.exe`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc_0.1.0_x64-setup.exe) · [`.msi`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc_0.1.0_x64_en-US.msi) | SmartScreen → More info → Run anyway |
-| **Linux** (x64) | [`.deb`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc_0.1.0_amd64.deb) · [`.AppImage`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc_0.1.0_amd64.AppImage) · [`.rpm`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc-0.1.0-1.x86_64.rpm) | No warning |
+| **macOS** (Apple Silicon) | [`wechat-cc_0.3.1_aarch64.dmg`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.3.1/wechat-cc_0.3.1_aarch64.dmg) | Right-click → Open on first launch |
+| **Windows** (x64) | [`.exe`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.3.1/wechat-cc_0.3.1_x64-setup.exe) · [`.msi`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.3.1/wechat-cc_0.3.1_x64_en-US.msi) | SmartScreen → More info → Run anyway |
+| **Linux** (x64) | [`.deb`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.3.1/wechat-cc_0.3.1_amd64.deb) · [`.rpm`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.3.1/wechat-cc-0.3.1-1.x86_64.rpm) | No warning |
 
 > Bundles are unsigned for now (Apple Developer ID + Windows EV cert
 > not yet provisioned). See [Desktop bundles — first-run warnings](#desktop-bundles--first-run-warnings)
 > for the per-platform "Open anyway" steps.
+>
+> **What's in v0.3.1**: reply-path stability (capture ilink `context_token`,
+> set `CLAUDE_CODE_ENTRYPOINT=sdk-ts` for the bundled claude); share-page
+> tunnel readiness probe; macOS Chrome `.app` discovery for PDF render;
+> 开机自启 + 守护进程 split into two toggles; dashboard goes edge-to-edge.
+> Full notes: [`desktop-v0.3.1`](docs/releases/desktop-v0.3.1.md).
 
 **Prerequisite**: the desktop app shells out to the `wechat-cc` CLI, so
 the source needs to be available somewhere. Recommended path:
@@ -171,7 +177,7 @@ wechat-cc run
 
 ## Table of Contents
 
-- [Desktop installer (alpha)](#desktop-installer-alpha--desktop-v010)
+- [Desktop installer (beta)](#desktop-installer-beta--desktop-v031)
 - [What changed in v1.0](#what-changed-in-v10)
 - [Quick Start](#quick-start)
 - [Features](#features)

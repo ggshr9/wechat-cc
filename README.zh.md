@@ -18,20 +18,26 @@
 
 <!-- TODO: 加一张 4 格截图或 30 秒演示视频 -->
 
-## 桌面安装器 (alpha) — [`desktop-v0.1.0`](https://github.com/ggshr9/wechat-cc/releases/tag/desktop-v0.1.0)
+## 桌面安装器 (beta) — [`desktop-v0.3.1`](https://github.com/ggshr9/wechat-cc/releases/tag/desktop-v0.3.1)
 
-不想敲 CLI？Tauri 2 桌面 app 把整套配置流（扫码 / 选 agent / 装服务）
-做成一个 4 步向导，然后给你一个有绑定账号、Companion 记忆、`wechat-cc update`
-一键升级的控制面板。
+不想敲 CLI？Tauri 2 桌面 app 把整套配置流（扫码 / 选 agent / 装服务）做成
+一个 4 步向导，然后给你一个有绑定账号、可编辑的 Companion 记忆、实时日志
+和 `wechat-cc update` 一键升级的控制面板。
 
 | 平台 | 安装包 | 说明 |
 |:---|:---|:---|
-| **macOS** (Apple Silicon) | [`wechat-cc_0.1.0_aarch64.dmg`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc_0.1.0_aarch64.dmg) | 第一次开右键 → 打开 |
-| **Windows** (x64) | [`.exe`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc_0.1.0_x64-setup.exe) · [`.msi`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc_0.1.0_x64_en-US.msi) | SmartScreen → 更多信息 → 仍要运行 |
-| **Linux** (x64) | [`.deb`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc_0.1.0_amd64.deb) · [`.AppImage`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc_0.1.0_amd64.AppImage) · [`.rpm`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.1.0/wechat-cc-0.1.0-1.x86_64.rpm) | 没警告 |
+| **macOS** (Apple Silicon) | [`wechat-cc_0.3.1_aarch64.dmg`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.3.1/wechat-cc_0.3.1_aarch64.dmg) | 第一次开右键 → 打开 |
+| **Windows** (x64) | [`.exe`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.3.1/wechat-cc_0.3.1_x64-setup.exe) · [`.msi`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.3.1/wechat-cc_0.3.1_x64_en-US.msi) | SmartScreen → 更多信息 → 仍要运行 |
+| **Linux** (x64) | [`.deb`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.3.1/wechat-cc_0.3.1_amd64.deb) · [`.rpm`](https://github.com/ggshr9/wechat-cc/releases/download/desktop-v0.3.1/wechat-cc-0.3.1-1.x86_64.rpm) | 没警告 |
 
 > 当前 bundle 都未签名（Apple Developer ID + Windows EV 证书暂未配齐）。
 > 各平台「打开警告」处理方式见 [桌面 bundle —— 首次运行警告](#桌面-bundle--首次运行警告)。
+>
+> **v0.3.1 修了什么**：回复链路（捕获 ilink `context_token`，给 bundled
+> claude 设 `CLAUDE_CODE_ENTRYPOINT=sdk-ts`，去掉重复回复）、share-page
+> tunnel 就绪探测、macOS 下 Chrome `.app` 自动发现（PDF 渲染）、开机自启
+> 和守护进程拆成两个独立开关、控制面板满屏不再有外框。完整 release
+> notes：[`desktop-v0.3.1`](docs/releases/desktop-v0.3.1.md)。
 
 **前置条件**：桌面 app 是壳，运行时调 `wechat-cc` CLI，所以源码得先放到本地。
 推荐路径：
@@ -166,7 +172,7 @@ wechat-cc run
 
 ## 目录
 
-- [桌面安装器 (alpha)](#桌面安装器-alpha--desktop-v010)
+- [桌面安装器 (beta)](#桌面安装器-beta--desktop-v031)
 - [v1.0 有什么变化](#v10-有什么变化)
 - [快速开始](#快速开始)
 - [功能](#功能)
