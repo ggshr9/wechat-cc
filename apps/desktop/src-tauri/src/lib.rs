@@ -1,16 +1,27 @@
+// wechat-cc desktop installer — Tauri command surface.
+//
+// The bundled `wechat-cc-cli` sidecar (a `bun build --compile`d
+// self-contained binary built from the project's cli.ts) is the single
+// source of truth for every CLI operation the GUI invokes. There is no
+// dependency on a system-installed `bun`, no requirement for a cloned
+// wechat-cc source tree, and no PATH lookup — the sidecar lives inside
+// the .app/.exe/.deb bundle and is resolved by tauri-plugin-shell.
+
 use serde_json::Value;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use tauri::{AppHandle, Emitter};
+use tauri_plugin_shell::process::CommandEvent;
+use tauri_plugin_shell::ShellExt;
 
 #[tauri::command]
-fn wechat_cli_json(args: Vec<String>) -> Result<Value, String> {
-    let output = run_wechat_cli(args)?;
-    serde_json::from_str(&output).map_err(|err| format!("invalid JSON from wechat-cc: {err}\n{output}"))
+async fn wechat_cli_json(app: AppHandle, args: Vec<String>) -> Result<Value, String> {
+    let stdout = run_sidecar(&app, args).await?;
+    serde_json::from_str(&stdout)
+        .map_err(|err| format!("invalid JSON from wechat-cc: {err}\n{stdout}"))
 }
 
 #[tauri::command]
-fn wechat_cli_text(args: Vec<String>) -> Result<String, String> {
-    run_wechat_cli(args)
+async fn wechat_cli_text(app: AppHandle, args: Vec<String>) -> Result<String, String> {
+    run_sidecar(&app, args).await
 }
 
 #[tauri::command]
@@ -27,89 +38,69 @@ fn render_qr_svg(text: String) -> Result<String, String> {
         .build())
 }
 
-fn run_wechat_cli(args: Vec<String>) -> Result<String, String> {
-    let root = wechat_root()?;
-    let cli = root.join("cli.ts");
-    let bun = std::env::var("BUN_PATH").unwrap_or_else(|_| "bun".to_string());
-    let output = Command::new(bun)
-        .arg(cli)
+// Spawn the bundled sidecar and collect its stdout. Stderr is forwarded as
+// part of the error payload so callers (the wizard / dashboard) can render a
+// useful message when something goes wrong. Termination with a non-zero exit
+// code is treated as failure regardless of stdout content.
+async fn run_sidecar(app: &AppHandle, args: Vec<String>) -> Result<String, String> {
+    let sidecar = app
+        .shell()
+        .sidecar("wechat-cc-cli")
+        .map_err(|err| format!("failed to resolve wechat-cc-cli sidecar: {err}"))?;
+
+    let (mut rx, _child) = sidecar
         .args(args)
-        .current_dir(&root)
-        .output()
-        .map_err(|err| format!("failed to run wechat-cc: {err}"))?;
+        .spawn()
+        .map_err(|err| format!("failed to spawn wechat-cc-cli: {err}"))?;
 
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    let mut stdout = Vec::<u8>::new();
+    let mut stderr = Vec::<u8>::new();
+    let mut exit_code: Option<i32> = None;
+
+    while let Some(event) = rx.recv().await {
+        match event {
+            CommandEvent::Stdout(line) => {
+                stdout.extend_from_slice(&line);
+                stdout.push(b'\n');
+            }
+            CommandEvent::Stderr(line) => {
+                stderr.extend_from_slice(&line);
+                stderr.push(b'\n');
+            }
+            CommandEvent::Terminated(payload) => {
+                exit_code = payload.code;
+                break;
+            }
+            _ => {}
+        }
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+
+    let stdout_str = String::from_utf8_lossy(&stdout).trim().to_string();
+    let stderr_str = String::from_utf8_lossy(&stderr).trim().to_string();
+    if exit_code.unwrap_or(1) != 0 {
+        if stderr_str.is_empty() {
+            return Err(format!("wechat-cc-cli exited with code {:?}\n{stdout_str}", exit_code));
+        }
+        return Err(stderr_str);
+    }
+    Ok(stdout_str)
 }
 
-// Order of search for the wechat-cc source root (containing cli.ts):
-//   1. WECHAT_CC_ROOT env var (explicit override; used in dev + power users)
-//   2. Tauri resource_dir/wechat-cc-src (when we bundle source as a resource)
-//   3. ~/.local/share/wechat-cc      (recommended user-install location)
-//   4. /opt/wechat-cc                (system-wide install)
-//   5. /usr/share/wechat-cc          (distro packaging)
-//   6. exe ancestors (dev: built binary lives inside the source tree)
-//   7. cwd ancestors (dev: shim or `tauri dev` from arbitrary subdir)
-fn wechat_root() -> Result<PathBuf, String> {
-    if let Ok(root) = std::env::var("WECHAT_CC_ROOT") {
-        let p = PathBuf::from(root);
-        if has_cli(&p) {
-            return Ok(p);
-        }
-        return Err(format!("WECHAT_CC_ROOT points to {} but no cli.ts there", p.display()));
-    }
-
-    if let Some(home) = std::env::var_os("HOME") {
-        let user_share = PathBuf::from(&home).join(".local/share/wechat-cc");
-        if has_cli(&user_share) {
-            return Ok(user_share);
-        }
-    }
-
-    for sys_path in ["/opt/wechat-cc", "/usr/share/wechat-cc"] {
-        let p = PathBuf::from(sys_path);
-        if has_cli(&p) {
-            return Ok(p);
-        }
-    }
-
-    if let Ok(exe) = std::env::current_exe() {
-        for ancestor in exe.ancestors() {
-            // Tauri bundled-resource layout: <exe>/../resources/wechat-cc-src
-            let candidate = ancestor.join("resources").join("wechat-cc-src");
-            if has_cli(&candidate) {
-                return Ok(candidate);
-            }
-            if has_cli(ancestor) {
-                return Ok(ancestor.to_path_buf());
-            }
-        }
-    }
-
-    if let Ok(cwd) = std::env::current_dir() {
-        for ancestor in cwd.ancestors() {
-            if has_cli(ancestor) {
-                return Ok(ancestor.to_path_buf());
-            }
-        }
-    }
-
-    Err(concat!(
-        "wechat-cc source not found. Either set WECHAT_CC_ROOT, ",
-        "or install the source at ~/.local/share/wechat-cc (git clone https://github.com/ggshr9/wechat-cc.git ~/.local/share/wechat-cc)."
-    ).to_string())
-}
-
-fn has_cli(path: &Path) -> bool {
-    path.join("cli.ts").exists()
+// Suppress unused warnings until streaming is wired through.
+#[allow(dead_code)]
+fn emit_log(app: &AppHandle, line: &str) {
+    let _ = app.emit("wechat-cc:log", line);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![wechat_cli_json, wechat_cli_text, render_qr_svg])
+        .plugin(tauri_plugin_shell::init())
+        .invoke_handler(tauri::generate_handler![
+            wechat_cli_json,
+            wechat_cli_text,
+            render_qr_svg
+        ])
         .run(tauri::generate_context!())
         .expect("error while running wechat-cc desktop");
 }

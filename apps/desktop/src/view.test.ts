@@ -232,10 +232,19 @@ describe('updateProbeLine', () => {
     expect(line.headline).toContain('5')
   })
 
-  it('fetch_failed → bad tone', () => {
-    const line = updateProbeLine({ ok: false, mode: 'check', reason: 'fetch_failed', message: 'x' })
+  it('fetch_failed (generic network) → bad tone', () => {
+    const line = updateProbeLine({ ok: false, mode: 'check', reason: 'fetch_failed', message: 'network unreachable' })
     expect(line.tone).toBe('bad')
     expect(line.headline).toContain('检查失败')
+  })
+
+  it('not_a_git_repo (desktop bundle short-circuit) → hide tone', () => {
+    const line = updateProbeLine({
+      ok: false, mode: 'check', reason: 'not_a_git_repo',
+      message: 'no git repo at this binary\'s location',
+      details: { repoRoot: '/Applications/wechat-cc.app/Contents/MacOS' },
+    })
+    expect(line.tone).toBe('hide')
   })
 
   it('null/undefined probe → warn placeholder', () => {

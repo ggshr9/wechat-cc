@@ -100,6 +100,49 @@ jobs:
             src/daemon/onboarding.test.ts \
             apps/desktop/src/view.test.ts
 
+      # Compile cli.ts to a self-contained native sidecar that Tauri bundles
+      # into the .app/.exe/.deb. This is what makes the desktop install
+      # actually self-contained — no system Bun, no cloned wechat-cc source,
+      # no PATH lookup. The host OS compiles for its own architecture; cross
+      # builds are deliberately not attempted (each runner ships one platform).
+      #
+      # macOS quirk: bun-compiled binaries are not Mach-O codesign-compatible
+      # out of the box (see bun-build's known issue) — we strip the embedded
+      # signature, clear quarantine xattrs, and re-sign ad-hoc so the runtime
+      # passes Gatekeeper. Tauri's bundle step re-signs everything together
+      # later with APPLE_SIGNING_IDENTITY=- (also ad-hoc), which is fine.
+      - name: Compile sidecar (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          mkdir -p apps/desktop/src-tauri/binaries
+          bun build --compile --target=bun-linux-x64 cli.ts \
+            --outfile apps/desktop/src-tauri/binaries/wechat-cc-cli-x86_64-unknown-linux-gnu
+          chmod +x apps/desktop/src-tauri/binaries/wechat-cc-cli-x86_64-unknown-linux-gnu
+          ls -lh apps/desktop/src-tauri/binaries/
+
+      - name: Compile sidecar (macOS)
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          mkdir -p apps/desktop/src-tauri/binaries
+          bun build --compile --target=bun-darwin-arm64 cli.ts \
+            --outfile apps/desktop/src-tauri/binaries/wechat-cc-cli-aarch64-apple-darwin
+          xattr -cr apps/desktop/src-tauri/binaries/wechat-cc-cli-aarch64-apple-darwin || true
+          codesign --remove-signature apps/desktop/src-tauri/binaries/wechat-cc-cli-aarch64-apple-darwin || true
+          codesign --force --sign - --identifier=dev.wechat-cc.cli \
+            apps/desktop/src-tauri/binaries/wechat-cc-cli-aarch64-apple-darwin
+          ls -lh apps/desktop/src-tauri/binaries/
+
+      - name: Compile sidecar (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          mkdir -p apps/desktop/src-tauri/binaries
+          bun build --compile --target=bun-windows-x64 cli.ts \
+            --outfile apps/desktop/src-tauri/binaries/wechat-cc-cli-x86_64-pc-windows-msvc.exe
+          ls -lh apps/desktop/src-tauri/binaries/
+
       - name: Tauri build
         working-directory: apps/desktop
         run: bun run tauri build

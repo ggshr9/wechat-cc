@@ -16,6 +16,7 @@ export type UpdateReason =
   | 'bun_missing'
   | 'daemon_running_not_service'
   | 'service_stop_failed'
+  | 'not_a_git_repo'
 
 export type DaemonAction = 'restarted' | 'noop' | 'restart_failed'
 

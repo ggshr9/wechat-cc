@@ -12,6 +12,12 @@ export interface ServicePlanInput {
   homeDir?: string
   cwd: string
   bunPath?: string
+  // Path to a self-contained wechat-cc binary (produced by `bun build
+  // --compile`). When set, the plist/unit/task uses ExecStart=<binaryPath>
+  // run [--dangerously] directly — no bun on PATH required. When omitted,
+  // falls back to legacy `bunPath cli.ts run [--dangerously]` for
+  // source-checkout users.
+  binaryPath?: string
   // Pass through to plist/unit `ProgramArguments` so the daemon starts with
   // `cli.ts run --dangerously`. Defaults true: wizard-installed daemons must
   // bypass permission prompts since no human will be there to answer them.
@@ -42,6 +48,7 @@ export function buildServicePlan(input: ServicePlanInput): ServicePlan {
   const pf = input.platform ?? platform()
   const homeDir = input.homeDir ?? homedir()
   const bunPath = input.bunPath ?? findOnPath('bun') ?? 'bun'
+  const binaryPath = input.binaryPath
   const serviceName = 'wechat-cc'
   const dangerously = input.dangerouslySkipPermissions ?? true
   const autoStart = input.autoStart ?? true
@@ -61,7 +68,7 @@ export function buildServicePlan(input: ServicePlanInput): ServicePlan {
       kind: 'launchagent',
       serviceName,
       serviceFile,
-      fileContent: launchAgentPlist({ bunPath, cwd: input.cwd, runArgs, autoStart }),
+      fileContent: launchAgentPlist({ bunPath, binaryPath, cwd: input.cwd, runArgs, autoStart }),
       installCommands: [['launchctl', 'bootstrap', gui, serviceFile], ['launchctl', 'enable', `${gui}/com.wechat-cc.daemon`], ['launchctl', 'kickstart', '-k', `${gui}/com.wechat-cc.daemon`]],
       startCommands: [['launchctl', 'kickstart', '-k', `${gui}/com.wechat-cc.daemon`]],
       stopCommands: [['launchctl', 'bootout', gui, serviceFile]],
@@ -70,7 +77,9 @@ export function buildServicePlan(input: ServicePlanInput): ServicePlan {
   }
 
   if (pf === 'win32') {
-    const taskRun = `"${bunPath}" "${join(input.cwd, 'cli.ts')}" ${runArgs.join(' ')}`
+    const taskRun = binaryPath
+      ? `"${binaryPath}" ${runArgs.join(' ')}`
+      : `"${bunPath}" "${join(input.cwd, 'cli.ts')}" ${runArgs.join(' ')}`
     // autoStart=false on Windows: create the task disabled (no ONLOGON
     // trigger fires), then explicitly /Run it once for this session.
     const installCommands: string[][] = [['schtasks', '/Create', '/TN', serviceName, '/SC', 'ONLOGON', '/TR', taskRun, '/F']]
@@ -105,7 +114,7 @@ export function buildServicePlan(input: ServicePlanInput): ServicePlan {
     kind: 'systemd-user',
     serviceName,
     serviceFile,
-    fileContent: systemdUnit({ bunPath, cwd: input.cwd, runArgs }),
+    fileContent: systemdUnit({ bunPath, binaryPath, cwd: input.cwd, runArgs }),
     installCommands,
     startCommands: [['systemctl', '--user', 'start', 'wechat-cc.service']],
     stopCommands: [['systemctl', '--user', 'stop', 'wechat-cc.service']],
@@ -155,8 +164,11 @@ function runCommands(commands: string[][]): void {
   }
 }
 
-function launchAgentPlist(opts: { bunPath: string; cwd: string; runArgs: string[]; autoStart: boolean }): string {
-  const argsXml = [opts.bunPath, join(opts.cwd, 'cli.ts'), ...opts.runArgs]
+function launchAgentPlist(opts: { bunPath: string; binaryPath?: string; cwd: string; runArgs: string[]; autoStart: boolean }): string {
+  const argv = opts.binaryPath
+    ? [opts.binaryPath, ...opts.runArgs]
+    : [opts.bunPath, join(opts.cwd, 'cli.ts'), ...opts.runArgs]
+  const argsXml = argv
     .map(arg => `    <string>${escapeXml(arg)}</string>`)
     .join('\n')
   const autoLines = opts.autoStart
@@ -175,14 +187,17 @@ ${autoLines}
 `
 }
 
-function systemdUnit(opts: { bunPath: string; cwd: string; runArgs: string[] }): string {
+function systemdUnit(opts: { bunPath: string; binaryPath?: string; cwd: string; runArgs: string[] }): string {
+  const execStart = opts.binaryPath
+    ? `${opts.binaryPath} ${opts.runArgs.join(' ')}`
+    : `${opts.bunPath} ${join(opts.cwd, 'cli.ts')} ${opts.runArgs.join(' ')}`
   return `[Unit]
 Description=wechat-cc daemon
 
 [Service]
 Type=simple
 WorkingDirectory=${opts.cwd}
-ExecStart=${opts.bunPath} ${join(opts.cwd, 'cli.ts')} ${opts.runArgs.join(' ')}
+ExecStart=${execStart}
 Restart=always
 RestartSec=5
 

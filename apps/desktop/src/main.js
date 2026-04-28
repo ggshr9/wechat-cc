@@ -610,6 +610,14 @@ function renderUpdateCard(line, opts = {}) {
   const checkBtn = document.getElementById("update-check-btn")
   const applyBtn = document.getElementById("update-apply-btn")
   if (!card) return
+  // tone "hide" = compiled-bundle mode without a git repo — the in-GUI updater
+  // is meaningless here, so suppress the whole card. Users get new versions
+  // by re-downloading from GitHub Releases.
+  if (line.tone === "hide") {
+    card.hidden = true
+    return
+  }
+  card.hidden = false
   card.dataset.tone = line.tone
   headline.textContent = line.headline
   body.textContent = line.body

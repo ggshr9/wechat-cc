@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
-import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { join, dirname } from 'node:path'
+import { dirname } from 'node:path'
 import { STATE_DIR } from './config'
 import { loadAgentConfig, saveAgentConfig, type AgentProviderKind } from './agent-config'
 import { analyzeDoctor, defaultDoctorDeps, printDoctor, serviceStatus, setupStatus } from './doctor'
@@ -180,10 +179,20 @@ async function main() {
   const here = dirname(fileURLToPath(import.meta.url))
   switch (parsed.cmd) {
     case 'run': {
-      const daemonPath = join(here, 'src', 'daemon', 'main.ts')
-      const args = parsed.dangerouslySkipPermissions ? [daemonPath, '--dangerously'] : [daemonPath]
-      const r = spawnSync(process.execPath, args, { stdio: 'inherit' })
-      process.exit(r.status ?? 1)
+      // Run the daemon in-process by importing main.ts (its module top-level
+      // invokes main()). This used to spawn `bun src/daemon/main.ts`, but that
+      // doesn't work in `bun build --compile`d binaries where the source tree
+      // isn't on disk anymore — and the compiled sidecar shipped inside the
+      // desktop bundle is the single source of truth for both CLI and daemon.
+      if (parsed.dangerouslySkipPermissions && !process.argv.includes('--dangerously')) {
+        process.argv.push('--dangerously')
+      }
+      await import('./src/daemon/main.ts')
+      // main() is started by main.ts's top-level; it never resolves under
+      // normal operation (long poll loops keep the event loop alive). Block
+      // here so cli.ts's main() doesn't return and trigger process exit.
+      await new Promise(() => {})
+      return
     }
     case 'setup': {
       if (parsed.qrJson) {
@@ -191,9 +200,10 @@ async function main() {
         console.log(JSON.stringify(await requestSetupQrCode(), null, 2))
         return
       }
-      const setupPath = join(here, 'setup.ts')
-      const r = spawnSync(process.execPath, [setupPath], { stdio: 'inherit' })
-      process.exit(r.status ?? 1)
+      // Same rationale as `run`: import setup.ts directly so the compiled
+      // sidecar can drive the QR flow from inside Tauri-spawned shells too.
+      await import('./setup.ts')
+      return
     }
     case 'setup-poll': {
       const { pollSetupQrStatus } = await import('./setup-flow.ts')
@@ -251,7 +261,22 @@ async function main() {
         })
       }
       const config = loadAgentConfig(STATE_DIR)
-      const plan = buildServicePlan({ cwd: here, dangerouslySkipPermissions: config.dangerouslySkipPermissions, autoStart: config.autoStart })
+      // Detect whether we're running as a `bun build --compile`d binary by
+      // probing argv[1] — Bun packs the entry script under `/$bunfs/`. When
+      // compiled, the daemon should be launched via the same self-contained
+      // binary (no external bun + cli.ts source needed), so we point the
+      // service unit at `process.execPath`. WorkingDirectory falls back to
+      // the binary's containing dir, since `here` (cli.ts's source dir) is
+      // a virtual `/$bunfs/...` path that doesn't exist on real disk.
+      const isCompiled = (process.argv[1] ?? '').startsWith('/$bunfs/')
+      const binaryPath = isCompiled ? process.execPath : undefined
+      const planCwd = isCompiled ? dirname(process.execPath) : here
+      const plan = buildServicePlan({
+        cwd: planCwd,
+        dangerouslySkipPermissions: config.dangerouslySkipPermissions,
+        autoStart: config.autoStart,
+        ...(binaryPath ? { binaryPath } : {}),
+      })
       if (parsed.action === 'status') {
         const status = serviceStatus(defaultDoctorDeps())
         if (parsed.json) console.log(JSON.stringify({ ...status, plan, agentConfig: config }, null, 2))
@@ -335,7 +360,31 @@ async function main() {
     }
     case 'update': {
       const { analyzeUpdate, applyUpdate, defaultUpdateDeps } = await import('./update.ts')
-      const deps = defaultUpdateDeps(here, STATE_DIR)
+      // Compiled-bundle short-circuit: when the binary is shipped inside a
+      // desktop .app/.exe, `here` is `/$bunfs/root` (Bun's virtual filesystem)
+      // — there is no git repo nearby to fetch/pull. Surface this with a
+      // dedicated `not_a_git_repo` reason instead of letting analyzeUpdate
+      // bubble up an empty-stderr fetch_failed (which the GUI couldn't tell
+      // apart from a real network outage).
+      const { existsSync } = await import('node:fs')
+      const { join } = await import('node:path')
+      const isCompiled = (process.argv[1] ?? '').startsWith('/$bunfs/')
+      const repoRoot = isCompiled ? dirname(process.execPath) : here
+      const hasGitRepo = existsSync(join(repoRoot, '.git'))
+      if (!hasGitRepo) {
+        const synthetic = {
+          ok: false as const,
+          mode: parsed.check ? ('check' as const) : ('apply' as const),
+          reason: 'not_a_git_repo' as const,
+          message: 'no git repo at this binary\'s location; in-place updates are not available for desktop bundles (download a newer version from GitHub Releases instead)',
+          details: { repoRoot },
+        }
+        if (parsed.json) console.log(JSON.stringify(synthetic, null, 2))
+        else console.error(`update: not_a_git_repo — ${synthetic.message}`)
+        if (!parsed.json) process.exit(1)
+        return
+      }
+      const deps = defaultUpdateDeps(repoRoot, STATE_DIR)
       if (parsed.check) {
         const probe = analyzeUpdate(deps)
         if (parsed.json) {

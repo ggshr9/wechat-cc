@@ -29,6 +29,14 @@ build/
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/schemas/
 apps/desktop/src-tauri/WixTools/
+# Sidecar binaries are produced per-platform during CI (`bun build --compile`)
+# and bundled into the Tauri output. Never commit — they're 60+ MB and machine-
+# specific; CI rebuilds them before each desktop release.
+apps/desktop/src-tauri/binaries/
 
 # Playwright MCP snapshots — local debugging artifacts
 .playwright-mcp/
+
+# Claude Code local state
+.claude/
+*.bun-build

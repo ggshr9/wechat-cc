@@ -149,11 +149,19 @@ export function formatRelativeTime(iso, now = Date.now()) {
 //   "info" — update available, primary action
 //   "warn" — probe ok but applyUpdate would reject (dirty / diverged)
 //   "bad"  — probe failed (fetch / detached_head)
+//   "hide" — running from a self-contained desktop bundle; no git repo
+//            available so the in-GUI updater is meaningless. Caller hides
+//            the whole card; users get new versions from GitHub Releases.
 export function updateProbeLine(probe) {
   if (!probe || typeof probe !== "object") {
     return { tone: "warn", headline: "未检查", body: "点检查更新" }
   }
   if (!probe.ok) {
+    if (probe.reason === "not_a_git_repo") {
+      // Desktop-bundle mode — the binary is inside an .app with no git repo;
+      // hide the whole card. Users get new versions from GitHub Releases.
+      return { tone: "hide", headline: "", body: "" }
+    }
     if (probe.reason === "fetch_failed") {
       return { tone: "bad", headline: "检查失败", body: "网络问题或 git 不可用" }
     }
@@ -196,6 +204,8 @@ export function updateApplyLine(result) {
     return { tone: "ok", headline: `升级成功 · ${from} → ${to}`, body: "daemon 升级前未运行，未做重启。" }
   }
   switch (result.reason) {
+    case "not_a_git_repo":
+      return { tone: "hide", headline: "", body: "" }
     case "dirty_tree": {
       const files = result.details?.dirtyFiles || []
       return { tone: "warn", headline: "升级被拒 · 本地有未提交修改", body: files.length ? `未提交：${files.slice(0, 4).join("、")}${files.length > 4 ? ` 等 ${files.length} 个` : ""}` : "先 commit/stash/discard 再试。" }
