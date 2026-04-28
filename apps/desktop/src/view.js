@@ -180,33 +180,114 @@ export function formatRelativeTime(iso, now = Date.now()) {
 
 // ─── update card view-models ──────────────────────────────────────────
 
-// Map an UpdateProbe (output of `wechat-cc update --check --json`) to a
-// {tone, headline, body} card render. Tone drives the badge color:
-//   "ok"   — up to date, can be ignored
+// Single source of truth for how each `UpdateReason` (from update.ts) renders
+// in the GUI. Adding a new reason: add one row here. Both `updateProbeLine`
+// and `updateApplyLine` consult this table — they only diverge in the
+// framing word (检查失败 / 升级被拒 / 升级失败) which is derived from the
+// row's `severity`.
+//
+// Tone legend on the rendered card:
+//   "ok"   — up to date / success (only emitted by happy-path branches, not
+//            from this table)
 //   "info" — update available, primary action
-//   "warn" — probe ok but applyUpdate would reject (dirty / diverged)
-//   "bad"  — probe failed (fetch / detached_head)
-//   "hide" — running from a self-contained desktop bundle; no git repo
-//            available so the in-GUI updater is meaningless. Caller hides
-//            the whole card; users get new versions from GitHub Releases.
+//   "warn" — soft-reject: applyUpdate refused, but the user can fix it
+//            (dirty tree, diverged commits)
+//   "bad"  — hard failure: something broke (fetch, pull, install, stop)
+//   "hide" — desktop bundle, no git repo nearby — suppress the whole card.
+//            User updates by re-downloading from GitHub Releases.
+//
+// `body(details)` reads optional structured details from the result; static
+// strings are wrapped in a constant arrow to keep the row shape uniform.
+export const UPDATE_REASON_COPY = {
+  not_a_git_repo: {
+    severity: "hide",
+    label: "",
+    body: () => "",
+  },
+  dirty_tree: {
+    severity: "warn",
+    label: "本地有未提交修改",
+    body: (details) => {
+      const files = details?.dirtyFiles || []
+      if (!files.length) return "先 commit/stash/discard 再试。"
+      const head = files.slice(0, 4).join("、")
+      return `未提交：${head}${files.length > 4 ? ` 等 ${files.length} 个` : ""}`
+    },
+  },
+  diverged: {
+    severity: "warn",
+    label: "本地领先 origin",
+    body: () => "push 你的本地 commit，或 reset 后再升级。",
+  },
+  detached_head: {
+    severity: "bad",
+    label: "HEAD 游离",
+    body: () => "checkout 一个分支（通常 master）再试。",
+  },
+  daemon_running_not_service: {
+    severity: "bad",
+    label: "daemon 不是 service",
+    body: () => "你正在前台跑 wechat-cc run？先 Ctrl+C 停掉再升级。",
+  },
+  fetch_failed: {
+    severity: "bad",
+    label: "git fetch 失败",
+    body: (details) => details?.stderr || "网络问题或 git 不可用。",
+  },
+  pull_conflict: {
+    severity: "bad",
+    label: "git pull 冲突",
+    body: (details) => details?.stderr || "ff-only 失败；手动 git pull 看看。",
+  },
+  bun_missing: {
+    severity: "bad",
+    label: "找不到 bun",
+    body: () => "lockfile 已变，但 PATH 上没有 bun；安装 Bun 后再试。",
+  },
+  install_failed: {
+    severity: "bad",
+    label: "bun install 失败",
+    body: (details) => details?.stderr || "终端跑 bun install --frozen-lockfile 看具体错误。",
+  },
+  service_stop_failed: {
+    severity: "bad",
+    label: "无法停止 service",
+    body: (details) => details?.stderr || "service.stop 抛错；先手动停服务。",
+  },
+}
+
+// Frame a copy entry as a probe-mode line. Probe overlays a couple of
+// reasons with copy that's tighter than the apply phrasing (网络/git 不可用
+// rather than "检查失败 · git fetch 失败"); everything else falls through
+// the generic header `检查失败 · <label>`.
+function frameProbe(reason, fallbackMessage, details) {
+  const row = UPDATE_REASON_COPY[reason]
+  if (!row) return { tone: "bad", headline: "检查失败", body: fallbackMessage || reason || "未知错误" }
+  if (row.severity === "hide") return { tone: "hide", headline: "", body: "" }
+  if (reason === "fetch_failed") return { tone: "bad", headline: "检查失败", body: "网络问题或 git 不可用" }
+  if (reason === "detached_head") return { tone: "bad", headline: "检查失败", body: "HEAD 游离，请 checkout 一个分支后重试" }
+  return { tone: row.severity, headline: row.label ? `检查失败 · ${row.label}` : "检查失败", body: row.body(details) }
+}
+
+// Frame a copy entry as an apply-mode line. `severity:'warn'` reasons are
+// soft-rejects (升级被拒); `severity:'bad'` are hard failures (升级失败).
+function frameApply(reason, fallbackMessage, details) {
+  const row = UPDATE_REASON_COPY[reason]
+  if (!row) return { tone: "bad", headline: "升级失败", body: fallbackMessage || reason || "未知错误" }
+  if (row.severity === "hide") return { tone: "hide", headline: "", body: "" }
+  const verb = row.severity === "warn" ? "升级被拒" : "升级失败"
+  return { tone: row.severity, headline: row.label ? `${verb} · ${row.label}` : verb, body: row.body(details) }
+}
+
+// Map an UpdateProbe (output of `wechat-cc update --check --json`) to a
+// {tone, headline, body} card render. Probe failures route through
+// `frameProbe`; happy-path probe.dirty / diverged / updateAvailable cases
+// stay inline because they read probe.* fields directly (not result.reason).
 export function updateProbeLine(probe) {
   if (!probe || typeof probe !== "object") {
     return { tone: "warn", headline: "未检查", body: "点检查更新" }
   }
-  if (!probe.ok) {
-    if (probe.reason === "not_a_git_repo") {
-      // Desktop-bundle mode — the binary is inside an .app with no git repo;
-      // hide the whole card. Users get new versions from GitHub Releases.
-      return { tone: "hide", headline: "", body: "" }
-    }
-    if (probe.reason === "fetch_failed") {
-      return { tone: "bad", headline: "检查失败", body: "网络问题或 git 不可用" }
-    }
-    if (probe.reason === "detached_head") {
-      return { tone: "bad", headline: "检查失败", body: "HEAD 游离，请 checkout 一个分支后重试" }
-    }
-    return { tone: "bad", headline: "检查失败", body: probe.message || probe.reason || "未知错误" }
-  }
+  if (!probe.ok) return frameProbe(probe.reason, probe.message, probe.details)
   const sha = (probe.currentCommit || "").slice(0, 7) || "—"
   if (probe.dirty) {
     const n = (probe.dirtyFiles || []).length
@@ -222,8 +303,9 @@ export function updateProbeLine(probe) {
   return { tone: "ok", headline: `已是最新 · ${sha}`, body: "无需升级。" }
 }
 
-// Map an UpdateResult (output of `wechat-cc update --json`, apply mode)
-// to a {tone, headline, body}. Reject reasons get user-actionable copy.
+// Map an UpdateResult (apply mode) to a {tone, headline, body}. Success
+// branches (ok=true) build their own copy from fromCommit/toCommit/
+// daemonAction; rejection branches delegate to `frameApply`.
 export function updateApplyLine(result) {
   if (!result || typeof result !== "object") {
     return { tone: "bad", headline: "升级失败", body: "未收到结果" }
@@ -240,32 +322,7 @@ export function updateApplyLine(result) {
     }
     return { tone: "ok", headline: `升级成功 · ${from} → ${to}`, body: "daemon 升级前未运行，未做重启。" }
   }
-  switch (result.reason) {
-    case "not_a_git_repo":
-      return { tone: "hide", headline: "", body: "" }
-    case "dirty_tree": {
-      const files = result.details?.dirtyFiles || []
-      return { tone: "warn", headline: "升级被拒 · 本地有未提交修改", body: files.length ? `未提交：${files.slice(0, 4).join("、")}${files.length > 4 ? ` 等 ${files.length} 个` : ""}` : "先 commit/stash/discard 再试。" }
-    }
-    case "diverged":
-      return { tone: "warn", headline: "升级被拒 · 本地领先 origin", body: "push 你的本地 commit，或 reset 后再升级。" }
-    case "detached_head":
-      return { tone: "bad", headline: "升级被拒 · HEAD 游离", body: "checkout 一个分支（通常 master）再试。" }
-    case "daemon_running_not_service":
-      return { tone: "bad", headline: "升级被拒 · daemon 不是 service", body: "你正在前台跑 wechat-cc run？先 Ctrl+C 停掉再升级。" }
-    case "fetch_failed":
-      return { tone: "bad", headline: "升级失败 · git fetch 失败", body: result.details?.stderr || "网络问题或 git 不可用。" }
-    case "pull_conflict":
-      return { tone: "bad", headline: "升级失败 · git pull 冲突", body: result.details?.stderr || "ff-only 失败；手动 git pull 看看。" }
-    case "bun_missing":
-      return { tone: "bad", headline: "升级失败 · 找不到 bun", body: "lockfile 已变，但 PATH 上没有 bun；安装 Bun 后再试。" }
-    case "install_failed":
-      return { tone: "bad", headline: "升级失败 · bun install 失败", body: result.details?.stderr || "终端跑 bun install --frozen-lockfile 看具体错误。" }
-    case "service_stop_failed":
-      return { tone: "bad", headline: "升级失败 · 无法停止 service", body: result.details?.stderr || "service.stop 抛错；先手动停服务。" }
-    default:
-      return { tone: "bad", headline: "升级失败", body: result.message || result.reason || "未知错误" }
-  }
+  return frameApply(result.reason, result.message, result.details)
 }
 
 // Configuration table rows shown on the dashboard.

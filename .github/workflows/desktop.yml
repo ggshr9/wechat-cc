@@ -91,6 +91,10 @@ jobs:
         # honor the trailing-backslash line continuations we use below, which
         # would silently invoke `vitest run` with no file args and then try to
         # execute `cli.test.ts` as a separate command.
+        # apps/desktop/shim.e2e.test.ts is gated to non-Windows: it spawns
+        # `bun apps/desktop/test-shim.ts` and the shim's `bun cli.ts` paths
+        # fight Git Bash quoting on the Windows runner — verified locally,
+        # not worth a Windows-specific shim port for this Tier-1 smoke.
         shell: bash
         run: |
           bun x vitest run \
@@ -100,10 +104,12 @@ jobs:
             account-remove.test.ts \
             daemon-kill.test.ts \
             memory.test.ts \
+            runtime-info.test.ts \
             update.test.ts \
             update.e2e.test.ts \
             src/daemon/onboarding.test.ts \
-            apps/desktop/src/view.test.ts
+            apps/desktop/src/view.test.ts \
+            $(if [ "$RUNNER_OS" != "Windows" ]; then echo apps/desktop/shim.e2e.test.ts; fi)
 
       # Compile cli.ts to a self-contained native sidecar that Tauri bundles
       # into the .app/.exe/.deb. This is what makes the desktop install

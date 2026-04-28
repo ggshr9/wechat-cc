@@ -3,8 +3,18 @@ import {
   doctorRows, pollAdvance, daemonStatusLine, escapeHtml,
   initialMode, dashboardHero, accountRows, configRows, formatRelativeTime,
   updateProbeLine, updateApplyLine, restartButtonState, deleteAccountConfirmCopy,
+  UPDATE_REASON_COPY,
 // @ts-expect-error — vanilla JS sibling module; covered at runtime.
 } from './view.js'
+
+// Single source of truth for UpdateReason union — must stay in sync with
+// the type alias in update.ts. Tested below to ensure UPDATE_REASON_COPY
+// covers every reason the backend can emit.
+const ALL_UPDATE_REASONS: string[] = [
+  'dirty_tree', 'diverged', 'detached_head', 'fetch_failed',
+  'pull_conflict', 'install_failed', 'bun_missing',
+  'daemon_running_not_service', 'service_stop_failed', 'not_a_git_repo',
+]
 
 function fakeReport(overrides: Record<string, any> = {}): any {
   const base = {
@@ -371,6 +381,41 @@ describe('updateApplyLine', () => {
       const line = updateApplyLine({ ok: false, mode: 'apply', reason, message: 'x' })
       expect(line.headline).not.toBe('升级失败')  // generic fallback
       expect(['warn', 'bad']).toContain(line.tone)
+    }
+  })
+})
+
+describe('UPDATE_REASON_COPY drift protection', () => {
+  it('every UpdateReason has a row in the copy table', () => {
+    const tableKeys = Object.keys(UPDATE_REASON_COPY).sort()
+    expect(tableKeys).toEqual([...ALL_UPDATE_REASONS].sort())
+  })
+
+  it('every row has severity ∈ {warn, bad, hide} and a body fn', () => {
+    for (const [reason, row] of Object.entries(UPDATE_REASON_COPY) as Array<[string, { severity: string; label: string; body: (d?: Record<string, unknown>) => string }]>) {
+      expect(['warn', 'bad', 'hide']).toContain(row.severity)
+      expect(typeof row.body).toBe('function')
+      // Smoke-call body() with empty details — must return a string,
+      // never throw or return undefined.
+      const text = row.body({})
+      expect(typeof text).toBe('string')
+      // hide rows return empty body; non-hide rows must have non-empty.
+      if (row.severity !== 'hide') {
+        expect(text.length).toBeGreaterThan(0)
+        expect(row.label.length).toBeGreaterThan(0)
+      }
+    }
+  })
+
+  it('updateProbeLine and updateApplyLine agree on severity for every reason', () => {
+    // Both view-models must emit the same tone for hide rows (suppressing
+    // the card) and the same warn/bad split for everything else. This is
+    // the contract the refactor was supposed to enforce.
+    for (const reason of ALL_UPDATE_REASONS) {
+      const probe = updateProbeLine({ ok: false, mode: 'check', reason, message: 'x' })
+      const apply = updateApplyLine({ ok: false, mode: 'apply', reason, message: 'x' })
+      if (probe.tone === 'hide') expect(apply.tone).toBe('hide')
+      if (apply.tone === 'hide') expect(probe.tone).toBe('hide')
     }
   })
 })

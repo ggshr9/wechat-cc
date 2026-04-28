@@ -5,6 +5,7 @@ import { STATE_DIR } from './config'
 import { loadAgentConfig, saveAgentConfig, type AgentProviderKind } from './agent-config'
 import { analyzeDoctor, defaultDoctorDeps, printDoctor, serviceStatus, setupStatus } from './doctor'
 import { buildServicePlan, installService, startService, stopService, uninstallService } from './service-manager'
+import { compiledBinaryPath, compiledRepoRoot } from './runtime-info'
 
 export type CliArgs =
   | { cmd: 'run'; dangerouslySkipPermissions: boolean }
@@ -257,16 +258,12 @@ async function main() {
         })
       }
       const config = loadAgentConfig(STATE_DIR)
-      // Detect whether we're running as a `bun build --compile`d binary by
-      // probing argv[1] — Bun packs the entry script under `/$bunfs/`. When
-      // compiled, the daemon should be launched via the same self-contained
-      // binary (no external bun + cli.ts source needed), so we point the
-      // service unit at `process.execPath`. WorkingDirectory falls back to
-      // the binary's containing dir, since `here` (cli.ts's source dir) is
-      // a virtual `/$bunfs/...` path that doesn't exist on real disk.
-      const isCompiled = (process.argv[1] ?? '').startsWith('/$bunfs/')
-      const binaryPath = isCompiled ? process.execPath : undefined
-      const planCwd = isCompiled ? dirname(process.execPath) : here
+      // Compiled-bundle mode: launch the daemon via the same self-contained
+      // binary (no external bun + cli.ts source). Source mode: legacy
+      // `bunPath cli.ts run` ExecStart. compiledBinaryPath/compiledRepoRoot
+      // both return non-null only in compiled mode — see runtime-info.ts.
+      const binaryPath = compiledBinaryPath() ?? undefined
+      const planCwd = compiledRepoRoot() ?? here
       const plan = buildServicePlan({
         cwd: planCwd,
         dangerouslySkipPermissions: config.dangerouslySkipPermissions,
@@ -357,15 +354,12 @@ async function main() {
     case 'update': {
       const { analyzeUpdate, applyUpdate, defaultUpdateDeps } = await import('./update.ts')
       // Compiled-bundle short-circuit: when the binary is shipped inside a
-      // desktop .app/.exe, `here` is `/$bunfs/root` (Bun's virtual filesystem)
-      // — there is no git repo nearby to fetch/pull. Surface this with a
-      // dedicated `not_a_git_repo` reason instead of letting analyzeUpdate
-      // bubble up an empty-stderr fetch_failed (which the GUI couldn't tell
-      // apart from a real network outage).
+      // desktop .app/.exe, there is no git repo nearby. Surface this with a
+      // dedicated `not_a_git_repo` reason instead of bubbling up an empty-
+      // stderr fetch_failed (which the GUI couldn't tell from a real outage).
       const { existsSync } = await import('node:fs')
       const { join } = await import('node:path')
-      const isCompiled = (process.argv[1] ?? '').startsWith('/$bunfs/')
-      const repoRoot = isCompiled ? dirname(process.execPath) : here
+      const repoRoot = compiledRepoRoot() ?? here
       const hasGitRepo = existsSync(join(repoRoot, '.git'))
       if (!hasGitRepo) {
         const synthetic = {

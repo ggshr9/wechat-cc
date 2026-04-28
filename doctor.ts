@@ -5,6 +5,7 @@ import { STATE_DIR } from './config'
 import { findOnPath } from './util'
 import { loadAgentConfig, type AgentConfig } from './agent-config'
 import { buildServicePlan, isServiceInstalled, type ServiceKind } from './service-manager'
+import { compiledBinaryPath, compiledRepoRoot } from './runtime-info'
 
 export interface BoundAccount {
   id: string
@@ -182,16 +183,14 @@ export function defaultDoctorDeps(stateDir = STATE_DIR): DoctorDeps {
 // bundle's wechat-cc-cli, cwd = its directory. Source mode: cwd = the
 // repo root containing cli.ts.
 export function defaultServiceSnapshot(stateDir: string): ServiceSnapshot {
-  const isCompiled = (process.argv[1] ?? '').startsWith('/$bunfs/')
-  const repoRoot = isCompiled
-    ? dirname(process.execPath)
-    : dirname(fileURLToPath(import.meta.url))
+  const repoRoot = compiledRepoRoot() ?? dirname(fileURLToPath(import.meta.url))
+  const binaryPath = compiledBinaryPath() ?? undefined
   const config = loadAgentConfig(stateDir)
   const plan = buildServicePlan({
     cwd: repoRoot,
     dangerouslySkipPermissions: config.dangerouslySkipPermissions,
     autoStart: config.autoStart,
-    ...(isCompiled ? { binaryPath: process.execPath } : {}),
+    ...(binaryPath ? { binaryPath } : {}),
   })
   return { installed: isServiceInstalled(plan), kind: plan.kind }
 }

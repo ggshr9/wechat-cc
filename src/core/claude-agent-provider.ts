@@ -5,6 +5,29 @@ export interface ClaudeAgentProviderOptions {
   sdkOptionsForProject: (alias: string, path: string) => Options
 }
 
+// Local mirror of the SDK message variants this provider actually reads.
+// The SDK's full union (`SDKMessage`) covers many more variants but our
+// streaming loop only branches on these three. Defining a narrow local
+// type means every reach into the message shape goes through one cast
+// (`narrow` below) — when the SDK changes shape, that's the only place
+// to update.
+type AssistantContent = string | Array<{ type?: string; text?: string }>
+type AssistantMsg = { type: 'assistant'; message?: { content?: AssistantContent } }
+type ResultMsg = {
+  type: 'result'
+  subtype?: string
+  session_id?: string
+  num_turns?: number
+  duration_ms?: number
+  result?: unknown
+}
+type SystemMsg = { type: 'system'; subtype?: string; session_id?: string }
+type NarrowedMsg = AssistantMsg | ResultMsg | SystemMsg | { type: string }
+
+function narrow(msg: SDKMessage): NarrowedMsg {
+  return msg as unknown as NarrowedMsg
+}
+
 export function createClaudeAgentProvider(opts: ClaudeAgentProviderOptions): AgentProvider {
   return {
     async spawn(project: AgentProject, spawnOpts?: { resumeSessionId?: string }): Promise<AgentSession> {
@@ -35,33 +58,31 @@ export function createClaudeAgentProvider(opts: ClaudeAgentProviderOptions): Age
 
       ;(async () => {
         try {
-          for await (const msg of q as AsyncGenerator<SDKMessage>) {
-            const t = (msg as { type: string }).type
-            if (t === 'assistant') {
-              const content = (msg as any).message?.content
-              const text = extractText(content)
+          for await (const raw of q as AsyncGenerator<SDKMessage>) {
+            const msg = narrow(raw)
+            if (msg.type === 'assistant') {
+              const text = extractText(msg.message?.content)
               if (text) {
                 if (pendingTurns[0]) pendingTurns[0].texts.push(text)
                 for (const cb of assistantListeners) cb(text)
               }
-            } else if (t === 'result') {
-              const r = msg as any
-              const result = {
-                session_id: r.session_id,
-                num_turns: r.num_turns,
-                duration_ms: r.duration_ms,
+            } else if (msg.type === 'result') {
+              const result: AgentResult = {
+                session_id: msg.session_id ?? '',
+                num_turns: msg.num_turns ?? 0,
+                duration_ms: msg.duration_ms ?? 0,
               }
               const head = pendingTurns.shift()
               if (head) head.resolve({ assistantText: head.texts })
               for (const cb of resultListeners) cb(result)
-              if (r.subtype && r.subtype !== 'success') {
-                console.error(`wechat channel: [SESSION_RESULT] alias=${project.alias} subtype=${r.subtype} result=${typeof r.result === 'string' ? r.result.slice(0, 400) : JSON.stringify(r).slice(0, 400)}`)
+              if (msg.subtype && msg.subtype !== 'success') {
+                const summary = typeof msg.result === 'string'
+                  ? msg.result.slice(0, 400)
+                  : JSON.stringify(msg).slice(0, 400)
+                console.error(`wechat channel: [SESSION_RESULT] alias=${project.alias} subtype=${msg.subtype} result=${summary}`)
               }
-            } else if (t === 'system') {
-              const sub = (msg as any).subtype
-              if (sub === 'init') {
-                console.error(`wechat channel: [SESSION_INIT] alias=${project.alias} session_id=${(msg as any).session_id}`)
-              }
+            } else if (msg.type === 'system' && msg.subtype === 'init') {
+              console.error(`wechat channel: [SESSION_INIT] alias=${project.alias} session_id=${msg.session_id ?? ''}`)
             }
           }
         } catch (e) {
@@ -103,12 +124,10 @@ export function createClaudeAgentProvider(opts: ClaudeAgentProviderOptions): Age
   }
 }
 
-function extractText(content: unknown): string {
+function extractText(content: AssistantContent | undefined): string {
+  if (!content) return ''
   if (typeof content === 'string') return content
-  if (Array.isArray(content)) {
-    return content.map(b => (b && typeof b === 'object' && (b as any).type === 'text' ? (b as any).text ?? '' : '')).join('')
-  }
-  return ''
+  return content.map(b => (b?.type === 'text' ? b.text ?? '' : '')).join('')
 }
 
 class AsyncQueue<T> {
