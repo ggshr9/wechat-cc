@@ -73,6 +73,7 @@ describe('makeIlinkAdapter (composed)', () => {
     expect(typeof a.flush).toBe('function')
     expect(typeof a.handlePermissionReply).toBe('function')
     expect(typeof a.markChatActive).toBe('function')
+    expect(typeof a.captureContextToken).toBe('function')
     expect(typeof a.resolveUserName).toBe('function')
     expect(a.projects).toBeDefined()
   })
@@ -107,6 +108,30 @@ describe('makeIlinkAdapter (composed)', () => {
     expect(a.lastActiveChatId()).toBe('chat-99')
     a.markChatActive('chat-100')
     expect(a.lastActiveChatId()).toBe('chat-100')
+  })
+
+  it('captureContextToken persists per-chat ilink context_token', async () => {
+    const stateDir = newStateDir()
+    const a = makeIlinkAdapter({ stateDir, accounts: [acct] })
+    a.captureContextToken('chat-7', 'tok-xyz')
+    await a.flush()
+    const { readFileSync } = await import('node:fs')
+    const tokens = JSON.parse(readFileSync(join(stateDir, 'context_tokens.json'), 'utf8'))
+    expect(tokens['chat-7']).toBe('tok-xyz')
+  })
+
+  it('captureContextToken is a no-op when token is empty/undefined', async () => {
+    const stateDir = newStateDir()
+    const a = makeIlinkAdapter({ stateDir, accounts: [acct] })
+    a.captureContextToken('chat-8', undefined)
+    a.captureContextToken('chat-8', '')
+    await a.flush()
+    const { existsSync, readFileSync } = await import('node:fs')
+    const path = join(stateDir, 'context_tokens.json')
+    if (existsSync(path)) {
+      const tokens = JSON.parse(readFileSync(path, 'utf8'))
+      expect(tokens['chat-8']).toBeUndefined()
+    }
   })
 
   it('loadProjects returns {projects: {}, current: null} when projects.json missing', () => {

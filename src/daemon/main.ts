@@ -142,6 +142,11 @@ async function main() {
     onInbound: async (msg) => {
       // accountId keeps the persisted user→bot route fresh (self-heals after re-bind).
       ilink.markChatActive(msg.chatId, msg.accountId)
+      // ilink requires context_token on outbound sendmessage; capture it
+      // from each inbound so replies don't fail with errcode=-14 ("session
+      // timeout"). The OLD server.ts did this; the v1.0 rebuild dropped
+      // it. Re-added in v0.3.1.
+      if (msg.contextToken) ilink.captureContextToken(msg.chatId, msg.contextToken)
       // Fire "正在输入..." immediately so the user sees activity during
       // Claude's ~8-15s cold-start on first turn. Best-effort.
       void ilink.sendTyping(msg.chatId, msg.accountId)

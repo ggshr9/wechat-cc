@@ -154,6 +154,10 @@ export function parseUpdates(
       createTimeMs: msg.create_time_ms ?? 0,
       accountId: deps.accountId,
       ...(quoteTo !== undefined ? { quoteTo } : {}),
+      // ilink puts context_token on every inbound message; threading it
+      // through to onInbound lets the daemon persist it before replying.
+      // See InboundMsg.contextToken docstring for the regression history.
+      ...(msg.context_token ? { contextToken: msg.context_token } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
     }
 

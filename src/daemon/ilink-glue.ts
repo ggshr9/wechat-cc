@@ -51,6 +51,7 @@ export interface IlinkAdapter {
   loadProjects(): { projects: Record<string, { path: string; last_active: number }>; current: string | null }
   lastActiveChatId(): string | null
   markChatActive(chatId: string, accountId?: string): void
+  captureContextToken(chatId: string, ctxToken?: string): void
   sendTyping(chatId: string, accountId?: string): Promise<void>
   /**
    * Long-poll wrapper for poll-loop. Detects errcode=-14 session timeout and
@@ -229,6 +230,7 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
 
     lastActiveChatId: transport.lastActiveChatId,
     markChatActive: transport.markChatActive,
+    captureContextToken: transport.captureContextToken,
     sendTyping: transport.sendTyping,
     getUpdatesForLoop: transport.getUpdatesForLoop,
 

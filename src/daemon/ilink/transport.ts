@@ -18,6 +18,7 @@ export interface TransportMethods {
     expired?: boolean
   }>
   markChatActive(chatId: string, accountId?: string): void
+  captureContextToken(chatId: string, ctxToken?: string): void
   lastActiveChatId(): string | null
 }
 
@@ -83,6 +84,17 @@ export function makeTransport(ctx: IlinkContext): TransportMethods {
       if (accountId && acctStore.get(chatId) !== accountId) {
         acctStore.set(chatId, accountId)
       }
+    },
+
+    // Capture the ilink-issued per-chat context_token from the latest
+    // inbound. Sendmessage requires it; without persistence the daemon
+    // can't reply after a restart (the token is in-memory on the ilink
+    // server side and bound to a specific chat's session). Refresh-on-
+    // change keeps the disk file warm without a write per inbound.
+    captureContextToken(chatId, ctxToken) {
+      if (!ctxToken) return
+      if (ctxStore.get(chatId) === ctxToken) return
+      ctxStore.set(chatId, ctxToken)
     },
 
     lastActiveChatId() {

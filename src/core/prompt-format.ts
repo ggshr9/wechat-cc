@@ -7,6 +7,17 @@ export interface InboundMsg {
   createTimeMs: number
   quoteTo?: string
   accountId: string
+  /**
+   * ilink-issued per-chat context token. ilink requires it on outbound
+   * sendmessage; without it sendmessage returns errcode=-14 (session
+   * timeout). The daemon captures this from each incoming message and
+   * persists to context_tokens.json, then reads it back when replying.
+   *
+   * This field was lost in the v1.0 phase-1 rebuild — the old server.ts
+   * did `if (msg.context_token) contextTokens.set(...)`; the new
+   * src/daemon/main.ts dropped the field. v0.3.1 wires it back.
+   */
+  contextToken?: string
   attachments?: { kind: 'image' | 'file' | 'voice'; path: string; caption?: string }[]
 }
 

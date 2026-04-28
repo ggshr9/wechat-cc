@@ -116,6 +116,31 @@ describe('parseUpdates', () => {
     const [msg] = parseUpdates(raw, { accountId: 'A', resolveUserName: () => undefined })
     expect(msg!.text).toBe('line1\nline2')
   })
+
+  it('passes through context_token from raw update so daemon can capture it', () => {
+    const raw: RawUpdate[] = [{
+      from_user_id: 'u',
+      create_time_ms: 1000,
+      message_type: 1,
+      message_state: 2,
+      context_token: 'ctx-abc-123',
+      item_list: [{ type: 1, text_item: { text: 'hi' } }],
+    }]
+    const [msg] = parseUpdates(raw, { accountId: 'A', resolveUserName: () => undefined })
+    expect(msg!.contextToken).toBe('ctx-abc-123')
+  })
+
+  it('omits contextToken when raw update has no context_token', () => {
+    const raw: RawUpdate[] = [{
+      from_user_id: 'u',
+      create_time_ms: 1000,
+      message_type: 1,
+      message_state: 2,
+      item_list: [{ type: 1, text_item: { text: 'hi' } }],
+    }]
+    const [msg] = parseUpdates(raw, { accountId: 'A', resolveUserName: () => undefined })
+    expect(msg!.contextToken).toBeUndefined()
+  })
 })
 
 describe('startLongPollLoops', () => {
