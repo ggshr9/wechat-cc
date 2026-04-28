@@ -179,7 +179,11 @@ async function main() {
         resolveProject: resolve,
         manager: sessionManager,
         format: formatInbound,
-        sendAssistantText: async (chatId, text) => { await ilink.sendMessage(chatId, text) },
+        // Plain assistant text is intentionally NOT forwarded to wechat —
+        // the system prompt tells Claude to use the `reply` MCP tool, and
+        // forwarding plain text on top of that produced duplicate messages
+        // ("2" + "已回复 2。"). Drop plain text; tool calls remain the
+        // only outbound path.
         log: (tag, line) => log(tag, line),
       }, msg)
     },
