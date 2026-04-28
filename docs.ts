@@ -486,15 +486,18 @@ ${slugNeedsApproval(slug) ? decisionSection(slug) : ''}
     var lbl = document.getElementById('pdf-btn-label');
     btn.addEventListener('click', function () {
       btn.disabled = true;
-      lbl.textContent = '生成中…';
+      lbl.textContent = '正在生成…';
       var p = window.location.pathname;
       if (p.charAt(p.length - 1) === '/') p = p.substring(0, p.length - 1);
       fetch(p + '/send-pdf', { method: 'POST' })
         .then(function (r) {
-          if (!r.ok) throw new Error('HTTP ' + r.status);
-          return r.json();
+          // 202 Accepted: server queued the job and will deliver async
+          // (render + ilink upload takes 5-15s; cloudflared's edge times
+          // out long-running responses with 502 even on successful origin).
+          if (r.status === 202 || r.ok) return r.json().catch(function () { return {}; });
+          throw new Error('HTTP ' + r.status);
         })
-        .then(function () { lbl.textContent = '已发送到微信 ✓'; })
+        .then(function () { lbl.textContent = '已派发，PDF 稍后到达对话 ✓'; })
         .catch(function (e) { btn.disabled = false; lbl.textContent = '失败：' + e.message; });
     });
   })();
@@ -673,7 +676,15 @@ function startHttpServer(): Server {
         })
       }
 
-      // POST /docs/<slug>/send-pdf — render the doc to PDF, deliver to original chat
+      // POST /docs/<slug>/send-pdf — render the doc to PDF, deliver to original chat.
+      // Render + ilink upload can take 5-15s combined; cloudflared's edge
+      // times out the HTTP round-trip and returns 502 to the browser even
+      // when the origin completes successfully. So: validate prerequisites
+      // synchronously, then kick off render+deliver as fire-and-forget and
+      // return 202 immediately. Any failure is logged to stderr (no UI
+      // surface — the original symptom was "PDF arrived but button said
+      // failed", which this trades for "button reports queued, no error
+      // surfaced if delivery fails").
       const pdfMatch = url.pathname.match(/^\/docs\/([a-zA-Z0-9_-]+)\/send-pdf\/?$/)
       if (pdfMatch && req.method === 'POST') {
         const slug = pdfMatch[1]!
@@ -681,25 +692,26 @@ function startHttpServer(): Server {
         if (!existsSync(mdPath)) return new Response('slug not found', { status: 404 })
         const link = getSlugChat(slug)
         if (!link) return new Response('this page has no chat link', { status: 412 })
-        const pdfPath = join(DOCS_DIR, `${slug}.pdf`)
-        const pageUrl = `http://127.0.0.1:${httpServer?.port ?? ''}/docs/${slug}`
-        try {
-          await renderPagePdf(pageUrl, pdfPath)
-        } catch (err) {
-          process.stderr.write(`wechat channel: PDF render failed for ${slug}: ${err}\n`)
-          return new Response(JSON.stringify({ ok: false, error: String(err) }), { status: 500, headers: { 'Content-Type': 'application/json' } })
-        }
         if (!pdfRequestCallback) {
           return new Response(JSON.stringify({ ok: false, error: 'no PDF delivery callback registered' }), { status: 503, headers: { 'Content-Type': 'application/json' } })
         }
-        try {
-          const title = titleFromMarkdown(readFileSync(mdPath, 'utf8'), slug)
-          await pdfRequestCallback({ slug, title, chatId: link.chatId, accountId: link.accountId, pdfPath })
-        } catch (err) {
-          process.stderr.write(`wechat channel: PDF deliver failed for ${slug}: ${err}\n`)
-          return new Response(JSON.stringify({ ok: false, error: String(err) }), { status: 500, headers: { 'Content-Type': 'application/json' } })
-        }
-        return new Response(JSON.stringify({ ok: true, slug }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+        const pdfPath = join(DOCS_DIR, `${slug}.pdf`)
+        const pageUrl = `http://127.0.0.1:${httpServer?.port ?? ''}/docs/${slug}`
+        ;(async () => {
+          try {
+            await renderPagePdf(pageUrl, pdfPath)
+          } catch (err) {
+            process.stderr.write(`wechat channel: PDF render failed for ${slug}: ${err}\n`)
+            return
+          }
+          try {
+            const title = titleFromMarkdown(readFileSync(mdPath, 'utf8'), slug)
+            await pdfRequestCallback!({ slug, title, chatId: link.chatId, accountId: link.accountId, pdfPath })
+          } catch (err) {
+            process.stderr.write(`wechat channel: PDF deliver failed for ${slug}: ${err}\n`)
+          }
+        })()
+        return new Response(JSON.stringify({ ok: true, slug, queued: true }), { status: 202, headers: { 'Content-Type': 'application/json' } })
       }
 
       // GET /docs/<slug>/download — serve the raw .md as an attachment
