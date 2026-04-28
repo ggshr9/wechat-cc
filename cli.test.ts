@@ -100,6 +100,15 @@ describe('parseCliArgs', () => {
     expect(parseCliArgs(['memory', 'write', 'u@x']).cmd).toBe('help')
     expect(parseCliArgs(['memory', 'write']).cmd).toBe('help')
   })
+  it('parses logs subcommand with default + explicit tail count', () => {
+    expect(parseCliArgs(['logs'])).toEqual({ cmd: 'logs', tail: 50, json: false })
+    expect(parseCliArgs(['logs', '--tail', '20'])).toEqual({ cmd: 'logs', tail: 20, json: false })
+    expect(parseCliArgs(['logs', '--tail', '100', '--json'])).toEqual({ cmd: 'logs', tail: 100, json: true })
+    expect(parseCliArgs(['logs', '--json'])).toEqual({ cmd: 'logs', tail: 50, json: true })
+  })
+  it('logs --tail with non-numeric value falls back to default 50', () => {
+    expect(parseCliArgs(['logs', '--tail', 'banana'])).toEqual({ cmd: 'logs', tail: 50, json: false })
+  })
   it('accepts --dangerously on run subcommand', () => {
     expect(parseCliArgs(['run', '--dangerously'])).toEqual({
       cmd: 'run',

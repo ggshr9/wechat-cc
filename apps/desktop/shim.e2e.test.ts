@@ -195,6 +195,26 @@ describe('apps/desktop shim — CLI invoke contracts', () => {
     expect(Array.isArray(r)).toBe(true)
   })
 
+  it('logs --tail N --json returns parsed entries with timestamp/tag/message/raw', async () => {
+    const r = await invoke('wechat_cli_json', ['logs', '--tail', '10', '--json']) as Record<string, unknown>
+    expect(r).toMatchObject({
+      ok: true,
+      logFile: expect.stringContaining('channel.log'),
+      totalLines: expect.any(Number),
+      entries: expect.any(Array),
+    })
+    // If there are any log lines, each entry must have the documented shape.
+    const entries = r.entries as Array<Record<string, unknown>>
+    for (const e of entries) {
+      expect(e).toMatchObject({
+        timestamp: expect.any(String),
+        tag: expect.any(String),
+        message: expect.any(String),
+        raw: expect.any(String),
+      })
+    }
+  })
+
   it('memory write --json returns ok:false with structured error on sandbox reject', async () => {
     // We can't safely write to the user's real ~/.claude/channels/wechat
     // memory dir from a test (would clobber actual notes), but we CAN

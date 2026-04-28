@@ -24,6 +24,7 @@ export type CliArgs =
   | { cmd: 'memory-list'; json: boolean }
   | { cmd: 'memory-read'; userId: string; path: string; json: boolean }
   | { cmd: 'memory-write'; userId: string; path: string; bodyBase64: string; json: boolean }
+  | { cmd: 'logs'; tail: number; json: boolean }
   | { cmd: 'update'; check: boolean; json: boolean }
   | { cmd: 'help' }
 
@@ -115,6 +116,15 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
         json: rest.includes('--json'),
       }
     }
+    case 'logs': {
+      const idx = rest.indexOf('--tail')
+      const tail = idx >= 0 ? Number.parseInt(rest[idx + 1] ?? '', 10) : 50
+      return {
+        cmd: 'logs',
+        tail: Number.isFinite(tail) ? tail : 50,
+        json: rest.includes('--json'),
+      }
+    }
     default: return { cmd: 'help' }
   }
 }
@@ -167,6 +177,11 @@ Usage:
                         passed as base64 (avoids shell-quote pain with
                         multi-line markdown). Sandboxed: .md only,
                         ≤100KB, no traversal, atomic rename.
+  wechat-cc logs [--tail N] [--json]
+                        Tail the daemon's channel.log. Default --tail 50.
+                        --json returns parsed entries (timestamp, tag,
+                        message). Without --json, raw lines are printed
+                        (equivalent to: tail -n N channel.log).
   wechat-cc update [--check] [--json]
                         Pull latest + reinstall deps + restart service.
                         --check probes only (no side effects); GUI calls
@@ -339,6 +354,22 @@ async function main() {
         console.error(`memory read failed: ${msg}`)
         process.exit(1)
       }
+      return
+    }
+    case 'logs': {
+      const { tailLog } = await import('./logs.ts')
+      const result = tailLog(STATE_DIR, parsed.tail)
+      if (parsed.json) {
+        console.log(JSON.stringify(result, null, 2))
+        return
+      }
+      if (!result.ok) {
+        console.error(`logs read failed: ${result.error}`)
+        process.exit(1)
+      }
+      // Plain-text form for terminal users — match the file's original layout
+      // so `wechat-cc logs --tail 30` looks like a `tail -n 30 channel.log`.
+      for (const e of result.entries) console.log(e.raw)
       return
     }
     case 'memory-write': {

@@ -1069,3 +1069,41 @@ input { font: inherit; color: inherit; }
 .memory-status[data-tone="ok"]   { background: var(--green-soft); color: var(--green-ink); }
 .memory-status[data-tone="bad"]  { background: var(--rouge-soft); color: var(--rouge); }
 .memory-status[data-tone="info"] { background: var(--paper-2); color: var(--ink-3); }
+
+/* ─── logs pane ────────────────────────────────────────────────────── */
+.logs-body {
+  flex: 1; overflow-y: auto; padding: 0;
+  background: var(--paper); margin: 0;
+}
+.logs-body .empty-state { padding: 40px; text-align: center; color: var(--ink-3); font-size: 12px; }
+.logs-row {
+  display: grid;
+  grid-template-columns: 88px 130px 1fr;
+  gap: 14px;
+  padding: 5px 18px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  border-bottom: 1px solid var(--paper-2);
+  word-break: break-word;
+}
+.logs-row:last-child { border-bottom: 0; }
+.logs-row:hover { background: var(--paper-2); }
+.logs-row .ts { color: var(--ink-4); white-space: nowrap; }
+.logs-row .tag {
+  color: var(--ink-2); font-weight: 500;
+  text-transform: uppercase; letter-spacing: .03em; font-size: 10.5px;
+  padding: 1px 0;
+}
+.logs-row .tag-error  { color: var(--rouge); }
+.logs-row .tag-warn   { color: var(--amber); }
+.logs-row .tag-info   { color: var(--green-ink); }
+.logs-row .msg { color: var(--ink); white-space: pre-wrap; }
+.logs-row.continuation .ts, .logs-row.continuation .tag { color: var(--ink-4); opacity: .5; }
+.logs-row.continuation .msg { color: var(--ink-3); }
+.logs-select {
+  font-family: var(--mono); font-size: 11.5px;
+  padding: 4px 10px; border-radius: 6px;
+  border: 1px solid var(--hair-2); background: #fff; color: var(--ink-2);
+  height: 30px;
+}

@@ -11,6 +11,7 @@ import { refreshQr } from "./modules/qr.js"
 import { serviceAction, forceKillDaemon } from "./modules/service.js"
 import { renderDashboard, renderRestartButton, setPending, updateClock, restartDaemon, handleAccountRowClick } from "./modules/dashboard.js"
 import { loadMemoryPane, wireMemoryButtons } from "./modules/memory.js"
+import { loadLogsPane, startLogsAutoRefresh, stopLogsAutoRefresh } from "./modules/logs.js"
 import { loadUpdateProbe, applyUpdate } from "./modules/update.js"
 
 const state = {
@@ -131,6 +132,14 @@ function switchPane(name) {
   document.querySelectorAll(".dash-pane[data-pane]").forEach(el => {
     el.hidden = el.dataset.pane !== name
   })
+  // Logs pane gets a 10s auto-refresh tick while active; stop it on
+  // pane switch so we don't burn CPU tailing log files no one is reading.
+  if (name === "logs") {
+    loadLogsPane(deps).catch(err => console.error("logs load failed", err))
+    startLogsAutoRefresh(deps)
+  } else {
+    stopLogsAutoRefresh()
+  }
   if (name === "memory") loadMemoryPane(deps).catch(err => {
     console.error("memory load failed", err)
     document.getElementById("memory-rendered").innerHTML =
@@ -184,6 +193,8 @@ function wireEvents() {
   document.getElementById("dash-restart").addEventListener("click", () => restartDaemon(deps))
   document.getElementById("memory-refresh")?.addEventListener("click", () => loadMemoryPane(deps))
   wireMemoryButtons(deps)
+  document.getElementById("logs-refresh")?.addEventListener("click", () => loadLogsPane(deps))
+  document.getElementById("logs-tail-select")?.addEventListener("change", () => loadLogsPane(deps))
   document.getElementById("update-check-btn")?.addEventListener("click", () => loadUpdateProbe(deps))
   document.getElementById("update-apply-btn")?.addEventListener("click", () => applyUpdate(deps))
 
