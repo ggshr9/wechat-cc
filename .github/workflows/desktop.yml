@@ -46,7 +46,12 @@ jobs:
             libayatana-appindicator3-dev \
             file \
             build-essential \
-            pkg-config
+            pkg-config \
+            libfuse2
+          # libfuse2 is required by linuxdeploy / AppImage runtime (it mounts
+          # the AppImage as a fuse filesystem during bundling). Newer Ubuntu
+          # images dropped fuse2 by default; without this the AppImage step
+          # fails with an opaque "failed to run linuxdeploy" message.
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
