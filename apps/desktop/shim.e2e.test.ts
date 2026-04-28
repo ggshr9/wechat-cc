@@ -182,7 +182,11 @@ describe('apps/desktop shim — CLI invoke contracts', () => {
     } else {
       expect(r.reason).toMatch(/not_a_git_repo|fetch_failed|detached_head/)
     }
-  })
+    // Generous timeout: this command shells out to `git fetch origin` against
+    // the live remote. Healthy network finishes in <1s; under contention
+    // (CI parallel fetches, slow link, or other vitest workers) it can spike
+    // to 10s+. We're testing that the JSON SHAPE is right, not network speed.
+  }, 30_000)
 
   it('memory list --json returns an array', async () => {
     const r = await invoke('wechat_cli_json', ['memory', 'list', '--json'])

@@ -180,20 +180,42 @@ export async function applyUpdate(deps: UpdateDeps): Promise<UpdateResult> {
     }
   }
 
-  // From here on, we've already stopped the service. Any early return must
-  // best-effort restart it so the user is not left with a silently-stopped
-  // daemon (microsoft seriously, that's how WeChat goes dark for everyone
-  // until they notice). The restart attempt is wrapped because if the
-  // outer cause was systemic (disk full, plist removed) it'll fail too,
-  // but at least we tried; the GUI will surface the original failure.
-  const tryRestoreDaemon = () => {
-    if (!wasService) return
-    try { deps.service.start() } catch { /* surfacing the original failure is more useful */ }
+  // From here the service is stopped. The mutating steps (pull/install)
+  // are split into a daemon-unaware helper; whether we restart on success
+  // or restore on failure is the wrapper's single concern. This isolates
+  // "WeChat must not go silently dark on a failed update" to one place
+  // instead of three explicit `tryRestoreDaemon()` calls scattered across
+  // each early-return.
+  const inner = runMutatingSteps(deps, probe)
+  if (!inner.ok) {
+    bestEffortStart(deps, wasService)
+    return inner
   }
 
+  const daemonAction: DaemonAction = wasService
+    ? (tryStart(deps) ? 'restarted' : 'restart_failed')
+    : 'noop'
+
+  return {
+    ok: true, mode: 'apply',
+    fromCommit: probe.currentCommit!,
+    toCommit: probe.latestCommit!,
+    lockfileChanged: !!probe.lockfileWillChange,
+    installRan: inner.installRan,
+    daemonAction,
+    elapsedMs: ((deps.now ?? Date.now)() - startedAt),
+  }
+}
+
+// Run the actual upgrade steps (pull, optional bun install). No knowledge of
+// the daemon — caller (applyUpdate) handles stop/start/restore. Returns
+// either { ok:true, installRan } or a typed UpdateRejected.
+function runMutatingSteps(
+  deps: UpdateDeps,
+  probe: UpdateProbe,
+): { ok: true; installRan: boolean } | UpdateRejected {
   const pulled = deps.runGit(['pull', '--ff-only'])
   if (pulled.code !== 0) {
-    tryRestoreDaemon()
     return {
       ok: false, mode: 'apply', reason: 'pull_conflict',
       message: 'git pull --ff-only failed',
@@ -204,7 +226,6 @@ export async function applyUpdate(deps: UpdateDeps): Promise<UpdateResult> {
   let installRan = false
   if (probe.lockfileWillChange) {
     if (!deps.bun.path) {
-      tryRestoreDaemon()
       return {
         ok: false, mode: 'apply', reason: 'bun_missing',
         message: 'bun.lock changed but `bun` is not on PATH; install Bun then retry',
@@ -213,7 +234,6 @@ export async function applyUpdate(deps: UpdateDeps): Promise<UpdateResult> {
     const installed = deps.bun.install()
     installRan = true
     if (installed.code !== 0) {
-      tryRestoreDaemon()
       return {
         ok: false, mode: 'apply', reason: 'install_failed',
         message: 'bun install --frozen-lockfile failed',
@@ -221,26 +241,22 @@ export async function applyUpdate(deps: UpdateDeps): Promise<UpdateResult> {
       }
     }
   }
+  return { ok: true, installRan }
+}
 
-  let daemonAction: DaemonAction = 'noop'
-  if (wasService) {
-    try {
-      deps.service.start()
-      daemonAction = 'restarted'
-    } catch {
-      daemonAction = 'restart_failed'
-    }
-  }
+// Best-effort daemon restore — used after a failed mutating step. Swallows
+// any error from service.start(); the caller is propagating the original
+// failure (pull_conflict / bun_missing / install_failed) which is more
+// actionable than "service.start ALSO failed". No-op when wasService=false.
+function bestEffortStart(deps: UpdateDeps, wasService: boolean): void {
+  if (!wasService) return
+  try { deps.service.start() } catch { /* original failure is what the user needs */ }
+}
 
-  return {
-    ok: true, mode: 'apply',
-    fromCommit: probe.currentCommit!,
-    toCommit: probe.latestCommit!,
-    lockfileChanged: !!probe.lockfileWillChange,
-    installRan,
-    daemonAction,
-    elapsedMs: ((deps.now ?? Date.now)() - startedAt),
-  }
+// Attempt service.start, returning whether it succeeded. Used on the
+// happy path to map success/failure to daemonAction='restarted'/'restart_failed'.
+function tryStart(deps: UpdateDeps): boolean {
+  try { deps.service.start(); return true } catch { return false }
 }
 
 export function defaultUpdateDeps(repoRoot: string, stateDir: string): UpdateDeps {
