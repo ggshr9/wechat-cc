@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   doctorRows, pollAdvance, daemonStatusLine, escapeHtml,
   initialMode, dashboardHero, accountRows, configRows, formatRelativeTime,
-  updateProbeLine, updateApplyLine,
+  updateProbeLine, updateApplyLine, restartButtonState, deleteAccountConfirmCopy,
+// @ts-expect-error — vanilla JS sibling module; covered at runtime.
 } from './view.js'
 
 function fakeReport(overrides: Record<string, any> = {}): any {
@@ -18,6 +19,7 @@ function fakeReport(overrides: Record<string, any> = {}): any {
       access: { ok: false, dmPolicy: 'allowlist', allowFromCount: 0 },
       provider: { ok: true, provider: 'claude', binaryPath: '/usr/local/bin/claude' },
       daemon: { alive: false, pid: null },
+      service: { installed: true, kind: 'systemd-user' },
     },
   }
   return { ...base, ...overrides, checks: { ...base.checks, ...(overrides.checks ?? {}) } }
@@ -37,11 +39,11 @@ describe('doctorRows', () => {
         daemon: { alive: false, pid: null },
       },
     })
-    expect(rows.map(([name]) => name)).toEqual([
+    expect(rows.map((r: [string, unknown]) => r[0])).toEqual([
       'Bun', 'Git', 'Claude', 'Codex', '微信账号', 'Allowlist', 'Provider', 'Daemon',
     ])
-    expect(rows[4][1]).toEqual({ ok: true, path: '1 个账号' })
-    expect(rows[7][1]).toEqual({ ok: false, path: 'stopped' })
+    expect(rows[4]![1]).toEqual({ ok: true, path: '1 个账号' })
+    expect(rows[7]![1]).toEqual({ ok: false, path: 'stopped' })
   })
 
   it('shows live pid in Daemon row when alive', () => {
@@ -53,7 +55,7 @@ describe('doctorRows', () => {
         daemon: { alive: true, pid: 4321 },
       },
     })
-    expect(rows[7][1]).toEqual({ ok: true, path: 'pid 4321' })
+    expect(rows[7]![1]).toEqual({ ok: true, path: 'pid 4321' })
   })
 })
 
@@ -95,6 +97,59 @@ describe('daemonStatusLine', () => {
 describe('escapeHtml', () => {
   it('escapes the standard XSS vector chars', () => {
     expect(escapeHtml(`<script>alert("x")</script>`)).toBe('&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;')
+  })
+})
+
+describe('restartButtonState', () => {
+  it('service installed → restart action with default label', () => {
+    const choice = restartButtonState(
+      { alive: false, pid: null },
+      { installed: true, kind: 'systemd-user' },
+    )
+    expect(choice.action).toBe('restart')
+    expect(choice.label).toBe('重启 daemon')
+    expect(choice.helper).toBeNull()
+  })
+
+  it('service missing + daemon alive (foreground source-mode) → install action with PID hint', () => {
+    const choice = restartButtonState(
+      { alive: true, pid: 691574 },
+      { installed: false, kind: 'systemd-user' },
+    )
+    expect(choice.action).toBe('install')
+    expect(choice.label).toBe('去安装服务')
+    expect(choice.helper).toContain('691574')
+  })
+
+  it('service missing + daemon dead → install action pointing at wizard', () => {
+    const choice = restartButtonState(
+      { alive: false, pid: null },
+      { installed: false, kind: 'launchagent' },
+    )
+    expect(choice.action).toBe('install')
+    expect(choice.label).toBe('去设置向导')
+    expect(choice.helper).toContain('设置向导')
+  })
+
+  it('service field undefined → treated as missing (defensive default)', () => {
+    expect(restartButtonState({ alive: false, pid: null }, undefined).action).toBe('install')
+    expect(restartButtonState({ alive: false, pid: null }, null).action).toBe('install')
+  })
+})
+
+describe('deleteAccountConfirmCopy', () => {
+  it('service installed → restart-daemon hint', () => {
+    expect(deleteAccountConfirmCopy('丸子', { installed: true, kind: 'systemd-user' }))
+      .toBe('已删除 丸子 · 重启 daemon 生效')
+  })
+
+  it('service missing → wizard-service hint', () => {
+    expect(deleteAccountConfirmCopy('丸子', { installed: false, kind: 'systemd-user' }))
+      .toContain('设置向导')
+  })
+
+  it('service undefined → safe default (treated as missing)', () => {
+    expect(deleteAccountConfirmCopy('丸子', undefined)).toContain('设置向导')
   })
 })
 
@@ -159,11 +214,11 @@ describe('accountRows', () => {
       [{ botId: 'dead-im-bot', firstSeenExpiredAt: '2026-04-26T00:00:00Z' }],
       Date.parse('2026-04-26T03:30:00Z'),
     )
-    expect(rows[0].badge).toEqual({ tone: 'ok', label: 'active' })
-    expect(rows[1].expired).toBe(true)
-    expect(rows[1].badge.tone).toBe('warn')
-    expect(rows[1].badge.label).toMatch(/已过期/)
-    expect(rows[1].badge.label).toMatch(/3 小时前/)
+    expect(rows[0]!.badge).toEqual({ tone: 'ok', label: 'active' })
+    expect(rows[1]!.expired).toBe(true)
+    expect(rows[1]!.badge.tone).toBe('warn')
+    expect(rows[1]!.badge.label).toMatch(/已过期/)
+    expect(rows[1]!.badge.label).toMatch(/3 小时前/)
   })
 })
 
@@ -186,7 +241,7 @@ describe('formatRelativeTime', () => {
 describe('configRows', () => {
   it('returns the four config rows in stable order', () => {
     const rows = configRows(fakeReport(), '~/.claude/channels/wechat')
-    expect(rows.map(r => r[0])).toEqual(['Provider', 'Provider binary', 'Allowlist', 'State directory'])
+    expect(rows.map((r: [string, string, string]) => r[0])).toEqual(['Provider', 'Provider binary', 'Allowlist', 'State directory'])
   })
 })
 
@@ -319,3 +374,7 @@ describe('updateApplyLine', () => {
     }
   })
 })
+
+// fakeReport is intentionally unused-by-default in some test groups but
+// needs to typecheck cleanly under tsc --noEmit.
+void fakeReport

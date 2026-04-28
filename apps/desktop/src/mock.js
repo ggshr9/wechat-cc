@@ -17,8 +17,9 @@ export async function mockInvoke(command, args, state) {
         access: { ok: false, dmPolicy: "allowlist", allowFromCount: 0 },
         provider: { ok: true, provider: state?.selectedProvider ?? "claude", binaryPath: "/usr/local/bin/claude" },
         daemon: { alive: false, pid: null },
+        service: { installed: false, kind: "launchagent" },
       },
-      nextActions: ["run_wechat_setup", "start_service"],
+      nextActions: ["run_wechat_setup", "install_service"],
     }
   }
   if (command === "wechat_cli_json" && args.args?.[0] === "setup") {

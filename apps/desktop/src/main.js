@@ -2,7 +2,7 @@ import { mockInvoke } from "./mock.js"
 import {
   doctorRows, pollAdvance, daemonStatusLine, escapeHtml,
   initialMode, dashboardHero, accountRows, configRows, formatRelativeTime,
-  updateProbeLine, updateApplyLine,
+  updateProbeLine, updateApplyLine, restartButtonState, deleteAccountConfirmCopy,
 } from "./view.js"
 
 const state = {
@@ -218,6 +218,21 @@ async function serviceAction(action) {
   if (action === "install") {
     state.unattended = isToggleOn("unattended-toggle")
     state.autoStart = isToggleOn("autostart-toggle")
+    // Pre-install guard: if a daemon is currently running OUTSIDE any
+    // installed service (foreground source-mode bun, e.g. PID 691574 from
+    // before the GUI was installed), wedge it. Otherwise systemd will
+    // start a second daemon, the second one hits the server.pid lock,
+    // exits, Restart=always loops, user is stuck. Surface the existing
+    // post-stop-alert UI but with pre-install copy so the user can
+    // force-kill before we touch any unit files.
+    const status = await invoke("wechat_cli_json", { args: ["service", "status", "--json"] }).catch(() => null)
+    if (status && status.alive && !status.installed && status.pid) {
+      summaryEl.textContent = "检测到前台 daemon 仍在运行，需要先停掉再安装服务。"
+      showPostStopAlert(status.pid)
+      const headEl = document.querySelector("#post-stop-alert .h")
+      if (headEl) headEl.textContent = `先停掉前台 daemon (pid ${status.pid}) — 否则装上的 service 会立刻被 PID 锁挤掉`
+      return
+    }
   }
   const args = ["service", action, "--json"]
   if (action === "install") {
@@ -294,6 +309,29 @@ async function refreshDashboard(opts = {}) {
   if (!report) return
   setPending(opts.message || "")
   renderDashboard(report)
+  renderRestartButton(report)
+}
+
+// Mutate the dashboard's restart button to reflect daemon+service state.
+// Stored separately from renderDashboard so we can call it from places
+// that don't re-render the whole hero (e.g. after account remove).
+function renderRestartButton(report) {
+  const btn = document.getElementById("dash-restart")
+  if (!btn) return
+  const choice = restartButtonState(report.checks.daemon, report.checks.service)
+  // Find the label text node (the one with non-whitespace content). The
+  // button has whitespace text nodes between the icon span and the label,
+  // so a naive `find(TEXT_NODE)` would replace the wrong node and leave
+  // the original "重启 daemon" string sitting next to the new label.
+  // Strip any blank text nodes around the icon while we're here.
+  const labelNode = Array.from(btn.childNodes).find(
+    n => n.nodeType === Node.TEXT_NODE && n.textContent.trim().length > 0,
+  )
+  if (labelNode) labelNode.textContent = ` ${choice.label}`
+  else btn.appendChild(document.createTextNode(` ${choice.label}`))
+  btn.dataset.action = choice.action
+  if (choice.helper) btn.title = choice.helper
+  else btn.removeAttribute("title")
 }
 
 function renderDashboard(report) {
@@ -374,6 +412,21 @@ function updateClock() {
 }
 
 async function restartDaemon() {
+  // Pre-flight: if the service unit isn't installed, route to the wizard
+  // service step instead of shelling out to systemctl/launchctl which would
+  // fail with a confusing "Unit not found" error. The button label is
+  // already updated by renderRestartButton, but a stale dashboard tick
+  // could let a click through during a state transition.
+  const cached = state.doctor
+  if (cached) {
+    const choice = restartButtonState(cached.checks.daemon, cached.checks.service)
+    if (choice.action === "install") {
+      setMode("wizard")
+      showStep("service")
+      setPending("")
+      return
+    }
+  }
   setPending("停止…")
   try {
     await invoke("wechat_cli_json", { args: ["service", "stop", "--json"] })
@@ -472,7 +525,7 @@ document.getElementById("accounts-body").addEventListener("click", async (ev) =>
       setPending(`删除失败：${formatInvokeError(err)}`)
       return
     }
-    setPending(`已删除 ${row.dataset.name} · 重启 daemon 生效`)
+    setPending(deleteAccountConfirmCopy(row.dataset.name, state.doctor?.checks?.service))
     await refreshDashboard()
   }
 })

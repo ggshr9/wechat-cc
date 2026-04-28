@@ -1,10 +1,8 @@
-import type { ServicePlan } from './service-manager'
-import { buildServicePlan, startService, stopService } from './service-manager'
+import { buildServicePlan, isServiceInstalled, startService, stopService } from './service-manager'
 import { loadAgentConfig } from './agent-config'
 import { findOnPath } from './util'
 import { readDaemon } from './doctor'
 import { spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
 
 export type UpdateReason =
   | 'dirty_tree'
@@ -182,8 +180,20 @@ export async function applyUpdate(deps: UpdateDeps): Promise<UpdateResult> {
     }
   }
 
+  // From here on, we've already stopped the service. Any early return must
+  // best-effort restart it so the user is not left with a silently-stopped
+  // daemon (microsoft seriously, that's how WeChat goes dark for everyone
+  // until they notice). The restart attempt is wrapped because if the
+  // outer cause was systemic (disk full, plist removed) it'll fail too,
+  // but at least we tried; the GUI will surface the original failure.
+  const tryRestoreDaemon = () => {
+    if (!wasService) return
+    try { deps.service.start() } catch { /* surfacing the original failure is more useful */ }
+  }
+
   const pulled = deps.runGit(['pull', '--ff-only'])
   if (pulled.code !== 0) {
+    tryRestoreDaemon()
     return {
       ok: false, mode: 'apply', reason: 'pull_conflict',
       message: 'git pull --ff-only failed',
@@ -194,6 +204,7 @@ export async function applyUpdate(deps: UpdateDeps): Promise<UpdateResult> {
   let installRan = false
   if (probe.lockfileWillChange) {
     if (!deps.bun.path) {
+      tryRestoreDaemon()
       return {
         ok: false, mode: 'apply', reason: 'bun_missing',
         message: 'bun.lock changed but `bun` is not on PATH; install Bun then retry',
@@ -202,6 +213,7 @@ export async function applyUpdate(deps: UpdateDeps): Promise<UpdateResult> {
     const installed = deps.bun.install()
     installRan = true
     if (installed.code !== 0) {
+      tryRestoreDaemon()
       return {
         ok: false, mode: 'apply', reason: 'install_failed',
         message: 'bun install --frozen-lockfile failed',
@@ -262,13 +274,4 @@ export function defaultUpdateDeps(repoRoot: string, stateDir: string): UpdateDep
       start: () => startService(plan),
     },
   }
-}
-
-function isServiceInstalled(plan: ServicePlan): boolean {
-  if (plan.serviceFile) return existsSync(plan.serviceFile)
-  if (plan.kind === 'scheduled-task') {
-    const r = spawnSync('schtasks', ['/Query', '/TN', plan.serviceName], { encoding: 'utf8' })
-    return (r.status ?? 1) === 0
-  }
-  return false
 }

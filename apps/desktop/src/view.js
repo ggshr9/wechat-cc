@@ -75,6 +75,34 @@ export function initialMode(report) {
   return { mode: "wizard", step: "service" }
 }
 
+// Determine the dashboard "restart daemon" button's mode + label given the
+// service+daemon state. The pre-existing button blindly invoked
+// `service stop` + `service start`, which fails noisily when no service unit
+// is registered (systemctl: Unit not found, launchctl: Could not find domain).
+// Now we surface three branches:
+//   action="restart"      — service installed → safe to stop+start
+//   action="install"      — service missing → button label points at wizard
+//                           step "service"; clicking should navigate, not
+//                           shell out to a broken command
+//   action="install" + label="先停掉前台 daemon" — daemon is alive but no
+//                           service is registered (foreground source-mode
+//                           daemon). Restart would either no-op (no unit)
+//                           or, post-install, collide with the PID lock.
+export function restartButtonState(daemon, service) {
+  const installed = !!(service && service.installed)
+  if (installed) {
+    return { action: "restart", label: "重启 daemon", helper: null }
+  }
+  if (daemon && daemon.alive) {
+    return {
+      action: "install",
+      label: "去安装服务",
+      helper: `daemon 在前台跑着 (pid ${daemon.pid})，需要先安装为 service 才能在 GUI 里管它`,
+    }
+  }
+  return { action: "install", label: "去设置向导", helper: "尚未安装为后台服务；点这里走完设置向导。" }
+}
+
 // Hero block for the dashboard top: "DAEMON · running" with a sub-line.
 export function dashboardHero(daemon, accountCount) {
   if (daemon.alive) {
@@ -99,6 +127,15 @@ export function dashboardHero(daemon, accountCount) {
     meta1: "no daemon process",
     meta2: "press restart to bring it up",
   }
+}
+
+// Choose post-account-delete confirmation copy. When the service is not
+// installed there's no daemon-managed restart to suggest — direct the user
+// to wizard step instead. Mirrors restartButtonState's branching.
+export function deleteAccountConfirmCopy(name, service) {
+  const installed = !!(service && service.installed)
+  if (installed) return `已删除 ${name} · 重启 daemon 生效`
+  return `已删除 ${name} · 去设置向导启动后台服务以生效`
 }
 
 // Each row for the dashboard accounts table. Resolve a friendly display

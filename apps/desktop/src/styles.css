@@ -5,7 +5,31 @@
    1px borders, subtle shadows on cards, status pills.
    ========================================================= */
 
-@import url("https://fonts.googleapis.com/css2?family=Geist:wght@300..700&family=Geist+Mono:wght@400;500&family=Noto+Sans+SC:wght@300;400;500;600&display=swap");
+/* Bundle the latin subsets of Geist + Geist Mono so the desktop app works
+   offline and behind firewalls (the v0.2.0 release shipped a CSS @import
+   to fonts.googleapis.com which timed out for users without DNS access to
+   Google's CDN, falling back to system fonts and breaking visual fidelity).
+   CJK rendering relies on the OS-level fallback chain (PingFang SC on
+   macOS, Microsoft YaHei via system-ui on Windows, Noto-installed-by-default
+   on most Linux desktops); shipping Noto Sans SC would balloon the bundle
+   by ~5MB per weight without meaningfully improving CJK on systems that
+   already have a CJK font installed. */
+@font-face {
+  font-family: "Geist";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("./fonts/geist-variable-latin.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 400 500;
+  font-display: swap;
+  src: url("./fonts/geist-mono-variable-latin.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
 
 :root {
   /* surface */
@@ -166,8 +190,8 @@ input { font: inherit; color: inherit; }
 
 .wizard {
   max-width: 880px;
-  margin: 32px auto;
-  padding: 0 28px 64px;
+  margin: 24px auto;
+  padding: 0 28px 32px;
 }
 
 .wizard-window {
@@ -578,8 +602,8 @@ input { font: inherit; color: inherit; }
 
 .dashboard {
   max-width: 1280px;
-  margin: 24px auto;
-  padding: 0 28px 64px;
+  margin: 16px auto;
+  padding: 0 24px 24px;
 }
 
 .dash-window {

@@ -213,22 +213,18 @@ async function main() {
       return
     }
     case 'install': {
-      const { installUserMcp } = await import('./install-user-mcp.ts')
-      const { join: pathJoin } = await import('node:path')
-      const { homedir } = await import('node:os')
-      if (parsed.userScope) {
-        const configFile = pathJoin(homedir(), '.claude.json')
-        installUserMcp(configFile, 'wechat', {
-          command: process.execPath,
-          args: ['run', '--cwd', here, '--silent', 'start'],
-        })
-        console.log(`Updated user-scope MCP config: ${configFile}`)
-        console.log('\nNext: wechat-cc run or start claude in any project')
-      } else {
-        console.log('Project-scope install: run `wechat-cc install --user` to register globally,')
-        console.log('or manually add the wechat entry to your project .mcp.json.')
-      }
-      return
+      // `wechat-cc install [--user]` was the v0.x entrypoint that wrote a
+      // wechat MCP server entry into ~/.claude.json so Claude Code would
+      // spawn the channel as a child MCP. v1.0+ flipped the model: the
+      // daemon now drives Claude via the Agent SDK directly, so an MCP
+      // entry serves no purpose — the args we used to write
+      // (`['run', '--cwd', here, '--silent', 'start']`) aren't even valid
+      // for the v1.2 cli parser. Tell the user the new path instead of
+      // silently writing a broken entry.
+      console.error('wechat-cc install is deprecated since v1.0.')
+      console.error('Use `wechat-cc service install` to register the daemon (macOS launchd / Linux systemd / Windows ScheduledTask),')
+      console.error('or open the desktop app and walk through the setup wizard.')
+      process.exit(2)
     }
     case 'status': case 'list': {
       const { runStatus } = await import('./cli-status.ts')
@@ -280,7 +276,7 @@ async function main() {
       if (parsed.action === 'status') {
         const status = serviceStatus(defaultDoctorDeps())
         if (parsed.json) console.log(JSON.stringify({ ...status, plan, agentConfig: config }, null, 2))
-        else console.log(`service: ${status.state}${status.pid ? ` pid=${status.pid}` : ''}`)
+        else console.log(`service: ${status.state}${status.installed ? ' [installed]' : ''}${status.pid ? ` pid=${status.pid}` : ''}`)
         return
       }
       // WECHAT_CC_DRY_RUN=1 makes install/uninstall/start/stop a no-op (still

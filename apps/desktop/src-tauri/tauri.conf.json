@@ -11,8 +11,8 @@
     "windows": [
       {
         "title": "wechat-cc",
-        "width": 980,
-        "height": 680,
+        "width": 1100,
+        "height": 860,
         "minWidth": 760,
         "minHeight": 560
       }

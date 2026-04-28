@@ -1,8 +1,10 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { STATE_DIR } from './config'
 import { findOnPath } from './util'
 import { loadAgentConfig, type AgentConfig } from './agent-config'
+import { buildServicePlan, isServiceInstalled, type ServiceKind } from './service-manager'
 
 export interface BoundAccount {
   id: string
@@ -27,6 +29,11 @@ export interface ExpiredBotEntry {
   lastReason?: string
 }
 
+export interface ServiceSnapshot {
+  installed: boolean
+  kind: ServiceKind
+}
+
 export interface DoctorDeps {
   stateDir: string
   findOnPath: (cmd: string) => string | null
@@ -36,6 +43,7 @@ export interface DoctorDeps {
   readUserNames: () => Record<string, string>
   readExpiredBots: () => ExpiredBotEntry[]
   daemon: () => DaemonSnapshot
+  service: () => ServiceSnapshot
 }
 
 export interface DoctorReport {
@@ -50,6 +58,7 @@ export interface DoctorReport {
     access: { ok: boolean; dmPolicy: string; allowFromCount: number }
     provider: { ok: boolean; provider: AgentConfig['provider']; model?: string; binaryPath: string | null }
     daemon: DaemonSnapshot
+    service: ServiceSnapshot
   }
   userNames: Record<string, string>
   expiredBots: ExpiredBotEntry[]
@@ -65,6 +74,7 @@ export function analyzeDoctor(deps: DoctorDeps): DoctorReport {
   const access = deps.readAccess()
   const agent = deps.readAgentConfig()
   const daemon = deps.daemon()
+  const service = deps.service()
   const providerBinary = agent.provider === 'codex' ? codex : claude
 
   const nextActions: string[] = []
@@ -73,7 +83,8 @@ export function analyzeDoctor(deps: DoctorDeps): DoctorReport {
   if (!providerBinary) nextActions.push(agent.provider === 'codex' ? 'install_codex' : 'install_claude')
   if (accounts.length === 0) nextActions.push('run_wechat_setup')
   if (accounts.length > 0 && access.allowFrom.length === 0) nextActions.push('fix_access_allowlist')
-  if (!daemon.alive) nextActions.push('start_service')
+  if (!service.installed) nextActions.push('install_service')
+  else if (!daemon.alive) nextActions.push('start_service')
 
   const checks = {
     bun: { ok: !!bun, path: bun },
@@ -93,6 +104,7 @@ export function analyzeDoctor(deps: DoctorDeps): DoctorReport {
       binaryPath: providerBinary,
     },
     daemon,
+    service,
   }
 
   return {
@@ -110,7 +122,7 @@ export function analyzeDoctor(deps: DoctorDeps): DoctorReport {
   }
 }
 
-export function setupStatus(deps: Pick<DoctorDeps, 'stateDir' | 'readAccounts' | 'readAccess' | 'readAgentConfig' | 'daemon'>) {
+export function setupStatus(deps: Pick<DoctorDeps, 'stateDir' | 'readAccounts' | 'readAccess' | 'readAgentConfig' | 'daemon' | 'service'>) {
   const accounts = deps.readAccounts()
   const access = deps.readAccess()
   const agent = deps.readAgentConfig()
@@ -122,17 +134,32 @@ export function setupStatus(deps: Pick<DoctorDeps, 'stateDir' | 'readAccounts' |
     provider: agent.provider,
     ...(agent.model ? { model: agent.model } : {}),
     daemon: deps.daemon(),
+    service: deps.service(),
   }
 }
 
-export function serviceStatus(deps: { daemon: () => DaemonSnapshot }) {
+export interface ServiceStatusReport {
+  installed: boolean
+  alive: boolean
+  pid: number | null
+  state: 'missing' | 'running' | 'stale' | 'stopped'
+}
+
+// Cross 4 truth states based on (installed, alive, pid):
+//   missing  — service unit/plist/task not registered (ALL platforms agree)
+//   running  — daemon alive (regardless of whether registered as service —
+//              foreground `bun cli.ts run` still reports running here)
+//   stale    — pid file exists but process dead (crashed without cleanup)
+//   stopped  — service installed, no pid (ready for `service start`)
+export function serviceStatus(deps: { daemon: () => DaemonSnapshot; service: () => ServiceSnapshot }): ServiceStatusReport {
   const daemon = deps.daemon()
-  return {
-    installed: daemon.alive,
-    alive: daemon.alive,
-    pid: daemon.pid,
-    state: daemon.alive ? 'running' : daemon.pid !== null ? 'stale' : 'stopped',
-  }
+  const service = deps.service()
+  let state: ServiceStatusReport['state']
+  if (daemon.alive) state = 'running'
+  else if (daemon.pid !== null) state = 'stale'
+  else if (service.installed) state = 'stopped'
+  else state = 'missing'
+  return { installed: service.installed, alive: daemon.alive, pid: daemon.pid, state }
 }
 
 export function defaultDoctorDeps(stateDir = STATE_DIR): DoctorDeps {
@@ -145,7 +172,28 @@ export function defaultDoctorDeps(stateDir = STATE_DIR): DoctorDeps {
     readUserNames: () => readUserNames(stateDir),
     readExpiredBots: () => readExpiredBots(stateDir),
     daemon: () => readDaemon(stateDir),
+    service: () => defaultServiceSnapshot(stateDir),
   }
+}
+
+// Resolve the service plan the way cli.ts service handler does — reusing
+// the compiled-mode detection so the GUI doctor agrees with what the
+// install path would write. Compiled binaries: ExecStart points at the
+// bundle's wechat-cc-cli, cwd = its directory. Source mode: cwd = the
+// repo root containing cli.ts.
+export function defaultServiceSnapshot(stateDir: string): ServiceSnapshot {
+  const isCompiled = (process.argv[1] ?? '').startsWith('/$bunfs/')
+  const repoRoot = isCompiled
+    ? dirname(process.execPath)
+    : dirname(fileURLToPath(import.meta.url))
+  const config = loadAgentConfig(stateDir)
+  const plan = buildServicePlan({
+    cwd: repoRoot,
+    dangerouslySkipPermissions: config.dangerouslySkipPermissions,
+    autoStart: config.autoStart,
+    ...(isCompiled ? { binaryPath: process.execPath } : {}),
+  })
+  return { installed: isServiceInstalled(plan), kind: plan.kind }
 }
 
 export function readExpiredBots(stateDir: string): ExpiredBotEntry[] {
@@ -246,6 +294,7 @@ export function printDoctor(report: DoctorReport): void {
   console.log(`provider: ${report.checks.provider.provider}${report.checks.provider.model ? ` (${report.checks.provider.model})` : ''}`)
   console.log(`accounts: ${report.checks.accounts.count}`)
   console.log(`access: ${report.checks.access.dmPolicy}, allowed=${report.checks.access.allowFromCount}`)
+  console.log(`service: ${report.checks.service.installed ? `installed (${report.checks.service.kind})` : 'missing'}`)
   console.log(`daemon: ${report.checks.daemon.alive ? `running pid=${report.checks.daemon.pid}` : report.checks.daemon.pid ? `stale pid=${report.checks.daemon.pid}` : 'stopped'}`)
   if (report.nextActions.length) console.log(`next: ${report.nextActions.join(', ')}`)
 }

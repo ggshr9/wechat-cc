@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, platform, userInfo } from 'node:os'
 import { dirname, join, posix } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -153,6 +153,25 @@ export function uninstallService(plan: ServicePlan, opts: ServiceSideEffectOpts 
   if (opts.dryRun) return
   runCommands(plan.uninstallCommands)
   if (plan.serviceFile) rmSync(plan.serviceFile, { force: true })
+}
+
+// Probe whether the service unit/plist/scheduled-task this plan targets is
+// currently registered. Decoupled from "is the daemon process alive": a
+// service can be installed but stopped, and a daemon can run outside any
+// service (foreground `bun cli.ts run`). The GUI restart button + update
+// flow both rely on this distinction to render correct prompts.
+//
+// linux/macOS — file existence at the unit/plist path. The service-manager
+// owns that file (writes it during install, removes it during uninstall),
+// so file presence is authoritative.
+// windows — schtasks /Query exits 0 iff the named task exists.
+export function isServiceInstalled(plan: ServicePlan): boolean {
+  if (plan.serviceFile) return existsSync(plan.serviceFile)
+  if (plan.kind === 'scheduled-task') {
+    const r = spawnSync('schtasks', ['/Query', '/TN', plan.serviceName], { encoding: 'utf8' })
+    return (r.status ?? 1) === 0
+  }
+  return false
 }
 
 function runCommands(commands: string[][]): void {

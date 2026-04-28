@@ -221,7 +221,7 @@ describe('applyUpdate — service stop', () => {
 })
 
 describe('applyUpdate — pull/install', () => {
-  it('pull --ff-only fails → reject pull_conflict, install not run, service stays stopped', async () => {
+  it('pull --ff-only fails → reject pull_conflict, but daemon restored (best-effort)', async () => {
     const { deps, stop, start, install } = makeFakeDeps({
       behind: 1, head: 'a', remoteHead: 'b',
       daemon: { alive: true, pid: 1 },
@@ -234,10 +234,12 @@ describe('applyUpdate — pull/install', () => {
     expect(result.reason).toBe('pull_conflict')
     expect(stop).toHaveBeenCalledOnce()
     expect(install).not.toHaveBeenCalled()
-    expect(start).not.toHaveBeenCalled()
+    // Daemon was already stopped before we tried the pull — bring it back so
+    // WeChat doesn't go silently dark while the user reads the error message.
+    expect(start).toHaveBeenCalledOnce()
   })
 
-  it('install fails → reject install_failed, service stays stopped', async () => {
+  it('install fails → reject install_failed, but daemon restored (best-effort)', async () => {
     const { deps, install, start } = makeFakeDeps({
       behind: 1, head: 'a', remoteHead: 'b',
       lockfileDiff: 'bun.lock\n',
@@ -250,20 +252,41 @@ describe('applyUpdate — pull/install', () => {
     if (result.ok) return
     expect(result.reason).toBe('install_failed')
     expect(install).toHaveBeenCalledOnce()
-    expect(start).not.toHaveBeenCalled()
+    // Same rationale as pull_conflict — surface the error AND keep the
+    // daemon up. Old code left the daemon down on this path.
+    expect(start).toHaveBeenCalledOnce()
   })
 
-  it('lockfile changed but bun missing → reject bun_missing', async () => {
-    const { deps, install } = makeFakeDeps({
+  it('bun_missing after stop → daemon restored (best-effort)', async () => {
+    const { deps, install, start } = makeFakeDeps({
       behind: 1, head: 'a', remoteHead: 'b',
       lockfileDiff: 'bun.lock\n',
       bunPath: null,
+      daemon: { alive: true, pid: 1 },
+      serviceInstalled: true,
     })
     const result = await applyUpdate(deps)
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.reason).toBe('bun_missing')
     expect(install).not.toHaveBeenCalled()
+    expect(start).toHaveBeenCalledOnce()
+  })
+
+  it('lockfile changed but bun missing AND no daemon to restore → reject bun_missing, no spurious start', async () => {
+    const { deps, install, start } = makeFakeDeps({
+      behind: 1, head: 'a', remoteHead: 'b',
+      lockfileDiff: 'bun.lock\n',
+      bunPath: null,
+      daemon: { alive: false, pid: null },
+    })
+    const result = await applyUpdate(deps)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toBe('bun_missing')
+    expect(install).not.toHaveBeenCalled()
+    // No service was running pre-update, so don't spuriously start one.
+    expect(start).not.toHaveBeenCalled()
   })
 })
 
