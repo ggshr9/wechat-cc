@@ -34,13 +34,23 @@ export async function runIntrospectTick(deps: IntrospectDeps): Promise<void> {
   try {
     result = await deps.agent.runIntrospect()
   } catch (err) {
-    deps.log('INTROSPECT', `agent failed: ${err instanceof Error ? err.message : String(err)}`)
+    const msg = err instanceof Error ? err.message : String(err)
+    deps.log('INTROSPECT', `agent failed: ${msg}`)
+    await deps.events.append({
+      kind: 'cron_eval_failed',
+      trigger: 'introspect',
+      reasoning: msg,
+    })
     return
   }
 
   if (!result.write || !result.body) {
+    // Distinguish 'agent decided not to write' (skip) from 'SDK threw or
+    // output unparseable' (failed). The agent prefixes failure reasoning
+    // with 'SDK error:' or 'parse failed' (see introspect-runtime.ts).
+    const isFailure = /^(SDK error:|parse failed)/i.test(result.reasoning)
     await deps.events.append({
-      kind: 'cron_eval_skipped',
+      kind: isFailure ? 'cron_eval_failed' : 'cron_eval_skipped',
       trigger: 'introspect',
       reasoning: result.reasoning,
     })

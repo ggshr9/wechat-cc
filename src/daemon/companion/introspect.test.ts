@@ -58,5 +58,42 @@ describe('introspect tick', () => {
 
     await expect(runIntrospectTick(deps)).resolves.not.toThrow()
     expect(log).toHaveBeenCalledWith('INTROSPECT', expect.stringContaining('SDK timeout'))
+    const evs = await events.list()
+    expect(evs).toHaveLength(1)
+    expect(evs[0].kind).toBe('cron_eval_failed')
+    expect(evs[0].reasoning).toContain('SDK timeout')
+  })
+
+  it('routes SDK error reasoning to cron_eval_failed', async () => {
+    const events = makeEventsStore(dir, 'chat_x')
+    const observations = makeObservationsStore(dir, 'chat_x')
+    const agent = { runIntrospect: vi.fn(async () => ({ write: false, reasoning: 'SDK error: timeout after 30s' })) }
+    const deps: IntrospectDeps = { events, observations, agent, chatId: 'chat_x', log: vi.fn() }
+    await runIntrospectTick(deps)
+    const evs = await events.list()
+    expect(evs).toHaveLength(1)
+    expect(evs[0].kind).toBe('cron_eval_failed')
+  })
+
+  it('routes parse failure reasoning to cron_eval_failed', async () => {
+    const events = makeEventsStore(dir, 'chat_x')
+    const observations = makeObservationsStore(dir, 'chat_x')
+    const agent = { runIntrospect: vi.fn(async () => ({ write: false, reasoning: 'parse failed; raw[:120]=garbage' })) }
+    const deps: IntrospectDeps = { events, observations, agent, chatId: 'chat_x', log: vi.fn() }
+    await runIntrospectTick(deps)
+    const evs = await events.list()
+    expect(evs).toHaveLength(1)
+    expect(evs[0].kind).toBe('cron_eval_failed')
+  })
+
+  it('still routes legitimate skip reasoning to cron_eval_skipped', async () => {
+    const events = makeEventsStore(dir, 'chat_x')
+    const observations = makeObservationsStore(dir, 'chat_x')
+    const agent = { runIntrospect: vi.fn(async () => ({ write: false, reasoning: 'nothing new since last week' })) }
+    const deps: IntrospectDeps = { events, observations, agent, chatId: 'chat_x', log: vi.fn() }
+    await runIntrospectTick(deps)
+    const evs = await events.list()
+    expect(evs).toHaveLength(1)
+    expect(evs[0].kind).toBe('cron_eval_skipped')
   })
 })
