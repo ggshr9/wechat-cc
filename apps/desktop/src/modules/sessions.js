@@ -65,35 +65,59 @@ export function extractUserText(turn) {
  * Extract Claude's actual reply text(s) from an 'assistant'-type turn.
  * The real reply lives in the input of mcp__wechat__reply tool calls —
  * Claude may call this multiple times in one turn, producing multiple
- * outbound messages. Falls back to text parts (excluding tool_use/thinking)
- * when no reply tool was called — covers the case where Claude responded
- * with plain text without going through the reply path.
+ * outbound messages.
  *
- * Returns string[] (one per reply / fallback text).
+ * Fallback to text parts only fires when this turn AND the surrounding
+ * session never invoked the reply tool. The per-session check matters
+ * because after a reply tool call the model often emits a wrap-up text
+ * like "已回复。" — not meant for the user, just internal status. Those
+ * trailing texts must not become bubbles.
+ *
+ * Pass `opts.sessionHasReplyTool: true` (compute once via sessionHasReplyTool)
+ * to suppress the per-turn text fallback for sessions that use the tool.
+ *
+ * Returns string[] (one per reply).
  */
-export function extractClaudeReplies(turn) {
+export function extractClaudeReplies(turn, opts = {}) {
   if (!turn || turn.type !== 'assistant') return []
   const content = turn.message?.content
   if (!Array.isArray(content)) return []
 
   const replies = []
   for (const p of content) {
-    // wechat-cc's MCP exposes the reply tool as `mcp__wechat__reply`. Match
-    // loosely — the tool name pattern may evolve. Either suffix-match
-    // 'reply' (after a separator) or exact 'mcp__wechat__reply'.
     if (p && p.type === 'tool_use' && typeof p.name === 'string' && /(^|[_/])reply$/.test(p.name)) {
       const t = p.input && typeof p.input.text === 'string' ? p.input.text : ''
       if (t.trim()) replies.push(t.trim())
     }
   }
   if (replies.length > 0) return replies
+  if (opts.sessionHasReplyTool) return []
 
-  // Fallback: text parts, ignoring thinking/tool_use. Useful when Claude
-  // emitted plain text instead of calling the reply tool.
   const fallback = content
     .filter(p => p && p.type === 'text' && typeof p.text === 'string' && p.text.trim())
     .map(p => p.text.trim())
   return fallback
+}
+
+/**
+ * Returns true if any turn in the session calls the wechat reply tool —
+ * used to gate the text-fallback in extractClaudeReplies. Once Claude has
+ * the reply tool available, plain-text assistant content is wrap-up
+ * status, not user-facing reply.
+ */
+export function sessionHasReplyTool(turns) {
+  if (!Array.isArray(turns)) return false
+  for (const t of turns) {
+    if (!t || t.type !== 'assistant') continue
+    const content = t.message?.content
+    if (!Array.isArray(content)) continue
+    for (const p of content) {
+      if (p && p.type === 'tool_use' && typeof p.name === 'string' && /(^|[_/])reply$/.test(p.name)) {
+        return true
+      }
+    }
+  }
+  return false
 }
 
 export function groupProjectsByRecency(projects, opts = {}) {
@@ -215,7 +239,10 @@ export async function openProjectDetail(deps, alias, opts = {}) {
     // system events) render to '' and are filtered out before mounting.
     const mode = readSessionsDetailMode()
     applyModeToToggle(mode)
-    const renderer = mode === 'detailed' ? turnHtml : turnHtmlCompact
+    const hasReplyTool = sessionHasReplyTool(resp.turns)
+    const renderer = mode === 'detailed'
+      ? (turn) => turnHtml(turn)
+      : (turn) => turnHtmlCompact(turn, { sessionHasReplyTool: hasReplyTool })
     const html = resp.turns
       .map((turn, idx) => {
         const inner = renderer(turn)
@@ -312,7 +339,11 @@ export function turnHtml(turn) {
 // calls / results, system events, queue-operation, last-prompt, unknown
 // shapes) returns ''. The caller filters empty strings before mounting so
 // hidden turns don't even produce an empty .jsonl-turn-group wrapper.
-export function turnHtmlCompact(turn) {
+//
+// `opts.sessionHasReplyTool` should be precomputed once per session via
+// sessionHasReplyTool(turns) and threaded into every per-turn call so the
+// text-fallback path stays consistent across the whole conversation.
+export function turnHtmlCompact(turn, opts = {}) {
   if (!turn || typeof turn !== 'object') return ''
   if (turn.type === 'user') {
     const text = extractUserText(turn)
@@ -320,14 +351,12 @@ export function turnHtmlCompact(turn) {
     return `<div class="jsonl-turn" data-role="user">${escapeHtml(text)}</div>`
   }
   if (turn.type === 'assistant') {
-    const replies = extractClaudeReplies(turn)
+    const replies = extractClaudeReplies(turn, { sessionHasReplyTool: !!opts.sessionHasReplyTool })
     if (replies.length === 0) return ''
     return replies
       .map(r => `<div class="jsonl-turn" data-role="assistant">${escapeHtml(r)}</div>`)
       .join('')
   }
-  // attachment, tool_result, queue-operation, last-prompt, system, unknown:
-  // all hidden in compact mode.
   return ''
 }
 
@@ -373,6 +402,46 @@ function renderPart(part, role) {
   return ''
 }
 
+/**
+ * Build markdown export for a session. In `compact` mode (default for users)
+ * produces a clean chat transcript — only what the user said and what
+ * Claude replied; envelope, tool calls, attachments, and wrap-up status
+ * messages are stripped. In `detailed` mode dumps the raw JSON per turn
+ * for developer debugging.
+ *
+ * Pure function so it's unit-testable without DOM / Tauri.
+ */
+export function buildExportMarkdown(alias, sessionId, turns, mode) {
+  const safeAlias = String(alias ?? '')
+  const safeSid = String(sessionId ?? '')
+  const turnList = Array.isArray(turns) ? turns : []
+  const header = `# ${safeAlias}\n\nSession: ${safeSid}\n\n`
+
+  if (mode === 'detailed') {
+    if (turnList.length === 0) return header
+    return header + turnList
+      .map((t, i) => `## Turn ${i + 1}\n\n\`\`\`json\n${JSON.stringify(t, null, 2)}\n\`\`\`\n`)
+      .join('\n')
+  }
+
+  // Compact: chat-style transcript. Blockquote (>) for user messages,
+  // plain paragraph for Claude — keeps copy-paste readable.
+  const hasReplyTool = sessionHasReplyTool(turnList)
+  const lines = []
+  for (const t of turnList) {
+    if (!t || typeof t !== 'object') continue
+    if (t.type === 'user') {
+      const text = extractUserText(t)
+      if (text) lines.push(text.split('\n').map(l => `> ${l}`).join('\n'))
+    } else if (t.type === 'assistant') {
+      const replies = extractClaudeReplies(t, { sessionHasReplyTool: hasReplyTool })
+      for (const r of replies) lines.push(r)
+    }
+  }
+  if (lines.length === 0) return header
+  return header + lines.join('\n\n') + '\n'
+}
+
 export async function exportProjectMarkdown(deps) {
   const detail = document.getElementById("sessions-detail")
   const alias = detail?.dataset.alias
@@ -380,8 +449,8 @@ export async function exportProjectMarkdown(deps) {
   try {
     const resp = await deps.invoke("wechat_cli_json", { args: ["sessions", "read-jsonl", alias, "--json"] })
     if (!resp.ok) return
-    const md = `# ${alias}\n\nSession: ${resp.session_id}\n\n` +
-      resp.turns.map((t, i) => `## Turn ${i + 1}\n\n\`\`\`json\n${JSON.stringify(t, null, 2)}\n\`\`\`\n`).join("\n")
+    const mode = readSessionsDetailMode()
+    const md = buildExportMarkdown(resp.alias ?? alias, resp.session_id, resp.turns, mode)
 
     if (window.__TAURI__?.dialog?.save && window.__TAURI__?.fs?.writeTextFile) {
       const path = await window.__TAURI__.dialog.save({ defaultPath: `${alias}-session.md` })

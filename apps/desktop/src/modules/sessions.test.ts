@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error JS sibling
-import { groupProjectsByRecency, projectRow, searchHitRow, turnHtml, turnHtmlCompact, extractUserText, extractClaudeReplies } from './sessions.js'
+import { groupProjectsByRecency, projectRow, searchHitRow, turnHtml, turnHtmlCompact, extractUserText, extractClaudeReplies, sessionHasReplyTool, buildExportMarkdown } from './sessions.js'
 
 describe('groupProjectsByRecency', () => {
   const now = Date.now()
@@ -228,6 +228,68 @@ describe('extractClaudeReplies', () => {
     }
     expect(extractClaudeReplies(turn)).toEqual([])
   })
+
+  // Per-session noise suppression — when the session uses the reply tool,
+  // assistant turns that only have plain text are wrap-up status ("已回复。")
+  // and should be hidden, not treated as a reply via the fallback path.
+  it('with sessionHasReplyTool=true, suppresses plain-text fallback', () => {
+    const turn = {
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: '已回复。' }] },
+    }
+    expect(extractClaudeReplies(turn, { sessionHasReplyTool: true })).toEqual([])
+  })
+
+  it('with sessionHasReplyTool=false (default), keeps plain-text fallback', () => {
+    const turn = {
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: '直接回的' }] },
+    }
+    expect(extractClaudeReplies(turn)).toEqual(['直接回的'])
+    expect(extractClaudeReplies(turn, { sessionHasReplyTool: false })).toEqual(['直接回的'])
+  })
+
+  it('with sessionHasReplyTool=true, reply tool inputs still extracted', () => {
+    const turn = {
+      type: 'assistant',
+      message: { role: 'assistant', content: [
+        { type: 'tool_use', name: 'mcp__wechat__reply', input: { text: '回复' } },
+      ] },
+    }
+    expect(extractClaudeReplies(turn, { sessionHasReplyTool: true })).toEqual(['回复'])
+  })
+})
+
+describe('sessionHasReplyTool', () => {
+  it('returns true when at least one assistant turn has a reply tool call', () => {
+    const turns = [
+      { type: 'user', message: { content: 'hi' } },
+      { type: 'assistant', message: { content: [
+        { type: 'tool_use', name: 'mcp__wechat__reply', input: { text: 'hi back' } },
+      ]}},
+    ]
+    expect(sessionHasReplyTool(turns)).toBe(true)
+  })
+
+  it('returns false when no assistant turn has a reply tool', () => {
+    const turns = [
+      { type: 'user', message: { content: 'hi' } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'hi back' }] } },
+      { type: 'assistant', message: { content: [
+        { type: 'tool_use', name: 'mcp__wechat__memory_read', input: {} },
+      ]}},
+    ]
+    expect(sessionHasReplyTool(turns)).toBe(false)
+  })
+
+  it('returns false on empty array', () => {
+    expect(sessionHasReplyTool([])).toBe(false)
+  })
+
+  it('handles malformed turns defensively', () => {
+    expect(sessionHasReplyTool([null, { type: 'user' }, { type: 'assistant', message: null }])).toBe(false)
+    expect(sessionHasReplyTool(undefined as any)).toBe(false)
+  })
 })
 
 describe('turnHtmlCompact', () => {
@@ -277,5 +339,74 @@ describe('turnHtmlCompact', () => {
     })
     expect(html).not.toContain('<script>alert(1)')
     expect(html).toContain('&lt;script&gt;')
+  })
+
+  it('hides plain-text assistant turn when sessionHasReplyTool=true (e.g. "已回复。")', () => {
+    const html = turnHtmlCompact(
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '已回复。' }] } },
+      { sessionHasReplyTool: true },
+    )
+    expect(html).toBe('')
+  })
+
+  it('keeps plain-text assistant when sessionHasReplyTool=false', () => {
+    const html = turnHtmlCompact(
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '直接回的' }] } },
+      { sessionHasReplyTool: false },
+    )
+    expect(html).toContain('直接回的')
+  })
+})
+
+describe('buildExportMarkdown', () => {
+  const turns = [
+    { type: 'user', message: { role: 'user', content: [{ type: 'text', text: '<wechat user="GSR" chat_id="x">我是谁</wechat>' }] } },
+    { type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'thinking', thinking: '思考中' },
+      { type: 'tool_use', name: 'mcp__wechat__reply', input: { text: '你是 GSR' } },
+    ] } },
+    { type: 'attachment', attachment: { path: '/x.png' } },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '已回复。' }] } },
+  ]
+
+  it('detailed mode dumps full JSON per turn (developer archive)', () => {
+    const md = buildExportMarkdown('compass', 'sid-123', turns, 'detailed')
+    expect(md).toContain('# compass')
+    expect(md).toContain('Session: sid-123')
+    expect(md).toContain('## Turn 1')
+    expect(md).toContain('```json')
+    expect(md).toContain('"attachment"')
+    expect(md).toContain('thinking')
+    expect(md).toContain('mcp__wechat__reply')
+  })
+
+  it('compact mode renders clean transcript (envelope stripped, noise hidden)', () => {
+    const md = buildExportMarkdown('compass', 'sid-123', turns, 'compact')
+    expect(md).toContain('# compass')
+    expect(md).toContain('我是谁')
+    expect(md).toContain('你是 GSR')
+    expect(md).not.toContain('<wechat')
+    expect(md).not.toContain('attachment')
+    expect(md).not.toContain('mcp__wechat__reply')
+    expect(md).not.toContain('thinking')
+    expect(md).not.toContain('```json')
+    // "已回复。" is wrap-up status when reply tool was used — must not appear
+    expect(md).not.toContain('已回复。')
+  })
+
+  it('compact mode keeps text-fallback when session never used reply tool', () => {
+    const turnsNoReplyTool = [
+      { type: 'user', message: { content: [{ type: 'text', text: 'hi' }] } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'hello' }] } },
+    ]
+    const md = buildExportMarkdown('a', 'sid', turnsNoReplyTool, 'compact')
+    expect(md).toContain('hi')
+    expect(md).toContain('hello')
+  })
+
+  it('compact mode is empty-state safe', () => {
+    const md = buildExportMarkdown('a', 'sid', [], 'compact')
+    expect(md).toContain('# a')
+    expect(md).toContain('Session: sid')
   })
 })
