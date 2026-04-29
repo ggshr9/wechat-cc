@@ -118,8 +118,16 @@ the wechat-cc adapter is one of several entry points.
 **基础设施**
 
 - 新增 `events.jsonl` / `observations.jsonl` / `milestones.jsonl` per chat
-- 内省 cron（24h ± 30%，stub agent 在 v0.4 — 真 SDK 集成 v0.4.1）
-- 里程碑探测（100/1000 turn / first_handoff / first_push_reply / 7day_streak）
+- 里程碑探测（100/1000 turn / first_handoff / first_push_reply）— daemon 启动 +
+  每条 inbound 后自动 detect，触发即写入 `events.jsonl`
+- 内省 cron（24h ± 30%）框架已就位，stub agent 在 v0.4
+
+**Deferred to v0.4.1**
+
+- 真 introspect SDK 集成（v0.4 是 stub agent，永不写 observation）
+- 项目级 1 行 LLM 摘要（helpers 已写好，缺生产调用方 — 当前 `projectRow`
+  显示 `—`）
+- `ms_7day_streak` 里程碑（需要 per-chat 每日活动跟踪，v0.4 detector 传空数组）
 
 完整设计：[`docs/specs/2026-04-29-sessions-memory-design.md`](docs/specs/2026-04-29-sessions-memory-design.md)
 

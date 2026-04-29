@@ -34,7 +34,9 @@ function byRecencyDesc(a, b) {
 }
 
 export function projectRow(p, opts = {}) {
-  const summaryText = p.summary || '—'
+  // 1-line LLM summary is deferred to v0.4.1 — helpers exist, no production
+  // caller. Until then the placeholder is honest about why this is empty.
+  const summaryText = p.summary || '(总结待 v0.4.1 上线)'
   const summaryClass = p.summary ? 'summary' : 'summary empty'
   const star = opts.isFavorite ? '★' : '☆'
   const favClass = opts.isFavorite ? ' is-favorite' : ''

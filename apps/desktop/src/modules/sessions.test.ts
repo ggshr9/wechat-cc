@@ -45,14 +45,16 @@ describe('projectRow', () => {
     expect(html).toContain('is-favorite')
   })
 
-  it('shows "—" when summary is missing', () => {
+  it('shows v0.4.1 deferral placeholder when summary is missing', () => {
+    // Per-project summarizer is deferred to v0.4.1; the placeholder names
+    // the deferral so users aren't left wondering why every row is blank.
     const html = projectRow({
       alias: 'x',
       session_id: 's',
       last_used_at: new Date().toISOString(),
     })
     expect(html).toContain('class="summary empty"')
-    expect(html).toContain('—')
+    expect(html).toContain('v0.4.1')
   })
 
   it('escapes html in alias and summary to prevent xss', () => {
