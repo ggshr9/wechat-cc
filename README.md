@@ -37,10 +37,6 @@ breadth, see [`cc-connect`](https://github.com/chenhg5/cc-connect). If you
 want a single, deep WeChat × Claude Code experience that feels like a
 relationship, this is it.
 
-> ⚠️ **Read [Account ban risk](#account-ban-risk) before installing.** ilink
-> is a partner-only WeChat API; this project repurposes it. Your WeChat
-> account could face restrictions.
-
 <!-- TODO: 4-panel screenshot or 30s demo video here -->
 
 ---
@@ -338,23 +334,6 @@ won't kill your shell — Ctrl+C the foreground process first.
 
 ---
 
-## Account ban risk
-
-ilink is a partner-only API provided by WeChat for connecting platforms
-like OpenClaw. **Repurposing it for Claude Code integration is not its
-intended use case.** Possible consequences:
-
-- WeChat may revoke / restrict the bot's session at any time (you'll see
-  `errcode=-14` in `/health` when this happens).
-- Heavy use, account sharing, or automation patterns may flag the
-  underlying WeChat account itself for restrictions.
-- A future ilink update could close this entirely.
-
-If you can't afford either of the above, don't install. There's no warning
-sticker on this — your account, your call.
-
----
-
 ## State layout
 
 ```
@@ -525,13 +504,6 @@ harness.
 
 This is an **unofficial, community-built plugin** — not affiliated with,
 endorsed by, or sponsored by Tencent or WeChat.
-
-ilink is a partner communication interface provided by WeChat for connecting
-with platforms like OpenClaw. wechat-cc repurposes it for Claude Code
-integration, which is **not its intended use case**. This usage may not be
-permitted by WeChat, and accounts involved could face restrictions.
-
-**Use at your own risk.**
 
 ---
 
