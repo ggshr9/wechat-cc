@@ -2,9 +2,9 @@
 // table (incl. inline two-step delete confirm), config table, footer pid
 // indicator, and the smart restart-daemon button.
 //
-// Owns: #hero-card, #hero-headline, #hero-meta, #dash-live, #dash-state-dir,
-//       #accounts-body, #accounts-meta, #config-table, #dash-pending,
-//       #dash-clock, #dash-restart, #dash-refresh
+// Owns: #hero-card, #hero-headline, #hero-meta, #accounts-body,
+//       #accounts-meta, #config-table, #dash-pending, #dash-restart,
+//       #dash-refresh, #dash-rail-clock (rail-foot wall clock)
 // Subscribes to: doctorPoller (renderDashboard + renderRestartButton fire
 // on every successful poll automatically).
 
@@ -18,17 +18,6 @@ export function renderDashboard(report) {
   document.getElementById("hero-headline").textContent = `Daemon ${hero.headline}`
   const metaParts = [`<b>${escapeHtml(hero.meta1)}</b>`, `<b>${escapeHtml(hero.meta2)}</b>`]
   document.getElementById("hero-meta").innerHTML = metaParts.join('<span class="sep">·</span>')
-
-  const live = document.getElementById("dash-live")
-  const liveText = document.getElementById("dash-live-text")
-  if (hero.tone === "ok") {
-    live.dataset.tone = "ok"
-    liveText.textContent = "Live · daemon"
-  } else {
-    live.dataset.tone = "warn"
-    liveText.textContent = "Daemon offline"
-  }
-  document.getElementById("dash-state-dir").textContent = report.stateDir || ""
 
   const accounts = report.checks.accounts.items || []
   const expired = report.expiredBots || []
@@ -74,9 +63,9 @@ export function renderDashboard(report) {
   `).join("")
 }
 
-// Mutate the dashboard's restart button to reflect daemon+service state.
-// Stored separately from renderDashboard so we can call it from places
-// that don't re-render the whole hero (e.g. after account remove).
+// Mutate the dashboard's restart + stop buttons to reflect daemon+service
+// state. Stored separately from renderDashboard so we can call it from
+// places that don't re-render the whole hero (e.g. after account remove).
 export function renderRestartButton(report) {
   const btn = document.getElementById("dash-restart")
   if (!btn) return
@@ -93,6 +82,17 @@ export function renderRestartButton(report) {
   btn.dataset.action = choice.action
   if (choice.helper) btn.title = choice.helper
   else btn.removeAttribute("title")
+
+  // Stop button: meaningful only when the daemon is actually running. When
+  // offline, disable to make "nothing to stop" the obvious affordance
+  // (instead of clicking and getting an error toast).
+  const stopBtn = document.getElementById("dash-stop")
+  if (stopBtn) {
+    const alive = !!report.checks.daemon?.alive
+    stopBtn.disabled = !alive
+    if (alive) stopBtn.removeAttribute("title")
+    else stopBtn.title = "daemon 未运行"
+  }
 }
 
 export function setPending(msg) {
@@ -101,10 +101,26 @@ export function setPending(msg) {
 }
 
 export function updateClock() {
-  const el = document.getElementById("dash-clock")
+  const el = document.getElementById("dash-rail-clock")
   if (!el) return
   const now = new Date()
-  el.textContent = now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })
+  el.textContent = now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })
+}
+
+// Stop the daemon via `service stop`. Mirrors restartDaemon's pending UX
+// but only fires the stop step. After this returns, restart-button state
+// re-renders to show "启动" (since daemon is now offline).
+export async function stopDaemon(deps) {
+  setPending("停止…")
+  try {
+    await deps.invoke("wechat_cli_json", { args: ["service", "stop", "--json"] })
+  } catch (err) {
+    setPending(`停止失败：${deps.formatInvokeError(err)}`)
+    return
+  }
+  await deps.doctorPoller.refresh()
+  setPending("已停止")
+  setTimeout(() => setPending(""), 2000)
 }
 
 // Smart restart: if no service is registered, route to the wizard service

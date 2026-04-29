@@ -154,6 +154,15 @@ input { font: inherit; color: inherit; }
 }
 .btn.danger:hover { background: var(--rouge-soft); }
 
+.btn.ghost-danger {
+  color: var(--rouge);
+  border-color: var(--hair-2);
+  background: #fff;
+}
+.btn.ghost-danger:hover { color: var(--rouge); border-color: var(--rouge); background: var(--rouge-soft); }
+.btn.ghost-danger:disabled { color: var(--ink-4); border-color: var(--hair-2); }
+.btn.ghost-danger:disabled:hover { background: #fff; }
+
 .btn.danger-strong {
   background: var(--rouge); color: #fff; border-color: #8a3724;
 }
@@ -223,6 +232,18 @@ input { font: inherit; color: inherit; }
   font-weight: 600;
   letter-spacing: -0.005em;
 }
+.wz-top .wz-back {
+  margin-left: 14px;
+  background: none;
+  border: 0;
+  padding: 4px 8px;
+  border-radius: 5px;
+  color: var(--ink-3);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.wz-top .wz-back:hover { color: var(--ink); background: var(--paper-2); }
 .wz-top .step-of { margin-left: auto; font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
 
 /* step indicator */
@@ -618,8 +639,24 @@ input { font: inherit; color: inherit; }
   background: var(--paper);
   display: grid;
   grid-template-columns: 196px 1fr;
-  min-height: 100vh;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
+
+/* Dashboard mode locks the page to the viewport so each pane scrolls inside
+   itself (logs/memory/overview) instead of pushing the whole window. Body is
+   a flex column so the dev-banner (shim only) takes its natural ~30px and the
+   dashboard fills the remaining space — without this the banner would push
+   the rail-foot below the viewport. Wizard mode keeps body's default growth. */
+[data-mode="dashboard"] body {
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+[data-mode="dashboard"] .dashboard { flex: 1; min-height: 0; }
 
 .dash-rail {
   border-right: 1px solid var(--hair);
@@ -627,7 +664,13 @@ input { font: inherit; color: inherit; }
   display: flex; flex-direction: column;
   background: var(--paper);
   gap: 0;
+  overflow-y: auto;
 }
+
+/* macOS overlay title bar — push rail content below the traffic-light area
+   (~28px tall, anchored top-left of the window). On Windows/Linux the OS
+   draws its own title bar above the webview, so no extra padding is needed. */
+[data-platform="macos"] .dash-rail { padding-top: 38px; }
 
 .dash-brand {
   display: flex; align-items: center; gap: 9px;
@@ -688,24 +731,6 @@ input { font: inherit; color: inherit; }
 .dash-nav-link.disabled { color: var(--ink-4); cursor: not-allowed; }
 .dash-nav-link.disabled:hover { background: transparent; color: var(--ink-4); }
 
-.mode-link {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  background: none;
-  border: 0;
-  padding: 7px 8px;
-  margin-top: 4px;
-  border-radius: 6px;
-  color: var(--ink-3);
-  font-size: 12.5px;
-  text-align: left;
-  cursor: pointer;
-}
-.mode-link:hover { color: var(--ink); background: var(--paper-2); }
-.mode-link .arrow { font-family: var(--mono); font-size: 12px; }
-
 .dash-rail-foot {
   margin-top: auto;
   padding: 12px 6px 4px;
@@ -714,20 +739,41 @@ input { font: inherit; color: inherit; }
   font-size: 11.5px;
   color: var(--ink-2);
 }
-.dash-rail-foot .ver {
-  margin-left: auto;
+.dash-rail-foot #dash-rail-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dash-rail-foot .clock {
   font-family: var(--mono);
   font-size: 10.5px;
-  color: var(--ink-3);
+  color: var(--ink-4);
+  flex-shrink: 0;
+  letter-spacing: .02em;
 }
+.rail-gear {
+  flex-shrink: 0;
+  width: 22px; height: 22px;
+  display: inline-grid; place-items: center;
+  border-radius: 5px;
+  background: none; border: 0; padding: 0;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.rail-gear:hover { background: var(--paper-2); color: var(--ink); }
+.rail-gear svg { width: 14px; height: 14px; }
 
 .dash-main {
   display: flex; flex-direction: column;
   min-width: 0;
+  min-height: 0;
 }
 
 .dash-pane[hidden] { display: none !important; }
-.dash-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.dash-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 
 /* topbar */
 .topbar {
@@ -750,6 +796,8 @@ input { font: inherit; color: inherit; }
   padding: 18px 22px 22px;
   display: flex; flex-direction: column;
   gap: 16px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -868,24 +916,6 @@ input { font: inherit; color: inherit; }
 }
 .empty .h { font-size: 14px; font-weight: 500; color: var(--ink-2); margin-bottom: 4px; }
 .empty .sub { font-size: 12.5px; color: var(--ink-3); margin-bottom: 14px; }
-
-/* footer status bar */
-.dash-foot {
-  border-top: 1px solid var(--hair);
-  padding: 9px 22px;
-  display: flex; align-items: center; gap: 14px;
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--ink-3);
-}
-.dash-foot .live {
-  display: inline-flex; align-items: center; gap: 6px;
-  color: var(--green-ink);
-}
-.dash-foot .live[data-tone="warn"] { color: var(--amber); }
-.dash-foot .live .b { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
-.dash-foot .live[data-tone="warn"] .b { background: var(--amber); }
-.dash-foot .sep { color: var(--ink-4); }
 
 /* ─── memory pane ────────────────────────────────────────────────────── */
 .mem {

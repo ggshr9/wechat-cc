@@ -44,12 +44,15 @@ export function pollAdvance(prev, result) {
   return { stopTimer: false }
 }
 
-// Format the daemon health line shown in the wizard sidebar status strip.
-// Kept stable for view.test.ts — don't change shape or copy.
+// Format the daemon health line shown in the wizard sidebar status strip
+// + the dashboard rail-foot. The green/amber dot already conveys "alive vs
+// not"; we drop the redundant 运行中 word so pid + wall clock + gear all fit
+// in the 196px rail. Dead state still says 未运行 because there's no pid to
+// stand in for it.
 export function daemonStatusLine(daemon) {
   return {
     cls: daemon.alive ? "ok" : "warn",
-    text: daemon.alive ? `运行中 pid=${daemon.pid}` : "未运行",
+    text: daemon.alive ? `pid=${daemon.pid}` : "未运行",
   }
 }
 

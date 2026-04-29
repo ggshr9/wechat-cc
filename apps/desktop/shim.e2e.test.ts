@@ -94,10 +94,12 @@ describe('apps/desktop shim — HTML structure', () => {
       'memory-sidebar', 'memory-rendered',              // memory pane
       'memory-editor', 'memory-status',                 // memory edit mode
       'memory-edit-btn', 'memory-save-btn', 'memory-cancel-btn',
-      'dash-restart', 'dash-refresh',                   // dashboard actions
+      'dash-stop', 'dash-restart', 'dash-refresh',      // dashboard actions
       'qr-box', 'qr-refresh', 'qr-poll',                // setup QR
-      'service-install', 'service-stop',                // service controls
+      'service-install',                                // wizard install (stop lives on dashboard now)
       'unattended-toggle', 'autostart-toggle',          // wizard toggles
+      'dash-rail-clock', 'dash-rail-text',              // rail-foot pid + clock
+      'wizard-step-of',                                 // wizard top-bar step indicator
       'enter-dashboard', 'continue-provider', 'continue-wechat', 'continue-service',
       'post-stop-alert', 'post-stop-pid', 'post-stop-kill',
       'dev-banner',

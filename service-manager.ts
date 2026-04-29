@@ -27,11 +27,6 @@ export interface ServicePlanInput {
   // uses an active ONLOGON trigger. When false, the daemon is installed +
   // started ONCE this session but won't come back after reboot.
   autoStart?: boolean
-  // When true (default), the daemon respawns on crash: macOS plist sets
-  // KeepAlive=true, systemd unit gets `Restart=always`. When false, a
-  // crashed daemon stays dead until the user restarts it. Decoupled from
-  // autoStart per user request 2026-04-28: 推荐打开 (recommended on).
-  keepAlive?: boolean
   // macOS-only: override the uid used in the launchctl `gui/<uid>` domain.
   // Tests on non-macOS platforms inject a fixed uid so assertions are
   // deterministic; production reads `process.getuid()`.
@@ -57,9 +52,6 @@ export function buildServicePlan(input: ServicePlanInput): ServicePlan {
   const serviceName = 'wechat-cc'
   const dangerously = input.dangerouslySkipPermissions ?? true
   const autoStart = input.autoStart ?? true
-  // keepAlive defaults to autoStart so callers that only pass `autoStart`
-  // get the pre-2026-04-28 behavior unchanged. New callers (GUI) pass both.
-  const keepAlive = input.keepAlive ?? autoStart
   const runArgs = dangerously ? ['run', '--dangerously'] : ['run']
 
   if (pf === 'darwin') {
@@ -76,7 +68,7 @@ export function buildServicePlan(input: ServicePlanInput): ServicePlan {
       kind: 'launchagent',
       serviceName,
       serviceFile,
-      fileContent: launchAgentPlist({ bunPath, binaryPath, cwd: input.cwd, runArgs, runAtLoad: autoStart, keepAlive }),
+      fileContent: launchAgentPlist({ bunPath, binaryPath, cwd: input.cwd, runArgs, runAtLoad: autoStart }),
       installCommands: [['launchctl', 'bootstrap', gui, serviceFile], ['launchctl', 'enable', `${gui}/com.wechat-cc.daemon`], ['launchctl', 'kickstart', '-k', `${gui}/com.wechat-cc.daemon`]],
       startCommands: [['launchctl', 'kickstart', '-k', `${gui}/com.wechat-cc.daemon`]],
       stopCommands: [['launchctl', 'bootout', gui, serviceFile]],
@@ -122,7 +114,7 @@ export function buildServicePlan(input: ServicePlanInput): ServicePlan {
     kind: 'systemd-user',
     serviceName,
     serviceFile,
-    fileContent: systemdUnit({ bunPath, binaryPath, cwd: input.cwd, runArgs, keepAlive }),
+    fileContent: systemdUnit({ bunPath, binaryPath, cwd: input.cwd, runArgs }),
     installCommands,
     startCommands: [['systemctl', '--user', 'start', 'wechat-cc.service']],
     stopCommands: [['systemctl', '--user', 'stop', 'wechat-cc.service']],
@@ -149,7 +141,19 @@ export function installService(plan: ServicePlan, opts: ServiceSideEffectOpts = 
 
 export function startService(plan: ServicePlan, opts: ServiceSideEffectOpts = {}): void {
   if (opts.dryRun) return
-  runCommands(plan.startCommands)
+  const r = tryRunCommands(plan.startCommands)
+  if (r.ok) return
+  // launchctl kickstart fails (exit 113 on darwin) when the service isn't
+  // currently registered in the user's GUI domain — typical right after
+  // `service stop` (which boots out the plist) or after launchd dropped the
+  // service for any reason. Re-run the full bootstrap+enable+kickstart from
+  // installCommands so a "stop → start" round-trip self-heals instead of
+  // dead-ending with "Could not find service" until the user reinstalls.
+  if (plan.kind === 'launchagent') {
+    runCommands(plan.installCommands)
+    return
+  }
+  throw new Error(`${r.command[0]} ${r.command.slice(1).join(' ')} failed with exit ${r.exitCode}`)
 }
 
 export function stopService(plan: ServicePlan, opts: ServiceSideEffectOpts = {}): void {
@@ -191,16 +195,32 @@ function runCommands(commands: string[][]): void {
   }
 }
 
-function launchAgentPlist(opts: { bunPath: string; binaryPath?: string; cwd: string; runArgs: string[]; runAtLoad: boolean; keepAlive: boolean }): string {
+// Variant that returns failure instead of throwing — startService uses this
+// to detect a launchctl-not-loaded state and retry via installCommands.
+function tryRunCommands(commands: string[][]): { ok: true } | { ok: false; exitCode: number; command: string[] } {
+  for (const command of commands) {
+    const [cmd, ...args] = command
+    if (!cmd) continue
+    const r = spawnSync(cmd, args, { stdio: 'inherit' })
+    const code = r.status ?? 1
+    if (code !== 0) return { ok: false, exitCode: code, command }
+  }
+  return { ok: true }
+}
+
+function launchAgentPlist(opts: { bunPath: string; binaryPath?: string; cwd: string; runArgs: string[]; runAtLoad: boolean }): string {
   const argv = opts.binaryPath
     ? [opts.binaryPath, ...opts.runArgs]
     : [opts.bunPath, join(opts.cwd, 'cli.ts'), ...opts.runArgs]
   const argsXml = argv
     .map(arg => `    <string>${escapeXml(arg)}</string>`)
     .join('\n')
+  // KeepAlive is always true: a crashed daemon should be auto-respawned. It
+  // used to be a user-facing toggle but no one wanted it off — power users
+  // can edit the plist by hand if they really need crash-stays-dead semantics.
   const autoLines =
     `  <key>RunAtLoad</key><${opts.runAtLoad ? 'true' : 'false'}/>\n` +
-    `  <key>KeepAlive</key><${opts.keepAlive ? 'true' : 'false'}/>`
+    `  <key>KeepAlive</key><true/>`
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -214,14 +234,13 @@ ${autoLines}
 `
 }
 
-function systemdUnit(opts: { bunPath: string; binaryPath?: string; cwd: string; runArgs: string[]; keepAlive: boolean }): string {
+function systemdUnit(opts: { bunPath: string; binaryPath?: string; cwd: string; runArgs: string[] }): string {
   const execStart = opts.binaryPath
     ? `${opts.binaryPath} ${opts.runArgs.join(' ')}`
     : `${opts.bunPath} ${join(opts.cwd, 'cli.ts')} ${opts.runArgs.join(' ')}`
-  // keepAlive=false → omit Restart= so a crashed daemon stays dead. We
-  // still set Type/WorkingDirectory/ExecStart unconditionally; toggling
-  // Restart is the only knob users care about here.
-  const restartLines = opts.keepAlive ? 'Restart=always\nRestartSec=5\n' : ''
+  // Restart=always is unconditional now (used to be tied to a keepAlive
+  // toggle). Crash-respawn is always-on; power users edit the unit by hand
+  // if they really want crash-stays-dead semantics.
   return `[Unit]
 Description=wechat-cc daemon
 
@@ -229,7 +248,9 @@ Description=wechat-cc daemon
 Type=simple
 WorkingDirectory=${opts.cwd}
 ExecStart=${execStart}
-${restartLines}
+Restart=always
+RestartSec=5
+
 [Install]
 WantedBy=default.target
 `

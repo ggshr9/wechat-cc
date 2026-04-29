@@ -3,9 +3,13 @@
 // renders the post-stop alert, drives the "force kill" path, and waits
 // up to 8s for daemon.alive=true after install/start.
 //
-// Owns: #service-summary, #service-plan, #service-install, #service-stop,
+// Owns: #service-summary, #service-plan, #service-install,
 //       #post-stop-alert, #post-stop-pid, #post-stop-kill,
 //       #unattended-toggle, #autostart-toggle, #service-plan-toggle
+// Wizard no longer has its own stop button — daily start/stop is the
+// dashboard's job; wizard is for first-install and reconfiguration only.
+// Crash-respawn (KeepAlive / Restart=always) is unconditional in v0.4+; the
+// 守护进程 toggle was retired because no one wanted it off.
 // Reads service status via `deps.invoke` directly (one-shot) and uses
 // `deps.doctorPoller.waitForCondition` for the post-action settle.
 
@@ -20,7 +24,6 @@ export async function serviceAction(deps, state, action) {
   if (action === "install") {
     state.unattended = isToggleOn("unattended-toggle")
     state.autoStart = isToggleOn("autostart-toggle")
-    state.keepAlive = isToggleOn("keepalive-toggle")
     // Pre-install guard: if a daemon is currently running OUTSIDE any
     // installed service (foreground source-mode bun, e.g. PID 691574 from
     // before the GUI was installed), wedge it. Otherwise systemd will
@@ -41,7 +44,6 @@ export async function serviceAction(deps, state, action) {
   if (action === "install") {
     args.push("--unattended", state.unattended ? "true" : "false")
     args.push("--auto-start", state.autoStart ? "true" : "false")
-    args.push("--keep-alive", state.keepAlive ? "true" : "false")
   }
   let result
   try {

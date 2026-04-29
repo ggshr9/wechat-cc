@@ -16,7 +16,7 @@ export type CliArgs =
   | { cmd: 'list' }
   | { cmd: 'doctor'; json: boolean }
   | { cmd: 'setup-status'; json: boolean }
-  | { cmd: 'service'; action: 'status' | 'install' | 'start' | 'stop' | 'uninstall'; json: boolean; unattended?: boolean; autoStart?: boolean; keepAlive?: boolean }
+  | { cmd: 'service'; action: 'status' | 'install' | 'start' | 'stop' | 'uninstall'; json: boolean; unattended?: boolean; autoStart?: boolean }
   | { cmd: 'provider-set'; provider: AgentProviderKind; model?: string; unattended?: boolean }
   | { cmd: 'provider-show'; json: boolean }
   | { cmd: 'account-remove'; botId: string; json: boolean }
@@ -66,7 +66,6 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
           cmd: 'service', action: rest[0], json: rest.includes('--json'),
           unattended: parseBoolFlag(rest, '--unattended'),
           autoStart: parseBoolFlag(rest, '--auto-start'),
-          keepAlive: parseBoolFlag(rest, '--keep-alive'),
         }
       }
       return { cmd: 'help' }
@@ -154,15 +153,14 @@ Usage:
   wechat-cc list        List bound accounts
   wechat-cc doctor [--json]        Diagnose install/setup state
   wechat-cc setup-status [--json]  Machine-readable setup status for desktop UI
-  wechat-cc service <status|install|start|stop|uninstall> [--json] [--unattended true|false] [--auto-start true|false] [--keep-alive true|false]
+  wechat-cc service <status|install|start|stop|uninstall> [--json] [--unattended true|false] [--auto-start true|false]
                         --unattended: persist into agent-config and re-write plist.
                                       Idempotent: install replaces any existing daemon.
                         --auto-start: register for boot/login auto-start
                                       (macOS RunAtLoad, systemd enable,
                                       schtasks ONLOGON). Default false: opt-in.
-                        --keep-alive: respawn daemon on crash
-                                      (macOS KeepAlive, systemd Restart=always).
-                                      Default mirrors --auto-start.
+                        Crash-respawn (macOS KeepAlive / systemd Restart=always)
+                        is always on — no longer a user-facing flag.
   wechat-cc account remove <bot-id> [--json]
                         Decommission a bound bot — wipes its account dir,
                         context_token, user_account_id, session-state entry.
@@ -276,16 +274,15 @@ async function main() {
       return
     }
     case 'service': {
-      // If the caller passed --unattended, --auto-start, or --keep-alive,
-      // persist them into agent-config first so this is the source of truth
-      // (re-installs from the GUI re-pick the same values).
-      if (parsed.unattended !== undefined || parsed.autoStart !== undefined || parsed.keepAlive !== undefined) {
+      // If the caller passed --unattended or --auto-start, persist them into
+      // agent-config first so it's the source of truth (re-installs from the
+      // GUI re-pick the same values).
+      if (parsed.unattended !== undefined || parsed.autoStart !== undefined) {
         const existing = loadAgentConfig(STATE_DIR)
         saveAgentConfig(STATE_DIR, {
           ...existing,
           ...(parsed.unattended !== undefined ? { dangerouslySkipPermissions: parsed.unattended } : {}),
           ...(parsed.autoStart !== undefined ? { autoStart: parsed.autoStart } : {}),
-          ...(parsed.keepAlive !== undefined ? { keepAlive: parsed.keepAlive } : {}),
         })
       }
       const config = loadAgentConfig(STATE_DIR)
@@ -299,7 +296,6 @@ async function main() {
         cwd: planCwd,
         dangerouslySkipPermissions: config.dangerouslySkipPermissions,
         autoStart: config.autoStart,
-        keepAlive: config.keepAlive,
         ...(binaryPath ? { binaryPath } : {}),
       })
       if (parsed.action === 'status') {

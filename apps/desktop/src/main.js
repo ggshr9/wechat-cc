@@ -9,7 +9,7 @@ import { createDoctorPoller } from "./doctor-poller.js"
 import { renderDoctorWizard, refreshEnterDashboardButton, updateFooterStatus, showStep as wizardShowStep } from "./modules/wizard.js"
 import { refreshQr } from "./modules/qr.js"
 import { serviceAction, forceKillDaemon } from "./modules/service.js"
-import { renderDashboard, renderRestartButton, setPending, updateClock, restartDaemon, handleAccountRowClick } from "./modules/dashboard.js"
+import { renderDashboard, renderRestartButton, setPending, updateClock, restartDaemon, stopDaemon, handleAccountRowClick } from "./modules/dashboard.js"
 import { loadMemoryPane, wireMemoryButtons } from "./modules/memory.js"
 import { loadLogsPane, startLogsAutoRefresh, stopLogsAutoRefresh } from "./modules/logs.js"
 import { loadUpdateProbe, applyUpdate } from "./modules/update.js"
@@ -29,6 +29,35 @@ const state = {
 }
 
 const mock = !window.__TAURI__?.core?.invoke
+
+// macOS uses titleBarStyle: "Overlay" — window content extends under the
+// traffic-light area. CSS reads data-platform to add top padding on the rail
+// so the brand block doesn't sit behind the close/min/max buttons.
+if (/Mac/i.test(navigator.platform || navigator.userAgent || "")) {
+  document.documentElement.dataset.platform = "macos"
+}
+
+// Brief click feedback shared across all "刷新" buttons (overview/memory/logs):
+// disable + replace label text with "已刷新" → revert after 1.2s. Stops users
+// from double-clicking and confirms the click without leaving stale text
+// behind (the prior overview-only `setPending("已刷新")` never cleared).
+async function withRefreshFeedback(button, fn) {
+  if (!button) return await fn()
+  const labelNode = Array.from(button.childNodes).find(
+    n => n.nodeType === Node.TEXT_NODE && n.textContent.trim().length > 0,
+  )
+  const original = labelNode ? labelNode.textContent : null
+  button.disabled = true
+  try {
+    await fn()
+  } finally {
+    if (labelNode) labelNode.textContent = " 已刷新"
+    setTimeout(() => {
+      if (labelNode && original !== null) labelNode.textContent = original
+      button.disabled = false
+    }, 1200)
+  }
+}
 
 // `state` carried through ipcInvoke for the mock path so dev-mode mocks can
 // react to selectedProvider/unattended/autoStart toggles in real time.
@@ -111,13 +140,9 @@ async function loadAgentConfig() {
   const provider = config.provider === "codex" ? "codex" : "claude"
   state.unattended = config.dangerouslySkipPermissions !== false
   state.autoStart = config.autoStart === true
-  // keepAlive default: true (推荐打开). Pre-2026-04-28 configs lack the field —
-  // mirror autoStart so existing installs preserve their crash-restart setting.
-  state.keepAlive = config.keepAlive !== undefined ? config.keepAlive === true : state.autoStart
   applyProviderUI(provider)
   setToggle("unattended-toggle", state.unattended)
   setToggle("autostart-toggle", state.autoStart)
-  setToggle("keepalive-toggle", state.keepAlive)
 }
 
 function setToggle(id, on) {
@@ -162,7 +187,6 @@ function wireEvents() {
   document.getElementById("continue-service").addEventListener("click", () => showStep("service"))
   document.getElementById("qr-refresh").addEventListener("click", () => refreshQr({ invoke, mock }, state))
   document.getElementById("service-install").addEventListener("click", () => serviceAction(deps, state, "install"))
-  document.getElementById("service-stop").addEventListener("click", () => serviceAction(deps, state, "stop"))
   document.getElementById("post-stop-kill")?.addEventListener("click", () => forceKillDaemon(deps))
   document.getElementById("enter-dashboard").addEventListener("click", () => setMode("dashboard"))
   document.getElementById("copy-diagnostics").addEventListener("click", async () => {
@@ -180,7 +204,6 @@ function wireEvents() {
       t.setAttribute("aria-pressed", on ? "true" : "false")
       if (t.id === "unattended-toggle") state.unattended = on
       if (t.id === "autostart-toggle") state.autoStart = on
-      if (t.id === "keepalive-toggle") state.keepAlive = on
     })
   })
 
@@ -191,22 +214,29 @@ function wireEvents() {
     document.getElementById("service-plan").classList.toggle("show")
   })
 
-  document.getElementById("dash-refresh").addEventListener("click", async () => {
-    setPending("已刷新")
-    await doctorPoller.refresh()
-  })
+  document.getElementById("dash-refresh").addEventListener("click", (e) =>
+    withRefreshFeedback(e.currentTarget, () => doctorPoller.refresh()),
+  )
+  document.getElementById("dash-stop").addEventListener("click", () => stopDaemon(deps))
   document.getElementById("dash-restart").addEventListener("click", () => restartDaemon(deps))
-  document.getElementById("memory-refresh")?.addEventListener("click", () => loadMemoryPane(deps))
+  document.getElementById("memory-refresh")?.addEventListener("click", (e) =>
+    withRefreshFeedback(e.currentTarget, () => loadMemoryPane(deps)),
+  )
   wireMemoryButtons(deps)
-  document.getElementById("logs-refresh")?.addEventListener("click", () => loadLogsPane(deps))
+  document.getElementById("logs-refresh")?.addEventListener("click", (e) =>
+    withRefreshFeedback(e.currentTarget, () => loadLogsPane(deps)),
+  )
   document.getElementById("logs-tail-select")?.addEventListener("change", () => loadLogsPane(deps))
   document.getElementById("update-check-btn")?.addEventListener("click", () => loadUpdateProbe(deps))
   document.getElementById("update-apply-btn")?.addEventListener("click", () => applyUpdate(deps))
 
   document.getElementById("accounts-body").addEventListener("click", ev => handleAccountRowClick(deps, ev))
 
-  document.querySelectorAll(".mode-link[data-action='open-wizard']").forEach(btn =>
+  document.querySelectorAll("[data-action='open-wizard']").forEach(btn =>
     btn.addEventListener("click", () => setMode("wizard"))
+  )
+  document.querySelectorAll("[data-action='open-dashboard']").forEach(btn =>
+    btn.addEventListener("click", () => setMode("dashboard"))
   )
 
   document.querySelectorAll(".dash-nav-link[data-pane]").forEach(btn => {
