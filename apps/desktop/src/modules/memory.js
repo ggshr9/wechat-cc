@@ -21,6 +21,10 @@ const memoryState = {
   marked: null,
   editing: false,
   pristine: "",
+  // Dirty-switch two-step: tracks "userId:relPath" of the file the user
+  // tried to switch to while editing. Second click on the same file
+  // within 3s commits the switch (§1.3 #8 绝不弹窗).
+  dirtySwitchPending: null,
 }
 
 async function loadMarked() {
@@ -79,8 +83,25 @@ async function openMemoryFile(deps, userId, relPath, mtime) {
   // Bail out cleanly if user clicks a different file mid-edit. We don't
   // discard their text silently — surface the choice.
   if (memoryState.editing) {
-    const proceed = window.confirm("当前文件有未保存的修改。切换会丢弃改动，确认继续？")
-    if (!proceed) return
+    // Inline two-step instead of native modal (§1.3 #8). Surface the
+    // warning via memory-status; user clicks the same file again within
+    // 3s to confirm. Closure-scoped flag on memoryState avoids yet
+    // another module-level state.
+    const target = `${userId}:${relPath}`
+    if (memoryState.dirtySwitchPending !== target) {
+      memoryState.dirtySwitchPending = target
+      setStatus("当前文件有未保存的修改。再点一次切换会丢弃修改。", "info")
+      // Auto-clear after 3s.
+      setTimeout(() => {
+        if (memoryState.dirtySwitchPending === target) {
+          memoryState.dirtySwitchPending = null
+          setStatus(null)
+        }
+      }, 3000)
+      return
+    }
+    // Confirmed.
+    memoryState.dirtySwitchPending = null
     setEditMode(false)
   }
   document.querySelectorAll(".mem-file").forEach(el =>

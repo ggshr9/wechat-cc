@@ -111,7 +111,8 @@ export async function openProjectDetail(deps, alias, opts = {}) {
 
   detail.dataset.alias = alias
   jsonlBox.innerHTML = `<p class="empty-state">加载中…</p>`
-  detail.hidden = false
+  detail.classList.remove('dismissed')
+  detail.setAttribute('aria-hidden', 'false')
 
   try {
     const resp = await deps.invoke("wechat_cli_json", { args: ["sessions", "read-jsonl", alias, "--json"] })
@@ -157,7 +158,10 @@ export async function openProjectDetail(deps, alias, opts = {}) {
 
 export function closeProjectDetail() {
   const detail = document.getElementById("sessions-detail")
-  if (detail) detail.hidden = true
+  if (detail) {
+    detail.classList.add('dismissed')
+    detail.setAttribute('aria-hidden', 'true')
+  }
 }
 
 // Render a single jsonl turn defensively. Claude Agent SDK turns are
@@ -206,18 +210,47 @@ export async function exportProjectMarkdown(deps) {
   }
 }
 
+// Two-step inline confirm state (§1.3 #8 绝不弹窗). First click on the
+// delete button arms; second click within 3s commits. Module-scoped so
+// re-rendering the detail pane doesn't lose the armed state.
+let pendingDeleteAlias = null
+let pendingDeleteTimer = null
+
 export async function deleteProject(deps) {
   const detail = document.getElementById("sessions-detail")
   const alias = detail?.dataset.alias
   if (!alias) return
-  if (!confirm(`真的要删除 ${alias} 的会话记录吗？\n\nsessions.json 条目会被移除（jsonl 文件保留在磁盘上）。`)) return
-  try {
-    await deps.invoke("wechat_cli_json", { args: ["sessions", "delete", alias, "--json"] })
-    closeProjectDetail()
-    await loadSessionsList(deps)
-  } catch (err) {
-    console.error("delete failed", err)
+  const btn = document.getElementById("sessions-delete")
+  if (!btn) return
+
+  // Two-step inline confirm: first click arms the delete (button text
+  // changes + 3s revert timer); second click within 3s commits.
+  if (pendingDeleteAlias === alias) {
+    // Confirm: actually delete.
+    clearTimeout(pendingDeleteTimer)
+    pendingDeleteAlias = null
+    pendingDeleteTimer = null
+    btn.textContent = '删除'
+    btn.classList.remove('is-confirming')
+    try {
+      await deps.invoke("wechat_cli_json", { args: ["sessions", "delete", alias, "--json"] })
+      closeProjectDetail()
+      await loadSessionsList(deps)
+    } catch (err) {
+      console.error("delete failed", err)
+    }
+    return
   }
+  // Arm: change button copy, set 3s revert.
+  pendingDeleteAlias = alias
+  btn.textContent = '再点确认删除'
+  btn.classList.add('is-confirming')
+  pendingDeleteTimer = setTimeout(() => {
+    pendingDeleteAlias = null
+    pendingDeleteTimer = null
+    btn.textContent = '删除'
+    btn.classList.remove('is-confirming')
+  }, 3000)
 }
 
 let searchTimer = null

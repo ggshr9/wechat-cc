@@ -153,6 +153,14 @@ input { font: inherit; color: inherit; }
   height: 26px; font-size: 12px;
 }
 .btn.danger:hover { background: var(--rouge-soft); }
+/* Two-step inline confirm — first click flips this state, second commits.
+   Used by the sessions delete button (§1.3 #8 绝不弹窗). */
+.btn.danger.is-confirming {
+  background: var(--rouge);
+  color: #fff;
+  border-color: var(--rouge);
+}
+.btn.danger.is-confirming:hover { background: var(--rouge); }
 
 .btn.ghost-danger {
   color: var(--rouge);
@@ -973,6 +981,13 @@ input { font: inherit; color: inherit; }
 }
 .observation:hover .archive-btn { opacity: 1; }
 .observation .archive-btn:hover { color: var(--ink-2); }
+/* Keyboard-only Tab nav reveals the archive button (it's hover-only by
+   default), so users without a mouse can reach 忽略. */
+.observation .archive-btn:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+  opacity: 1;
+}
 .observation .ts {
   position: absolute; bottom: 100%; left: 14px;
   font-family: var(--mono); font-size: 10px;
@@ -1371,7 +1386,11 @@ input { font: inherit; color: inherit; }
   font-style: normal;
 }
 
-/* sessions detail (drill-down) — slide from right */
+/* sessions detail (drill-down) — slide from right.
+   Uses a `.dismissed` class + `aria-hidden` instead of the [hidden] attribute
+   so screen readers don't announce the actions while the panel is closed
+   (§a11y) — and we still drive the slide via CSS transition without fighting
+   the user-agent `[hidden] { display: none }` rule. */
 .sessions-detail {
   position: absolute; inset: 0;
   background: var(--paper);
@@ -1382,12 +1401,12 @@ input { font: inherit; color: inherit; }
   transition: transform 180ms ease-out, opacity 180ms ease-out;
   z-index: 5;
 }
-.sessions-detail:not([hidden]) {
+.sessions-detail.dismissed { pointer-events: none; }
+.sessions-detail:not(.dismissed) {
   transform: translateX(0);
   opacity: 1;
   pointer-events: auto;
 }
-.sessions-detail[hidden] { display: flex !important; }  /* override [hidden]{display:none} so transition still applies */
 .sessions-detail-bar {
   display: flex; align-items: center; gap: 10px;
   padding: 12px 22px;

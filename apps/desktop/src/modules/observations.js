@@ -14,13 +14,17 @@ const TONE_GLYPH = {
 export function observationRow(obs) {
   const toneAttr = obs.tone ? ` data-tone="${escapeHtml(obs.tone)}"` : ''
   const glyph = TONE_GLYPH[obs.tone] || '·'
+  // Outer is a div (no row-level click action exists today). Archive is a
+  // real <button> for keyboard reachability + screen-reader announcement —
+  // a clickable <span> nested inside <button> is invalid HTML and the
+  // archive 忽略 affordance was completely unreachable by keyboard.
   return `
-    <button class="observation" data-id="${escapeHtml(obs.id)}"${toneAttr} data-action="observation-row">
+    <div class="observation" data-id="${escapeHtml(obs.id)}"${toneAttr}>
       <span class="glyph">${glyph}</span>
       <span class="body">${escapeHtml(obs.body)}</span>
-      <span class="archive-btn" data-action="archive-observation" data-id="${escapeHtml(obs.id)}">忽略</span>
+      <button type="button" class="archive-btn" data-action="archive-observation" data-id="${escapeHtml(obs.id)}" aria-label="忽略这条观察">忽略</button>
       <span class="ts">${escapeHtml(obs.ts)}</span>
-    </button>
+    </div>
   `
 }
 
