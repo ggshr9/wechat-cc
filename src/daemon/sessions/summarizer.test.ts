@@ -35,4 +35,31 @@ describe('summarizer.formatSummaryRequest', () => {
     expect(prompt).toContain('ilink-glue')
     expect(prompt.length).toBeLessThan(2000)
   })
+
+  it('includes memory section when memorySnapshot is provided', () => {
+    const turns = [{ role: 'user' as const, text: '搞一下 X' }]
+    const prompt = formatSummaryRequest(turns, '# preferences.md\n总结请像朋友说话')
+    expect(prompt).toContain('用户记忆')
+    expect(prompt).toContain('总结请像朋友说话')
+    expect(prompt).toContain('搞一下 X')
+  })
+
+  it('omits memory section when memorySnapshot is empty/missing', () => {
+    const turns = [{ role: 'user' as const, text: '搞一下 X' }]
+    const promptA = formatSummaryRequest(turns)
+    const promptB = formatSummaryRequest(turns, '')
+    const promptC = formatSummaryRequest(turns, '   ')
+    for (const p of [promptA, promptB, promptC]) {
+      expect(p).not.toContain('用户记忆')
+    }
+  })
+
+  it('caps oversized memory at 1500 chars', () => {
+    const turns = [{ role: 'user' as const, text: 'x' }]
+    const big = 'M'.repeat(5000)
+    const prompt = formatSummaryRequest(turns, big)
+    // Find the memory section content; should be ≤ 1500 chars worth of M's
+    const mems = prompt.match(/M+/)?.[0] ?? ''
+    expect(mems.length).toBeLessThanOrEqual(1500)
+  })
 })

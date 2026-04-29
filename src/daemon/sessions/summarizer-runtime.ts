@@ -20,10 +20,19 @@ import { join } from 'node:path'
 import { makeSessionStore } from '../../core/session-store'
 import { needsRefresh, formatSummaryRequest } from './summarizer'
 import { resolveProjectJsonlPath } from './path-resolver'
+import { buildMemorySnapshot } from '../memory/snapshot'
 
 export interface SummaryRefreshDeps {
   stateDir: string
   sdkEval: (prompt: string) => Promise<string>
+  /**
+   * Resolve the chat whose memory should be loaded as context for ALL
+   * stale projects in this batch. v0.4.x single-chat assumption: one
+   * default chat per daemon. Return null when not configured — memory
+   * section is skipped, preserving v0.4.1 behavior. v0.5+ (multi-chat)
+   * may revisit per-project chat resolution.
+   */
+  resolveChatId?: () => string | null
   log?: (tag: string, msg: string) => void
 }
 
@@ -33,6 +42,19 @@ export async function triggerStaleSummaryRefresh(deps: SummaryRefreshDeps): Prom
   if (isRunning) return
   isRunning = true
   try {
+    // Load memory snapshot ONCE per batch — all stale projects share the
+    // same chat owner under the v0.4.x single-chat assumption, so this
+    // avoids N redundant dir reads per refresh.
+    const chatId = deps.resolveChatId?.() ?? null
+    let memorySnapshot = ''
+    if (chatId) {
+      try {
+        memorySnapshot = await buildMemorySnapshot(deps.stateDir, chatId)
+      } catch (err) {
+        deps.log?.('SUMMARY', `memory load failed for ${chatId}: ${err instanceof Error ? err.message : err}`)
+      }
+    }
+
     const store = makeSessionStore(join(deps.stateDir, 'sessions.json'), { debounceMs: 0 })
     const all = store.all()
     for (const [alias, rec] of Object.entries(all)) {
@@ -50,7 +72,7 @@ export async function triggerStaleSummaryRefresh(deps: SummaryRefreshDeps): Prom
           } catch { return [] }
         })
         if (turns.length === 0) continue
-        const prompt = formatSummaryRequest(turns)
+        const prompt = formatSummaryRequest(turns, memorySnapshot)
         const raw = await deps.sdkEval(prompt)
         const summary = raw.trim().replace(/^["「『]|["」』]$/g, '').slice(0, 50)
         if (summary.length > 0) store.setSummary(alias, summary)

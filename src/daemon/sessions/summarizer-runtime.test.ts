@@ -84,4 +84,55 @@ describe('triggerStaleSummaryRefresh', () => {
       expect(s!.startsWith('「')).toBe(false)
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
+
+  it('passes memorySnapshot to formatSummaryRequest when resolveChatId returns a chat', async () => {
+    // Seed: stale entry + a memory file for the resolved chat
+    const stale = new Date(Date.now() - 30 * 86400_000).toISOString()
+    const fresh = new Date().toISOString()
+    seedSessions({ compass: { session_id: 's_mem_xyz', last_used_at: fresh, summary_updated_at: stale } })
+    const dir = seedJsonl('s_mem_xyz', [
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: '随便聊点什么' }] } },
+    ])
+    const memDir = join(stateDir, 'memory', 'chat_test')
+    mkdirSync(memDir, { recursive: true })
+    writeFileSync(join(memDir, 'preferences.md'), '总结请像朋友说话')
+
+    try {
+      let receivedPrompt = ''
+      const sdkEval = async (prompt: string) => { receivedPrompt = prompt; return '随便聊了点天' }
+      await triggerStaleSummaryRefresh({
+        stateDir,
+        sdkEval,
+        resolveChatId: () => 'chat_test',
+        log: vi.fn(),
+      })
+      expect(receivedPrompt).toContain('用户记忆')
+      expect(receivedPrompt).toContain('总结请像朋友说话')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('omits memory section when resolveChatId returns null', async () => {
+    const stale = new Date(Date.now() - 30 * 86400_000).toISOString()
+    const fresh = new Date().toISOString()
+    seedSessions({ compass: { session_id: 's_nomem_xyz', last_used_at: fresh, summary_updated_at: stale } })
+    const dir = seedJsonl('s_nomem_xyz', [
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'hi' }] } },
+    ])
+
+    try {
+      let receivedPrompt = ''
+      const sdkEval = async (prompt: string) => { receivedPrompt = prompt; return 'short' }
+      await triggerStaleSummaryRefresh({
+        stateDir,
+        sdkEval,
+        resolveChatId: () => null,
+        log: vi.fn(),
+      })
+      expect(receivedPrompt).not.toContain('用户记忆')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })

@@ -26,17 +26,23 @@ export interface TurnSnippet {
   text: string
 }
 
-const SUMMARY_PROMPT = `用一句话（中文，不超过 30 字）总结这段对话最后做了什么。\
+const SUMMARY_INSTRUCTION = `用一句话（中文，不超过 30 字）总结这段对话最后做了什么。\
 不要泛泛而谈，要具体。例如「修了 ilink-glue 的 token 透传 bug」「讨论了 v0.4 的会话 pane 形态」。\
 直接输出那一句话，不要前缀、引号、解释。
-
-对话：
 `
 
-export function formatSummaryRequest(turns: TurnSnippet[]): string {
+export function formatSummaryRequest(turns: TurnSnippet[], memorySnapshot?: string): string {
   const flattened = turns
     .map(t => `${t.role === 'user' ? '我' : 'Claude'}: ${t.text.slice(0, 400)}`)
     .join('\n')
     .slice(0, 1500)
-  return SUMMARY_PROMPT + flattened
+
+  const mem = memorySnapshot?.trim() ?? ''
+  // Cap memory section so a sprawling profile.md can't blow the prompt
+  // budget. 1500 chars is the same cap we use for the dialogue section.
+  const memorySection = mem
+    ? `\n=== 用户记忆（用户对你的偏好 / 你之前写的笔记 — 风格请遵循）===\n${mem.slice(0, 1500)}\n\n`
+    : '\n'
+
+  return SUMMARY_INSTRUCTION + memorySection + '对话：\n' + flattened
 }

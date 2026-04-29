@@ -21,9 +21,8 @@ import { makeOnboardingHandler } from './onboarding'
 import { notifyStartup } from './notify-startup'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { existsSync } from 'node:fs'
-import { readdir, readFile } from 'node:fs/promises'
 import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
+import { buildMemorySnapshot } from './memory/snapshot.ts'
 import { startCompanionScheduler } from './companion/scheduler'
 import { loadCompanionConfig, saveCompanionConfig } from './companion/config'
 import { buildDetectorContext } from './milestones/build-context'
@@ -417,29 +416,6 @@ async function main() {
 // Module-scope so they can be referenced from runIntrospectOnce without
 // capturing closures. All three are pure async functions with explicit
 // stateDir / chatId args.
-
-/**
- * Read every memory/<chatId>/*.md and concatenate into a single string. The
- * introspect prompt has a 2.5KB cap downstream (introspect-prompt.ts:MEMORY_MAX),
- * so this can produce a long blob and the prompt builder will truncate it.
- * Returns '' when the directory doesn't exist (chat has no memory yet).
- */
-async function buildMemorySnapshot(stateDir: string, chatId: string): Promise<string> {
-  const dir = join(stateDir, 'memory', chatId)
-  if (!existsSync(dir)) return ''
-  const entries = await readdir(dir, { withFileTypes: true })
-  const mds = entries.filter(e => e.isFile() && e.name.endsWith('.md'))
-  const out: string[] = []
-  for (const e of mds) {
-    try {
-      const content = await readFile(join(dir, e.name), 'utf8')
-      out.push(`# ${e.name}\n${content}`)
-    } catch {
-      // Skip unreadable file — best-effort snapshot.
-    }
-  }
-  return out.join('\n\n')
-}
 
 /**
  * Recent inbound messages for the given chat. v0.4.1 returns empty — v0.5

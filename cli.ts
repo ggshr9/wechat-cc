@@ -531,9 +531,15 @@ async function main() {
         void (async () => {
           try {
             const { triggerStaleSummaryRefresh } = await import('./src/daemon/sessions/summarizer-runtime')
+            // resolveIntrospectChatId is named for its first caller (introspect)
+            // but it's actually a generic "default chat" resolver that reads
+            // companion config. Reusing it here avoids extracting yet another
+            // helper for what is, today, the same v0.4.x single-chat lookup.
+            const { resolveIntrospectChatId } = await import('./src/daemon/companion/introspect-runtime')
             const { query } = await import('@anthropic-ai/claude-agent-sdk')
             await triggerStaleSummaryRefresh({
               stateDir: STATE_DIR,
+              resolveChatId: () => resolveIntrospectChatId(STATE_DIR),
               sdkEval: async (prompt) => {
                 let text = ''
                 const q = query({ prompt, options: { model: 'claude-haiku-4-5', maxTurns: 1 } })
