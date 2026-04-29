@@ -12,7 +12,7 @@ import { serviceAction, forceKillDaemon } from "./modules/service.js"
 import { renderDashboard, renderRestartButton, setPending, updateClock, restartDaemon, stopDaemon, handleAccountRowClick } from "./modules/dashboard.js"
 import { loadMemoryPane, wireMemoryButtons, loadMemoryTopZone, loadMemoryDecisions, archiveObservation } from "./modules/memory.js"
 import { loadLogsPane, startLogsAutoRefresh, stopLogsAutoRefresh } from "./modules/logs.js"
-import { loadSessionsList } from "./modules/sessions.js"
+import { loadSessionsList, openProjectDetail, closeProjectDetail, toggleFavorite, exportProjectMarkdown, deleteProject } from "./modules/sessions.js"
 import { loadUpdateProbe, applyUpdate } from "./modules/update.js"
 
 const state = {
@@ -265,6 +265,21 @@ function wireEvents() {
   document.getElementById("sessions-refresh")?.addEventListener("click", (e) =>
     withRefreshFeedback(e.currentTarget, () => loadSessionsList(deps)),
   )
+  // Sessions — drill-down: click a project row → open detail
+  document.getElementById("sessions-body")?.addEventListener("click", (e) => {
+    const row = e.target.closest("[data-action='open-project']")
+    if (row) openProjectDetail(deps, row.dataset.alias)
+  })
+  document.getElementById("sessions-back")?.addEventListener("click", closeProjectDetail)
+  document.getElementById("sessions-favorite")?.addEventListener("click", () => {
+    const alias = document.getElementById("sessions-detail")?.dataset.alias
+    if (!alias) return
+    toggleFavorite(alias)
+    openProjectDetail(deps, alias)  // refresh button label
+    loadSessionsList(deps)           // refresh list star state
+  })
+  document.getElementById("sessions-export")?.addEventListener("click", () => exportProjectMarkdown(deps))
+  document.getElementById("sessions-delete")?.addEventListener("click", () => deleteProject(deps))
   document.getElementById("logs-tail-select")?.addEventListener("change", () => loadLogsPane(deps))
   document.getElementById("update-check-btn")?.addEventListener("click", () => loadUpdateProbe(deps))
   document.getElementById("update-apply-btn")?.addEventListener("click", () => applyUpdate(deps))

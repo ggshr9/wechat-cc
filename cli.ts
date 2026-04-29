@@ -29,6 +29,8 @@ export type CliArgs =
   | { cmd: 'observations-archive'; chatId: string; obsId: string; json: boolean }
   | { cmd: 'milestones-list'; chatId: string; json: boolean }
   | { cmd: 'sessions-list-projects'; json: boolean }
+  | { cmd: 'sessions-read-jsonl'; alias: string; json: boolean }
+  | { cmd: 'sessions-delete'; alias: string; json: boolean }
   | { cmd: 'logs'; tail: number; json: boolean }
   | { cmd: 'update'; check: boolean; json: boolean }
   | { cmd: 'help' }
@@ -128,6 +130,12 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
       if (rest[0] === 'list-projects') {
         return { cmd: 'sessions-list-projects', json: rest.includes('--json') }
       }
+      if (rest[0] === 'read-jsonl' && rest[1]) {
+        return { cmd: 'sessions-read-jsonl', alias: rest[1], json: rest.includes('--json') }
+      }
+      if (rest[0] === 'delete' && rest[1]) {
+        return { cmd: 'sessions-delete', alias: rest[1], json: rest.includes('--json') }
+      }
       return { cmd: 'help' }
     }
     case 'provider': {
@@ -223,6 +231,10 @@ Usage:
                         Per-chat milestones (id-deduped).
   wechat-cc sessions list-projects [--json]
                         Project sessions with cached summaries.
+  wechat-cc sessions read-jsonl <alias> [--json]
+                        Read all turns from the alias's session jsonl.
+  wechat-cc sessions delete <alias> [--json]
+                        Remove the sessions.json entry (jsonl on disk untouched).
   wechat-cc logs [--tail N] [--json]
                         Tail the daemon's channel.log. Default --tail 50.
                         --json returns parsed entries (timestamp, tag,
@@ -485,6 +497,34 @@ async function main() {
         summary_updated_at: rec.summary_updated_at ?? null,
       }))
       console.log(parsed.json ? JSON.stringify({ ok: true, projects }, null, 2) : projects.map(p => `${p.alias} ${p.last_used_at}`).join('\n'))
+      return
+    }
+    case 'sessions-read-jsonl': {
+      const { makeSessionStore } = await import('./src/core/session-store')
+      const store = makeSessionStore(join(STATE_DIR, 'sessions.json'), { debounceMs: 0 })
+      const rec = store.get(parsed.alias)
+      if (!rec) {
+        console.log(parsed.json ? JSON.stringify({ ok: false, error: 'no such alias' }, null, 2) : 'no such alias')
+        return
+      }
+      const { resolveProjectJsonlPath } = await import('./src/daemon/sessions/path-resolver')
+      const path = resolveProjectJsonlPath(parsed.alias, rec.session_id)
+      const { existsSync, readFileSync } = await import('node:fs')
+      if (!existsSync(path)) {
+        console.log(parsed.json ? JSON.stringify({ ok: false, error: 'jsonl missing' }, null, 2) : 'jsonl missing')
+        return
+      }
+      const lines = readFileSync(path, 'utf8').split('\n').filter(l => l.length > 0)
+      const turns = lines.map(l => { try { return JSON.parse(l) } catch { return null } }).filter(t => t !== null)
+      console.log(parsed.json ? JSON.stringify({ ok: true, alias: parsed.alias, session_id: rec.session_id, turns }, null, 2) : `${turns.length} turns`)
+      return
+    }
+    case 'sessions-delete': {
+      const { makeSessionStore } = await import('./src/core/session-store')
+      const store = makeSessionStore(join(STATE_DIR, 'sessions.json'), { debounceMs: 0 })
+      store.delete(parsed.alias)
+      await store.flush()
+      console.log(parsed.json ? JSON.stringify({ ok: true, deleted: parsed.alias }, null, 2) : `deleted ${parsed.alias}`)
       return
     }
     case 'daemon-kill': {

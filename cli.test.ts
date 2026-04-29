@@ -181,3 +181,19 @@ describe('sessions list-projects', () => {
     })
   })
 })
+
+describe('sessions read-jsonl', () => {
+  it('parses alias', () => {
+    expect(parseCliArgs(['sessions', 'read-jsonl', 'compass', '--json'])).toEqual({
+      cmd: 'sessions-read-jsonl', alias: 'compass', json: true,
+    })
+  })
+})
+
+describe('sessions delete', () => {
+  it('parses alias', () => {
+    expect(parseCliArgs(['sessions', 'delete', 'compass', '--json'])).toEqual({
+      cmd: 'sessions-delete', alias: 'compass', json: true,
+    })
+  })
+})
