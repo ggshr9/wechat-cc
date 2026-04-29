@@ -8,6 +8,7 @@ import { formatRelativeTimeShort } from "./observations.js"
 const GLYPH_BY_KIND = {
   cron_eval_pushed: '💬',
   cron_eval_skipped: '🤔',
+  cron_eval_failed: '⚠',
   observation_written: '✨',
   milestone: '🎉',
 }
@@ -22,6 +23,7 @@ export function decisionSummary(ev) {
     return `主动找你：「${text}」`
   }
   if (ev.kind === 'cron_eval_skipped') return '想了想，决定不打扰'
+  if (ev.kind === 'cron_eval_failed') return 'introspect 出错（点开看原因）'
   if (ev.kind === 'observation_written') return '写下一条新观察'
   if (ev.kind === 'milestone') return '里程碑达成'
   return '(未知事件)'

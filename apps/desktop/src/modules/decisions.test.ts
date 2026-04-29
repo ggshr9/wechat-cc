@@ -15,6 +15,9 @@ describe('decisionGlyph', () => {
   it('🎉 for milestone', () => {
     expect(decisionGlyph('milestone')).toBe('🎉')
   })
+  it('⚠ for cron_eval_failed', () => {
+    expect(decisionGlyph('cron_eval_failed')).toBe('⚠')
+  })
 })
 
 describe('decisionSummary', () => {
@@ -26,6 +29,9 @@ describe('decisionSummary', () => {
   })
   it('describes observation_written', () => {
     expect(decisionSummary({ kind: 'observation_written' })).toBe('写下一条新观察')
+  })
+  it('describes cron_eval_failed with prompt to expand', () => {
+    expect(decisionSummary({ kind: 'cron_eval_failed' })).toContain('introspect 出错')
   })
 })
 
