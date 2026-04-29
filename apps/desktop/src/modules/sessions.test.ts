@@ -247,6 +247,75 @@ describe('extractWechatMeta', () => {
     }
     expect(extractWechatMeta(turn)?.ts).toBeNull()
   })
+
+  // Attachments live as `[image:path]` / `[file:path]` / `[voice:path]`
+  // lines inside the envelope body (see src/core/prompt-format.ts).
+  it('parses [image:path] attachment and excludes it from text', () => {
+    const turn = {
+      type: 'user',
+      message: { content: [{ type: 'text', text: '<wechat user="GSR">看这张\n[image:/tmp/cat.jpg]</wechat>' }] },
+    }
+    const m = extractWechatMeta(turn)
+    expect(m?.text).toBe('看这张')
+    expect(m?.attachments).toEqual([{ kind: 'image', path: '/tmp/cat.jpg', caption: null }])
+  })
+
+  it('parses [file:path] with caption', () => {
+    const turn = {
+      type: 'user',
+      message: { content: [{ type: 'text', text: '<wechat user="GSR">[file:/tmp/doc.pdf] 季度报表</wechat>' }] },
+    }
+    const m = extractWechatMeta(turn)
+    expect(m?.attachments).toEqual([{ kind: 'file', path: '/tmp/doc.pdf', caption: '季度报表' }])
+    expect(m?.text).toBe('')
+  })
+
+  it('parses multiple attachments + leaves only narrative text', () => {
+    const turn = {
+      type: 'user',
+      message: { content: [{ type: 'text', text: '<wechat user="GSR">三张图\n[image:/a.jpg]\n[image:/b.jpg]\n[image:/c.jpg]</wechat>' }] },
+    }
+    const m = extractWechatMeta(turn)
+    expect(m?.attachments).toHaveLength(3)
+    expect(m?.attachments?.[0]).toEqual({ kind: 'image', path: '/a.jpg', caption: null })
+    expect(m?.text).toBe('三张图')
+  })
+
+  it('parses voice attachments (rendered as a stub for now)', () => {
+    const turn = {
+      type: 'user',
+      message: { content: [{ type: 'text', text: '<wechat user="GSR">[voice:/tmp/v.mp3]</wechat>' }] },
+    }
+    expect(extractWechatMeta(turn)?.attachments).toEqual([{ kind: 'voice', path: '/tmp/v.mp3', caption: null }])
+  })
+
+  it('extracts quote_to from envelope attrs', () => {
+    const turn = {
+      type: 'user',
+      message: { content: [{ type: 'text', text: '<wechat user="GSR" quote_to="msg-abc">回复</wechat>' }] },
+    }
+    expect(extractWechatMeta(turn)?.quoteTo).toBe('msg-abc')
+  })
+
+  it('attachments default to empty array, quoteTo to null', () => {
+    const turn = {
+      type: 'user',
+      message: { content: [{ type: 'text', text: '<wechat user="X">just text</wechat>' }] },
+    }
+    const m = extractWechatMeta(turn)
+    expect(m?.attachments).toEqual([])
+    expect(m?.quoteTo).toBeNull()
+  })
+
+  it('ignores unknown attachment kinds (forward compat)', () => {
+    const turn = {
+      type: 'user',
+      message: { content: [{ type: 'text', text: '<wechat user="X">hi\n[unknown:/x]</wechat>' }] },
+    }
+    const m = extractWechatMeta(turn)
+    expect(m?.attachments).toEqual([])
+    expect(m?.text).toBe('hi\n[unknown:/x]')
+  })
 })
 
 describe('avatarInitial', () => {
@@ -538,6 +607,68 @@ describe('turnHtmlCompact', () => {
     expect(html).toContain('right')
     expect(html).toContain('wechat-avatar-cc')
     expect(html).toContain('回复')
+  })
+
+  it('renders user turn with image attachment as a standalone image (no white bubble)', () => {
+    const html = turnHtmlCompact({
+      type: 'user',
+      message: { content: [{ type: 'text', text: '<wechat user="GSR">[image:/inbox/cat.jpg]</wechat>' }] },
+    })
+    expect(html).toContain('wechat-row')
+    expect(html).toContain('left')
+    expect(html).toContain('wechat-image')
+    expect(html).toContain('cat.jpg')
+    // Image rows do NOT use a .wechat-bubble (no white card, no tail)
+    expect(html).not.toContain('wechat-bubble"')
+  })
+
+  it('renders user turn with file attachment as a file card', () => {
+    const html = turnHtmlCompact({
+      type: 'user',
+      message: { content: [{ type: 'text', text: '<wechat user="GSR">[file:/inbox/doc.pdf]</wechat>' }] },
+    })
+    expect(html).toContain('wechat-file-card')
+    expect(html).toContain('doc.pdf')
+    // PDF badge — extension surfaced in upper-case for the icon
+    expect(html.toUpperCase()).toContain('PDF')
+  })
+
+  it('renders text + image together (text bubble first, image below)', () => {
+    const html = turnHtmlCompact({
+      type: 'user',
+      message: { content: [{ type: 'text', text: '<wechat user="GSR">看图\n[image:/x.jpg]</wechat>' }] },
+    })
+    const textIdx = html.indexOf('看图')
+    const imgIdx = html.indexOf('wechat-image')
+    expect(textIdx).toBeGreaterThan(-1)
+    expect(imgIdx).toBeGreaterThan(textIdx)
+  })
+
+  it('renders [引用] prefix as a quote marker inside the bubble', () => {
+    const html = turnHtmlCompact({
+      type: 'user',
+      message: { content: [{ type: 'text', text: '<wechat user="GSR">[引用]\n那么图片呢</wechat>' }] },
+    })
+    expect(html).toContain('wechat-quote-marker')
+    expect(html).toContain('那么图片呢')
+    expect(html).not.toContain('[引用]')   // marker stripped from text
+  })
+
+  it('suppresses daemon "(non-text message)" placeholder when there are attachments', () => {
+    const html = turnHtmlCompact({
+      type: 'user',
+      message: { content: [{ type: 'text', text: '<wechat user="GSR">(non-text message)\n[file:/inbox/x.pdf]</wechat>' }] },
+    })
+    expect(html).not.toContain('(non-text message)')
+    expect(html).toContain('wechat-file-card')
+  })
+
+  it('escapes attachment paths to prevent injection', () => {
+    const html = turnHtmlCompact({
+      type: 'user',
+      message: { content: [{ type: 'text', text: '<wechat user="X">[image:/a"><script>alert(1)</script>]</wechat>' }] },
+    })
+    expect(html).not.toContain('<script>alert(1)')
   })
 
   it('emits one row per reply for multi-reply assistant turns', () => {

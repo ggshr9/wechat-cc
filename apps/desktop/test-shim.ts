@@ -89,6 +89,21 @@ Bun.serve({
   async fetch(req) {
     const url = new URL(req.url)
 
+    // Local-file attachment endpoint — restricted to the wechat-cc
+    // inbox tree so the dev shim doesn't double as an open file server.
+    if (url.pathname === '/attachment' && req.method === 'GET') {
+      const filePath = url.searchParams.get('path') || ''
+      const inboxRoot = join(ROOT, 'apps', 'desktop')  // for tauri-localhost dev cache
+      const stateInbox = (process.env.WECHAT_CC_STATE_DIR
+        ?? join(process.env.HOME ?? '', '.claude', 'channels', 'wechat'))
+      const allowedRoots = [join(stateInbox, 'inbox'), inboxRoot]
+      const ok = filePath && allowedRoots.some(root => filePath.startsWith(root))
+      if (!ok) return new Response('forbidden', { status: 403 })
+      const file = Bun.file(filePath)
+      if (!(await file.exists())) return new Response('not found', { status: 404 })
+      return new Response(file)
+    }
+
     if (url.pathname === '/__invoke' && req.method === 'POST') {
       const body = (await req.json()) as { command: string; args?: { args?: string[]; text?: string } }
       try {

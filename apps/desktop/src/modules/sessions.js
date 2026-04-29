@@ -100,10 +100,18 @@ export function extractClaudeReplies(turn, opts = {}) {
 }
 
 /**
- * Extract the WeChat envelope metadata (user, ts, cleaned text) from a
- * user-type turn. Returns null for non-user turns. The envelope is the
- * `<wechat chat_id="..." user="..." ts="...">...</wechat>` wrapper
- * applied by daemon/main.ts to every inbound message before SDK ingest.
+ * Extract the WeChat envelope metadata from a user-type turn. Returns
+ * null for non-user turns. The envelope is the
+ * `<wechat chat_id="..." user="..." ts="..." [quote_to="..."]>BODY</wechat>`
+ * wrapper applied to every inbound message before SDK ingest.
+ *
+ * BODY is split into:
+ *   - free-form text (everything that's not an attachment line)
+ *   - attachments[] — recognized `[image:path]`, `[file:path]`,
+ *     `[voice:path]` lines, optionally followed by ` caption`
+ *
+ * Unknown `[kind:path]` patterns are left in the text so future
+ * attachment kinds don't disappear silently.
  */
 export function extractWechatMeta(turn) {
   if (!turn || turn.type !== 'user') return null
@@ -116,19 +124,45 @@ export function extractWechatMeta(turn) {
       .map(p => p.text)
       .join('\n')
   }
-  if (!raw) return { user: null, ts: null, text: '' }
+  if (!raw) return { user: null, ts: null, text: '', attachments: [], quoteTo: null }
 
   const open = raw.match(/<wechat\b([^>]*)>([\s\S]*?)<\/wechat>/)
-  if (!open) return { user: null, ts: null, text: raw.trim() }
+  if (!open) return { user: null, ts: null, text: raw.trim(), attachments: [], quoteTo: null }
   const attrs = open[1] || ''
-  const inner = (open[2] || '').trim()
+  const innerRaw = open[2] || ''
   const userMatch = attrs.match(/\buser="([^"]*)"/)
   const tsMatch = attrs.match(/\bts="([^"]*)"/)
+  const quoteMatch = attrs.match(/\bquote_to="([^"]*)"/)
   const tsNum = tsMatch ? Number(tsMatch[1]) : NaN
+
+  // Split body lines: separate `[kind:path] caption` lines (recognized
+  // attachment kinds only), the `[引用]` quote marker, and narrative
+  // text. Other `[x:y]` shapes fall through into text.
+  const KNOWN = new Set(['image', 'file', 'voice'])
+  const attachments = []
+  const textLines = []
+  let hasQuotePrefix = false
+  for (const line of innerRaw.split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed === '[引用]') { hasQuotePrefix = true; continue }
+    const m = line.match(/^\s*\[([a-z]+):([^\]]+)\](?:\s+(.*))?$/i)
+    if (m && KNOWN.has(m[1].toLowerCase())) {
+      attachments.push({
+        kind: m[1].toLowerCase(),
+        path: m[2],
+        caption: m[3] ? m[3].trim() : null,
+      })
+    } else {
+      textLines.push(line)
+    }
+  }
   return {
     user: userMatch ? userMatch[1] : null,
     ts: Number.isFinite(tsNum) ? tsNum : null,
-    text: inner,
+    text: textLines.join('\n').trim(),
+    attachments,
+    quoteTo: quoteMatch ? quoteMatch[1] : null,
+    hasQuotePrefix,
   }
 }
 
@@ -441,14 +475,32 @@ export function turnHtmlCompact(turn, opts = {}) {
 
   if (turn.type === 'user') {
     const meta = extractWechatMeta(turn)
-    if (!meta || !meta.text) return ''
-    return wechatRow({
+    if (!meta) return ''
+    const hasContent = !!meta.text || (meta.attachments && meta.attachments.length > 0)
+    if (!hasContent) return ''
+    const avatarOpts = {
       side: 'left',
       role: 'user',
       avatarText: avatarInitial(meta.user),
       avatarColor: avatarColor(meta.user || ''),
-      text: meta.text,
-    })
+    }
+    const out = []
+    // Daemon stamps "(non-text message)" as the text body when an
+    // inbound is purely an attachment (image/file/voice) with no
+    // caption — treat it as no-text so the user sees just the
+    // attachment, like in real WeChat.
+    const isPlaceholderText = meta.text === '(non-text message)'
+    if (meta.text && !isPlaceholderText) {
+      out.push(wechatRow({ ...avatarOpts, text: meta.text, quotePrefix: meta.hasQuotePrefix }))
+    } else if (meta.hasQuotePrefix && (meta.attachments || []).length === 0) {
+      // Quote marker but no text/attachments — show the marker alone
+      // so the user knows there was a referenced message.
+      out.push(wechatRow({ ...avatarOpts, text: '', quotePrefix: true }))
+    }
+    for (const att of (meta.attachments || [])) {
+      out.push(wechatAttachmentRow({ ...avatarOpts, attachment: att }))
+    }
+    return out.join('')
   }
 
   if (turn.type === 'assistant') {
@@ -495,24 +547,111 @@ function phoneFrameHtml({ contactName, chatContent }) {
           <span class="phone-title-more" aria-hidden="true">⋯</span>
         </div>
         <div class="phone-chat">${chatContent}</div>
-        <div class="phone-input">
-          <svg class="phone-input-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9c.5-.7 1.7-1.4 3-1.4M15 9c-.5-.7-1.7-1.4-3-1.4"/><path d="M8 15c1 1.5 2.5 2 4 2s3-.5 4-2"/></svg>
-          <span class="phone-input-field">查看模式</span>
-          <svg class="phone-input-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="9" cy="10" r="0.8" fill="currentColor"/><circle cx="15" cy="10" r="0.8" fill="currentColor"/><path d="M9 14c.8 1.2 2 1.8 3 1.8s2.2-.6 3-1.8"/></svg>
-          <svg class="phone-input-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+        <div class="phone-input" aria-label="查看模式 — 只读">
+          <!-- 语音切换（圆形 + 内部声波竖条），左 -->
+          <svg class="phone-input-btn" viewBox="0 0 28 28" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+            <circle cx="14" cy="14" r="11.5"/>
+            <line x1="10" y1="11" x2="10" y2="17"/>
+            <line x1="13" y1="9" x2="13" y2="19"/>
+            <line x1="16" y1="11" x2="16" y2="17"/>
+            <line x1="19" y1="13" x2="19" y2="15"/>
+          </svg>
+          <!-- 文本输入框（空白，右侧内嵌 mic） -->
+          <div class="phone-input-field">
+            <svg class="phone-input-mic" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+              <rect x="9.5" y="4" width="5" height="11" rx="2.5"/>
+              <path d="M6.5 12a5.5 5.5 0 0 0 11 0"/>
+              <line x1="12" y1="17.5" x2="12" y2="20"/>
+            </svg>
+          </div>
+          <!-- 表情 -->
+          <svg class="phone-input-btn" viewBox="0 0 28 28" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+            <circle cx="14" cy="14" r="11.5"/>
+            <circle cx="10.5" cy="11.5" r="0.9" fill="currentColor"/>
+            <circle cx="17.5" cy="11.5" r="0.9" fill="currentColor"/>
+            <path d="M9.5 16c1 1.6 2.7 2.6 4.5 2.6s3.5-1 4.5-2.6"/>
+          </svg>
+          <!-- 加号 -->
+          <svg class="phone-input-btn" viewBox="0 0 28 28" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+            <circle cx="14" cy="14" r="11.5"/>
+            <line x1="14" y1="9" x2="14" y2="19"/>
+            <line x1="9" y1="14" x2="19" y2="14"/>
+          </svg>
         </div>
       </div>
     </div>
   `
 }
 
-function wechatRow({ side, role, avatarText, avatarColor: bg, avatarClass, text }) {
+function wechatRow({ side, role, avatarText, avatarColor: bg, avatarClass, text, quotePrefix }) {
   const avatarStyle = bg ? ` style="background:${escapeHtml(bg)}"` : ''
   const avatarCls = avatarClass ? ` ${escapeHtml(avatarClass)}` : ''
+  const quoteHtml = quotePrefix ? `<div class="wechat-quote-marker">引用了一条消息</div>` : ''
+  const textHtml = text ? escapeHtml(text) : ''
   return `<div class="wechat-row ${side}" data-role="${escapeHtml(role)}">` +
     `<div class="wechat-avatar${avatarCls}"${avatarStyle}>${escapeHtml(avatarText)}</div>` +
-    `<div class="wechat-bubble-wrap"><div class="wechat-bubble">${escapeHtml(text)}</div></div>` +
+    `<div class="wechat-bubble-wrap"><div class="wechat-bubble">${quoteHtml}${textHtml}</div></div>` +
     `</div>`
+}
+
+function wechatAttachmentRow({ side, role, avatarText, avatarColor: bg, avatarClass, attachment }) {
+  const avatarStyle = bg ? ` style="background:${escapeHtml(bg)}"` : ''
+  const avatarCls = avatarClass ? ` ${escapeHtml(avatarClass)}` : ''
+  let inner = ''
+  if (attachment.kind === 'image') {
+    const src = escapeHtml(attachmentUrl(attachment.path))
+    inner = `<div class="wechat-image-wrap"><img class="wechat-image" src="${src}" alt="image" loading="lazy"/></div>`
+  } else if (attachment.kind === 'file') {
+    inner = `<div class="wechat-bubble-wrap">${fileCard(attachment)}</div>`
+  } else if (attachment.kind === 'voice') {
+    // 语音 stub — duration not tracked yet, just signal there was one.
+    inner = `<div class="wechat-bubble-wrap"><div class="wechat-bubble wechat-voice-stub">🎤 语音</div></div>`
+  }
+  return `<div class="wechat-row ${side}" data-role="${escapeHtml(role)}">` +
+    `<div class="wechat-avatar${avatarCls}"${avatarStyle}>${escapeHtml(avatarText)}</div>` +
+    inner +
+    `</div>`
+}
+
+function fileCard(attachment) {
+  const path = String(attachment.path || '')
+  const slash = path.lastIndexOf('/')
+  const filename = slash >= 0 ? path.slice(slash + 1) : path
+  const dot = filename.lastIndexOf('.')
+  const ext = dot > 0 ? filename.slice(dot + 1).toUpperCase().slice(0, 4) : 'FILE'
+  const tone = fileIconTone(ext)
+  return `<div class="wechat-file-card">` +
+    `<div class="wechat-file-info">` +
+      `<div class="wechat-file-name">${escapeHtml(filename)}</div>` +
+      `<div class="wechat-file-meta">已收到</div>` +
+    `</div>` +
+    `<div class="wechat-file-icon" style="background:${escapeHtml(tone)}">${escapeHtml(ext)}</div>` +
+    `</div>`
+}
+
+// File-icon tone keyed by extension — matches WeChat's family-by-color
+// convention loosely. Unknown extensions get a neutral slate.
+function fileIconTone(ext) {
+  const e = ext.toLowerCase()
+  if (e === 'pdf') return '#D9433A'
+  if (e === 'doc' || e === 'docx') return '#2A6FCB'
+  if (e === 'xls' || e === 'xlsx' || e === 'csv') return '#1F8C4A'
+  if (e === 'ppt' || e === 'pptx') return '#D87100'
+  if (e === 'zip' || e === 'rar' || e === '7z' || e === 'tar' || e === 'gz') return '#7C6F4A'
+  return '#586672'
+}
+
+// Resolve a local-fs path to a URL the browser can fetch. In Tauri the
+// asset protocol does this via convertFileSrc; in the dev shim we route
+// through a /attachment endpoint. Keep both paths stub-tolerant — if
+// neither is available, the <img> fails gracefully (broken icon).
+function attachmentUrl(path) {
+  const safePath = String(path || '')
+  const conv = typeof window !== 'undefined' && window.__TAURI__?.core?.convertFileSrc
+  if (typeof conv === 'function') {
+    try { return conv(safePath) } catch { /* fall through */ }
+  }
+  return '/attachment?path=' + encodeURIComponent(safePath)
 }
 
 // Toggle handler — called from main.js when the user clicks one of the
