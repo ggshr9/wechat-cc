@@ -180,6 +180,20 @@ describe('initialMode', () => {
     expect(initialMode(fakeReport()))
       .toEqual({ mode: 'wizard', step: 'wechat' })
   })
+
+  it('parks at service step when account is bound but service install never ran', () => {
+    // The "happy half-finish" state: user completed `bind WeChat` and the
+    // account is recorded, but `install service` failed (Windows
+    // schtasks access-denied, etc.) and no service unit / scheduled
+    // task is registered. Without this branch the dashboard appears
+    // with a stopped daemon and no obvious next step.
+    expect(initialMode(fakeReport({
+      checks: {
+        accounts: { ok: true, count: 1, items: [] },
+        service: { installed: false, kind: 'scheduled-task' },
+      },
+    }))).toEqual({ mode: 'wizard', step: 'service' })
+  })
 })
 
 describe('dashboardHero', () => {

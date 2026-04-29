@@ -1,5 +1,7 @@
 # wechat-cc desktop v0.4.0
 
+> **Re-published** with three post-cut fixes (Windows install + first-launch routing + new app icon). Same version number — Windows users on the first cut should re-download the .exe / .msi.
+
 **Two mirrors of accompaniment** — Sessions and Memory finally have a place to live in the dashboard, and the session view now feels like opening WeChat itself.
 
 This is the long-deferred v0.4 release: the sessions / memory feature originally scoped in `docs/specs/2026-04-29-sessions-memory-design.md` has shipped, plus a substantial refinement pass that turned the dev-card transcript view into a 1:1 iOS WeChat replica running inside an iPhone 17 Pro frame.
@@ -74,6 +76,27 @@ Click the ★ on any session-list row to favorite/unfavorite it without drilling
 - **2026-04-29 (Bundle E)**: WeChat-replica chat bubbles + iPhone 17 Pro frame + Dynamic Island
 - **2026-04-29 (Bundle E2)**: image / file / quote attachments
 - **2026-04-29 (final pass)**: time separators + lightbox + live clock + custom avatars
+
+## Post-cut fixes (re-publish)
+
+- **Windows service install was broken.** The first cut hit
+  `schtasks /Create /TR "<path>" run --dangerously /F` failures
+  ("Access denied" / "file not found") because Bun's spawn quoting on
+  Windows dropped the outer quotes around `/TR`, so `run --dangerously`
+  ended up dangling outside the quoted value and schtasks rejected the
+  malformed args. Switched to `schtasks /Create /XML <task.xml>` which
+  separates `<Command>` from `<Arguments>` in the task definition —
+  no quoting hell.
+- **First-launch routing.** Users who finished `bind WeChat` but had
+  `install service` fail (most commonly Windows users hitting the bug
+  above) were silently dropped on the dashboard with a stopped daemon
+  and no obvious next step. `initialMode` now also requires
+  `service.installed: true` for the dashboard route — otherwise the
+  wizard parks at the `service` step so the install can be retried.
+- **New desktop icon.** WeChat-green squircle with a white "cc"
+  wordmark + subtle chat-bubble accent. Shipped at all standard sizes
+  (32 / 64 / 128 / 128@2x / icon.icns / icon.ico) plus iOS/Android
+  variants Tauri generates by default.
 
 ## Configuration changes
 

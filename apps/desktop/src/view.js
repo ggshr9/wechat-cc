@@ -64,14 +64,18 @@ export function escapeHtml(value) {
 
 // ─── dashboard / mode-routing helpers ─────────────────────────────────
 
-// Boot routing: dashboard once we have a bound account AND service installed
-// (running or not — running is the happy path, stopped is the "I just rebooted
-// and the daemon hasn't spawned yet" path that the dashboard handles cleanly
-// with a Restart button). Wizard otherwise, parked at the first unfinished
-// step so power users don't redo work.
+// Boot routing: dashboard once everything is set up — provider OK, an
+// account is bound, AND the service is installed. Wizard otherwise,
+// parked at the first unfinished step so power users don't redo work.
+//
+// Critically, a user who finished `bind WeChat` but had `install service`
+// fail (e.g. Windows schtasks access-denied) lands BACK in the wizard at
+// the service step instead of being silently dropped on a dashboard with
+// a stopped daemon and no obvious way forward.
 export function initialMode(report) {
   const hasAccount = report.checks.accounts.count > 0
-  if (hasAccount && report.checks.provider.ok) return { mode: "dashboard" }
+  const serviceInstalled = !!report.checks.service?.installed
+  if (hasAccount && report.checks.provider.ok && serviceInstalled) return { mode: "dashboard" }
   if (!report.checks.bun.ok || !report.checks.git.ok) return { mode: "wizard", step: "doctor" }
   if (!report.checks.provider.ok) return { mode: "wizard", step: "provider" }
   if (!hasAccount) return { mode: "wizard", step: "wechat" }

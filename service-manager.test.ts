@@ -66,16 +66,31 @@ describe('service-manager', () => {
     expect(plan.fileContent).not.toContain('--dangerously')
   })
 
-  it('Windows ScheduledTask /TR includes --dangerously when unattended', () => {
+  it('Windows ScheduledTask XML <Arguments> includes --dangerously when unattended', () => {
     const plan = buildServicePlan({
       platform: 'win32',
       homeDir: 'C:\\Users\\alice',
       cwd: 'C:\\Users\\alice\\AppData\\Local\\wechat-cc',
       bunPath: 'C:\\bun.exe',
     })
+    expect(plan.fileContent).toContain('<Arguments>')
+    expect(plan.fileContent).toContain('run --dangerously')
+    // /Create arg list is /XML <path> /F — no /TR arg now
     const create = plan.installCommands.find(c => c[1] === '/Create')!
-    const trIdx = create.indexOf('/TR')
-    expect(create[trIdx + 1]).toContain('run --dangerously')
+    expect(create).toContain('/XML')
+    expect(create).not.toContain('/TR')
+  })
+
+  it('Windows ScheduledTask XML separates Command from Arguments (no quoting hell)', () => {
+    const plan = buildServicePlan({
+      platform: 'win32',
+      homeDir: 'C:\\Users\\alice',
+      cwd: 'C:\\Users\\alice\\AppData\\Local\\wechat-cc',
+      bunPath: 'C:\\bun.exe',
+      binaryPath: 'D:\\wechat-cc\\wechat-cc-cli.exe',
+    })
+    expect(plan.fileContent).toContain('<Command>D:\\wechat-cc\\wechat-cc-cli.exe</Command>')
+    expect(plan.fileContent).toContain('<Arguments>run --dangerously</Arguments>')
   })
 
   it('Linux systemd ExecStart includes --dangerously when unattended', () => {

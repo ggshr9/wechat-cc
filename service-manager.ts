@@ -77,19 +77,31 @@ export function buildServicePlan(input: ServicePlanInput): ServicePlan {
   }
 
   if (pf === 'win32') {
-    const taskRun = binaryPath
-      ? `"${binaryPath}" ${runArgs.join(' ')}`
-      : `"${bunPath}" "${join(input.cwd, 'cli.ts')}" ${runArgs.join(' ')}`
-    // autoStart=false on Windows: create the task disabled (no ONLOGON
-    // trigger fires), then explicitly /Run it once for this session.
-    const installCommands: string[][] = [['schtasks', '/Create', '/TN', serviceName, '/SC', 'ONLOGON', '/TR', taskRun, '/F']]
+    // Use schtasks /XML import to sidestep Bun-on-Windows arg-quoting
+    // issues (the previous `/TR "path" args` form had spawnSync drop
+    // outer quotes, leaving args dangling outside /TR — schtasks then
+    // failed with "Access denied" / "file not found"). XML separates
+    // <Command> from <Arguments> so quoting is irrelevant.
+    const command = binaryPath ?? bunPath
+    const args = binaryPath
+      ? runArgs.join(' ')
+      : `"${join(input.cwd, 'cli.ts')}" ${runArgs.join(' ')}`
+    const xmlPath = join(homeDir, 'AppData', 'Local', 'Temp', `wechat-cc-task.xml`)
+    const xmlContent = buildScheduledTaskXml({ command, args, autoStart })
+    const installCommands: string[][] = [
+      // The XML write is an in-memory side effect (handled by installService
+      // before runCommands runs) — this command list only contains schtasks
+      // calls. We thread the XML content via fileContent, and the file path
+      // via serviceFile so installService writes it before /Create.
+      ['schtasks', '/Create', '/TN', serviceName, '/XML', xmlPath, '/F'],
+    ]
     if (!autoStart) installCommands.push(['schtasks', '/Change', '/TN', serviceName, '/DISABLE'])
     installCommands.push(['schtasks', '/Run', '/TN', serviceName])
     return {
       kind: 'scheduled-task',
       serviceName,
-      serviceFile: null,
-      fileContent: null,
+      serviceFile: xmlPath,
+      fileContent: xmlContent,
       installCommands,
       startCommands: [['schtasks', '/Run', '/TN', serviceName]],
       stopCommands: [['schtasks', '/End', '/TN', serviceName]],
@@ -184,6 +196,68 @@ export function isServiceInstalled(plan: ServicePlan): boolean {
     return (r.status ?? 1) === 0
   }
   return false
+}
+
+/**
+ * Build a Windows Scheduled Task XML payload (schtasks /XML format).
+ * Avoids the /TR-arg-quoting hell — Command and Arguments live in
+ * separate XML elements, so spawnSync arg-list quoting never gets
+ * applied to the executable path.
+ */
+function buildScheduledTaskXml(opts: { command: string; args: string; autoStart: boolean }): string {
+  const cmdEsc = xmlEsc(opts.command)
+  const argsEsc = xmlEsc(opts.args)
+  const enabled = opts.autoStart ? 'true' : 'false'
+  // Declare UTF-8 to match writeFileSync's default encoding. schtasks
+  // accepts either UTF-8 or UTF-16 as long as the declaration matches
+  // the actual byte content.
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>wechat-cc daemon — bridges WeChat ilink to Claude Code</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>${enabled}</Enabled>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>${enabled}</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>${cmdEsc}</Command>
+      <Arguments>${argsEsc}</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+`
+}
+
+function xmlEsc(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
 function runCommands(commands: string[][]): void {
