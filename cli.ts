@@ -522,6 +522,35 @@ async function main() {
         summary_updated_at: rec.summary_updated_at ?? null,
       }))
       console.log(parsed.json ? JSON.stringify({ ok: true, projects }, null, 2) : projects.map(p => `${p.alias} ${p.last_used_at}`).join('\n'))
+
+      // Fire-and-forget: refresh stale summaries in the background. The current
+      // request returns immediately with whatever's cached; next list call will
+      // pick up the fresh summaries. WECHAT_CC_DISABLE_SUMMARIZER=1 skips for
+      // CI/e2e where SDK calls are undesirable.
+      if (process.env.WECHAT_CC_DISABLE_SUMMARIZER !== '1') {
+        void (async () => {
+          try {
+            const { triggerStaleSummaryRefresh } = await import('./src/daemon/sessions/summarizer-runtime')
+            const { query } = await import('@anthropic-ai/claude-agent-sdk')
+            await triggerStaleSummaryRefresh({
+              stateDir: STATE_DIR,
+              sdkEval: async (prompt) => {
+                let text = ''
+                const q = query({ prompt, options: { model: 'claude-haiku-4-5', maxTurns: 1 } })
+                for await (const raw of q as AsyncGenerator<import('@anthropic-ai/claude-agent-sdk').SDKMessage>) {
+                  const msg = raw as unknown as { type: string; message?: { content?: unknown } }
+                  if (msg.type === 'assistant' && Array.isArray(msg.message?.content)) {
+                    for (const part of msg.message.content as Array<{ type?: string; text?: string }>) {
+                      if (part.type === 'text' && typeof part.text === 'string') text += part.text
+                    }
+                  }
+                }
+                return text
+              },
+            })
+          } catch { /* swallow — summary is non-critical */ }
+        })()
+      }
       return
     }
     case 'sessions-read-jsonl': {
