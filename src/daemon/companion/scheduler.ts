@@ -23,6 +23,8 @@ export interface CompanionSchedulerDeps {
   /** Wake Claude up. Exceptions are swallowed + logged. */
   onTick: () => Promise<void>
   log: (tag: string, line: string) => void
+  /** Optional name for log disambiguation (e.g. 'push', 'introspect'). */
+  name?: string
 }
 
 export function startCompanionScheduler(deps: CompanionSchedulerDeps): () => Promise<void> {
@@ -43,14 +45,14 @@ export function startCompanionScheduler(deps: CompanionSchedulerDeps): () => Pro
           await deps.onTick()
         }
       } catch (err) {
-        deps.log('SCHED', `tick failed: ${err instanceof Error ? err.message : String(err)}`)
+        deps.log('SCHED', `${deps.name ?? 'companion'} tick failed: ${err instanceof Error ? err.message : String(err)}`)
       }
       scheduleNext()
     }, wait)
   }
 
   scheduleNext()
-  deps.log('SCHED', `companion scheduler started — interval ${deps.intervalMs}ms ± ${Math.round(deps.jitterRatio * 100)}%`)
+  deps.log('SCHED', `${deps.name ?? 'companion'} scheduler started — interval ${deps.intervalMs}ms ± ${Math.round(deps.jitterRatio * 100)}%`)
 
   return async () => {
     stopped = true

@@ -64,6 +64,7 @@ async function main() {
   const COMPANION_TICK_JITTER = 0.3                  // ±30%
 
   const stopScheduler = startCompanionScheduler({
+    name: 'push',
     intervalMs: COMPANION_TICK_INTERVAL_MS,
     jitterRatio: COMPANION_TICK_JITTER,
     isEnabled: () => loadCompanionConfig(STATE_DIR).enabled,
@@ -105,6 +106,7 @@ async function main() {
   const INTROSPECT_TICK_INTERVAL_MS = 24 * 60 * 60 * 1000  // 24 h base
   const INTROSPECT_TICK_JITTER = 0.3
   const stopIntrospect = startCompanionScheduler({
+    name: 'introspect',
     intervalMs: INTROSPECT_TICK_INTERVAL_MS,
     jitterRatio: INTROSPECT_TICK_JITTER,
     isEnabled: () => loadCompanionConfig(STATE_DIR).enabled,
@@ -123,7 +125,7 @@ async function main() {
         log('INTROSPECT', 'skip tick — no default_chat_id configured')
         return
       }
-      const memoryRoot = `${STATE_DIR}/memory`
+      const memoryRoot = join(STATE_DIR, 'memory')
       const events = makeEventsStore(memoryRoot, chatId)
       const observations = makeObservationsStore(memoryRoot, chatId)
       const agent = makeIntrospectAgent()

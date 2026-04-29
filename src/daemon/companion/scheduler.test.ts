@@ -73,4 +73,29 @@ describe('startCompanionScheduler', () => {
     await vi.advanceTimersByTimeAsync(5000)
     expect(onTick).not.toHaveBeenCalled()
   })
+
+  it('uses name in startup log when provided', async () => {
+    const logs: string[] = []
+    const stop = startCompanionScheduler({
+      intervalMs: 1000, jitterRatio: 0,
+      isEnabled: () => false, isSnoozed: () => false,
+      onTick: async () => {},
+      log: (tag, line) => logs.push(`${tag} ${line}`),
+      name: 'push',
+    })
+    expect(logs.some(l => l.includes('push scheduler started'))).toBe(true)
+    await stop()
+  })
+
+  it('falls back to "companion" when no name provided', async () => {
+    const logs: string[] = []
+    const stop = startCompanionScheduler({
+      intervalMs: 1000, jitterRatio: 0,
+      isEnabled: () => false, isSnoozed: () => false,
+      onTick: async () => {},
+      log: (tag, line) => logs.push(`${tag} ${line}`),
+    })
+    expect(logs.some(l => l.includes('companion scheduler started'))).toBe(true)
+    await stop()
+  })
 })
