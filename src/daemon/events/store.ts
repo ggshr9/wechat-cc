@@ -6,10 +6,12 @@
  *
  * Layout: <stateRoot>/<chatId>/events.jsonl
  * Append uses fs.promises.appendFile with `\n` — each call is one line.
- * No locking: introspect cron + daemon both append, but appendFile is atomic
- * for single-line writes on POSIX (PIPE_BUF guarantees lines ≤ 4KB stay
- * intact across concurrent writers). We keep individual records under 4KB by
- * convention (reasoning truncated at 2KB).
+ * Concurrency: appendFile is best-effort atomic on POSIX up to PIPE_BUF
+ * (512B macOS / 4KB Linux). Writes exceeding this may interleave with
+ * concurrent writers and produce a corrupt line — readers must skip
+ * malformed lines (which they do). We cap reasoning at 2KB and push_text
+ * at 1KB to keep typical lines small, but Chinese (UTF-8 multi-byte) +
+ * JSON escapes can still push a single record over macOS's 512B limit.
  */
 import { existsSync, mkdirSync } from 'node:fs'
 import { appendFile, readFile } from 'node:fs/promises'
@@ -39,6 +41,10 @@ export interface EventsStore {
 }
 
 const REASONING_MAX = 2048
+// push_text is the message Claude pushed to the user. Cap it so a long
+// generated reply can't blow PIPE_BUF and risk interleaving with another
+// concurrent appendFile.
+const PUSH_TEXT_MAX = 1024
 
 function newEventId(): string {
   return `evt_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
@@ -56,7 +62,16 @@ export function makeEventsStore(stateRoot: string, chatId: string): EventsStore 
       const reasoning = rec.reasoning.length > REASONING_MAX
         ? rec.reasoning.slice(0, REASONING_MAX) + '…'
         : rec.reasoning
-      const full: EventRecord = { ...rec, reasoning, id, ts }
+      const push_text = rec.push_text !== undefined && rec.push_text.length > PUSH_TEXT_MAX
+        ? rec.push_text.slice(0, PUSH_TEXT_MAX) + '…'
+        : rec.push_text
+      const full: EventRecord = {
+        ...rec,
+        reasoning,
+        ...(push_text !== undefined ? { push_text } : {}),
+        id,
+        ts,
+      }
       await appendFile(path, JSON.stringify(full) + '\n', { mode: 0o600 })
       return id
     },
@@ -64,7 +79,16 @@ export function makeEventsStore(stateRoot: string, chatId: string): EventsStore 
       if (!existsSync(path)) return []
       const raw = await readFile(path, 'utf8')
       const lines = raw.split('\n').filter(line => line.length > 0)
-      let parsed = lines.map(line => JSON.parse(line) as EventRecord)
+      let parsed: EventRecord[] = []
+      for (const line of lines) {
+        try {
+          parsed.push(JSON.parse(line) as EventRecord)
+        } catch {
+          // Skip malformed line — concurrent write interleave or partial flush.
+          // Append-only semantics + filtered read keeps the store readable even
+          // when a single line is corrupt.
+        }
+      }
       if (opts.since) {
         parsed = parsed.filter(r => r.ts >= opts.since!)
       }

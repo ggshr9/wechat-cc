@@ -52,4 +52,30 @@ describe('events store', () => {
     const store = makeEventsStore(dir, 'fresh_chat')
     expect(await store.list()).toEqual([])
   })
+
+  it('skips malformed lines instead of throwing', async () => {
+    const { writeFileSync } = await import('node:fs')
+    const { mkdirSync } = await import('node:fs')
+    mkdirSync(join(dir, 'chat_x'), { recursive: true })
+    // Mix valid + malformed lines
+    writeFileSync(
+      join(dir, 'chat_x', 'events.jsonl'),
+      JSON.stringify({ id: 'evt_1', ts: '2026-01-01T00:00:00Z', kind: 'cron_eval_skipped', trigger: 't', reasoning: 'r' }) + '\n' +
+      'this-is-not-json\n' +
+      JSON.stringify({ id: 'evt_2', ts: '2026-01-02T00:00:00Z', kind: 'cron_eval_skipped', trigger: 't', reasoning: 'r' }) + '\n',
+    )
+    const store = makeEventsStore(dir, 'chat_x')
+    const all = await store.list()
+    expect(all).toHaveLength(2)
+    expect(all.map(r => r.id)).toEqual(['evt_1', 'evt_2'])
+  })
+
+  it('truncates push_text exceeding PUSH_TEXT_MAX', async () => {
+    const store = makeEventsStore(dir, 'chat_x')
+    const long = 'x'.repeat(2000)
+    await store.append({ kind: 'cron_eval_pushed', trigger: 't', reasoning: 'r', push_text: long })
+    const [rec] = await store.list()
+    expect(rec.push_text!.length).toBeLessThanOrEqual(1025) // 1024 + ellipsis
+    expect(rec.push_text!.endsWith('…')).toBe(true)
+  })
 })
