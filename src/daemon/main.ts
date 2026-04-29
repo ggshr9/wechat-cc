@@ -212,6 +212,18 @@ async function main() {
     }
   }
 
+  // Track daily activity for this chat — feeds milestone detector's
+  // 7-day-streak check. Fire-and-forget; failures don't impact reply.
+  async function recordActivity(chatId: string, when: Date): Promise<void> {
+    try {
+      const { makeActivityStore } = await import('./activity/store.ts')
+      const store = makeActivityStore(join(STATE_DIR, 'memory'), chatId)
+      await store.recordInbound(when)
+    } catch (err) {
+      log('ACTIVITY', `record failed for ${chatId}: ${err instanceof Error ? err.message : err}`)
+    }
+  }
+
   // Milestone detection — non-blocking, fire-and-forget. Runs once on
   // daemon startup (per known chat) and after each successful inbound. The
   // milestones store dedupes by id so repeated invocations are cheap and
@@ -328,6 +340,7 @@ async function main() {
       // successful routing. Non-blocking so an unrelated failure can never
       // delay the next inbound or impact reply latency.
       void maybeWriteWelcomeObservation(msg.chatId)
+      void recordActivity(msg.chatId, new Date(msg.createTimeMs || Date.now()))
       void fireMilestonesFor(msg.chatId)
     },
   })

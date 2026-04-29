@@ -3,20 +3,20 @@
  * fs only, not net/SDK). Designed to be cheap enough to call after every
  * inbound message + on daemon startup.
  *
- * v0.4 scope:
+ * v0.4.1 scope:
  *   - turnCount: line count of chat's _default project session jsonl
  *   - handoffMarkerExists: existsSync any project's memory/_handoff.md
  *   - pushRepliedHistory: events.jsonl scan for cron_eval_pushed events
- *   - daysWithMessage: empty array for v0.4 — 7-day-streak deferred to v0.4.1
+ *   - daysWithMessage: read from activity.jsonl via makeActivityStore
  *
- * The 5 milestones currently fire-able with this context: ms_100msg,
- * ms_1000msg, ms_first_handoff, ms_first_push_reply. ms_7day_streak needs
- * per-chat daily activity tracking which is v0.4.1 work.
+ * All 5 milestones now fire-able: ms_100msg, ms_1000msg, ms_first_handoff,
+ * ms_first_push_reply, ms_7day_streak.
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { DetectorContext } from './detector'
 import { makeEventsStore } from '../events/store'
+import { makeActivityStore } from '../activity/store'
 import { makeSessionStore } from '../../core/session-store'
 import { resolveProjectJsonlPath } from '../sessions/path-resolver'
 
@@ -58,11 +58,19 @@ export async function buildDetectorContext(deps: BuildContextDeps): Promise<Dete
   const pushed = (await events.list()).filter(e => e.kind === 'cron_eval_pushed')
   const pushRepliedHistory = pushed.map(e => e.id)
 
+  // daysWithMessage: real values from activity.jsonl. v0.4 stubbed this
+  // to []; v0.4.1 wires it. The detector's has7DayStreak helper is now
+  // fed real data — streak milestone fires when 7 consecutive UTC days
+  // each have at least 1 inbound message.
+  const activity = makeActivityStore(memoryRoot, deps.chatId)
+  const recent = await activity.recentDays(7)
+  const daysWithMessage = recent.map(r => r.date)
+
   return {
     chatId: deps.chatId,
     turnCount,
     handoffMarkerExists,
     pushRepliedHistory,
-    daysWithMessage: [],  // v0.4.1: per-chat daily activity tracking
+    daysWithMessage,
   }
 }
