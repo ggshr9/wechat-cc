@@ -6,7 +6,7 @@
 
 <p align="center">
   <img alt="version"  src="https://img.shields.io/badge/cli-v1.2.0-blue">
-  <img alt="desktop"  src="https://img.shields.io/badge/desktop-v0.3.1-blue">
+  <img alt="desktop"  src="https://img.shields.io/badge/desktop-v0.4.0-blue">
   <img alt="platform" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey">
   <img alt="runtime"  src="https://img.shields.io/badge/runtime-Bun-black">
   <img alt="license"  src="https://img.shields.io/badge/license-MIT-green">
@@ -473,7 +473,7 @@ the OS package manager.
 
 - **CLI / daemon**: 1.2.0 — see [`package.json`](./package.json)
 - **Desktop bundle**: latest signed release is
-  [`desktop-v0.3.1`](https://github.com/ggshr9/wechat-cc/releases/tag/desktop-v0.3.1).
+  [`desktop-v0.4.0`](https://github.com/ggshr9/wechat-cc/releases/tag/desktop-v0.4.0).
   v0.4 / v0.4.1 features (双面镜子 dashboard, real introspect SDK,
   per-project summary, 7-day streak) are in `master` and will ship with the
   next desktop bundle cut.

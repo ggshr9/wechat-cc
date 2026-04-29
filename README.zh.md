@@ -6,7 +6,7 @@
 
 <p align="center">
   <img alt="version"  src="https://img.shields.io/badge/cli-v1.2.0-blue">
-  <img alt="desktop"  src="https://img.shields.io/badge/desktop-v0.3.1-blue">
+  <img alt="desktop"  src="https://img.shields.io/badge/desktop-v0.4.0-blue">
   <img alt="platform" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey">
   <img alt="runtime"  src="https://img.shields.io/badge/runtime-Bun-black">
   <img alt="license"  src="https://img.shields.io/badge/license-MIT-green">
@@ -383,7 +383,7 @@ Remove-Item "$env:USERPROFILE\.claude\channels\wechat" -Recurse -Force
 
 - **CLI / daemon**: 1.2.0 —— 见 [`package.json`](./package.json)
 - **桌面 bundle**: 最新签名 release 是
-  [`desktop-v0.3.1`](https://github.com/ggshr9/wechat-cc/releases/tag/desktop-v0.3.1)。
+  [`desktop-v0.4.0`](https://github.com/ggshr9/wechat-cc/releases/tag/desktop-v0.4.0)。
   v0.4 / v0.4.1 功能（双面镜子 dashboard、真 introspect SDK、per-project 摘要、7-day-streak）已经在 `master`，下次桌面 bundle 出版时一起 ship
 - **每个版本的 release notes**: [`docs/releases/`](./docs/releases/)
 - **架构 / 设计 spec**: [`docs/specs/`](./docs/specs/)
