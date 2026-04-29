@@ -1544,7 +1544,20 @@ input { font: inherit; color: inherit; }
   font-size: 15px;
   line-height: 1.4;
   color: #1A1A1A;
+  /* iOS-style overlay scrollbar — hidden by default, shown only while
+   * the user is actively scrolling (JS toggles `is-scrolling`). */
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
 }
+.phone-chat.is-scrolling { scrollbar-color: rgba(0, 0, 0, 0.28) transparent; }
+.phone-chat::-webkit-scrollbar { width: 3px; }
+.phone-chat::-webkit-scrollbar-track { background: transparent; }
+.phone-chat::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 2px;
+  transition: background 250ms ease-out;
+}
+.phone-chat.is-scrolling::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.28); }
 .phone-input {
   background: #F7F7F7;
   border-top: 1px solid #DCDCDC;

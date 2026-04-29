@@ -332,9 +332,15 @@ export async function openProjectDetail(deps, alias, opts = {}) {
   if (!detail || !meta || !jsonlBox) return
 
   detail.dataset.alias = alias
-  jsonlBox.innerHTML = `<p class="empty-state">加载中…</p>`
+  // Don't blank the body during auto-refresh ticks — would flash empty.
+  if (!opts.preserveScroll) {
+    jsonlBox.innerHTML = `<p class="empty-state">加载中…</p>`
+  }
   detail.classList.remove('dismissed')
   detail.setAttribute('aria-hidden', 'false')
+  // Start (or reset) the auto-refresh tick — gives the chat a near
+  // real-time feel when the WeChat user sends new messages.
+  if (!opts.preserveScroll) startDetailAutoRefresh(deps)
 
   try {
     const resp = await deps.invoke("wechat_cli_json", { args: ["sessions", "read-jsonl", alias, "--json"] })
@@ -377,23 +383,54 @@ export async function openProjectDetail(deps, alias, opts = {}) {
       jsonlBox.innerHTML = innerTurns
     }
 
-    // Scroll to and highlight the focused turn (search drill-down).
+    // Scroll behavior — three cases:
+    //   (1) focusTurn set (search drill-down): smooth-scroll the matched
+    //       turn into view + pulse highlight
+    //   (2) preserveScroll passed (auto-refresh tick): if user was at
+    //       bottom, follow the new bottom; otherwise restore prev scrollTop
+    //   (3) default (first open): jump to the most recent message
+    const scrollContainer = jsonlBox.querySelector('.phone-chat') || jsonlBox
     if (focusTurn !== null && focusTurn !== undefined) {
-      // Wait one tick for layout to settle before scrollIntoView.
       requestAnimationFrame(() => {
         const target = jsonlBox.querySelector(`[data-turn-index="${focusTurn}"]`)
         if (target) {
           target.scrollIntoView({ behavior: 'smooth', block: 'center' })
           target.classList.add('is-search-hit')
-          // Pulse the highlight off after 2s — long enough for the user to
-          // notice, short enough to not nag.
           setTimeout(() => target.classList.remove('is-search-hit'), 2000)
         }
       })
+    } else if (opts.preserveScroll) {
+      const { wasAtBottom, scrollTop } = opts.preserveScroll
+      requestAnimationFrame(() => {
+        if (wasAtBottom) scrollContainer.scrollTop = scrollContainer.scrollHeight
+        else scrollContainer.scrollTop = scrollTop
+      })
+    } else {
+      requestAnimationFrame(() => {
+        scrollContainer.scrollTop = scrollContainer.scrollHeight
+      })
     }
+
+    // Wire scrollbar-fade — show during scroll, hide after idle (iOS feel).
+    attachScrollbarFade(scrollContainer)
   } catch (err) {
     jsonlBox.innerHTML = `<p class="empty-state">读取失败：${escapeHtml(String(err.message || err))}</p>`
   }
+}
+
+// Adds an `is-scrolling` class to the chat container while the user is
+// actively scrolling, removes it ~700ms after the last scroll event.
+// CSS pairs this with thin/transparent scrollbar styling so the bar
+// only appears while in motion (matches iOS behavior).
+function attachScrollbarFade(el) {
+  if (!el || el.dataset.scrollFadeAttached === '1') return
+  el.dataset.scrollFadeAttached = '1'
+  let timer = null
+  el.addEventListener('scroll', () => {
+    el.classList.add('is-scrolling')
+    clearTimeout(timer)
+    timer = setTimeout(() => el.classList.remove('is-scrolling'), 700)
+  })
 }
 
 export function closeProjectDetail() {
@@ -401,6 +438,42 @@ export function closeProjectDetail() {
   if (detail) {
     detail.classList.add('dismissed')
     detail.setAttribute('aria-hidden', 'true')
+  }
+  stopDetailAutoRefresh()
+}
+
+// Auto-refresh the open session detail every ~4s — gives the chat a
+// near-real-time feel when the WeChat user sends a new message. Clears
+// itself when the detail closes, the user changes panes, or a new
+// detail is opened (which will start its own timer).
+let detailAutoTimer = null
+
+export function startDetailAutoRefresh(deps, intervalMs = 4000) {
+  stopDetailAutoRefresh()
+  detailAutoTimer = setInterval(async () => {
+    const detail = document.getElementById("sessions-detail")
+    if (!detail || detail.classList.contains('dismissed')) {
+      stopDetailAutoRefresh()
+      return
+    }
+    const alias = detail.dataset.alias
+    if (!alias) return
+    // Capture scroll state so the re-render preserves user position.
+    const chat = document.querySelector('.phone-chat')
+    const wasAtBottom = chat
+      ? (chat.scrollTop + chat.clientHeight >= chat.scrollHeight - 6)
+      : true
+    const scrollTop = chat?.scrollTop ?? 0
+    try {
+      await openProjectDetail(deps, alias, { preserveScroll: { wasAtBottom, scrollTop } })
+    } catch { /* network blip — try again next tick */ }
+  }, intervalMs)
+}
+
+export function stopDetailAutoRefresh() {
+  if (detailAutoTimer) {
+    clearInterval(detailAutoTimer)
+    detailAutoTimer = null
   }
 }
 
