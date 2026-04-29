@@ -210,3 +210,21 @@ describe('sessions search', () => {
     })
   })
 })
+
+describe('demo seed/unseed', () => {
+  it('parses seed with --chat-id', () => {
+    expect(parseCliArgs(['demo', 'seed', '--chat-id', 'chat_x', '--json'])).toEqual({
+      cmd: 'demo-seed', chatId: 'chat_x', json: true,
+    })
+  })
+  it('parses seed without --chat-id (null)', () => {
+    expect(parseCliArgs(['demo', 'seed'])).toEqual({
+      cmd: 'demo-seed', chatId: null, json: false,
+    })
+  })
+  it('parses unseed', () => {
+    expect(parseCliArgs(['demo', 'unseed', '--json'])).toEqual({
+      cmd: 'demo-unseed', chatId: null, json: true,
+    })
+  })
+})

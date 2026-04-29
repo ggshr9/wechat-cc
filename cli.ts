@@ -34,6 +34,8 @@ export type CliArgs =
   | { cmd: 'sessions-search'; query: string; json: boolean; limit: number }
   | { cmd: 'logs'; tail: number; json: boolean }
   | { cmd: 'update'; check: boolean; json: boolean }
+  | { cmd: 'demo-seed'; chatId: string | null; json: boolean }
+  | { cmd: 'demo-unseed'; chatId: string | null; json: boolean }
   | { cmd: 'help' }
 
 export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void }): CliArgs {
@@ -164,6 +166,14 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
         json: rest.includes('--json'),
       }
     }
+    case 'demo': {
+      if (rest[0] === 'seed' || rest[0] === 'unseed') {
+        const chatIdx = rest.indexOf('--chat-id')
+        const chatId = chatIdx >= 0 ? rest[chatIdx + 1] ?? null : null
+        return { cmd: rest[0] === 'seed' ? 'demo-seed' : 'demo-unseed', chatId, json: rest.includes('--json') }
+      }
+      return { cmd: 'help' }
+    }
     case 'logs': {
       const idx = rest.indexOf('--tail')
       const tail = idx >= 0 ? Number.parseInt(rest[idx + 1] ?? '', 10) : 50
@@ -244,6 +254,12 @@ Usage:
   wechat-cc sessions search <query> [--limit N] [--json]
                         Naive case-insensitive substring search across
                         all sessions.json-registered jsonls.
+  wechat-cc demo seed [--chat-id <id>] [--json]
+                        Populate sample observations + milestones + events
+                        for first-impression / screenshot use. Defaults to
+                        companion default_chat_id if --chat-id omitted.
+  wechat-cc demo unseed [--chat-id <id>] [--json]
+                        Remove items written by \`demo seed\`. Idempotent.
   wechat-cc logs [--tail N] [--json]
                         Tail the daemon's channel.log. Default --tail 50.
                         --json returns parsed entries (timestamp, tag,
@@ -641,6 +657,22 @@ async function main() {
       }
       saveAgentConfig(STATE_DIR, next)
       console.log(`provider set: ${next.provider}${next.model ? ` (${next.model})` : ''} unattended=${next.dangerouslySkipPermissions}`)
+      return
+    }
+    case 'demo-seed':
+    case 'demo-unseed': {
+      const { loadCompanionConfig } = await import('./src/daemon/companion/config')
+      const cfg = loadCompanionConfig(STATE_DIR)
+      const chatId = parsed.chatId ?? cfg.default_chat_id
+      if (!chatId) {
+        const msg = 'no default chat configured — pass --chat-id or run setup first'
+        console.error(parsed.json ? JSON.stringify({ ok: false, error: msg }, null, 2) : msg)
+        process.exit(1)
+      }
+      const { seedDemo, unseedDemo } = await import('./src/daemon/demo/seed')
+      const fn = parsed.cmd === 'demo-seed' ? seedDemo : unseedDemo
+      const result = await fn({ stateDir: STATE_DIR, chatId })
+      console.log(parsed.json ? JSON.stringify({ ok: true, ...result }, null, 2) : JSON.stringify(result))
       return
     }
     case 'help': {

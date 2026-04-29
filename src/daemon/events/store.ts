@@ -37,6 +37,13 @@ export interface EventRecord {
 
 export interface EventsStore {
   append(rec: Omit<EventRecord, 'id' | 'ts'>): Promise<string>  // returns generated id
+  /**
+   * @internal Test seam — accepts a fully-formed record (id + ts caller-
+   * supplied). Production code should use append() which generates id + ts.
+   * Used by demo seeding to write records with stable evt_demo_* ids so
+   * unseed can target them by id prefix.
+   */
+  appendRaw(rec: EventRecord): Promise<void>
   list(opts?: { limit?: number; since?: string }): Promise<EventRecord[]>
 }
 
@@ -74,6 +81,14 @@ export function makeEventsStore(stateRoot: string, chatId: string): EventsStore 
       }
       await appendFile(path, JSON.stringify(full) + '\n', { mode: 0o600 })
       return id
+    },
+    /**
+     * @internal Test seam — accepts a fully-formed record (id + ts caller-
+     * supplied). Production code should use append() which generates id + ts.
+     */
+    async appendRaw(rec) {
+      if (!existsSync(chatDir)) mkdirSync(chatDir, { recursive: true, mode: 0o700 })
+      await appendFile(path, JSON.stringify(rec) + '\n', { mode: 0o600 })
     },
     async list(opts = {}) {
       if (!existsSync(path)) return []
