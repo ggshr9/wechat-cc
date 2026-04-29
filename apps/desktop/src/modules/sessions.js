@@ -659,11 +659,14 @@ function phoneFrameHtml({ contactName, chatContent }) {
 function wechatRow({ side, role, avatarText, avatarColor: bg, avatarClass, text, quotePrefix }) {
   const avatarStyle = bg ? ` style="background:${escapeHtml(bg)}"` : ''
   const avatarCls = avatarClass ? ` ${escapeHtml(avatarClass)}` : ''
-  const quoteHtml = quotePrefix ? `<div class="wechat-quote-marker">引用了一条消息</div>` : ''
-  const textHtml = text ? escapeHtml(text) : ''
+  const textHtml = text ? `<div class="wechat-bubble">${escapeHtml(text)}</div>` : ''
+  // Quote ref renders AFTER the bubble as a small grey card (matches
+  // real WeChat position). Without msg_id resolution we can only show
+  // the marker label; the actual quoted content lookup is deferred.
+  const quoteHtml = quotePrefix ? `<div class="wechat-quote-ref">引用了一条消息</div>` : ''
   return `<div class="wechat-row ${side}" data-role="${escapeHtml(role)}">` +
     `<div class="wechat-avatar${avatarCls}"${avatarStyle}>${escapeHtml(avatarText)}</div>` +
-    `<div class="wechat-bubble-wrap"><div class="wechat-bubble">${quoteHtml}${textHtml}</div></div>` +
+    `<div class="wechat-bubble-wrap">${textHtml}${quoteHtml}</div>` +
     `</div>`
 }
 

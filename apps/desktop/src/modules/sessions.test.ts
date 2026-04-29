@@ -644,14 +644,19 @@ describe('turnHtmlCompact', () => {
     expect(imgIdx).toBeGreaterThan(textIdx)
   })
 
-  it('renders [引用] prefix as a quote marker inside the bubble', () => {
+  it('renders [引用] prefix as a quote-ref card BELOW the bubble', () => {
     const html = turnHtmlCompact({
       type: 'user',
       message: { content: [{ type: 'text', text: '<wechat user="GSR">[引用]\n那么图片呢</wechat>' }] },
     })
-    expect(html).toContain('wechat-quote-marker')
+    expect(html).toContain('wechat-quote-ref')
     expect(html).toContain('那么图片呢')
-    expect(html).not.toContain('[引用]')   // marker stripped from text
+    expect(html).not.toContain('[引用]')           // marker stripped from text
+    // Quote ref must come AFTER the bubble in DOM order (matches WeChat).
+    const bubbleIdx = html.indexOf('wechat-bubble"')
+    const quoteIdx = html.indexOf('wechat-quote-ref')
+    expect(bubbleIdx).toBeGreaterThan(-1)
+    expect(quoteIdx).toBeGreaterThan(bubbleIdx)
   })
 
   it('suppresses daemon "(non-text message)" placeholder when there are attachments', () => {

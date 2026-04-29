@@ -1696,18 +1696,27 @@ input { font: inherit; color: inherit; }
   color: #4A4A4A;
 }
 
-/* Quote marker — appears at the top of a bubble when the user replied
- * to a previous message (envelope had `[引用]` prefix). We don't have
- * the original message body, just the marker, so render an italic grey
- * hint line. */
-.wechat-quote-marker {
-  font-size: 12px;
-  color: #888;
-  font-style: italic;
-  margin: -2px 0 4px;
-  padding-bottom: 4px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+/* Quote ref — small grey card BELOW the reply bubble. Position +
+ * shape match real WeChat; the actual quoted content (author name +
+ * preview/thumbnail) needs daemon-side msg_id storage and is deferred
+ * to a future bundle. For now we just show the marker label. */
+.wechat-quote-ref {
+  margin-top: 4px;
+  align-self: flex-start;
+  background: rgba(0, 0, 0, 0.05);
+  color: #6E6E6E;
+  font-size: 12.5px;
+  padding: 5px 10px;
+  border-radius: 4px;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+/* Right-aligned bubbles: quote ref hugs the right edge to match the bubble. */
+.wechat-row.right .wechat-bubble-wrap { display: flex; flex-direction: column; align-items: flex-end; }
+.wechat-row.right .wechat-quote-ref { align-self: flex-end; }
+.wechat-row.left  .wechat-bubble-wrap { display: flex; flex-direction: column; align-items: flex-start; }
 
 .sessions-jsonl {
   flex: 1; min-height: 0;
