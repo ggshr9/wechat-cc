@@ -1460,6 +1460,83 @@ input { font: inherit; color: inherit; }
 }
 .sessions-detail-mode-toggle .mode-seg + .mode-seg { border-left: 1px solid var(--hair-2); }
 .sessions-detail-actions { margin-left: auto; display: flex; gap: 6px; }
+/* ─── WeChat-style chat bubbles (compact mode, Bundle E) ─────────
+ * Refined 1:1 replica of iOS WeChat (chat bg #EDEDED, user bubble
+ * #95EC69, other bubble white, 4px corners, 40px rounded-square
+ * avatars, tail pointing toward avatar). Values cross-verified from
+ * multiple observed-WeChat references (see docs/specs).
+ *
+ * Detailed mode keeps the existing .jsonl-turn[data-role=...] cards.
+ */
+.sessions-jsonl:has(.wechat-row) {
+  background: #EDEDED;
+  padding: 16px 14px;
+  font-family: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.4;
+  color: #1A1A1A;
+}
+.wechat-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+  align-items: flex-start;
+}
+.wechat-row.right { flex-direction: row-reverse; }
+.wechat-avatar {
+  width: 40px; height: 40px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; font-weight: 500;
+  color: #fff;
+  background: #6B655C;
+  user-select: none;
+}
+.wechat-avatar-cc {
+  background: #586672;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+.wechat-bubble-wrap { max-width: 70%; min-width: 0; }
+.wechat-bubble {
+  padding: 9px 12px;
+  border-radius: 4px;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  position: relative;
+}
+.wechat-row.left .wechat-bubble {
+  background: #FFFFFF;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+}
+.wechat-row.right .wechat-bubble {
+  background: #95EC69;
+}
+/* Tail — small triangle pointing toward avatar, top-aligned. */
+.wechat-row.left .wechat-bubble::before {
+  content: ''; position: absolute;
+  left: -5px; top: 10px;
+  width: 0; height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-right: 6px solid #FFFFFF;
+}
+.wechat-row.right .wechat-bubble::after {
+  content: ''; position: absolute;
+  right: -5px; top: 10px;
+  width: 0; height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 6px solid #95EC69;
+}
+/* Search drill-down highlight pulse for chat bubbles — keep visible
+ * over WeChat backdrop without breaking the chat aesthetic. */
+.jsonl-turn-group.is-search-hit .wechat-bubble {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
+}
+
 .sessions-jsonl {
   flex: 1; min-height: 0;
   padding: 18px 22px;

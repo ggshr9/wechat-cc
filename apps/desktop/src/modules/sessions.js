@@ -100,6 +100,64 @@ export function extractClaudeReplies(turn, opts = {}) {
 }
 
 /**
+ * Extract the WeChat envelope metadata (user, ts, cleaned text) from a
+ * user-type turn. Returns null for non-user turns. The envelope is the
+ * `<wechat chat_id="..." user="..." ts="...">...</wechat>` wrapper
+ * applied by daemon/main.ts to every inbound message before SDK ingest.
+ */
+export function extractWechatMeta(turn) {
+  if (!turn || turn.type !== 'user') return null
+  const content = turn.message?.content
+  let raw = ''
+  if (typeof content === 'string') raw = content
+  else if (Array.isArray(content)) {
+    raw = content
+      .filter(p => p && p.type === 'text' && typeof p.text === 'string')
+      .map(p => p.text)
+      .join('\n')
+  }
+  if (!raw) return { user: null, ts: null, text: '' }
+
+  const open = raw.match(/<wechat\b([^>]*)>([\s\S]*?)<\/wechat>/)
+  if (!open) return { user: null, ts: null, text: raw.trim() }
+  const attrs = open[1] || ''
+  const inner = (open[2] || '').trim()
+  const userMatch = attrs.match(/\buser="([^"]*)"/)
+  const tsMatch = attrs.match(/\bts="([^"]*)"/)
+  const tsNum = tsMatch ? Number(tsMatch[1]) : NaN
+  return {
+    user: userMatch ? userMatch[1] : null,
+    ts: Number.isFinite(tsNum) ? tsNum : null,
+    text: inner,
+  }
+}
+
+/**
+ * Default-avatar initial — first non-whitespace char of the name,
+ * uppercased for Latin scripts so "alice" → "A". CJK passes through.
+ */
+export function avatarInitial(name) {
+  if (!name) return '?'
+  const trimmed = String(name).trim()
+  if (!trimmed) return '?'
+  const ch = trimmed.charAt(0)
+  return /[a-zA-Z]/.test(ch) ? ch.toUpperCase() : ch
+}
+
+/**
+ * Deterministic muted hsl color from a seed string. Same seed always
+ * yields the same color, so a contact's avatar stays consistent across
+ * reloads. 35% saturation + 50% lightness keeps it muted (matches
+ * WeChat's tone — not loud).
+ */
+export function avatarColor(seed) {
+  const s = String(seed || '?')
+  let h = 0
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360
+  return `hsl(${h}, 35%, 50%)`
+}
+
+/**
  * Returns true if any turn in the session calls the wechat reply tool —
  * used to gate the text-fallback in extractClaudeReplies. Once Claude has
  * the reply tool available, plain-text assistant content is wrap-up
@@ -335,30 +393,64 @@ export function turnHtml(turn) {
   return `<div class="jsonl-turn" data-role="other">[${escapeHtml(turn.type || 'unknown')}]</div>`
 }
 
-// Compact-mode renderer — only emits chat bubbles for the actual user message
-// and Claude's actual reply. Everything else (attachments, internal tool
-// calls / results, system events, queue-operation, last-prompt, unknown
-// shapes) returns ''. The caller filters empty strings before mounting so
-// hidden turns don't even produce an empty .jsonl-turn-group wrapper.
-//
-// `opts.sessionHasReplyTool` should be precomputed once per session via
-// sessionHasReplyTool(turns) and threaded into every per-turn call so the
-// text-fallback path stays consistent across the whole conversation.
+/**
+ * Compact-mode renderer — produces WeChat-style chat-bubble markup. Only
+ * the actual user message and Claude's actual reply are visible;
+ * attachments, tool calls, tool results, system events all return ''.
+ * The caller filters empty strings before mounting.
+ *
+ * Markup layout per row:
+ *
+ *   .wechat-row.{left|right}[data-role="user"|"assistant"]
+ *     .wechat-avatar[.wechat-avatar-cc][style=bg-color]   "G" or "cc"
+ *     .wechat-bubble-wrap
+ *       .wechat-bubble                                    text
+ *
+ * Visual replica of iOS WeChat: #EDEDED background, #95EC69 right
+ * bubble, #FFFFFF left bubble, 4px corners, tail pointing toward avatar.
+ *
+ * `opts.sessionHasReplyTool` precomputed once per session — gates the
+ * text fallback so wrap-up "已回复。" status isn't rendered.
+ */
 export function turnHtmlCompact(turn, opts = {}) {
   if (!turn || typeof turn !== 'object') return ''
+
   if (turn.type === 'user') {
-    const text = extractUserText(turn)
-    if (!text) return ''
-    return `<div class="jsonl-turn" data-role="user">${escapeHtml(text)}</div>`
+    const meta = extractWechatMeta(turn)
+    if (!meta || !meta.text) return ''
+    return wechatRow({
+      side: 'left',
+      role: 'user',
+      avatarText: avatarInitial(meta.user),
+      avatarColor: avatarColor(meta.user || ''),
+      text: meta.text,
+    })
   }
+
   if (turn.type === 'assistant') {
     const replies = extractClaudeReplies(turn, { sessionHasReplyTool: !!opts.sessionHasReplyTool })
     if (replies.length === 0) return ''
     return replies
-      .map(r => `<div class="jsonl-turn" data-role="assistant">${escapeHtml(r)}</div>`)
+      .map(r => wechatRow({
+        side: 'right',
+        role: 'assistant',
+        avatarText: 'cc',
+        avatarClass: 'wechat-avatar-cc',
+        text: r,
+      }))
       .join('')
   }
+
   return ''
+}
+
+function wechatRow({ side, role, avatarText, avatarColor: bg, avatarClass, text }) {
+  const avatarStyle = bg ? ` style="background:${escapeHtml(bg)}"` : ''
+  const avatarCls = avatarClass ? ` ${escapeHtml(avatarClass)}` : ''
+  return `<div class="wechat-row ${side}" data-role="${escapeHtml(role)}">` +
+    `<div class="wechat-avatar${avatarCls}"${avatarStyle}>${escapeHtml(avatarText)}</div>` +
+    `<div class="wechat-bubble-wrap"><div class="wechat-bubble">${escapeHtml(text)}</div></div>` +
+    `</div>`
 }
 
 // Toggle handler — called from main.js when the user clicks one of the

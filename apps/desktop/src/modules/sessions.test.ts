@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error JS sibling
-import { groupProjectsByRecency, projectRow, searchHitRow, turnHtml, turnHtmlCompact, extractUserText, extractClaudeReplies, sessionHasReplyTool, buildExportMarkdown } from './sessions.js'
+import { groupProjectsByRecency, projectRow, searchHitRow, turnHtml, turnHtmlCompact, extractUserText, extractClaudeReplies, sessionHasReplyTool, buildExportMarkdown, extractWechatMeta, avatarInitial, avatarColor } from './sessions.js'
 
 describe('groupProjectsByRecency', () => {
   const now = Date.now()
@@ -215,6 +215,81 @@ describe('turnHtml', () => {
   })
 })
 
+describe('extractWechatMeta', () => {
+  it('extracts user, ts, and text from envelope', () => {
+    const turn = {
+      type: 'user',
+      message: { content: [{ type: 'text', text: '<wechat user="GSR" ts="1777462246591" chat_id="x">我是谁</wechat>' }] },
+    }
+    const meta = extractWechatMeta(turn)
+    expect(meta?.user).toBe('GSR')
+    expect(meta?.ts).toBe(1777462246591)
+    expect(meta?.text).toBe('我是谁')
+  })
+
+  it('returns null fields when envelope absent', () => {
+    const turn = { type: 'user', message: { content: 'hi' } }
+    const meta = extractWechatMeta(turn)
+    expect(meta?.user).toBeNull()
+    expect(meta?.ts).toBeNull()
+    expect(meta?.text).toBe('hi')
+  })
+
+  it('returns null for non-user turns', () => {
+    expect(extractWechatMeta({ type: 'assistant', message: {} })).toBeNull()
+    expect(extractWechatMeta({ type: 'attachment' })).toBeNull()
+  })
+
+  it('handles ts that is not a parseable number gracefully', () => {
+    const turn = {
+      type: 'user',
+      message: { content: [{ type: 'text', text: '<wechat user="X" ts="abc">hi</wechat>' }] },
+    }
+    expect(extractWechatMeta(turn)?.ts).toBeNull()
+  })
+})
+
+describe('avatarInitial', () => {
+  it('returns uppercased first char for latin names', () => {
+    expect(avatarInitial('GSR')).toBe('G')
+    expect(avatarInitial('alice')).toBe('A')
+  })
+
+  it('returns first char as-is for CJK', () => {
+    expect(avatarInitial('张三')).toBe('张')
+    expect(avatarInitial('李华')).toBe('李')
+  })
+
+  it('falls back to "?" on empty/null/undefined', () => {
+    expect(avatarInitial('')).toBe('?')
+    expect(avatarInitial(null)).toBe('?')
+    expect(avatarInitial(undefined)).toBe('?')
+  })
+
+  it('skips leading whitespace', () => {
+    expect(avatarInitial('  Bob')).toBe('B')
+  })
+})
+
+describe('avatarColor', () => {
+  it('returns an hsl string', () => {
+    expect(avatarColor('GSR')).toMatch(/^hsl\(\d+,\s*\d+%,\s*\d+%\)$/)
+  })
+
+  it('is deterministic — same seed → same color', () => {
+    expect(avatarColor('GSR')).toBe(avatarColor('GSR'))
+  })
+
+  it('different seeds produce different colors (collision tolerated, but common cases differ)', () => {
+    expect(avatarColor('GSR')).not.toBe(avatarColor('Alice'))
+  })
+
+  it('handles empty seed without crashing', () => {
+    expect(avatarColor('')).toMatch(/^hsl\(/)
+    expect(avatarColor(null)).toMatch(/^hsl\(/)
+  })
+})
+
 describe('extractUserText', () => {
   it('strips <wechat> envelope and returns inner text', () => {
     const turn = {
@@ -404,6 +479,57 @@ describe('turnHtmlCompact', () => {
     })
     expect(html).not.toContain('<script>alert(1)')
     expect(html).toContain('&lt;script&gt;')
+  })
+
+  // WeChat-style replica markup (refined V1 from Bundle E)
+  it('emits WeChat-style markup for user turn (left row, avatar with initial)', () => {
+    const html = turnHtmlCompact({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: '<wechat user="GSR" chat_id="x">我是谁</wechat>' }] },
+    })
+    expect(html).toContain('wechat-row')
+    expect(html).toContain('left')
+    expect(html).toContain('wechat-avatar')
+    expect(html).toContain('wechat-bubble')
+    expect(html).toContain('>G<')         // GSR → 'G'
+    expect(html).toContain('我是谁')
+    expect(html).not.toContain('<wechat')
+  })
+
+  it('uses "?" placeholder when wechat envelope is missing user attr', () => {
+    const html = turnHtmlCompact({
+      type: 'user',
+      message: { content: [{ type: 'text', text: 'hi' }] },
+    })
+    expect(html).toContain('wechat-avatar')
+    expect(html).toContain('>?<')
+  })
+
+  it('emits WeChat-style markup for assistant turn (right row, cc avatar)', () => {
+    const html = turnHtmlCompact({
+      type: 'assistant',
+      message: { content: [
+        { type: 'tool_use', name: 'mcp__wechat__reply', input: { text: '回复' } },
+      ]},
+    })
+    expect(html).toContain('wechat-row')
+    expect(html).toContain('right')
+    expect(html).toContain('wechat-avatar-cc')
+    expect(html).toContain('回复')
+  })
+
+  it('emits one row per reply for multi-reply assistant turns', () => {
+    const html = turnHtmlCompact({
+      type: 'assistant',
+      message: { content: [
+        { type: 'tool_use', name: 'mcp__wechat__reply', input: { text: '一' } },
+        { type: 'tool_use', name: 'mcp__wechat__reply', input: { text: '二' } },
+      ]},
+    })
+    const rowCount = (html.match(/wechat-row/g) || []).length
+    expect(rowCount).toBe(2)
+    expect(html).toContain('一')
+    expect(html).toContain('二')
   })
 
   it('hides plain-text assistant turn when sessionHasReplyTool=true (e.g. "已回复。")', () => {
