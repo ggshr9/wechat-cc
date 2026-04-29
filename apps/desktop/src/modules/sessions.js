@@ -34,9 +34,10 @@ function byRecencyDesc(a, b) {
 }
 
 export function projectRow(p, opts = {}) {
-  // 1-line LLM summary is deferred to v0.4.1 — helpers exist, no production
-  // caller. Until then the placeholder is honest about why this is empty.
-  const summaryText = p.summary || '(总结待 v0.4.1 上线)'
+  // Empty placeholder is just an em-dash — .summary.empty class greys it
+  // out via CSS. v0.4.1's summarizer fills this in within ~30s of the next
+  // sessions list-projects call (lazy fire-and-forget; refresh again to see).
+  const summaryText = p.summary || '—'
   const summaryClass = p.summary ? 'summary' : 'summary empty'
   const star = opts.isFavorite ? '★' : '☆'
   const favClass = opts.isFavorite ? ' is-favorite' : ''
@@ -307,6 +308,34 @@ export async function deleteProject(deps) {
     btn.textContent = '删除'
     btn.classList.remove('is-confirming')
   }, 3000)
+}
+
+// Auto-refresh tick while sessions pane is active. 30s — slower than logs
+// (10s) because sessions list-projects is heavier (reads sessions.json +
+// fires lazy summarizer) and last_used_at doesn't change as fast as a tail
+// log. main.js stops the tick on pane switch, same as the logs pattern.
+let sessionsAutoTimer = null
+
+export function startSessionsAutoRefresh(deps, intervalMs = 30000) {
+  if (sessionsAutoTimer) return
+  sessionsAutoTimer = setInterval(() => {
+    // Skip refresh when the search input has a query — would clobber the
+    // user's hits with the unfiltered project list.
+    const input = document.getElementById("sessions-search")
+    if (input?.value?.trim().length >= 2) return
+    // Skip refresh when the drill-down detail is open — the user is reading
+    // a transcript, not the list.
+    const detail = document.getElementById("sessions-detail")
+    if (detail && !detail.classList.contains('dismissed')) return
+    loadSessionsList(deps).catch(err => console.error("sessions auto-refresh failed", err))
+  }, intervalMs)
+}
+
+export function stopSessionsAutoRefresh() {
+  if (sessionsAutoTimer) {
+    clearInterval(sessionsAutoTimer)
+    sessionsAutoTimer = null
+  }
 }
 
 let searchTimer = null
