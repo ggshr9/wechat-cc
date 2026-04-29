@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error JS sibling
-import { groupProjectsByRecency, projectRow } from './sessions.js'
+import { groupProjectsByRecency, projectRow, searchHitRow } from './sessions.js'
 
 describe('groupProjectsByRecency', () => {
   const now = Date.now()
@@ -67,5 +67,20 @@ describe('projectRow', () => {
     expect(html).not.toContain('<script>')
     expect(html).not.toContain('<img onerror=x>')
     expect(html).toContain('&lt;script&gt;')
+  })
+})
+
+describe('searchHitRow', () => {
+  it('carries data-turn-index for drill-down', () => {
+    const html = searchHitRow({ alias: 'compass', session_id: 's', turn_index: 42, snippet: 'matched here' })
+    expect(html).toContain('data-turn-index="42"')
+    expect(html).toContain('data-alias="compass"')
+    expect(html).toContain('matched here')
+  })
+
+  it('escapes html in alias and snippet', () => {
+    const html = searchHitRow({ alias: '<x>', session_id: 's', turn_index: 0, snippet: '<script>' })
+    expect(html).not.toContain('<x>')
+    expect(html).not.toContain('<script>')
   })
 })

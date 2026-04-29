@@ -268,7 +268,10 @@ function wireEvents() {
   // Sessions — drill-down: click a project row → open detail
   document.getElementById("sessions-body")?.addEventListener("click", (e) => {
     const row = e.target.closest("[data-action='open-project']")
-    if (row) openProjectDetail(deps, row.dataset.alias)
+    if (!row) return
+    const turnIdx = row.dataset.turnIndex
+    const opts = turnIdx !== undefined ? { focusTurn: Number(turnIdx) } : {}
+    openProjectDetail(deps, row.dataset.alias, opts)
   })
   document.getElementById("sessions-back")?.addEventListener("click", closeProjectDetail)
   document.getElementById("sessions-favorite")?.addEventListener("click", () => {

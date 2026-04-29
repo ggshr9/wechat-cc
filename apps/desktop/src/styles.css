@@ -1426,6 +1426,19 @@ input { font: inherit; color: inherit; }
   border-color: var(--hair-2);
 }
 
+/* Search drill-down — flash the matching turn so the user can find it
+   in a long jsonl. 2s fade matches §1.3 #4 (微动 ≤180ms ease-out × N
+   pulses). Background-only per §1.3 #7. */
+.jsonl-turn-group {
+  position: relative;
+  border-radius: 8px;
+  padding: 0;
+  transition: background 600ms ease-out;
+}
+.jsonl-turn-group.is-search-hit {
+  background: var(--green-soft);
+}
+
 /* hoisted from inline style attrs on .crumb .meta in index.html */
 .crumb .meta {
   font-family: var(--mono);

@@ -101,7 +101,8 @@ export async function loadSessionsList(deps) {
   }
 }
 
-export async function openProjectDetail(deps, alias) {
+export async function openProjectDetail(deps, alias, opts = {}) {
+  const { focusTurn = null } = opts
   const detail = document.getElementById("sessions-detail")
   const meta = document.getElementById("sessions-detail-meta")
   const jsonlBox = document.getElementById("sessions-jsonl")
@@ -120,11 +121,34 @@ export async function openProjectDetail(deps, alias) {
       return
     }
     meta.textContent = `${resp.alias} · ${resp.session_id} · ${resp.turns.length} turns`
-    const html = resp.turns.map(turnHtml).join("")
+    // Render turns and tag each with data-turn-index so the focus scroll
+    // can find the matching one. We tag the OUTER wrapper at the original
+    // turn level — assistant turns expand into multiple .jsonl-turn divs,
+    // so we wrap them in a per-turn container.
+    const html = resp.turns.map((turn, idx) => `
+      <div class="jsonl-turn-group" data-turn-index="${idx}">
+        ${turnHtml(turn)}
+      </div>
+    `).join("")
     jsonlBox.innerHTML = html || `<p class="empty-state">这个 session 还没产生消息。</p>`
     if (favBtn) {
       const favs = readFavorites()
       favBtn.textContent = favs.has(alias) ? '★ 已收藏' : '☆ 收藏'
+    }
+
+    // Scroll to and highlight the focused turn (search drill-down).
+    if (focusTurn !== null && focusTurn !== undefined) {
+      // Wait one tick for layout to settle before scrollIntoView.
+      requestAnimationFrame(() => {
+        const target = jsonlBox.querySelector(`[data-turn-index="${focusTurn}"]`)
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          target.classList.add('is-search-hit')
+          // Pulse the highlight off after 2s — long enough for the user to
+          // notice, short enough to not nag.
+          setTimeout(() => target.classList.remove('is-search-hit'), 2000)
+        }
+      })
     }
   } catch (err) {
     jsonlBox.innerHTML = `<p class="empty-state">读取失败：${escapeHtml(String(err.message || err))}</p>`
@@ -230,9 +254,9 @@ async function runSearch(deps, query) {
   }
 }
 
-function searchHitRow(h) {
+export function searchHitRow(h) {
   return `
-    <button class="project-row" data-action="open-project" data-alias="${escapeHtml(h.alias)}">
+    <button class="project-row" data-action="open-project" data-alias="${escapeHtml(h.alias)}" data-turn-index="${escapeHtml(String(h.turn_index))}">
       <span class="star"></span>
       <span class="alias">${escapeHtml(h.alias)}</span>
       <span class="summary">${escapeHtml(h.snippet)}</span>
