@@ -12,6 +12,7 @@ import { serviceAction, forceKillDaemon } from "./modules/service.js"
 import { renderDashboard, renderRestartButton, setPending, updateClock, restartDaemon, stopDaemon, handleAccountRowClick } from "./modules/dashboard.js"
 import { loadMemoryPane, wireMemoryButtons, loadMemoryTopZone, loadMemoryDecisions, archiveObservation } from "./modules/memory.js"
 import { loadLogsPane, startLogsAutoRefresh, stopLogsAutoRefresh } from "./modules/logs.js"
+import { loadSessionsList } from "./modules/sessions.js"
 import { loadUpdateProbe, applyUpdate } from "./modules/update.js"
 
 const state = {
@@ -177,6 +178,9 @@ function switchPane(name) {
     })
     loadMemoryTopZone(deps).catch(err => console.error("memory top zone failed", err))
   }
+  if (name === "sessions") {
+    loadSessionsList(deps).catch(err => console.error("sessions load failed", err))
+  }
 }
 
 // ─── DOM event wiring ────────────────────────────────────────────────
@@ -257,6 +261,9 @@ function wireEvents() {
   })
   document.getElementById("logs-refresh")?.addEventListener("click", (e) =>
     withRefreshFeedback(e.currentTarget, () => loadLogsPane(deps)),
+  )
+  document.getElementById("sessions-refresh")?.addEventListener("click", (e) =>
+    withRefreshFeedback(e.currentTarget, () => loadSessionsList(deps)),
   )
   document.getElementById("logs-tail-select")?.addEventListener("change", () => loadLogsPane(deps))
   document.getElementById("update-check-btn")?.addEventListener("click", () => loadUpdateProbe(deps))
