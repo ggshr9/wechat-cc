@@ -105,7 +105,7 @@ describe('apps/desktop shim — HTML structure', () => {
       'dev-banner',
       // sessions pane (Task 9 — HTML scaffolding for v2.1)
       'sessions-search', 'sessions-body', 'sessions-detail', 'sessions-back',
-      'sessions-favorite', 'sessions-export', 'sessions-delete', 'sessions-jsonl',
+      'sessions-export', 'sessions-delete', 'sessions-jsonl',
       'sessions-refresh', 'sessions-meta', 'sessions-empty', 'sessions-detail-meta',
       'sessions-count',
       'sessions-mode-compact', 'sessions-mode-detailed',

@@ -268,22 +268,26 @@ function wireEvents() {
   document.getElementById("sessions-refresh")?.addEventListener("click", (e) =>
     withRefreshFeedback(e.currentTarget, () => loadSessionsList(deps)),
   )
-  // Sessions — drill-down: click a project row → open detail
+  // Sessions — list-row clicks. closest('[data-action]') routes to the
+  // innermost match: clicking the star toggles favorite (and stops there);
+  // clicking anywhere else on the row opens the detail.
   document.getElementById("sessions-body")?.addEventListener("click", (e) => {
-    const row = e.target.closest("[data-action='open-project']")
-    if (!row) return
-    const turnIdx = row.dataset.turnIndex
-    const opts = turnIdx !== undefined ? { focusTurn: Number(turnIdx) } : {}
-    openProjectDetail(deps, row.dataset.alias, opts)
+    const actionEl = e.target.closest("[data-action]")
+    if (!actionEl) return
+    const action = actionEl.dataset.action
+    const alias = actionEl.dataset.alias
+    if (action === 'toggle-favorite') {
+      toggleFavorite(alias)
+      loadSessionsList(deps)
+      return
+    }
+    if (action === 'open-project') {
+      const turnIdx = actionEl.dataset.turnIndex
+      const opts = turnIdx !== undefined ? { focusTurn: Number(turnIdx) } : {}
+      openProjectDetail(deps, alias, opts)
+    }
   })
   document.getElementById("sessions-back")?.addEventListener("click", closeProjectDetail)
-  document.getElementById("sessions-favorite")?.addEventListener("click", () => {
-    const alias = document.getElementById("sessions-detail")?.dataset.alias
-    if (!alias) return
-    toggleFavorite(alias)
-    openProjectDetail(deps, alias)  // refresh button label
-    loadSessionsList(deps)           // refresh list star state
-  })
   document.getElementById("sessions-export")?.addEventListener("click", () => exportProjectMarkdown(deps))
   document.getElementById("sessions-delete")?.addEventListener("click", () => deleteProject(deps))
   document.getElementById("sessions-mode-compact")?.addEventListener("click", () =>

@@ -45,6 +45,15 @@ describe('projectRow', () => {
     expect(html).toContain('is-favorite')
   })
 
+  it('star is independently clickable: data-action="toggle-favorite" + data-alias', () => {
+    const html = projectRow({
+      alias: 'compass', session_id: 's', last_used_at: new Date().toISOString(),
+    })
+    // Star carries its own action so click delegation triggers favorite-toggle
+    // instead of opening the project detail.
+    expect(html).toMatch(/class="star"[^>]*data-action="toggle-favorite"[^>]*data-alias="compass"/)
+  })
+
   it('renders an em-dash placeholder when summary is missing', () => {
     // Empty placeholder is just '—' (.summary.empty greys it out via CSS).
     // v0.4.1's lazy summarizer fills this in within ~30s of the next

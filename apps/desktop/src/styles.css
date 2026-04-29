@@ -1370,9 +1370,16 @@ input { font: inherit; color: inherit; }
 .project-row:hover { background: var(--paper-2); }
 .project-row .star {
   color: var(--ink-4);
-  font-size: 12px;
+  font-size: 13px;
   user-select: none;
+  width: 20px; height: 20px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 4px;
+  margin: -2px 0;
+  transition: background 150ms ease-out, color 150ms ease-out;
+  cursor: pointer;
 }
+.project-row .star:hover { background: var(--paper-3, var(--paper-2)); color: var(--amber); }
 .project-row.is-favorite .star { color: var(--amber); }
 .project-row .alias { color: var(--ink); font-weight: 500; font-family: var(--cjk); }
 .project-row .summary {

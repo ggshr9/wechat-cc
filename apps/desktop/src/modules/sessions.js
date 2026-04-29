@@ -149,9 +149,15 @@ export function projectRow(p, opts = {}) {
   const summaryClass = p.summary ? 'summary' : 'summary empty'
   const star = opts.isFavorite ? '★' : '☆'
   const favClass = opts.isFavorite ? ' is-favorite' : ''
+  const aliasAttr = escapeHtml(p.alias)
+  const favLabel = opts.isFavorite ? '取消收藏' : '收藏'
+  // Row-level click opens detail; star carries its own data-action so the
+  // click handler routes by closest('[data-action]') and only the star
+  // toggles the favorite. Star clicks don't bubble into detail-open
+  // because closest() finds the inner match first.
   return `
-    <button class="project-row${favClass}" data-action="open-project" data-alias="${escapeHtml(p.alias)}">
-      <span class="star">${star}</span>
+    <button class="project-row${favClass}" data-action="open-project" data-alias="${aliasAttr}">
+      <span class="star" data-action="toggle-favorite" data-alias="${aliasAttr}" role="button" tabindex="-1" aria-label="${favLabel}">${star}</span>
       <span class="alias">${escapeHtml(p.alias)}</span>
       <span class="${summaryClass}">${escapeHtml(summaryText)}</span>
       <span class="meta">${escapeHtml(formatRelativeTimeShort(p.last_used_at))}</span>
@@ -215,7 +221,6 @@ export async function openProjectDetail(deps, alias, opts = {}) {
   const detail = document.getElementById("sessions-detail")
   const meta = document.getElementById("sessions-detail-meta")
   const jsonlBox = document.getElementById("sessions-jsonl")
-  const favBtn = document.getElementById("sessions-favorite")
   if (!detail || !meta || !jsonlBox) return
 
   detail.dataset.alias = alias
@@ -255,10 +260,6 @@ export async function openProjectDetail(deps, alias, opts = {}) {
         ? '这个 session 还没产生对话——切到「完整」看到底层细节。'
         : '这个 session 还没产生消息。'
     }</p>`
-    if (favBtn) {
-      const favs = readFavorites()
-      favBtn.textContent = favs.has(alias) ? '★ 已收藏' : '☆ 收藏'
-    }
 
     // Scroll to and highlight the focused turn (search drill-down).
     if (focusTurn !== null && focusTurn !== undefined) {
