@@ -137,3 +137,47 @@ describe('parseCliArgs', () => {
     expect(parseCliArgs(['update', '--check', '--json'])).toEqual({ cmd: 'update', check: true, json: true })
   })
 })
+
+describe('events list', () => {
+  it('parses chat-id with optional --json --limit', () => {
+    expect(parseCliArgs(['events', 'list', 'chat_x', '--json', '--limit', '20'])).toEqual({
+      cmd: 'events-list', chatId: 'chat_x', json: true, limit: 20,
+    })
+  })
+  it('limit defaults to 50 when omitted', () => {
+    const r = parseCliArgs(['events', 'list', 'chat_x'])
+    expect(r).toMatchObject({ cmd: 'events-list', chatId: 'chat_x', limit: 50 })
+  })
+})
+
+describe('observations list', () => {
+  it('parses chat-id and --include-archived', () => {
+    expect(parseCliArgs(['observations', 'list', 'chat_x', '--include-archived', '--json'])).toEqual({
+      cmd: 'observations-list', chatId: 'chat_x', includeArchived: true, json: true,
+    })
+  })
+})
+
+describe('observations archive', () => {
+  it('parses obs id', () => {
+    expect(parseCliArgs(['observations', 'archive', 'chat_x', 'obs_abc', '--json'])).toEqual({
+      cmd: 'observations-archive', chatId: 'chat_x', obsId: 'obs_abc', json: true,
+    })
+  })
+})
+
+describe('milestones list', () => {
+  it('parses chat-id', () => {
+    expect(parseCliArgs(['milestones', 'list', 'chat_x', '--json'])).toEqual({
+      cmd: 'milestones-list', chatId: 'chat_x', json: true,
+    })
+  })
+})
+
+describe('sessions list-projects', () => {
+  it('parses --json', () => {
+    expect(parseCliArgs(['sessions', 'list-projects', '--json'])).toEqual({
+      cmd: 'sessions-list-projects', json: true,
+    })
+  })
+})

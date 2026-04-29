@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { fileURLToPath } from 'node:url'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import { STATE_DIR } from './config'
 import { loadAgentConfig, saveAgentConfig, type AgentProviderKind } from './agent-config'
 import { analyzeDoctor, defaultDoctorDeps, printDoctor, serviceStatus, setupStatus } from './doctor'
@@ -24,6 +24,11 @@ export type CliArgs =
   | { cmd: 'memory-list'; json: boolean }
   | { cmd: 'memory-read'; userId: string; path: string; json: boolean }
   | { cmd: 'memory-write'; userId: string; path: string; bodyBase64: string; json: boolean }
+  | { cmd: 'events-list'; chatId: string; json: boolean; limit: number }
+  | { cmd: 'observations-list'; chatId: string; json: boolean; includeArchived: boolean }
+  | { cmd: 'observations-archive'; chatId: string; obsId: string; json: boolean }
+  | { cmd: 'milestones-list'; chatId: string; json: boolean }
+  | { cmd: 'sessions-list-projects'; json: boolean }
   | { cmd: 'logs'; tail: number; json: boolean }
   | { cmd: 'update'; check: boolean; json: boolean }
   | { cmd: 'help' }
@@ -93,6 +98,35 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
         const idx = rest.indexOf('--body-base64')
         if (idx < 0 || !rest[idx + 1]) return { cmd: 'help' }
         return { cmd: 'memory-write', userId: rest[1], path: rest[2], bodyBase64: rest[idx + 1], json: rest.includes('--json') }
+      }
+      return { cmd: 'help' }
+    }
+    case 'events': {
+      if (rest[0] === 'list' && rest[1]) {
+        const limitIdx = rest.indexOf('--limit')
+        const limit = limitIdx >= 0 ? Number.parseInt(rest[limitIdx + 1] ?? '', 10) : 50
+        return { cmd: 'events-list', chatId: rest[1], json: rest.includes('--json'), limit: Number.isFinite(limit) ? limit : 50 }
+      }
+      return { cmd: 'help' }
+    }
+    case 'observations': {
+      if (rest[0] === 'list' && rest[1]) {
+        return { cmd: 'observations-list', chatId: rest[1], json: rest.includes('--json'), includeArchived: rest.includes('--include-archived') }
+      }
+      if (rest[0] === 'archive' && rest[1] && rest[2]) {
+        return { cmd: 'observations-archive', chatId: rest[1], obsId: rest[2], json: rest.includes('--json') }
+      }
+      return { cmd: 'help' }
+    }
+    case 'milestones': {
+      if (rest[0] === 'list' && rest[1]) {
+        return { cmd: 'milestones-list', chatId: rest[1], json: rest.includes('--json') }
+      }
+      return { cmd: 'help' }
+    }
+    case 'sessions': {
+      if (rest[0] === 'list-projects') {
+        return { cmd: 'sessions-list-projects', json: rest.includes('--json') }
       }
       return { cmd: 'help' }
     }
@@ -179,6 +213,16 @@ Usage:
                         passed as base64 (avoids shell-quote pain with
                         multi-line markdown). Sandboxed: .md only,
                         ≤100KB, no traversal, atomic rename.
+  wechat-cc events list <chat-id> [--limit N] [--json]
+                        Tail Companion decisions log (push/skip/observation/milestone).
+  wechat-cc observations list <chat-id> [--include-archived] [--json]
+                        Active observations (default) or archive.
+  wechat-cc observations archive <chat-id> <obs-id> [--json]
+                        Mark an observation archived (user "ignore").
+  wechat-cc milestones list <chat-id> [--json]
+                        Per-chat milestones (id-deduped).
+  wechat-cc sessions list-projects [--json]
+                        Project sessions with cached summaries.
   wechat-cc logs [--tail N] [--json]
                         Tail the daemon's channel.log. Default --tail 50.
                         --json returns parsed entries (timestamp, tag,
@@ -395,6 +439,52 @@ async function main() {
         console.error(`memory write failed: ${msg}`)
         process.exit(1)
       }
+      return
+    }
+    case 'events-list': {
+      const { makeEventsStore } = await import('./src/daemon/events/store')
+      const memoryRoot = join(STATE_DIR, 'memory')
+      const store = makeEventsStore(memoryRoot, parsed.chatId)
+      const list = await store.list({ limit: parsed.limit })
+      console.log(parsed.json ? JSON.stringify({ ok: true, events: list }, null, 2) : list.map(e => `${e.ts} ${e.kind} ${e.trigger}`).join('\n'))
+      return
+    }
+    case 'observations-list': {
+      const { makeObservationsStore } = await import('./src/daemon/observations/store')
+      const memoryRoot = join(STATE_DIR, 'memory')
+      const store = makeObservationsStore(memoryRoot, parsed.chatId)
+      const list = parsed.includeArchived ? await store.listArchived() : await store.listActive()
+      console.log(parsed.json ? JSON.stringify({ ok: true, observations: list }, null, 2) : list.map(o => `${o.ts} ${o.body}`).join('\n'))
+      return
+    }
+    case 'observations-archive': {
+      const { makeObservationsStore } = await import('./src/daemon/observations/store')
+      const memoryRoot = join(STATE_DIR, 'memory')
+      const store = makeObservationsStore(memoryRoot, parsed.chatId)
+      await store.archive(parsed.obsId)
+      console.log(parsed.json ? JSON.stringify({ ok: true, archived: parsed.obsId }, null, 2) : `archived ${parsed.obsId}`)
+      return
+    }
+    case 'milestones-list': {
+      const { makeMilestonesStore } = await import('./src/daemon/milestones/store')
+      const memoryRoot = join(STATE_DIR, 'memory')
+      const store = makeMilestonesStore(memoryRoot, parsed.chatId)
+      const list = await store.list()
+      console.log(parsed.json ? JSON.stringify({ ok: true, milestones: list }, null, 2) : list.map(m => `${m.ts} ${m.body}`).join('\n'))
+      return
+    }
+    case 'sessions-list-projects': {
+      const { makeSessionStore } = await import('./src/core/session-store')
+      const store = makeSessionStore(join(STATE_DIR, 'sessions.json'), { debounceMs: 500 })
+      const all = store.all()
+      const projects = Object.entries(all).map(([alias, rec]) => ({
+        alias,
+        session_id: rec.session_id,
+        last_used_at: rec.last_used_at,
+        summary: rec.summary ?? null,
+        summary_updated_at: rec.summary_updated_at ?? null,
+      }))
+      console.log(parsed.json ? JSON.stringify({ ok: true, projects }, null, 2) : projects.map(p => `${p.alias} ${p.last_used_at}`).join('\n'))
       return
     }
     case 'daemon-kill': {
