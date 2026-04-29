@@ -20,6 +20,7 @@ import { join } from 'node:path'
 export type EventKind =
   | 'cron_eval_pushed'
   | 'cron_eval_skipped'
+  | 'cron_eval_failed'
   | 'observation_written'
   | 'milestone'
 

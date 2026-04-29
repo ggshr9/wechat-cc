@@ -78,4 +78,13 @@ describe('events store', () => {
     expect(rec.push_text!.length).toBeLessThanOrEqual(1025) // 1024 + ellipsis
     expect(rec.push_text!.endsWith('…')).toBe(true)
   })
+
+  it('accepts cron_eval_failed events with reasoning', async () => {
+    const store = makeEventsStore(dir, 'chat_x')
+    await store.append({ kind: 'cron_eval_failed', trigger: 'introspect', reasoning: 'SDK timeout after 30s' })
+    const all = await store.list()
+    expect(all).toHaveLength(1)
+    expect(all[0].kind).toBe('cron_eval_failed')
+    expect(all[0].reasoning).toContain('SDK timeout')
+  })
 })
