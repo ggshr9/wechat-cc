@@ -118,18 +118,21 @@ the wechat-cc adapter is one of several entry points.
 **基础设施**
 
 - 新增 `events.jsonl` / `observations.jsonl` / `milestones.jsonl` per chat
-- 里程碑探测（100/1000 turn / first_handoff / first_push_reply）— daemon 启动 +
-  每条 inbound 后自动 detect，触发即写入 `events.jsonl`
-- 内省 cron（24h ± 30%）框架已就位，stub agent 在 v0.4
-
-**Deferred to v0.4.1**
-
-- 真 introspect SDK 集成（v0.4 是 stub agent，永不写 observation）
-- 项目级 1 行 LLM 摘要（helpers 已写好，缺生产调用方 — 当前 `projectRow`
-  显示 `—`）
-- `ms_7day_streak` 里程碑（需要 per-chat 每日活动跟踪，v0.4 detector 传空数组）
+- 里程碑探测（100/1000 turn / first_handoff / first_push_reply / **7day_streak**）—
+  daemon 启动 + 每条 inbound 后自动 detect，触发即写入 `events.jsonl`
+- 内省 cron（24h ± 30%）+ 启动 catch-up（>24h 未跑则立即 fire）
 
 完整设计：[`docs/specs/2026-04-29-sessions-memory-design.md`](docs/specs/2026-04-29-sessions-memory-design.md)
+
+### v0.4.1 · 真 SDK 接入 + 7-day-streak
+
+v0.4 留下的三件 deferred 工作交付：
+
+- **真 introspect SDK**：`claude-haiku-4-5` 隔离 eval，每 24h ± 30% 一次。读 memory + 最近 observations + 最近 events + 最近入站消息，prompt 让 Claude 决定要不要写新观察 + 内容 + tone。SDK 失败 / JSON 解析失败时事件流写 `cron_eval_failed`（决策日志面板用 ⚠ 渲染，可点开看原因）
+- **真 per-project 1 行 LLM 摘要**：`sessions list-projects` 调用时检测 stale 项目，后台 fire-and-forget 触发 Haiku eval（`needsRefresh` + `formatSummaryRequest` helpers），写回 `sessions.json::summary` + `summary_updated_at`。当前请求立即返回缓存值，下次刷新可见新摘要。模块级 lock 串行化避免并发 SDK 调用。`WECHAT_CC_DISABLE_SUMMARIZER=1` 环境变量可跳过（CI/e2e 用）
+- **`ms_7day_streak` 真落地**：新增 `activity.jsonl` per chat，daemon onInbound 时 record（同日累加 `msg_count`，跨日 append），detector 读最近 7 天判定连续
+
+完整设计：[`docs/specs/2026-04-29-v0.4.1.md`](docs/specs/2026-04-29-v0.4.1.md)
 
 ---
 

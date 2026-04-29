@@ -34,11 +34,17 @@ export function decisionRow(ev) {
   const ts = formatRelativeTimeShort(ev.ts)
   const summary = decisionSummary(ev)
   const reasoning = (ev.reasoning || '').replace(/\n/g, ' ')
+  // data-reasoning lives on BOTH the row (for click delegation in main.js
+  // — toggles .expanded class) AND the .summary span (so the CSS rule
+  // `.decision-row.expanded .summary::after { content: attr(data-reasoning) }`
+  // can read it; CSS attr() only resolves attributes on the same element,
+  // not parents).
+  const reasoningEsc = escapeHtml(reasoning)
   return `
-    <button class="decision-row" data-id="${escapeHtml(ev.id)}" data-action="toggle-decision" data-reasoning="${escapeHtml(reasoning)}">
+    <button class="decision-row" data-id="${escapeHtml(ev.id)}" data-action="toggle-decision" data-reasoning="${reasoningEsc}">
       <span class="glyph">${glyph}</span>
       <span class="ts">${escapeHtml(ts)}</span>
-      <span class="summary">${escapeHtml(summary)}</span>
+      <span class="summary" data-reasoning="${reasoningEsc}">${escapeHtml(summary)}</span>
     </button>
   `
 }
