@@ -176,6 +176,32 @@ async function main() {
   }
   void maybeStartupIntrospect()
 
+  // First-inbound welcome observation — when a chat has never had ANY
+  // observation (active OR archived), drop one playful welcome line so the
+  // dashboard's memory pane top zone has content immediately. Once the user
+  // archives it ("忽略"), we never auto-write again — checking archived too
+  // means we respect that choice. Fire-and-forget; failures logged, never
+  // propagated. Per spec §1.3 the welcome is a single observation, not a
+  // system banner — should feel like Claude noticing you for the first time.
+  async function maybeWriteWelcomeObservation(chatId: string): Promise<void> {
+    try {
+      const { makeObservationsStore } = await import('./observations/store.ts')
+      const obs = makeObservationsStore(join(STATE_DIR, 'memory'), chatId)
+      const existing = await obs.listActive()
+      const archived = await obs.listArchived()
+      if (existing.length === 0 && archived.length === 0) {
+        await obs.append({
+          body: '嗨，我是 Claude。我会慢慢理解你，把观察写在这里——你可以随时来翻、纠正、忽略。',
+          tone: 'playful',
+        })
+        log('OBSERVE', `welcome observation written for ${chatId}`)
+      }
+    } catch (err) {
+      // Welcome is decoration — failure must not affect the inbound path.
+      log('OBSERVE', `welcome write failed for ${chatId}: ${err instanceof Error ? err.message : err}`)
+    }
+  }
+
   // Milestone detection — non-blocking, fire-and-forget. Runs once on
   // daemon startup (per known chat) and after each successful inbound. The
   // milestones store dedupes by id so repeated invocations are cheap and
@@ -288,9 +314,10 @@ async function main() {
         // only outbound path.
         log: (tag, line) => log(tag, line),
       }, msg)
-      // Fire-and-forget milestone detection after successful routing.
-      // Non-blocking so an unrelated detector failure can never delay the
-      // next inbound or impact reply latency.
+      // Fire-and-forget milestone detection + welcome observation after
+      // successful routing. Non-blocking so an unrelated failure can never
+      // delay the next inbound or impact reply latency.
+      void maybeWriteWelcomeObservation(msg.chatId)
       void fireMilestonesFor(msg.chatId)
     },
   })
