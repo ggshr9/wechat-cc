@@ -103,6 +103,14 @@ describe('apps/desktop shim — HTML structure', () => {
       'enter-dashboard', 'continue-provider', 'continue-wechat', 'continue-service',
       'post-stop-alert', 'post-stop-pid', 'post-stop-kill',
       'dev-banner',
+      // sessions pane (Task 9 — HTML scaffolding for v2.1)
+      'sessions-search', 'sessions-body', 'sessions-detail', 'sessions-back',
+      'sessions-favorite', 'sessions-export', 'sessions-delete', 'sessions-jsonl',
+      'sessions-refresh', 'sessions-meta', 'sessions-empty', 'sessions-detail-meta',
+      'sessions-count',
+      // memory pane new zones (Task 9)
+      'memory-top-zone', 'memory-observations', 'memory-milestones',
+      'memory-decisions-toggle', 'memory-decisions-body',
     ]
     for (const id of requiredIds) {
       expect(html, `missing id="${id}"`).toContain(`id="${id}"`)
