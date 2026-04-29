@@ -15,7 +15,13 @@ export interface DetectorContext {
   turnCount: number               // total turns across all sessions for this chat
   handoffMarkerExists: boolean    // _handoff.md present in any project memory
   pushRepliedHistory: string[]    // event_ids of pushes that user replied to
-  daysWithMessage: string[]       // YYYY-MM-DD strings, last N days where chat had a message
+  /**
+   * YYYY-MM-DD UTC keys (`toISOString().slice(0, 10)`). Caller MUST use the
+   * same convention — has7DayStreak compares against UTC "today" + 6 prior
+   * UTC days. Future v0.5 may switch to local-wallclock; keep keys generated
+   * in one place to ease that migration.
+   */
+  daysWithMessage: string[]
 }
 
 interface MilestoneSpec {
@@ -56,6 +62,7 @@ function has7DayStreak(days: string[]): boolean {
   if (days.length < 7) return false
   const set = new Set(days)
   const today = new Date()
+  // UTC-day comparison — see DetectorContext.daysWithMessage doc.
   for (let i = 0; i < 7; i++) {
     const d = new Date(today.getTime() - i * 86400_000)
     const key = d.toISOString().slice(0, 10)
