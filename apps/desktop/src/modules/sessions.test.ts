@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error JS sibling
-import { groupProjectsByRecency, projectRow, searchHitRow, turnHtml, turnHtmlCompact, extractUserText, extractClaudeReplies, sessionHasReplyTool, buildExportMarkdown, extractWechatMeta, avatarInitial, avatarColor, extractSessionContact, extractTurnTimestamp, formatChatTimestamp } from './sessions.js'
+import { groupProjectsByRecency, projectRow, searchHitRow, turnHtml, turnHtmlCompact, extractUserText, extractClaudeReplies, sessionHasReplyTool, buildExportMarkdown, extractWechatMeta, avatarInitial, avatarColor, extractSessionContact, extractSessionChatId, extractTurnTimestamp, formatChatTimestamp } from './sessions.js'
 
 describe('groupProjectsByRecency', () => {
   const now = Date.now()
@@ -425,6 +425,39 @@ describe('extractSessionContact', () => {
   it('handles malformed input defensively', () => {
     expect(extractSessionContact(undefined as any)).toBeNull()
     expect(extractSessionContact([null, undefined])).toBeNull()
+  })
+})
+
+describe('extractSessionChatId', () => {
+  it('extracts chat_id from the first user envelope that has one', () => {
+    const turns = [
+      { type: 'queue-operation' },
+      { type: 'user', message: { content: [{ type: 'text', text: '<wechat user="X" chat_id="abc@im.wechat">hi</wechat>' }] } },
+    ]
+    expect(extractSessionChatId(turns)).toBe('abc@im.wechat')
+  })
+
+  it('returns null when no envelope provides chat_id', () => {
+    expect(extractSessionChatId([])).toBeNull()
+    expect(extractSessionChatId([{ type: 'user', message: { content: 'plain' } }])).toBeNull()
+  })
+})
+
+describe('extractWechatMeta — chatId', () => {
+  it('returns chatId from the envelope', () => {
+    const turn = {
+      type: 'user',
+      message: { content: [{ type: 'text', text: '<wechat user="X" chat_id="abc@im.wechat" ts="1">hi</wechat>' }] },
+    }
+    expect(extractWechatMeta(turn)?.chatId).toBe('abc@im.wechat')
+  })
+
+  it('chatId is null when absent', () => {
+    const turn = {
+      type: 'user',
+      message: { content: [{ type: 'text', text: '<wechat user="X">hi</wechat>' }] },
+    }
+    expect(extractWechatMeta(turn)?.chatId).toBeNull()
   })
 })
 

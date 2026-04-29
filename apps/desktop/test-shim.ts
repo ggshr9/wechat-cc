@@ -96,7 +96,11 @@ Bun.serve({
       const inboxRoot = join(ROOT, 'apps', 'desktop')  // for tauri-localhost dev cache
       const stateInbox = (process.env.WECHAT_CC_STATE_DIR
         ?? join(process.env.HOME ?? '', '.claude', 'channels', 'wechat'))
-      const allowedRoots = [join(stateInbox, 'inbox'), inboxRoot]
+      const allowedRoots = [
+        join(stateInbox, 'inbox'),
+        join(stateInbox, 'avatars'),  // custom avatars (Bundle E2.5)
+        inboxRoot,
+      ]
       const ok = filePath && allowedRoots.some(root => filePath.startsWith(root))
       if (!ok) return new Response('forbidden', { status: 403 })
       const file = Bun.file(filePath)

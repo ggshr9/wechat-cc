@@ -1602,6 +1602,53 @@ input { font: inherit; color: inherit; }
   font-size: 13px;
   letter-spacing: 0.04em;
 }
+/* Image avatar — overrides the letter-mark default. Click affordance:
+ * cursor pointer everywhere (works with the avatar-edit modal). */
+.wechat-avatar { cursor: pointer; transition: transform 150ms ease-out; }
+.wechat-avatar:hover { transform: scale(1.05); }
+.wechat-avatar-image { padding: 0; overflow: hidden; }
+.wechat-avatar-image img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* Avatar edit modal — small dialog overlaid on the lightbox layer. */
+.avatar-modal {
+  background: var(--paper);
+  color: var(--ink);
+  border-radius: 10px;
+  padding: 22px 24px 18px;
+  width: min(360px, 90vw);
+  font-family: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+}
+.avatar-modal-title { font-size: 14px; font-weight: 500; margin: 0 0 14px; color: var(--ink); }
+.avatar-modal-preview {
+  width: 80px; height: 80px;
+  border-radius: 4px;
+  margin: 0 auto 16px;
+  background: var(--paper-2);
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+  font-size: 28px; color: #fff; font-weight: 500;
+}
+.avatar-modal-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.avatar-modal-drop {
+  border: 1px dashed var(--hair-2);
+  border-radius: 6px;
+  padding: 18px 12px;
+  text-align: center;
+  color: var(--ink-3);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 150ms ease-out, border-color 150ms ease-out;
+  margin-bottom: 16px;
+}
+.avatar-modal-drop:hover, .avatar-modal-drop.is-dragover {
+  background: var(--paper-2);
+  border-color: var(--ink-4);
+  color: var(--ink);
+}
+.avatar-modal-actions {
+  display: flex; gap: 8px; justify-content: space-between;
+}
+.avatar-modal-actions .btn-spacer { flex: 1; }
 .wechat-bubble-wrap { max-width: 70%; min-width: 0; }
 .wechat-bubble {
   padding: 9px 12px;

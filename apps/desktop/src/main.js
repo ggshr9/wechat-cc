@@ -318,10 +318,14 @@ function wireEvents() {
     })
   })
 
-  // ─── Lightbox for chat-bubble image / file attachments ──────────────
-  // Single delegated handler — opens lightbox on .wechat-image or
-  // .wechat-file-card click, closes on backdrop click or Esc.
+  // ─── Lightbox for chat-bubble image / file attachments + avatar edit ─
   document.body.addEventListener("click", (ev) => {
+    const avatar = ev.target.closest(".wechat-avatar[data-avatar-key]")
+    if (avatar) {
+      ev.preventDefault()
+      openAvatarModal(deps, avatar.dataset.avatarKey)
+      return
+    }
     const img = ev.target.closest(".wechat-image")
     if (img) {
       ev.preventDefault()
@@ -397,6 +401,132 @@ async function openFileLightbox(path, name, ext) {
   } catch (err) {
     content.classList.add("is-empty")
     content.textContent = "读取失败：" + (err?.message || String(err))
+  }
+}
+
+// ─── Avatar edit modal ──────────────────────────────────────────────
+//
+// Click an avatar (.wechat-avatar with data-avatar-key) → modal opens
+// inside the lightbox container, lets the user pick a new image (or
+// remove the current one). Image is canvas-resized to 80×80 PNG before
+// it's sent to the daemon CLI as base64. Reload reopens the chat to
+// pick up the new avatar.
+
+async function openAvatarModal(deps, key) {
+  const lb = document.getElementById("lightbox")
+  const body = document.getElementById("lightbox-body")
+  if (!lb || !body) return
+  const titleSubject = key === "claude" ? "Claude" : (extractContactNameFromOpenChat() || "联系人")
+  // Look up current avatar (if any) for the preview slot.
+  let info = null
+  try {
+    info = await deps.invoke("wechat_cli_json", { args: ["avatar", "info", key, "--json"] })
+  } catch { /* ignore — preview falls back */ }
+  const previewHtml = info?.exists
+    ? `<img src="/attachment?path=${encodeURIComponent(info.path)}&v=${Date.now()}"/>`
+    : `<span style="background:${key === "claude" ? "#586672" : "#6B655C"}; width:100%; height:100%; display:flex; align-items:center; justify-content:center;">${escapeHtml(key === "claude" ? "cc" : (titleSubject.charAt(0).toUpperCase()))}</span>`
+
+  body.innerHTML = `
+    <div class="avatar-modal">
+      <h3 class="avatar-modal-title">为 ${escapeHtml(titleSubject)} 设置头像</h3>
+      <div class="avatar-modal-preview" id="avatar-modal-preview">${previewHtml}</div>
+      <div class="avatar-modal-drop" id="avatar-modal-drop">
+        点击选择图片，或拖拽到此处
+        <input type="file" id="avatar-modal-input" accept="image/png,image/jpeg,image/webp" hidden />
+      </div>
+      <div class="avatar-modal-actions">
+        <button class="btn ghost" id="avatar-modal-remove" ${info?.exists ? "" : "disabled"}>移除自定义</button>
+        <span class="btn-spacer"></span>
+        <button class="btn ghost" id="avatar-modal-cancel">取消</button>
+      </div>
+    </div>
+  `
+  lb.hidden = false
+  lb.setAttribute("aria-hidden", "false")
+
+  const input = body.querySelector("#avatar-modal-input")
+  const drop = body.querySelector("#avatar-modal-drop")
+  const preview = body.querySelector("#avatar-modal-preview")
+
+  drop.addEventListener("click", () => input.click())
+  input.addEventListener("change", () => handleAvatarFile(deps, key, input.files?.[0], preview))
+  ;["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => {
+    e.preventDefault(); drop.classList.add("is-dragover")
+  }))
+  ;["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => {
+    e.preventDefault(); drop.classList.remove("is-dragover")
+  }))
+  drop.addEventListener("drop", e => {
+    const file = e.dataTransfer?.files?.[0]
+    if (file) handleAvatarFile(deps, key, file, preview)
+  })
+  body.querySelector("#avatar-modal-cancel").addEventListener("click", closeLightbox)
+  body.querySelector("#avatar-modal-remove").addEventListener("click", async () => {
+    try {
+      await deps.invoke("wechat_cli_json", { args: ["avatar", "remove", key, "--json"] })
+      closeLightbox()
+      reopenCurrentSession(deps)
+    } catch (err) {
+      preview.innerHTML = `<span style="font-size:11px; color:var(--ink-3); padding:4px;">${escapeHtml(err?.message || String(err))}</span>`
+    }
+  })
+}
+
+async function handleAvatarFile(deps, key, file, previewEl) {
+  if (!file) return
+  if (!/^image\/(png|jpe?g|webp)$/.test(file.type)) {
+    previewEl.innerHTML = `<span style="font-size:11px; color:var(--red); padding:4px;">仅支持 PNG / JPEG / WEBP</span>`
+    return
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    previewEl.innerHTML = `<span style="font-size:11px; color:var(--red); padding:4px;">图片太大（>5MB）</span>`
+    return
+  }
+  try {
+    const base64 = await imageToResizedPngBase64(file, 80)
+    await deps.invoke("wechat_cli_json", { args: ["avatar", "set", key, "--base64", base64, "--json"] })
+    closeLightbox()
+    reopenCurrentSession(deps)
+  } catch (err) {
+    previewEl.innerHTML = `<span style="font-size:11px; color:var(--red); padding:4px;">${escapeHtml(err?.message || String(err))}</span>`
+  }
+}
+
+// Read a File / Blob → draw onto canvas square-cropped + resized → PNG base64
+function imageToResizedPngBase64(blob, size) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob)
+    const img = new Image()
+    img.onload = () => {
+      try {
+        const canvas = document.createElement("canvas")
+        canvas.width = size; canvas.height = size
+        const ctx = canvas.getContext("2d")
+        // Square-crop from center (cover behavior)
+        const sw = img.naturalWidth, sh = img.naturalHeight
+        const side = Math.min(sw, sh)
+        const sx = (sw - side) / 2, sy = (sh - side) / 2
+        ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size)
+        const dataUrl = canvas.toDataURL("image/png")
+        URL.revokeObjectURL(url)
+        // Strip the data: prefix when sending to CLI
+        resolve(dataUrl.replace(/^data:image\/png;base64,/, ""))
+      } catch (e) { reject(e) }
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("无法读取图片")) }
+    img.src = url
+  })
+}
+
+function extractContactNameFromOpenChat() {
+  return document.querySelector(".phone-title-name")?.textContent?.trim() || null
+}
+
+function reopenCurrentSession(deps) {
+  const detail = document.getElementById("sessions-detail")
+  const alias = detail?.dataset.alias
+  if (alias) {
+    import("./modules/sessions.js").then(m => m.openProjectDetail(deps, alias))
   }
 }
 

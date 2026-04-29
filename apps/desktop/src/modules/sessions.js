@@ -127,10 +127,11 @@ export function extractWechatMeta(turn) {
   if (!raw) return { user: null, ts: null, text: '', attachments: [], quoteTo: null }
 
   const open = raw.match(/<wechat\b([^>]*)>([\s\S]*?)<\/wechat>/)
-  if (!open) return { user: null, ts: null, text: raw.trim(), attachments: [], quoteTo: null }
+  if (!open) return { user: null, chatId: null, ts: null, text: raw.trim(), attachments: [], quoteTo: null }
   const attrs = open[1] || ''
   const innerRaw = open[2] || ''
   const userMatch = attrs.match(/\buser="([^"]*)"/)
+  const chatIdMatch = attrs.match(/\bchat_id="([^"]*)"/)
   const tsMatch = attrs.match(/\bts="([^"]*)"/)
   const quoteMatch = attrs.match(/\bquote_to="([^"]*)"/)
   const tsNum = tsMatch ? Number(tsMatch[1]) : NaN
@@ -158,6 +159,7 @@ export function extractWechatMeta(turn) {
   }
   return {
     user: userMatch ? userMatch[1] : null,
+    chatId: chatIdMatch ? chatIdMatch[1] : null,
     ts: Number.isFinite(tsNum) ? tsNum : null,
     text: textLines.join('\n').trim(),
     attachments,
@@ -239,6 +241,22 @@ export function extractSessionContact(turns) {
     if (!t || t.type !== 'user') continue
     const meta = extractWechatMeta(t)
     if (meta?.user) return meta.user
+  }
+  return null
+}
+
+/**
+ * Returns the WeChat chat_id for a session — pulled from the first
+ * inbound user-turn envelope. Used as the key for custom-avatar
+ * storage so the same contact stays linked to their picture even if
+ * the displayed user name changes.
+ */
+export function extractSessionChatId(turns) {
+  if (!Array.isArray(turns)) return null
+  for (const t of turns) {
+    if (!t || t.type !== 'user') continue
+    const meta = extractWechatMeta(t)
+    if (meta?.chatId) return meta.chatId
   }
   return null
 }
@@ -420,9 +438,22 @@ export async function openProjectDetail(deps, alias, opts = {}) {
     const mode = readSessionsDetailMode()
     applyModeToToggle(mode)
     const hasReplyTool = sessionHasReplyTool(resp.turns)
+    // Resolve custom avatars (compact mode only — detailed uses cards).
+    let contactAvatarSrc = null
+    let claudeAvatarSrc = null
+    let contactKey = null
+    if (mode === 'compact') {
+      contactKey = extractSessionChatId(resp.turns)
+      const [contactInfo, claudeInfo] = await Promise.all([
+        contactKey ? avatarInfo(deps, contactKey) : Promise.resolve(null),
+        avatarInfo(deps, 'claude'),
+      ])
+      if (contactInfo?.exists) contactAvatarSrc = `/attachment?path=${encodeURIComponent(contactInfo.path)}&v=${Date.now()}`
+      if (claudeInfo?.exists) claudeAvatarSrc = `/attachment?path=${encodeURIComponent(claudeInfo.path)}&v=${Date.now()}`
+    }
     const renderer = mode === 'detailed'
       ? (turn) => turnHtml(turn)
-      : (turn) => turnHtmlCompact(turn, { sessionHasReplyTool: hasReplyTool })
+      : (turn) => turnHtmlCompact(turn, { sessionHasReplyTool: hasReplyTool, contactAvatarSrc, claudeAvatarSrc, contactKey })
     // Walk turns once: insert a centered time-separator before any
     // visible turn whose ts is ≥5 min after the previous visible one
     // (or the first visible one). Hidden turns (queue-operation, etc.)
@@ -635,6 +666,8 @@ export function turnHtmlCompact(turn, opts = {}) {
       role: 'user',
       avatarText: avatarInitial(meta.user),
       avatarColor: avatarColor(meta.user || ''),
+      avatarSrc: opts.contactAvatarSrc || null,
+      avatarKey: opts.contactKey || null,
     }
     const out = []
     // Daemon stamps "(non-text message)" as the text body when an
@@ -664,6 +697,8 @@ export function turnHtmlCompact(turn, opts = {}) {
         role: 'assistant',
         avatarText: 'cc',
         avatarClass: 'wechat-avatar-cc',
+        avatarSrc: opts.claudeAvatarSrc || null,
+        avatarKey: 'claude',
         text: r,
       }))
       .join('')
@@ -740,23 +775,33 @@ function phoneFrameHtml({ contactName, chatContent }) {
   `
 }
 
-function wechatRow({ side, role, avatarText, avatarColor: bg, avatarClass, text, quotePrefix }) {
-  const avatarStyle = bg ? ` style="background:${escapeHtml(bg)}"` : ''
-  const avatarCls = avatarClass ? ` ${escapeHtml(avatarClass)}` : ''
+function avatarHtml({ avatarText, avatarColor: bg, avatarClass, avatarSrc, avatarKey }) {
+  // `avatarKey` is what the click handler uses to know which avatar to
+  // edit ("claude" or a chat_id). Passed as data-avatar-key.
+  const cls = avatarClass ? ` ${escapeHtml(avatarClass)}` : ''
+  const dataKey = avatarKey ? ` data-avatar-key="${escapeHtml(avatarKey)}"` : ''
+  if (avatarSrc) {
+    return `<div class="wechat-avatar wechat-avatar-image${cls}"${dataKey} title="点击修改头像">` +
+      `<img src="${escapeHtml(avatarSrc)}" alt="avatar" />` +
+      `</div>`
+  }
+  const style = bg ? ` style="background:${escapeHtml(bg)}"` : ''
+  return `<div class="wechat-avatar${cls}"${style}${dataKey} title="点击修改头像">${escapeHtml(avatarText)}</div>`
+}
+
+function wechatRow({ side, role, avatarText, avatarColor, avatarClass, avatarSrc, avatarKey, text, quotePrefix }) {
   const textHtml = text ? `<div class="wechat-bubble">${escapeHtml(text)}</div>` : ''
   // Quote ref renders AFTER the bubble as a small grey card (matches
   // real WeChat position). Without msg_id resolution we can only show
   // the marker label; the actual quoted content lookup is deferred.
   const quoteHtml = quotePrefix ? `<div class="wechat-quote-ref">引用了一条消息</div>` : ''
   return `<div class="wechat-row ${side}" data-role="${escapeHtml(role)}">` +
-    `<div class="wechat-avatar${avatarCls}"${avatarStyle}>${escapeHtml(avatarText)}</div>` +
+    avatarHtml({ avatarText, avatarColor, avatarClass, avatarSrc, avatarKey }) +
     `<div class="wechat-bubble-wrap">${textHtml}${quoteHtml}</div>` +
     `</div>`
 }
 
-function wechatAttachmentRow({ side, role, avatarText, avatarColor: bg, avatarClass, attachment }) {
-  const avatarStyle = bg ? ` style="background:${escapeHtml(bg)}"` : ''
-  const avatarCls = avatarClass ? ` ${escapeHtml(avatarClass)}` : ''
+function wechatAttachmentRow({ side, role, avatarText, avatarColor, avatarClass, avatarSrc, avatarKey, attachment }) {
   let inner = ''
   if (attachment.kind === 'image') {
     const src = escapeHtml(attachmentUrl(attachment.path))
@@ -769,7 +814,7 @@ function wechatAttachmentRow({ side, role, avatarText, avatarColor: bg, avatarCl
     inner = `<div class="wechat-bubble-wrap"><div class="wechat-bubble wechat-voice-stub">🎤 语音</div></div>`
   }
   return `<div class="wechat-row ${side}" data-role="${escapeHtml(role)}">` +
-    `<div class="wechat-avatar${avatarCls}"${avatarStyle}>${escapeHtml(avatarText)}</div>` +
+    avatarHtml({ avatarText, avatarColor, avatarClass, avatarSrc, avatarKey }) +
     inner +
     `</div>`
 }
@@ -800,6 +845,19 @@ function fileIconTone(ext) {
   if (e === 'ppt' || e === 'pptx') return '#D87100'
   if (e === 'zip' || e === 'rar' || e === '7z' || e === 'tar' || e === 'gz') return '#7C6F4A'
   return '#586672'
+}
+
+/**
+ * Look up an avatar's existence + absolute path via the daemon CLI.
+ * Returns null on any failure so the caller falls back to the default
+ * letter avatar without crashing the chat.
+ */
+export async function avatarInfo(deps, key) {
+  try {
+    const r = await deps.invoke("wechat_cli_json", { args: ["avatar", "info", key, "--json"] })
+    if (r && r.ok) return { exists: !!r.exists, path: String(r.path || '') }
+    return null
+  } catch { return null }
 }
 
 // Resolve a local-fs path to a URL the browser can fetch. In Tauri the

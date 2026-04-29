@@ -36,6 +36,9 @@ export type CliArgs =
   | { cmd: 'update'; check: boolean; json: boolean }
   | { cmd: 'demo-seed'; chatId: string | null; json: boolean }
   | { cmd: 'demo-unseed'; chatId: string | null; json: boolean }
+  | { cmd: 'avatar-info'; key: string; json: boolean }
+  | { cmd: 'avatar-set'; key: string; base64: string; json: boolean }
+  | { cmd: 'avatar-remove'; key: string; json: boolean }
   | { cmd: 'help' }
 
 export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void }): CliArgs {
@@ -126,6 +129,20 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
     case 'milestones': {
       if (rest[0] === 'list' && rest[1]) {
         return { cmd: 'milestones-list', chatId: rest[1], json: rest.includes('--json') }
+      }
+      return { cmd: 'help' }
+    }
+    case 'avatar': {
+      if (rest[0] === 'info' && rest[1]) {
+        return { cmd: 'avatar-info', key: rest[1], json: rest.includes('--json') }
+      }
+      if (rest[0] === 'set' && rest[1]) {
+        const idx = rest.indexOf('--base64')
+        if (idx < 0 || !rest[idx + 1]) return { cmd: 'help' }
+        return { cmd: 'avatar-set', key: rest[1], base64: rest[idx + 1], json: rest.includes('--json') }
+      }
+      if (rest[0] === 'remove' && rest[1]) {
+        return { cmd: 'avatar-remove', key: rest[1], json: rest.includes('--json') }
       }
       return { cmd: 'help' }
     }
@@ -591,6 +608,34 @@ async function main() {
       const { searchAcrossSessions } = await import('./src/daemon/sessions/searcher')
       const hits = await searchAcrossSessions(parsed.query, { limit: parsed.limit, stateDir: STATE_DIR })
       console.log(parsed.json ? JSON.stringify({ ok: true, query: parsed.query, hits }, null, 2) : hits.map(h => `${h.alias} · ${h.snippet}`).join('\n'))
+      return
+    }
+    case 'avatar-info': {
+      const { avatarInfo } = await import('./src/daemon/avatar/store')
+      const info = avatarInfo(STATE_DIR, parsed.key)
+      if (parsed.json) console.log(JSON.stringify({ ok: true, ...info }))
+      else console.log(`${parsed.key}: ${info.exists ? info.path : '(no avatar)'}`)
+      return
+    }
+    case 'avatar-set': {
+      const { setAvatar } = await import('./src/daemon/avatar/store')
+      try {
+        const result = setAvatar(STATE_DIR, parsed.key, parsed.base64)
+        if (parsed.json) console.log(JSON.stringify({ ok: true, ...result }))
+        else console.log(`set ${parsed.key} → ${result.path}`)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (parsed.json) console.log(JSON.stringify({ ok: false, error: msg }))
+        else console.error(`avatar set failed: ${msg}`)
+        process.exit(1)
+      }
+      return
+    }
+    case 'avatar-remove': {
+      const { removeAvatar } = await import('./src/daemon/avatar/store')
+      const result = removeAvatar(STATE_DIR, parsed.key)
+      if (parsed.json) console.log(JSON.stringify({ ok: true, ...result }))
+      else console.log(`removed ${parsed.key}`)
       return
     }
     case 'daemon-kill': {
