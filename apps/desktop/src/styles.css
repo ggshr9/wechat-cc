@@ -1460,22 +1460,97 @@ input { font: inherit; color: inherit; }
 }
 .sessions-detail-mode-toggle .mode-seg + .mode-seg { border-left: 1px solid var(--hair-2); }
 .sessions-detail-actions { margin-left: auto; display: flex; gap: 6px; }
-/* ─── WeChat-style chat bubbles (compact mode, Bundle E) ─────────
- * Refined 1:1 replica of iOS WeChat (chat bg #EDEDED, user bubble
- * #95EC69, other bubble white, 4px corners, 40px rounded-square
- * avatars, tail pointing toward avatar). Values cross-verified from
- * multiple observed-WeChat references (see docs/specs).
- *
- * Detailed mode keeps the existing .jsonl-turn[data-role=...] cards.
+/* ─── iPhone frame + WeChat-style chat (compact mode, Bundle E) ───
+ * In compact mode the chat lives inside an iPhone-shaped frame so the
+ * bubbles feel like they're in their native ~390px viewport rather
+ * than floating across a 1000px+ desktop pane. Detailed mode keeps the
+ * existing .jsonl-turn[data-role=...] cards untouched.
  */
-.sessions-jsonl:has(.wechat-row) {
+.sessions-jsonl.is-phone-mode {
+  overflow: hidden;
+  padding: 24px 16px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: var(--paper-2);
+}
+.phone-frame {
+  /* iPhone 14 dimensions, capped to parent so the phone shrinks if the
+   * pane is shorter than 844px (chat scrolls internally). */
+  width: min(390px, 100%);
+  height: min(844px, 100%);
+  display: flex; flex-direction: column;
+  background: #1A1A1A;        /* bezel */
+  border-radius: 40px;
+  padding: 6px;
+  box-shadow:
+    0 12px 40px rgba(0, 0, 0, 0.18),
+    0 2px 6px rgba(0, 0, 0, 0.06),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+.phone-screen {
+  flex: 1;
   background: #EDEDED;
-  padding: 16px 14px;
+  border-radius: 34px;
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  min-height: 0;
+}
+.phone-status {
+  background: #F7F7F7;
+  padding: 10px 24px 6px;
+  display: flex; justify-content: space-between; align-items: center;
+  font-family: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+  font-size: 14px; font-weight: 600;
+  color: #1A1A1A;
+  letter-spacing: -0.02em;
+  flex-shrink: 0;
+}
+.phone-status-icons { display: inline-flex; align-items: center; gap: 5px; color: #1A1A1A; }
+.phone-title {
+  background: #F7F7F7;
+  padding: 8px 12px 10px;
+  display: grid;
+  grid-template-columns: 32px 1fr 32px;
+  align-items: center;
+  border-bottom: 1px solid #DCDCDC;
+  font-family: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+  flex-shrink: 0;
+}
+.phone-title-back  { color: #1A1A1A; font-size: 22px; line-height: 1; }
+.phone-title-name  { text-align: center; font-size: 15.5px; font-weight: 500; color: #1A1A1A; }
+.phone-title-more  { color: #1A1A1A; font-size: 22px; text-align: right; line-height: 1; letter-spacing: 0.05em; }
+.phone-chat {
+  flex: 1; min-height: 0;
+  overflow-y: auto;
+  background: #EDEDED;
+  padding: 12px 10px;
   font-family: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
   font-size: 15px;
   line-height: 1.4;
   color: #1A1A1A;
 }
+.phone-input {
+  background: #F7F7F7;
+  border-top: 1px solid #DCDCDC;
+  padding: 8px 10px;
+  display: flex; align-items: center; gap: 8px;
+  flex-shrink: 0;
+}
+.phone-input-icon { color: #4A4A4A; flex-shrink: 0; }
+.phone-input-field {
+  flex: 1;
+  height: 32px;
+  background: #FFFFFF;
+  border-radius: 6px;
+  padding: 0 12px;
+  display: flex; align-items: center;
+  font-size: 13.5px; color: #999088;
+  font-family: inherit;
+  user-select: none;
+}
+
 .wechat-row {
   display: flex;
   gap: 10px;

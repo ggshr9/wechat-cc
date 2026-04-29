@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error JS sibling
-import { groupProjectsByRecency, projectRow, searchHitRow, turnHtml, turnHtmlCompact, extractUserText, extractClaudeReplies, sessionHasReplyTool, buildExportMarkdown, extractWechatMeta, avatarInitial, avatarColor } from './sessions.js'
+import { groupProjectsByRecency, projectRow, searchHitRow, turnHtml, turnHtmlCompact, extractUserText, extractClaudeReplies, sessionHasReplyTool, buildExportMarkdown, extractWechatMeta, avatarInitial, avatarColor, extractSessionContact } from './sessions.js'
 
 describe('groupProjectsByRecency', () => {
   const now = Date.now()
@@ -268,6 +268,28 @@ describe('avatarInitial', () => {
 
   it('skips leading whitespace', () => {
     expect(avatarInitial('  Bob')).toBe('B')
+  })
+})
+
+describe('extractSessionContact', () => {
+  it('returns user name from the first user turn that has a wechat envelope', () => {
+    const turns = [
+      { type: 'queue-operation' },
+      { type: 'user', message: { content: [{ type: 'text', text: '<wechat user="GSR" chat_id="x">hi</wechat>' }] } },
+      { type: 'user', message: { content: [{ type: 'text', text: '<wechat user="Other">later</wechat>' }] } },
+    ]
+    expect(extractSessionContact(turns)).toBe('GSR')
+  })
+
+  it('returns null when no envelope found', () => {
+    expect(extractSessionContact([])).toBeNull()
+    expect(extractSessionContact([{ type: 'assistant', message: {} }])).toBeNull()
+    expect(extractSessionContact([{ type: 'user', message: { content: 'no envelope' } }])).toBeNull()
+  })
+
+  it('handles malformed input defensively', () => {
+    expect(extractSessionContact(undefined as any)).toBeNull()
+    expect(extractSessionContact([null, undefined])).toBeNull()
   })
 })
 

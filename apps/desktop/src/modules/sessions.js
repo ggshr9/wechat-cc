@@ -133,6 +133,22 @@ export function extractWechatMeta(turn) {
 }
 
 /**
+ * Returns the WeChat contact name for a session — the value of the
+ * `user` attribute on the first inbound user-turn envelope. Used by the
+ * iPhone-frame title bar so the chat reads as "you and <contact>", not
+ * the dev alias / session id.
+ */
+export function extractSessionContact(turns) {
+  if (!Array.isArray(turns)) return null
+  for (const t of turns) {
+    if (!t || t.type !== 'user') continue
+    const meta = extractWechatMeta(t)
+    if (meta?.user) return meta.user
+  }
+  return null
+}
+
+/**
  * Default-avatar initial — first non-whitespace char of the name,
  * uppercased for Latin scripts so "alice" → "A". CJK passes through.
  */
@@ -306,18 +322,26 @@ export async function openProjectDetail(deps, alias, opts = {}) {
     const renderer = mode === 'detailed'
       ? (turn) => turnHtml(turn)
       : (turn) => turnHtmlCompact(turn, { sessionHasReplyTool: hasReplyTool })
-    const html = resp.turns
+    const innerTurns = resp.turns
       .map((turn, idx) => {
         const inner = renderer(turn)
         return inner ? `<div class="jsonl-turn-group" data-turn-index="${idx}">${inner}</div>` : ''
       })
       .filter(s => s)
       .join("")
-    jsonlBox.innerHTML = html || `<p class="empty-state">${
-      mode === 'compact'
-        ? '这个 session 还没产生对话——切到「完整」看到底层细节。'
-        : '这个 session 还没产生消息。'
-    }</p>`
+    jsonlBox.classList.toggle('is-phone-mode', mode === 'compact' && innerTurns !== '')
+    if (innerTurns === '') {
+      jsonlBox.innerHTML = `<p class="empty-state">${
+        mode === 'compact'
+          ? '这个 session 还没产生对话——切到「完整」看到底层细节。'
+          : '这个 session 还没产生消息。'
+      }</p>`
+    } else if (mode === 'compact') {
+      const contactName = extractSessionContact(resp.turns) || resp.alias || alias
+      jsonlBox.innerHTML = phoneFrameHtml({ contactName, chatContent: innerTurns })
+    } else {
+      jsonlBox.innerHTML = innerTurns
+    }
 
     // Scroll to and highlight the focused turn (search drill-down).
     if (focusTurn !== null && focusTurn !== undefined) {
@@ -442,6 +466,43 @@ export function turnHtmlCompact(turn, opts = {}) {
   }
 
   return ''
+}
+
+/**
+ * Render the iPhone-shaped frame surrounding the WeChat chat in compact
+ * mode. Status bar (static 5:18 + signal/wifi/battery), title bar with
+ * contact name, scrollable chat area, disabled input bar — all together
+ * make the bubbles feel like they're inside a real iOS WeChat instead
+ * of floating in a wide desktop pane.
+ */
+function phoneFrameHtml({ contactName, chatContent }) {
+  const name = contactName ? escapeHtml(contactName) : '—'
+  return `
+    <div class="phone-frame">
+      <div class="phone-screen">
+        <div class="phone-status">
+          <span class="phone-status-time">5:18</span>
+          <span class="phone-status-icons">
+            <svg viewBox="0 0 17 11" width="17" height="11" fill="currentColor" aria-hidden="true"><rect x="0" y="6" width="3" height="5" rx="0.5"/><rect x="4.5" y="4" width="3" height="7" rx="0.5"/><rect x="9" y="2" width="3" height="9" rx="0.5"/><rect x="13.5" y="0" width="3" height="11" rx="0.5"/></svg>
+            <svg viewBox="0 0 16 12" width="16" height="12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2 5a8.5 8.5 0 0 1 12 0"/><path d="M4.5 7.5a5 5 0 0 1 7 0"/><circle cx="8" cy="10" r="1" fill="currentColor" stroke="none"/></svg>
+            <svg viewBox="0 0 24 12" width="24" height="12" fill="none" stroke="currentColor" stroke-width="1" aria-hidden="true"><rect x="0.5" y="0.5" width="20" height="11" rx="2.5"/><rect x="2" y="2" width="17" height="8" rx="1" fill="currentColor"/><rect x="21.5" y="3.5" width="2" height="5" rx="0.6" fill="currentColor"/></svg>
+          </span>
+        </div>
+        <div class="phone-title">
+          <span class="phone-title-back" aria-hidden="true">⟨</span>
+          <span class="phone-title-name">${name}</span>
+          <span class="phone-title-more" aria-hidden="true">⋯</span>
+        </div>
+        <div class="phone-chat">${chatContent}</div>
+        <div class="phone-input">
+          <svg class="phone-input-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9c.5-.7 1.7-1.4 3-1.4M15 9c-.5-.7-1.7-1.4-3-1.4"/><path d="M8 15c1 1.5 2.5 2 4 2s3-.5 4-2"/></svg>
+          <span class="phone-input-field">查看模式</span>
+          <svg class="phone-input-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="9" cy="10" r="0.8" fill="currentColor"/><circle cx="15" cy="10" r="0.8" fill="currentColor"/><path d="M9 14c.8 1.2 2 1.8 3 1.8s2.2-.6 3-1.8"/></svg>
+          <svg class="phone-input-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+        </div>
+      </div>
+    </div>
+  `
 }
 
 function wechatRow({ side, role, avatarText, avatarColor: bg, avatarClass, text }) {
