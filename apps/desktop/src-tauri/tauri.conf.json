@@ -23,7 +23,6 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "requireLiteralLeadingDot": false,
         "scope": [
           "$HOME/.claude/channels/wechat/inbox/**",
           "$HOME/.claude/channels/wechat/avatars/**"
