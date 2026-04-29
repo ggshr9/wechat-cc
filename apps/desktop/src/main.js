@@ -10,7 +10,7 @@ import { renderDoctorWizard, refreshEnterDashboardButton, updateFooterStatus, sh
 import { refreshQr } from "./modules/qr.js"
 import { serviceAction, forceKillDaemon } from "./modules/service.js"
 import { renderDashboard, renderRestartButton, setPending, updateClock, restartDaemon, stopDaemon, handleAccountRowClick } from "./modules/dashboard.js"
-import { loadMemoryPane, wireMemoryButtons } from "./modules/memory.js"
+import { loadMemoryPane, wireMemoryButtons, loadMemoryTopZone, loadMemoryDecisions, archiveObservation } from "./modules/memory.js"
 import { loadLogsPane, startLogsAutoRefresh, stopLogsAutoRefresh } from "./modules/logs.js"
 import { loadUpdateProbe, applyUpdate } from "./modules/update.js"
 
@@ -169,11 +169,14 @@ function switchPane(name) {
   } else {
     stopLogsAutoRefresh()
   }
-  if (name === "memory") loadMemoryPane(deps).catch(err => {
-    console.error("memory load failed", err)
-    document.getElementById("memory-rendered").innerHTML =
-      `<p class="empty-state">加载失败：${formatInvokeError(err)}</p>`
-  })
+  if (name === "memory") {
+    loadMemoryPane(deps).catch(err => {
+      console.error("memory load failed", err)
+      document.getElementById("memory-rendered").innerHTML =
+        `<p class="empty-state">加载失败：${formatInvokeError(err)}</p>`
+    })
+    loadMemoryTopZone(deps).catch(err => console.error("memory top zone failed", err))
+  }
 }
 
 // ─── DOM event wiring ────────────────────────────────────────────────
@@ -220,9 +223,38 @@ function wireEvents() {
   document.getElementById("dash-stop").addEventListener("click", () => stopDaemon(deps))
   document.getElementById("dash-restart").addEventListener("click", () => restartDaemon(deps))
   document.getElementById("memory-refresh")?.addEventListener("click", (e) =>
-    withRefreshFeedback(e.currentTarget, () => loadMemoryPane(deps)),
+    withRefreshFeedback(e.currentTarget, async () => {
+      await loadMemoryPane(deps)
+      await loadMemoryTopZone(deps)
+    }),
   )
   wireMemoryButtons(deps)
+
+  // Memory top zone — handle archive button clicks via delegation
+  document.getElementById("memory-observations")?.addEventListener("click", async (e) => {
+    const archiveBtn = e.target.closest("[data-action='archive-observation']")
+    if (archiveBtn) {
+      e.stopPropagation()
+      await archiveObservation(deps, archiveBtn.dataset.id)
+    }
+  })
+
+  // Memory decisions — toggle folded zone, lazy-load on first expand
+  document.getElementById("memory-decisions-toggle")?.addEventListener("click", () => {
+    const toggle = document.getElementById("memory-decisions-toggle")
+    const body = document.getElementById("memory-decisions-body")
+    if (!toggle || !body) return
+    const wasOpen = toggle.getAttribute("aria-expanded") === "true"
+    toggle.setAttribute("aria-expanded", wasOpen ? "false" : "true")
+    body.hidden = wasOpen
+    if (!wasOpen) loadMemoryDecisions(deps).catch(err => console.error("decisions load failed", err))
+  })
+
+  // Memory decisions — click row to expand reasoning (CSS handles the visual via .expanded class)
+  document.getElementById("memory-decisions-body")?.addEventListener("click", (e) => {
+    const row = e.target.closest("[data-action='toggle-decision']")
+    if (row) row.classList.toggle("expanded")
+  })
   document.getElementById("logs-refresh")?.addEventListener("click", (e) =>
     withRefreshFeedback(e.currentTarget, () => loadLogsPane(deps)),
   )

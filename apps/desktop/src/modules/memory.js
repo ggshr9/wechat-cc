@@ -8,6 +8,8 @@
 //       #memory-editor (textarea), #memory-status (save feedback)
 
 import { escapeHtml, formatRelativeTime } from "../view.js"
+import { observationRow, milestoneCard } from "./observations.js"
+import { decisionRow } from "./decisions.js"
 
 // `selected` doubles as the edit-target identity (userId + path) AND the
 // "we have a file open" flag for the edit button visibility. `editing`
@@ -220,4 +222,78 @@ function formatBytes(n) {
   if (n < 1024) return `${n}B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}k`
   return `${(n / 1024 / 1024).toFixed(1)}M`
+}
+
+// Memory pane top zone — Claude's recent observations + milestone cards.
+// Loads from CLI: observations list + milestones list. Empty state already
+// in HTML (Task 9). Refresh on pane switch + manual button.
+export async function loadMemoryTopZone(deps) {
+  const chatId = currentChatId(deps)
+  if (!chatId) return  // no chat configured yet — leave empty-state visible
+
+  const obsBox = document.getElementById("memory-observations")
+  const msBox = document.getElementById("memory-milestones")
+  if (!obsBox || !msBox) return
+
+  try {
+    const [obsResp, msResp] = await Promise.all([
+      deps.invoke("wechat_cli_json", { args: ["observations", "list", chatId, "--json"] }),
+      deps.invoke("wechat_cli_json", { args: ["milestones", "list", chatId, "--json"] }),
+    ])
+    const observations = (obsResp.observations || []).slice(0, 3)
+    if (observations.length === 0) {
+      // Keep design-language §1.3 #5 — empty states have narrative, not "暂无数据"
+      obsBox.innerHTML = `<p class="empty-state">Claude 还没注意到什么——这是它的安静日子。</p>`
+    } else {
+      obsBox.innerHTML = observations.map(observationRow).join("")
+    }
+    msBox.innerHTML = (msResp.milestones || []).slice(-2).map(milestoneCard).join("")
+  } catch (err) {
+    console.error("memory top zone load failed", err)
+  }
+}
+
+// Memory pane bottom — Claude's recent decisions (events.jsonl folded zone).
+// Lazy-loaded on first toggle expand to avoid a hot-path read on every pane
+// switch.
+export async function loadMemoryDecisions(deps) {
+  const chatId = currentChatId(deps)
+  if (!chatId) return
+
+  const box = document.getElementById("memory-decisions-body")
+  if (!box) return
+
+  try {
+    const resp = await deps.invoke("wechat_cli_json", {
+      args: ["events", "list", chatId, "--json", "--limit", "30"],
+    })
+    const events = (resp.events || []).reverse() // newest first
+    if (events.length === 0) {
+      box.innerHTML = `<p class="empty-state">还没记录到决策。</p>`
+    } else {
+      box.innerHTML = events.map(decisionRow).join("")
+    }
+  } catch (err) {
+    console.error("memory decisions load failed", err)
+  }
+}
+
+export async function archiveObservation(deps, obsId) {
+  const chatId = currentChatId(deps)
+  if (!chatId) return
+  try {
+    await deps.invoke("wechat_cli_json", {
+      args: ["observations", "archive", chatId, obsId, "--json"],
+    })
+    await loadMemoryTopZone(deps)
+  } catch (err) {
+    console.error("archive observation failed", err)
+  }
+}
+
+// Resolve the chat to query — first bound account from doctor poll. v0.4 is
+// single-chat; v0.5 will surface a chat picker.
+function currentChatId(deps) {
+  const rep = deps.doctorPoller?.current
+  return rep?.checks?.accounts?.items?.[0]?.botId ?? null
 }
