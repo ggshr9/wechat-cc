@@ -98,6 +98,39 @@ async function main() {
     },
   })
 
+  // Introspect tick — slower than the push scheduler (24h ± 30%), never
+  // pushes to user. Output goes to observations.jsonl + events.jsonl;
+  // surprise comes from user opening memory pane. v0.4 ships a stub agent
+  // (always returns write=false); real SDK integration in v0.4.1.
+  const INTROSPECT_TICK_INTERVAL_MS = 24 * 60 * 60 * 1000  // 24 h base
+  const INTROSPECT_TICK_JITTER = 0.3
+  const stopIntrospect = startCompanionScheduler({
+    intervalMs: INTROSPECT_TICK_INTERVAL_MS,
+    jitterRatio: INTROSPECT_TICK_JITTER,
+    isEnabled: () => loadCompanionConfig(STATE_DIR).enabled,
+    isSnoozed: () => {
+      const snooze = loadCompanionConfig(STATE_DIR).snooze_until
+      return !!snooze && Date.parse(snooze) > Date.now()
+    },
+    log: (tag, line) => log(tag, line),
+    onTick: async () => {
+      const { resolveIntrospectChatId, makeIntrospectAgent } = await import('./companion/introspect-runtime')
+      const { runIntrospectTick } = await import('./companion/introspect')
+      const { makeEventsStore } = await import('./events/store')
+      const { makeObservationsStore } = await import('./observations/store')
+      const chatId = resolveIntrospectChatId(STATE_DIR)
+      if (!chatId) {
+        log('INTROSPECT', 'skip tick — no default_chat_id configured')
+        return
+      }
+      const memoryRoot = `${STATE_DIR}/memory`
+      const events = makeEventsStore(memoryRoot, chatId)
+      const observations = makeObservationsStore(memoryRoot, chatId)
+      const agent = makeIntrospectAgent()
+      await runIntrospectTick({ events, observations, agent, chatId, log: (tag, line) => log(tag, line) })
+    },
+  })
+
   const startedAtIso = new Date().toISOString()
 
   // pollHandle is created after we compose the admin-commands handler, but
@@ -192,6 +225,7 @@ async function main() {
   const shutdown = async () => {
     log('DAEMON', 'shutdown initiated')
     await stopScheduler()
+    await stopIntrospect()
     await pollHandle.stop()
     await sessionManager.shutdown()
     await sessionStore.flush()
