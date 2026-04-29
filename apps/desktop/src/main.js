@@ -317,6 +317,101 @@ function wireEvents() {
       switchPane(btn.dataset.pane)
     })
   })
+
+  // ─── Lightbox for chat-bubble image / file attachments ──────────────
+  // Single delegated handler — opens lightbox on .wechat-image or
+  // .wechat-file-card click, closes on backdrop click or Esc.
+  document.body.addEventListener("click", (ev) => {
+    const img = ev.target.closest(".wechat-image")
+    if (img) {
+      ev.preventDefault()
+      openImageLightbox(img.src)
+      return
+    }
+    const fileCard = ev.target.closest(".wechat-file-card")
+    if (fileCard) {
+      ev.preventDefault()
+      openFileLightbox(fileCard.dataset.path, fileCard.dataset.name, fileCard.dataset.ext)
+      return
+    }
+    const lightbox = ev.target.closest("#lightbox")
+    if (lightbox && !ev.target.closest(".lightbox-body")) {
+      closeLightbox()
+    }
+  })
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") closeLightbox()
+  })
+}
+
+function openImageLightbox(src) {
+  const lb = document.getElementById("lightbox")
+  const body = document.getElementById("lightbox-body")
+  if (!lb || !body) return
+  body.innerHTML = `<img class="lightbox-img" src="${src}" alt="image"/>`
+  lb.hidden = false
+  lb.setAttribute("aria-hidden", "false")
+}
+
+async function openFileLightbox(path, name, ext) {
+  const lb = document.getElementById("lightbox")
+  const body = document.getElementById("lightbox-body")
+  if (!lb || !body) return
+  body.innerHTML = `
+    <div class="lightbox-file">
+      <div class="lightbox-file-head">
+        <span class="lightbox-file-name">${escapeHtml(name || path || "")}</span>
+        <span class="lightbox-file-tag">${escapeHtml(ext || "FILE")}</span>
+      </div>
+      <div class="lightbox-file-content is-empty">加载中…</div>
+    </div>
+  `
+  lb.hidden = false
+  lb.setAttribute("aria-hidden", "false")
+  const content = body.querySelector(".lightbox-file-content")
+
+  try {
+    const url = "/attachment?path=" + encodeURIComponent(path)
+    const r = await fetch(url)
+    if (!r.ok) {
+      content.classList.add("is-empty")
+      content.textContent = `无法预览：${r.status} ${r.statusText}`
+      return
+    }
+    const TEXT_EXTS = new Set(["TXT","MD","JSON","CSV","LOG","YAML","YML","XML","HTML","HTM","JS","TS","JSX","TSX","CSS","PY","SH","C","CPP","H","HPP","JAVA","GO","RS","TOML","INI","ENV","RB","PHP","SQL","CONF","DIFF","PATCH"])
+    const e = (ext || "").toUpperCase()
+    if (TEXT_EXTS.has(e)) {
+      let text = await r.text()
+      // Cap preview at ~200KB to keep DOM tractable.
+      if (text.length > 200_000) text = text.slice(0, 200_000) + "\n\n…(预览已截断)"
+      content.classList.remove("is-empty")
+      content.textContent = text
+    } else {
+      // Binary: show first 1KB as hex preview so the user has *some* sense
+      const buf = await r.arrayBuffer()
+      const bytes = new Uint8Array(buf.slice(0, 1024))
+      const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join(" ")
+      content.classList.remove("is-empty")
+      content.textContent = `(二进制文件，前 ${bytes.length} 字节 hex 预览):\n\n${hex}`
+    }
+  } catch (err) {
+    content.classList.add("is-empty")
+    content.textContent = "读取失败：" + (err?.message || String(err))
+  }
+}
+
+function closeLightbox() {
+  const lb = document.getElementById("lightbox")
+  const body = document.getElementById("lightbox-body")
+  if (!lb || !body) return
+  if (lb.hidden) return
+  body.innerHTML = ""
+  lb.hidden = true
+  lb.setAttribute("aria-hidden", "true")
+}
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;")
 }
 
 // ─── boot ────────────────────────────────────────────────────────────

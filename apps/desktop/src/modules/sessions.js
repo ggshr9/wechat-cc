@@ -167,6 +167,67 @@ export function extractWechatMeta(turn) {
 }
 
 /**
+ * Best-effort timestamp (ms) for a turn. User turns have explicit ts
+ * in the envelope. Queue-operation turns have ISO timestamps. Other
+ * types (assistant, attachment, system) return null and the caller
+ * inherits from the preceding ts when needed.
+ */
+export function extractTurnTimestamp(turn) {
+  if (!turn || typeof turn !== 'object') return null
+  if (turn.type === 'user') {
+    const meta = extractWechatMeta(turn)
+    return meta?.ts ?? null
+  }
+  if (turn.type === 'queue-operation' && typeof turn.timestamp === 'string') {
+    const t = Date.parse(turn.timestamp)
+    return Number.isFinite(t) ? t : null
+  }
+  return null
+}
+
+const WEEKDAYS_CN = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+
+/**
+ * Format a chat timestamp the WeChat way:
+ *   today        → "上午 8:32" / "下午 5:18"   (12-hour with am/pm)
+ *   yesterday    → "昨天 22:16"                (24-hour)
+ *   within 7d    → "周三 22:16"                (24-hour)
+ *   older        → "2026-04-15 22:16"          (full date + 24-hour)
+ */
+export function formatChatTimestamp(ms, nowMs = Date.now()) {
+  const d = new Date(ms)
+  const now = new Date(nowMs)
+  const dayKey = (x) => `${x.getFullYear()}-${x.getMonth()}-${x.getDate()}`
+  const sameDay = dayKey(d) === dayKey(now)
+  if (sameDay) return formatTime12(d)
+
+  const yesterday = new Date(now)
+  yesterday.setDate(yesterday.getDate() - 1)
+  if (dayKey(d) === dayKey(yesterday)) return `昨天 ${formatTime24(d)}`
+
+  // Within last 7 days (exclusive of today/yesterday already handled)
+  const ageMs = nowMs - ms
+  if (ageMs >= 0 && ageMs < 7 * 86400_000) return `${WEEKDAYS_CN[d.getDay()]} ${formatTime24(d)}`
+
+  return `${formatDateYMD(d)} ${formatTime24(d)}`
+}
+
+function formatTime12(d) {
+  const h = d.getHours()
+  const ampm = h < 12 ? '上午' : '下午'
+  const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h
+  return `${ampm} ${h12}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+function formatTime24(d) {
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+function formatDateYMD(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/**
  * Returns the WeChat contact name for a session — the value of the
  * `user` attribute on the first inbound user-turn envelope. Used by the
  * iPhone-frame title bar so the chat reads as "you and <contact>", not
@@ -362,10 +423,28 @@ export async function openProjectDetail(deps, alias, opts = {}) {
     const renderer = mode === 'detailed'
       ? (turn) => turnHtml(turn)
       : (turn) => turnHtmlCompact(turn, { sessionHasReplyTool: hasReplyTool })
+    // Walk turns once: insert a centered time-separator before any
+    // visible turn whose ts is ≥5 min after the previous visible one
+    // (or the first visible one). Hidden turns (queue-operation, etc.)
+    // do NOT consume the lastTs slot — otherwise their timestamps would
+    // pre-empt the separator that should appear before the first user
+    // message. Compact mode only.
+    const TIME_GAP_MS = 5 * 60_000
+    const renderNow = Date.now()
+    let lastTs = null
     const innerTurns = resp.turns
       .map((turn, idx) => {
         const inner = renderer(turn)
-        return inner ? `<div class="jsonl-turn-group" data-turn-index="${idx}">${inner}</div>` : ''
+        if (!inner) return ''
+        let separator = ''
+        const ts = extractTurnTimestamp(turn)
+        if (mode === 'compact' && ts !== null) {
+          if (lastTs === null || ts - lastTs > TIME_GAP_MS) {
+            separator = `<div class="wechat-time-separator">${escapeHtml(formatChatTimestamp(ts, renderNow))}</div>`
+          }
+          lastTs = ts
+        }
+        return separator + `<div class="jsonl-turn-group" data-turn-index="${idx}">${inner}</div>`
       })
       .filter(s => s)
       .join("")
@@ -602,12 +681,17 @@ export function turnHtmlCompact(turn, opts = {}) {
  */
 function phoneFrameHtml({ contactName, chatContent }) {
   const name = contactName ? escapeHtml(contactName) : '—'
+  // Live clock — re-rendered every auto-refresh tick (4s) so it stays
+  // current without its own interval. Hour shown without leading zero
+  // (matches iOS status-bar convention in most regions).
+  const now = new Date()
+  const time = `${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`
   return `
     <div class="phone-frame">
       <div class="phone-screen">
         <div class="phone-island" aria-hidden="true"></div>
         <div class="phone-status">
-          <span class="phone-status-time">5:18</span>
+          <span class="phone-status-time">${time}</span>
           <span class="phone-status-icons">
             <svg viewBox="0 0 17 11" width="17" height="11" fill="currentColor" aria-hidden="true"><rect x="0" y="6" width="3" height="5" rx="0.5"/><rect x="4.5" y="4" width="3" height="7" rx="0.5"/><rect x="9" y="2" width="3" height="9" rx="0.5"/><rect x="13.5" y="0" width="3" height="11" rx="0.5"/></svg>
             <svg viewBox="0 0 16 12" width="16" height="12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2 5a8.5 8.5 0 0 1 12 0"/><path d="M4.5 7.5a5 5 0 0 1 7 0"/><circle cx="8" cy="10" r="1" fill="currentColor" stroke="none"/></svg>
@@ -676,7 +760,8 @@ function wechatAttachmentRow({ side, role, avatarText, avatarColor: bg, avatarCl
   let inner = ''
   if (attachment.kind === 'image') {
     const src = escapeHtml(attachmentUrl(attachment.path))
-    inner = `<div class="wechat-image-wrap"><img class="wechat-image" src="${src}" alt="image" loading="lazy"/></div>`
+    const safePath = escapeHtml(attachment.path || '')
+    inner = `<div class="wechat-image-wrap"><img class="wechat-image" src="${src}" alt="image" loading="lazy" data-path="${safePath}"/></div>`
   } else if (attachment.kind === 'file') {
     inner = `<div class="wechat-bubble-wrap">${fileCard(attachment)}</div>`
   } else if (attachment.kind === 'voice') {
@@ -696,7 +781,7 @@ function fileCard(attachment) {
   const dot = filename.lastIndexOf('.')
   const ext = dot > 0 ? filename.slice(dot + 1).toUpperCase().slice(0, 4) : 'FILE'
   const tone = fileIconTone(ext)
-  return `<div class="wechat-file-card">` +
+  return `<div class="wechat-file-card" data-path="${escapeHtml(path)}" data-name="${escapeHtml(filename)}" data-ext="${escapeHtml(ext)}">` +
     `<div class="wechat-file-info">` +
       `<div class="wechat-file-name">${escapeHtml(filename)}</div>` +
       `<div class="wechat-file-meta">已收到</div>` +

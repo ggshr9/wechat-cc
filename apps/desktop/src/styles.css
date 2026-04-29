@@ -1696,6 +1696,60 @@ input { font: inherit; color: inherit; }
   color: #4A4A4A;
 }
 
+/* Shared lightbox for image + file preview. Click a wechat-image or
+ * wechat-file-card to open; click anywhere outside the body or press
+ * Esc to close. */
+.lightbox {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.88);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100;
+  padding: 32px;
+  cursor: zoom-out;
+  animation: lightboxFade 180ms ease-out;
+}
+.lightbox[hidden] { display: none; }
+@keyframes lightboxFade { from { opacity: 0; } to { opacity: 1; } }
+.lightbox-body { max-width: 100%; max-height: 100%; cursor: default; }
+.lightbox-img { display: block; max-width: 88vw; max-height: 88vh; object-fit: contain; border-radius: 4px; }
+.lightbox-file {
+  background: var(--paper);
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 18px 22px;
+  width: min(720px, 90vw);
+  max-height: 88vh;
+  display: flex; flex-direction: column;
+  font-family: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+}
+.lightbox-file-head {
+  display: flex; align-items: baseline; gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--hair);
+  margin-bottom: 12px;
+}
+.lightbox-file-name { font-weight: 500; flex: 1; min-width: 0; word-break: break-all; }
+.lightbox-file-tag { font-family: var(--mono); font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.06em; }
+.lightbox-file-content {
+  flex: 1; min-height: 0; overflow: auto;
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
+  color: var(--ink); white-space: pre-wrap; word-break: break-all;
+  background: var(--paper-2); padding: 12px 14px; border-radius: 4px;
+}
+.lightbox-file-content.is-empty { color: var(--ink-3); font-family: inherit; font-style: italic; }
+
+/* Time separator — centered grey label between message clusters that
+ * are >5 min apart. Matches WeChat's "上午 11:00 / 昨天 22:16 / 周三
+ * 22:16 / 2026-04-15 22:16" convention. */
+.wechat-time-separator {
+  text-align: center;
+  color: #B2B2B2;
+  font-size: 12px;
+  margin: 14px 0 10px;
+  user-select: none;
+  letter-spacing: 0.02em;
+}
+
 /* Quote ref — small grey card BELOW the reply bubble. Position +
  * shape match real WeChat; the actual quoted content (author name +
  * preview/thumbnail) needs daemon-side msg_id storage and is deferred

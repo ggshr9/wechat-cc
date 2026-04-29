@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error JS sibling
-import { groupProjectsByRecency, projectRow, searchHitRow, turnHtml, turnHtmlCompact, extractUserText, extractClaudeReplies, sessionHasReplyTool, buildExportMarkdown, extractWechatMeta, avatarInitial, avatarColor, extractSessionContact } from './sessions.js'
+import { groupProjectsByRecency, projectRow, searchHitRow, turnHtml, turnHtmlCompact, extractUserText, extractClaudeReplies, sessionHasReplyTool, buildExportMarkdown, extractWechatMeta, avatarInitial, avatarColor, extractSessionContact, extractTurnTimestamp, formatChatTimestamp } from './sessions.js'
 
 describe('groupProjectsByRecency', () => {
   const now = Date.now()
@@ -337,6 +337,72 @@ describe('avatarInitial', () => {
 
   it('skips leading whitespace', () => {
     expect(avatarInitial('  Bob')).toBe('B')
+  })
+})
+
+describe('extractTurnTimestamp', () => {
+  it('reads ts from wechat envelope on user turns', () => {
+    const turn = {
+      type: 'user',
+      message: { content: [{ type: 'text', text: '<wechat user="X" ts="1777462246591">hi</wechat>' }] },
+    }
+    expect(extractTurnTimestamp(turn)).toBe(1777462246591)
+  })
+
+  it('returns null on user turns without envelope ts', () => {
+    expect(extractTurnTimestamp({ type: 'user', message: { content: 'plain' } })).toBeNull()
+  })
+
+  it('returns null for assistant turns (caller inherits from preceding)', () => {
+    expect(extractTurnTimestamp({ type: 'assistant', message: { content: [] } })).toBeNull()
+  })
+
+  it('parses queue-operation timestamp field', () => {
+    expect(extractTurnTimestamp({ type: 'queue-operation', timestamp: '2026-04-29T11:31:01.003Z' }))
+      .toBe(new Date('2026-04-29T11:31:01.003Z').getTime())
+  })
+
+  it('returns null for unknown shapes', () => {
+    expect(extractTurnTimestamp({ type: 'system' })).toBeNull()
+    expect(extractTurnTimestamp(null)).toBeNull()
+  })
+})
+
+describe('formatChatTimestamp', () => {
+  // Lock now to a fixed point so tests don't drift across midnights/timezones.
+  // 2026-04-29 14:00 local time as the reference "now".
+  const now = new Date('2026-04-29T14:00:00').getTime()
+
+  it('today → 上午/下午 + 12-hour time', () => {
+    const ts = new Date('2026-04-29T08:32:00').getTime()
+    expect(formatChatTimestamp(ts, now)).toBe('上午 8:32')
+    const ts2 = new Date('2026-04-29T17:18:00').getTime()
+    expect(formatChatTimestamp(ts2, now)).toBe('下午 5:18')
+  })
+
+  it('yesterday → "昨天" + 24-hour', () => {
+    const ts = new Date('2026-04-28T22:16:00').getTime()
+    expect(formatChatTimestamp(ts, now)).toBe('昨天 22:16')
+  })
+
+  it('within last 7 days → weekday + 24-hour', () => {
+    const ts = new Date('2026-04-26T11:00:00').getTime()  // Sunday
+    expect(formatChatTimestamp(ts, now)).toBe('周日 11:00')
+  })
+
+  it('older → full date + 24-hour', () => {
+    const ts = new Date('2026-04-15T22:16:00').getTime()
+    expect(formatChatTimestamp(ts, now)).toBe('2026-04-15 22:16')
+  })
+
+  it('handles midnight edge (00:xx)', () => {
+    const ts = new Date('2026-04-29T00:05:00').getTime()
+    expect(formatChatTimestamp(ts, now)).toBe('上午 12:05')
+  })
+
+  it('handles noon edge (12:xx)', () => {
+    const ts = new Date('2026-04-29T12:30:00').getTime()
+    expect(formatChatTimestamp(ts, now)).toBe('下午 12:30')
   })
 })
 
