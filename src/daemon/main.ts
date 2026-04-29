@@ -21,6 +21,9 @@ import { makeOnboardingHandler } from './onboarding'
 import { notifyStartup } from './notify-startup'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
+import { existsSync } from 'node:fs'
+import { readdir, readFile } from 'node:fs/promises'
+import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { startCompanionScheduler } from './companion/scheduler'
 import { loadCompanionConfig, saveCompanionConfig } from './companion/config'
 import { buildDetectorContext } from './milestones/build-context'
@@ -105,8 +108,8 @@ async function main() {
 
   // Introspect tick — slower than the push scheduler (24h ± 30%), never
   // pushes to user. Output goes to observations.jsonl + events.jsonl;
-  // surprise comes from user opening memory pane. v0.4 ships a stub agent
-  // (always returns write=false); real SDK integration in v0.4.1.
+  // surprise comes from user opening memory pane. v0.4.1 wires the real
+  // SDK eval (claude-haiku-4-5, single-shot, no tools).
   const INTROSPECT_TICK_INTERVAL_MS = 24 * 60 * 60 * 1000  // 24 h base
   const INTROSPECT_TICK_JITTER = 0.3
 
@@ -128,7 +131,14 @@ async function main() {
     const memoryRoot = join(STATE_DIR, 'memory')
     const events = makeEventsStore(memoryRoot, chatId)
     const observations = makeObservationsStore(memoryRoot, chatId)
-    const agent = makeIntrospectAgent()
+    const agent = makeIntrospectAgent({
+      chatId,
+      events,
+      observations,
+      memorySnapshot: () => buildMemorySnapshot(STATE_DIR, chatId),
+      recentInboundMessages: () => recentInboundForChat(STATE_DIR, chatId),
+      sdkEval: isolatedSdkEval,
+    })
     await runIntrospectTick({ events, observations, agent, chatId, log: (tag, line) => log(tag, line) })
     // Persist last_introspect_at so successive boots respect the 24h
     // cadence — without this, every daemon restart resets the timer and
@@ -387,6 +397,72 @@ async function main() {
     },
     { pid: process.pid, accounts: accounts.length, dangerously: DANGEROUSLY }
   ).catch((err) => log('NOTIFY', `unhandled: ${err instanceof Error ? err.message : String(err)}`))
+}
+
+// ---------- introspect-tick helpers ----------
+//
+// Module-scope so they can be referenced from runIntrospectOnce without
+// capturing closures. All three are pure async functions with explicit
+// stateDir / chatId args.
+
+/**
+ * Read every memory/<chatId>/*.md and concatenate into a single string. The
+ * introspect prompt has a 2.5KB cap downstream (introspect-prompt.ts:MEMORY_MAX),
+ * so this can produce a long blob and the prompt builder will truncate it.
+ * Returns '' when the directory doesn't exist (chat has no memory yet).
+ */
+async function buildMemorySnapshot(stateDir: string, chatId: string): Promise<string> {
+  const dir = join(stateDir, 'memory', chatId)
+  if (!existsSync(dir)) return ''
+  const entries = await readdir(dir, { withFileTypes: true })
+  const mds = entries.filter(e => e.isFile() && e.name.endsWith('.md'))
+  const out: string[] = []
+  for (const e of mds) {
+    try {
+      const content = await readFile(join(dir, e.name), 'utf8')
+      out.push(`# ${e.name}\n${content}`)
+    } catch {
+      // Skip unreadable file — best-effort snapshot.
+    }
+  }
+  return out.join('\n\n')
+}
+
+/**
+ * Recent inbound messages for the given chat. v0.4.1 returns empty — v0.5
+ * will surface per-chat inbound history from the daemon's message log. The
+ * introspect prompt's "用户最近发的消息" section will be empty, but memory +
+ * observations + events still give Claude enough to decide.
+ */
+async function recentInboundForChat(_stateDir: string, _chatId: string): Promise<string[]> {
+  return []
+}
+
+/**
+ * Single-shot Haiku eval — no tools, no MCP, no resumed session. Just
+ * prompt → assistant text. Mirrors the iterator shape used in
+ * src/core/claude-agent-provider.ts (`for await (const raw of q)`, branch
+ * on msg.type === 'assistant', extract text parts), but trimmed to one
+ * turn since introspect is single-prompt → single-text-response.
+ */
+async function isolatedSdkEval(prompt: string): Promise<string> {
+  const q = query({
+    prompt,
+    options: {
+      model: 'claude-haiku-4-5',
+      maxTurns: 1,
+    },
+  })
+  let text = ''
+  for await (const raw of q as AsyncGenerator<SDKMessage>) {
+    const msg = raw as unknown as { type: string; message?: { content?: unknown } }
+    if (msg.type === 'assistant' && Array.isArray(msg.message?.content)) {
+      for (const part of msg.message.content as Array<{ type?: string; text?: string }>) {
+        if (part.type === 'text' && typeof part.text === 'string') text += part.text
+      }
+    }
+  }
+  return text
 }
 
 main().catch((err) => {
