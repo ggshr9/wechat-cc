@@ -164,22 +164,78 @@ export function closeProjectDetail() {
   }
 }
 
-// Render a single jsonl turn defensively. Claude Agent SDK turns are
-// shaped as { type, message: { role, content } }; content can be a string
-// (user) or array of {type, text/name} (assistant). Unknown shapes get a
-// generic [type] label so the viewer never throws.
-function turnHtml(turn) {
-  if (turn?.type === 'user' && typeof turn.message?.content === 'string') {
-    return `<div class="jsonl-turn" data-role="user">${escapeHtml(turn.message.content)}</div>`
+// Render a single jsonl turn defensively. Real Claude Agent SDK jsonls
+// (observed via head ~/.claude/projects/.../<session>.jsonl) carry user
+// content as an array of {type:'text', text}, and assistant content as an
+// array including {type:'thinking'} / {type:'text'} / {type:'tool_use'}.
+// Older string-content shapes are tolerated for forward compat. Other
+// SDK turn types we know about: queue-operation, last-prompt (silent),
+// attachment, tool_result, system. Unknown shapes fall through to a
+// compact [type] label so the viewer never throws.
+export function turnHtml(turn) {
+  if (!turn || typeof turn !== 'object') return ''
+
+  // Skip silent SDK lifecycle events that don't carry user-visible content.
+  if (turn.type === 'queue-operation' || turn.type === 'last-prompt') {
+    return ''
   }
-  if (turn?.type === 'assistant' && Array.isArray(turn.message?.content)) {
-    return turn.message.content.map(p => {
-      if (p.type === 'text') return `<div class="jsonl-turn" data-role="assistant">${escapeHtml(p.text || '')}</div>`
-      if (p.type === 'tool_use') return `<div class="jsonl-turn" data-role="tool_use">[tool_use: ${escapeHtml(p.name || '?')}]</div>`
-      return ''
-    }).join("")
+
+  // user/assistant: extract text from message.content (always array in real
+  // jsonls; tolerate string for forward compat).
+  if (turn.type === 'user' || turn.type === 'assistant') {
+    const role = turn.type
+    const content = turn.message?.content
+    if (typeof content === 'string') {
+      return `<div class="jsonl-turn" data-role="${role}">${escapeHtml(content)}</div>`
+    }
+    if (Array.isArray(content)) {
+      return content.map(p => renderPart(p, role)).filter(s => s).join("")
+    }
+    return ''
   }
-  return `<div class="jsonl-turn" data-role="other">[${escapeHtml(turn?.type || 'unknown')}]</div>`
+
+  // Attachment: render compact label with file name if present.
+  if (turn.type === 'attachment') {
+    const att = turn.attachment || {}
+    const name = att.path || att.name || 'attachment'
+    return `<div class="jsonl-turn" data-role="attachment">📎 ${escapeHtml(name)}</div>`
+  }
+
+  // tool_result: render body if present, else label.
+  if (turn.type === 'tool_result') {
+    const body = typeof turn.content === 'string' ? turn.content : JSON.stringify(turn.content || '').slice(0, 300)
+    return `<div class="jsonl-turn" data-role="tool_result">↳ ${escapeHtml(body)}</div>`
+  }
+
+  // Fallback: compact type label so unknown SDK shapes don't break the view.
+  return `<div class="jsonl-turn" data-role="other">[${escapeHtml(turn.type || 'unknown')}]</div>`
+}
+
+function renderPart(part, role) {
+  if (!part || typeof part !== 'object') return ''
+  if (part.type === 'text') {
+    const text = part.text || ''
+    if (!text.trim()) return ''
+    return `<div class="jsonl-turn" data-role="${role}">${escapeHtml(text)}</div>`
+  }
+  if (part.type === 'thinking') {
+    const thinking = part.thinking || ''
+    if (!thinking.trim()) return ''
+    // Thinking gets its own visual treatment — italics + muted to hint
+    // that this is internal reasoning, not user-facing assistant output.
+    return `<div class="jsonl-turn" data-role="thinking"><em>${escapeHtml(thinking)}</em></div>`
+  }
+  if (part.type === 'tool_use') {
+    const name = part.name || '?'
+    return `<div class="jsonl-turn" data-role="tool_use">⚙ ${escapeHtml(name)}</div>`
+  }
+  if (part.type === 'tool_result') {
+    const body = typeof part.content === 'string' ? part.content
+      : Array.isArray(part.content) ? part.content.map(c => c.text || '').filter(Boolean).join('\n')
+      : JSON.stringify(part.content || '').slice(0, 300)
+    return `<div class="jsonl-turn" data-role="tool_result">↳ ${escapeHtml(body)}</div>`
+  }
+  return ''
 }
 
 export async function exportProjectMarkdown(deps) {

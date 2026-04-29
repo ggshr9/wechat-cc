@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error JS sibling
-import { groupProjectsByRecency, projectRow, searchHitRow } from './sessions.js'
+import { groupProjectsByRecency, projectRow, searchHitRow, turnHtml } from './sessions.js'
 
 describe('groupProjectsByRecency', () => {
   const now = Date.now()
@@ -82,5 +82,69 @@ describe('searchHitRow', () => {
     const html = searchHitRow({ alias: '<x>', session_id: 's', turn_index: 0, snippet: '<script>' })
     expect(html).not.toContain('<x>')
     expect(html).not.toContain('<script>')
+  })
+})
+
+describe('turnHtml', () => {
+  it('renders user turn with array content (real SDK shape)', () => {
+    const html = turnHtml({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: '帮我看一下' }] },
+    })
+    expect(html).toContain('帮我看一下')
+    expect(html).toContain('data-role="user"')
+  })
+
+  it('renders user turn with string content (forward compat)', () => {
+    const html = turnHtml({ type: 'user', message: { role: 'user', content: 'hello' } })
+    expect(html).toContain('hello')
+    expect(html).toContain('data-role="user"')
+  })
+
+  it('renders assistant text + tool_use parts', () => {
+    const html = turnHtml({
+      type: 'assistant',
+      message: { role: 'assistant', content: [
+        { type: 'text', text: '我修了' },
+        { type: 'tool_use', name: 'Edit', input: {} },
+      ]},
+    })
+    expect(html).toContain('我修了')
+    expect(html).toContain('Edit')
+    expect(html).toContain('data-role="tool_use"')
+  })
+
+  it('renders assistant thinking with italic styling hint', () => {
+    const html = turnHtml({
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'thinking', thinking: '考虑一下' }] },
+    })
+    expect(html).toContain('考虑一下')
+    expect(html).toContain('data-role="thinking"')
+    expect(html).toContain('<em>')
+  })
+
+  it('skips queue-operation silently', () => {
+    expect(turnHtml({ type: 'queue-operation' })).toBe('')
+    expect(turnHtml({ type: 'last-prompt' })).toBe('')
+  })
+
+  it('renders attachment compactly', () => {
+    const html = turnHtml({ type: 'attachment', attachment: { path: '/tmp/img.png' } })
+    expect(html).toContain('📎')
+    expect(html).toContain('/tmp/img.png')
+  })
+
+  it('falls back gracefully on unknown shape', () => {
+    expect(turnHtml({ type: 'weird' })).toContain('[weird]')
+  })
+
+  it('escapes html in user content (xss)', () => {
+    const html = turnHtml({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: '<script>alert(1)</script>' }] },
+    })
+    expect(html).not.toContain('<script>alert(1)')
+    expect(html).toContain('&lt;script&gt;')
   })
 })
