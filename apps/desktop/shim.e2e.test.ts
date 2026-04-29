@@ -108,6 +108,7 @@ describe('apps/desktop shim — HTML structure', () => {
       'sessions-favorite', 'sessions-export', 'sessions-delete', 'sessions-jsonl',
       'sessions-refresh', 'sessions-meta', 'sessions-empty', 'sessions-detail-meta',
       'sessions-count',
+      'sessions-mode-compact', 'sessions-mode-detailed',
       // memory pane new zones (Task 9)
       'memory-top-zone', 'memory-observations', 'memory-milestones',
       'memory-decisions-toggle', 'memory-decisions-body',

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error JS sibling
-import { groupProjectsByRecency, projectRow, searchHitRow, turnHtml } from './sessions.js'
+import { groupProjectsByRecency, projectRow, searchHitRow, turnHtml, turnHtmlCompact, extractUserText, extractClaudeReplies } from './sessions.js'
 
 describe('groupProjectsByRecency', () => {
   const now = Date.now()
@@ -142,6 +142,136 @@ describe('turnHtml', () => {
 
   it('escapes html in user content (xss)', () => {
     const html = turnHtml({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: '<script>alert(1)</script>' }] },
+    })
+    expect(html).not.toContain('<script>alert(1)')
+    expect(html).toContain('&lt;script&gt;')
+  })
+})
+
+describe('extractUserText', () => {
+  it('strips <wechat> envelope and returns inner text', () => {
+    const turn = {
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: '<wechat chat_id="x" user="GSR" msg_type="text" ts="123">我是谁</wechat>' }] },
+    }
+    expect(extractUserText(turn)).toBe('我是谁')
+  })
+
+  it('falls back to raw text when no envelope', () => {
+    const turn = { type: 'user', message: { role: 'user', content: [{ type: 'text', text: '直接说话' }] } }
+    expect(extractUserText(turn)).toBe('直接说话')
+  })
+
+  it('handles string content (forward compat)', () => {
+    const turn = { type: 'user', message: { role: 'user', content: 'hello' } }
+    expect(extractUserText(turn)).toBe('hello')
+  })
+
+  it('returns null for non-user turns', () => {
+    expect(extractUserText({ type: 'assistant', message: {} })).toBeNull()
+    expect(extractUserText({ type: 'attachment' })).toBeNull()
+  })
+
+  it('returns null for empty content', () => {
+    expect(extractUserText({ type: 'user', message: { content: [] } })).toBeNull()
+    expect(extractUserText({ type: 'user', message: { content: '' } })).toBeNull()
+  })
+})
+
+describe('extractClaudeReplies', () => {
+  it('extracts text from mcp__wechat__reply tool input', () => {
+    const turn = {
+      type: 'assistant',
+      message: { role: 'assistant', content: [
+        { type: 'thinking', thinking: '...' },
+        { type: 'tool_use', name: 'mcp__wechat__reply', input: { text: '你是 GSR 啊', chat_id: 'x' } },
+      ] },
+    }
+    expect(extractClaudeReplies(turn)).toEqual(['你是 GSR 啊'])
+  })
+
+  it('handles multiple reply calls in one turn', () => {
+    const turn = {
+      type: 'assistant',
+      message: { role: 'assistant', content: [
+        { type: 'tool_use', name: 'mcp__wechat__reply', input: { text: '第一条' } },
+        { type: 'tool_use', name: 'mcp__wechat__reply', input: { text: '第二条' } },
+      ] },
+    }
+    expect(extractClaudeReplies(turn)).toEqual(['第一条', '第二条'])
+  })
+
+  it('falls back to text parts when no reply tool called', () => {
+    const turn = {
+      type: 'assistant',
+      message: { role: 'assistant', content: [
+        { type: 'text', text: '直接回的' },
+        { type: 'tool_use', name: 'mcp__wechat__memory_read', input: {} },
+      ] },
+    }
+    expect(extractClaudeReplies(turn)).toEqual(['直接回的'])
+  })
+
+  it('returns empty array for non-assistant turns', () => {
+    expect(extractClaudeReplies({ type: 'user', message: {} })).toEqual([])
+  })
+
+  it('ignores reply tool calls with empty input.text', () => {
+    const turn = {
+      type: 'assistant',
+      message: { role: 'assistant', content: [
+        { type: 'tool_use', name: 'mcp__wechat__reply', input: { text: '' } },
+        { type: 'tool_use', name: 'mcp__wechat__reply', input: {} },
+      ] },
+    }
+    expect(extractClaudeReplies(turn)).toEqual([])
+  })
+})
+
+describe('turnHtmlCompact', () => {
+  it('renders user turn with envelope stripped', () => {
+    const html = turnHtmlCompact({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: '<wechat chat_id="x">你好</wechat>' }] },
+    })
+    expect(html).toContain('你好')
+    expect(html).toContain('data-role="user"')
+    expect(html).not.toContain('<wechat')
+  })
+
+  it('renders assistant reply tool input as bubbles', () => {
+    const html = turnHtmlCompact({
+      type: 'assistant',
+      message: { role: 'assistant', content: [
+        { type: 'tool_use', name: 'mcp__wechat__reply', input: { text: '回的' } },
+      ] },
+    })
+    expect(html).toContain('回的')
+    expect(html).toContain('data-role="assistant"')
+  })
+
+  it('hides attachments / tool_result / queue-operation entirely', () => {
+    expect(turnHtmlCompact({ type: 'attachment', attachment: { path: '/x.png' } })).toBe('')
+    expect(turnHtmlCompact({ type: 'tool_result', content: 'noise' })).toBe('')
+    expect(turnHtmlCompact({ type: 'queue-operation' })).toBe('')
+    expect(turnHtmlCompact({ type: 'system' })).toBe('')
+  })
+
+  it('hides assistant turn that only made non-reply tool calls', () => {
+    const html = turnHtmlCompact({
+      type: 'assistant',
+      message: { role: 'assistant', content: [
+        { type: 'tool_use', name: 'mcp__wechat__memory_list', input: {} },
+        { type: 'tool_use', name: 'ToolSearch', input: { query: 'x' } },
+      ] },
+    })
+    expect(html).toBe('')
+  })
+
+  it('escapes html in compact mode (xss)', () => {
+    const html = turnHtmlCompact({
       type: 'user',
       message: { role: 'user', content: [{ type: 'text', text: '<script>alert(1)</script>' }] },
     })

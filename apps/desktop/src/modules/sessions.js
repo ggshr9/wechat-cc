@@ -11,6 +11,90 @@ import { formatRelativeTimeShort } from "./observations.js"
 const TODAY_MS = 24 * 3600_000
 const WEEK_MS = 7 * TODAY_MS
 const FAV_STORAGE_KEY = 'wechat-cc:favorite-sessions'
+const MODE_STORAGE_KEY = 'wechat-cc:session-detail-mode'
+
+// Detail view 「精简 / 完整」 toggle. 精简 (compact) is the default — extracts
+// only the actual user message + Claude's actual reply, hiding all SDK noise
+// (attachments, ToolSearch / memory_list / memory_read tool calls, raw JSON
+// tool results, system events, the <wechat ...> envelope). 完整 (detailed)
+// keeps the verbose dev view (everything turnHtml renders).
+function readSessionsDetailMode() {
+  try {
+    const stored = localStorage.getItem(MODE_STORAGE_KEY)
+    return stored === 'detailed' ? 'detailed' : 'compact'
+  } catch { return 'compact' }
+}
+
+function writeSessionsDetailMode(mode) {
+  try { localStorage.setItem(MODE_STORAGE_KEY, mode) } catch { /* fall through */ }
+}
+
+function applyModeToToggle(mode) {
+  const compactBtn = document.getElementById('sessions-mode-compact')
+  const detailedBtn = document.getElementById('sessions-mode-detailed')
+  if (compactBtn) compactBtn.classList.toggle('is-active', mode === 'compact')
+  if (detailedBtn) detailedBtn.classList.toggle('is-active', mode === 'detailed')
+}
+
+/**
+ * Extract the user's actual message text from a 'user'-type turn, stripping
+ * the wechat-cc-specific <wechat ...>...</wechat> envelope that wraps every
+ * inbound. Falls back to raw text content if envelope absent (forward
+ * compat). Returns null for non-user turns or when extraction yields empty.
+ */
+export function extractUserText(turn) {
+  if (!turn || turn.type !== 'user') return null
+  const content = turn.message?.content
+  let raw = ''
+  if (typeof content === 'string') raw = content
+  else if (Array.isArray(content)) {
+    raw = content
+      .filter(p => p && p.type === 'text' && typeof p.text === 'string')
+      .map(p => p.text)
+      .join('\n')
+  }
+  if (!raw) return null
+  // Try to strip the <wechat ...> envelope — wechat-cc wraps every inbound
+  // with metadata so the SDK has chat_id / user / msg_type context.
+  const m = raw.match(/<wechat\b[^>]*>([\s\S]*?)<\/wechat>/)
+  const text = (m ? m[1] : raw).trim()
+  return text || null
+}
+
+/**
+ * Extract Claude's actual reply text(s) from an 'assistant'-type turn.
+ * The real reply lives in the input of mcp__wechat__reply tool calls —
+ * Claude may call this multiple times in one turn, producing multiple
+ * outbound messages. Falls back to text parts (excluding tool_use/thinking)
+ * when no reply tool was called — covers the case where Claude responded
+ * with plain text without going through the reply path.
+ *
+ * Returns string[] (one per reply / fallback text).
+ */
+export function extractClaudeReplies(turn) {
+  if (!turn || turn.type !== 'assistant') return []
+  const content = turn.message?.content
+  if (!Array.isArray(content)) return []
+
+  const replies = []
+  for (const p of content) {
+    // wechat-cc's MCP exposes the reply tool as `mcp__wechat__reply`. Match
+    // loosely — the tool name pattern may evolve. Either suffix-match
+    // 'reply' (after a separator) or exact 'mcp__wechat__reply'.
+    if (p && p.type === 'tool_use' && typeof p.name === 'string' && /(^|[_/])reply$/.test(p.name)) {
+      const t = p.input && typeof p.input.text === 'string' ? p.input.text : ''
+      if (t.trim()) replies.push(t.trim())
+    }
+  }
+  if (replies.length > 0) return replies
+
+  // Fallback: text parts, ignoring thinking/tool_use. Useful when Claude
+  // emitted plain text instead of calling the reply tool.
+  const fallback = content
+    .filter(p => p && p.type === 'text' && typeof p.text === 'string' && p.text.trim())
+    .map(p => p.text.trim())
+  return fallback
+}
 
 export function groupProjectsByRecency(projects, opts = {}) {
   const skipThresh = opts.skipGroupingThreshold ?? 0
@@ -126,13 +210,24 @@ export async function openProjectDetail(deps, alias, opts = {}) {
     // Render turns and tag each with data-turn-index so the focus scroll
     // can find the matching one. We tag the OUTER wrapper at the original
     // turn level — assistant turns expand into multiple .jsonl-turn divs,
-    // so we wrap them in a per-turn container.
-    const html = resp.turns.map((turn, idx) => `
-      <div class="jsonl-turn-group" data-turn-index="${idx}">
-        ${turnHtml(turn)}
-      </div>
-    `).join("")
-    jsonlBox.innerHTML = html || `<p class="empty-state">这个 session 还没产生消息。</p>`
+    // so we wrap them in a per-turn container. In compact mode (default),
+    // hidden turn types (attachments, internal tool calls, raw tool results,
+    // system events) render to '' and are filtered out before mounting.
+    const mode = readSessionsDetailMode()
+    applyModeToToggle(mode)
+    const renderer = mode === 'detailed' ? turnHtml : turnHtmlCompact
+    const html = resp.turns
+      .map((turn, idx) => {
+        const inner = renderer(turn)
+        return inner ? `<div class="jsonl-turn-group" data-turn-index="${idx}">${inner}</div>` : ''
+      })
+      .filter(s => s)
+      .join("")
+    jsonlBox.innerHTML = html || `<p class="empty-state">${
+      mode === 'compact'
+        ? '这个 session 还没产生对话——切到「完整」看到底层细节。'
+        : '这个 session 还没产生消息。'
+    }</p>`
     if (favBtn) {
       const favs = readFavorites()
       favBtn.textContent = favs.has(alias) ? '★ 已收藏' : '☆ 收藏'
@@ -210,6 +305,45 @@ export function turnHtml(turn) {
 
   // Fallback: compact type label so unknown SDK shapes don't break the view.
   return `<div class="jsonl-turn" data-role="other">[${escapeHtml(turn.type || 'unknown')}]</div>`
+}
+
+// Compact-mode renderer — only emits chat bubbles for the actual user message
+// and Claude's actual reply. Everything else (attachments, internal tool
+// calls / results, system events, queue-operation, last-prompt, unknown
+// shapes) returns ''. The caller filters empty strings before mounting so
+// hidden turns don't even produce an empty .jsonl-turn-group wrapper.
+export function turnHtmlCompact(turn) {
+  if (!turn || typeof turn !== 'object') return ''
+  if (turn.type === 'user') {
+    const text = extractUserText(turn)
+    if (!text) return ''
+    return `<div class="jsonl-turn" data-role="user">${escapeHtml(text)}</div>`
+  }
+  if (turn.type === 'assistant') {
+    const replies = extractClaudeReplies(turn)
+    if (replies.length === 0) return ''
+    return replies
+      .map(r => `<div class="jsonl-turn" data-role="assistant">${escapeHtml(r)}</div>`)
+      .join('')
+  }
+  // attachment, tool_result, queue-operation, last-prompt, system, unknown:
+  // all hidden in compact mode.
+  return ''
+}
+
+// Toggle handler — called from main.js when the user clicks one of the
+// segmented buttons. Re-renders the current detail without re-fetching the
+// jsonl: persists the choice, then calls openProjectDetail again with the
+// stored alias from the detail dataset.
+export function setSessionsDetailMode(deps, mode) {
+  writeSessionsDetailMode(mode)
+  const detail = document.getElementById('sessions-detail')
+  const alias = detail?.dataset.alias
+  if (alias && !detail?.classList.contains('dismissed')) {
+    openProjectDetail(deps, alias)
+  } else {
+    applyModeToToggle(mode)
+  }
 }
 
 function renderPart(part, role) {
