@@ -12,7 +12,7 @@ import { serviceAction, forceKillDaemon } from "./modules/service.js"
 import { renderDashboard, renderRestartButton, setPending, updateClock, restartDaemon, stopDaemon, handleAccountRowClick } from "./modules/dashboard.js"
 import { loadMemoryPane, wireMemoryButtons, loadMemoryTopZone, loadMemoryDecisions, archiveObservation } from "./modules/memory.js"
 import { loadLogsPane, startLogsAutoRefresh, stopLogsAutoRefresh } from "./modules/logs.js"
-import { loadSessionsList, openProjectDetail, closeProjectDetail, toggleFavorite, exportProjectMarkdown, deleteProject } from "./modules/sessions.js"
+import { loadSessionsList, openProjectDetail, closeProjectDetail, toggleFavorite, exportProjectMarkdown, deleteProject, wireSearch } from "./modules/sessions.js"
 import { loadUpdateProbe, applyUpdate } from "./modules/update.js"
 
 const state = {
@@ -280,6 +280,7 @@ function wireEvents() {
   })
   document.getElementById("sessions-export")?.addEventListener("click", () => exportProjectMarkdown(deps))
   document.getElementById("sessions-delete")?.addEventListener("click", () => deleteProject(deps))
+  wireSearch(deps)
   document.getElementById("logs-tail-select")?.addEventListener("change", () => loadLogsPane(deps))
   document.getElementById("update-check-btn")?.addEventListener("click", () => loadUpdateProbe(deps))
   document.getElementById("update-apply-btn")?.addEventListener("click", () => applyUpdate(deps))

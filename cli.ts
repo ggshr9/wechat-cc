@@ -31,6 +31,7 @@ export type CliArgs =
   | { cmd: 'sessions-list-projects'; json: boolean }
   | { cmd: 'sessions-read-jsonl'; alias: string; json: boolean }
   | { cmd: 'sessions-delete'; alias: string; json: boolean }
+  | { cmd: 'sessions-search'; query: string; json: boolean; limit: number }
   | { cmd: 'logs'; tail: number; json: boolean }
   | { cmd: 'update'; check: boolean; json: boolean }
   | { cmd: 'help' }
@@ -136,6 +137,11 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
       if (rest[0] === 'delete' && rest[1]) {
         return { cmd: 'sessions-delete', alias: rest[1], json: rest.includes('--json') }
       }
+      if (rest[0] === 'search' && rest[1]) {
+        const limitIdx = rest.indexOf('--limit')
+        const limit = limitIdx >= 0 ? Number.parseInt(rest[limitIdx + 1] ?? '', 10) : 50
+        return { cmd: 'sessions-search', query: rest[1], json: rest.includes('--json'), limit: Number.isFinite(limit) ? limit : 50 }
+      }
       return { cmd: 'help' }
     }
     case 'provider': {
@@ -235,6 +241,9 @@ Usage:
                         Read all turns from the alias's session jsonl.
   wechat-cc sessions delete <alias> [--json]
                         Remove the sessions.json entry (jsonl on disk untouched).
+  wechat-cc sessions search <query> [--limit N] [--json]
+                        Naive case-insensitive substring search across
+                        all sessions.json-registered jsonls.
   wechat-cc logs [--tail N] [--json]
                         Tail the daemon's channel.log. Default --tail 50.
                         --json returns parsed entries (timestamp, tag,
@@ -525,6 +534,12 @@ async function main() {
       store.delete(parsed.alias)
       await store.flush()
       console.log(parsed.json ? JSON.stringify({ ok: true, deleted: parsed.alias }, null, 2) : `deleted ${parsed.alias}`)
+      return
+    }
+    case 'sessions-search': {
+      const { searchAcrossSessions } = await import('./src/daemon/sessions/searcher')
+      const hits = await searchAcrossSessions(parsed.query, { limit: parsed.limit, stateDir: STATE_DIR })
+      console.log(parsed.json ? JSON.stringify({ ok: true, query: parsed.query, hits }, null, 2) : hits.map(h => `${h.alias} · ${h.snippet}`).join('\n'))
       return
     }
     case 'daemon-kill': {

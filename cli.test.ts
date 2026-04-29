@@ -197,3 +197,16 @@ describe('sessions delete', () => {
     })
   })
 })
+
+describe('sessions search', () => {
+  it('parses query with optional --limit', () => {
+    expect(parseCliArgs(['sessions', 'search', 'ilink', '--json', '--limit', '20'])).toEqual({
+      cmd: 'sessions-search', query: 'ilink', json: true, limit: 20,
+    })
+  })
+  it('limit defaults to 50', () => {
+    expect(parseCliArgs(['sessions', 'search', 'foo'])).toMatchObject({
+      cmd: 'sessions-search', query: 'foo', limit: 50,
+    })
+  })
+})

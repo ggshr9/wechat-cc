@@ -193,3 +193,48 @@ export async function deleteProject(deps) {
     console.error("delete failed", err)
   }
 }
+
+let searchTimer = null
+
+export function wireSearch(deps) {
+  const input = document.getElementById("sessions-search")
+  if (!input) return
+  input.addEventListener("input", () => {
+    clearTimeout(searchTimer)
+    searchTimer = setTimeout(() => runSearch(deps, input.value), 250)
+  })
+}
+
+async function runSearch(deps, query) {
+  const trimmed = (query || '').trim()
+  if (trimmed.length < 2) {
+    // Empty/short query → restore the project list
+    await loadSessionsList(deps)
+    return
+  }
+  const body = document.getElementById("sessions-body")
+  if (!body) return
+  body.innerHTML = `<p class="empty-state">搜索中…</p>`
+  try {
+    const resp = await deps.invoke("wechat_cli_json", { args: ["sessions", "search", trimmed, "--json"] })
+    const hits = resp.hits || []
+    if (hits.length === 0) {
+      body.innerHTML = `<p class="empty-state">没找到「${escapeHtml(trimmed)}」。</p>`
+      return
+    }
+    body.innerHTML = hits.map(searchHitRow).join("")
+  } catch (err) {
+    body.innerHTML = `<p class="empty-state">搜索失败：${escapeHtml(String(err.message || err))}</p>`
+  }
+}
+
+function searchHitRow(h) {
+  return `
+    <button class="project-row" data-action="open-project" data-alias="${escapeHtml(h.alias)}">
+      <span class="star"></span>
+      <span class="alias">${escapeHtml(h.alias)}</span>
+      <span class="summary">${escapeHtml(h.snippet)}</span>
+      <span class="meta">turn ${h.turn_index}</span>
+    </button>
+  `
+}
