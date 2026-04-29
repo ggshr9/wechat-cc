@@ -33,6 +33,11 @@ export interface ObservationRecord {
 
 export interface ObservationsStore {
   append(rec: Omit<ObservationRecord, 'id' | 'ts' | 'archived'> & { archived?: boolean }): Promise<string>
+  /**
+   * @internal Test seam — accepts a fully-formed record (id, ts, archived
+   * all caller-supplied). Production code should use append() which generates
+   * id + ts.
+   */
   appendRaw(rec: ObservationRecord): Promise<void>
   listActive(): Promise<ObservationRecord[]>
   listArchived(): Promise<ObservationRecord[]>
@@ -86,6 +91,11 @@ export function makeObservationsStore(stateRoot: string, chatId: string, opts: O
       return id
     },
 
+    /**
+     * @internal Test seam — accepts a fully-formed record (id, ts, archived
+     * all caller-supplied). Production code should use append() which generates
+     * id + ts.
+     */
     async appendRaw(rec) {
       if (!existsSync(chatDir)) mkdirSync(chatDir, { recursive: true, mode: 0o700 })
       await appendFile(path, JSON.stringify(rec) + '\n', { mode: 0o600 })
@@ -102,6 +112,11 @@ export function makeObservationsStore(stateRoot: string, chatId: string, opts: O
       return all.filter(r => r.archived)
     },
 
+    // Concurrency: read-modify-write. We assume the daemon is the sole
+    // writer of observations.jsonl — the user-driven archive trigger and
+    // the introspect cron's append both go through the same daemon
+    // process. If multi-process writers are ever introduced, switch to a
+    // per-chat async lock here.
     async archive(id) {
       const all = await readAll()
       const idx = all.findIndex(r => r.id === id)
