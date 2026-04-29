@@ -15,6 +15,8 @@ import { dirname } from 'node:path'
 export interface SessionRecord {
   session_id: string
   last_used_at: string  // ISO
+  summary?: string      // NEW: 1-line LLM summary, cached
+  summary_updated_at?: string  // NEW: when summary was last refreshed
 }
 
 export interface SessionStore {
