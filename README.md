@@ -99,6 +99,32 @@ the wechat-cc adapter is one of several entry points.
 
 ---
 
+## Desktop v0.4 — 会话 / 记忆 双面镜子
+
+「记忆是 Claude 的视角，会话是共同的记录」 —— 桌面 dashboard 的两面镜子。
+
+**记忆 pane** (Companion 主场)
+
+- 顶部：Claude 最近写下的几条观察 + 里程碑卡片（「打开才发现的小惊喜」机制）
+- 中部：现有 markdown 文件浏览器
+- 底部：可折叠的「Claude 的最近决策」时间线（push / skip / observation / milestone）
+
+**会话 pane** (Assistant 主场)
+
+- 跨 session 全文搜索
+- 项目列表 + 时间分组（今天 / 7 天内 / 更早）
+- Drill-down 到 jsonl 消息流，可收藏 / 导出 markdown / 删除
+
+**基础设施**
+
+- 新增 `events.jsonl` / `observations.jsonl` / `milestones.jsonl` per chat
+- 内省 cron（24h ± 30%，stub agent 在 v0.4 — 真 SDK 集成 v0.4.1）
+- 里程碑探测（100/1000 turn / first_handoff / first_push_reply / 7day_streak）
+
+完整设计：[`docs/specs/2026-04-29-sessions-memory-design.md`](docs/specs/2026-04-29-sessions-memory-design.md)
+
+---
+
 ## v1.1 — Voice + Companion
 
 Three new capabilities layered on top of the v1.0 daemon:
