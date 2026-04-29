@@ -1306,6 +1306,13 @@ input { font: inherit; color: inherit; }
 
 /* ─── sessions pane ────────────────────────────────────────────────── */
 .dash-pane[data-pane="sessions"] { position: relative; }
+/* Pin topbar above the detail layer so the global 精简/完整 toggle and
+ * refresh button stay reachable while a session is open. */
+.dash-pane[data-pane="sessions"] > .topbar {
+  position: relative;
+  z-index: 6;
+  background: var(--paper);
+}
 
 .sessions-search-wrap {
   padding: 14px 22px 0;
@@ -1392,7 +1399,10 @@ input { font: inherit; color: inherit; }
    (§a11y) — and we still drive the slide via CSS transition without fighting
    the user-agent `[hidden] { display: none }` rule. */
 .sessions-detail {
-  position: absolute; inset: 0;
+  /* Top offset matches the topbar height so the global 精简/完整 toggle
+   * stays visible during drill-down. (topbar = 14px*2 padding + 28px
+   * button + 1px border = 57px.) */
+  position: absolute; inset: 57px 0 0 0;
   background: var(--paper);
   display: flex; flex-direction: column;
   transform: translateX(20px);

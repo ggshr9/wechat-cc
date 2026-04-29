@@ -84,6 +84,62 @@ describe('searchHitRow', () => {
     expect(html).not.toContain('<x>')
     expect(html).not.toContain('<script>')
   })
+
+  describe('compact mode (clean projection)', () => {
+    it('shows extracted user text from turn (envelope stripped)', () => {
+      const html = searchHitRow({
+        alias: 'x', session_id: 's', turn_index: 5, snippet: '"text":"我是谁"',
+        turn: { type: 'user', message: { content: [{ type: 'text', text: '<wechat user="GSR">我是谁</wechat>' }] } },
+        session_has_reply_tool: true,
+      }, { mode: 'compact' })
+      expect(html).toContain('我是谁')
+      expect(html).not.toContain('<wechat')
+      expect(html).not.toContain('"text"')
+    })
+
+    it('shows extracted reply text from assistant turn', () => {
+      const html = searchHitRow({
+        alias: 'x', session_id: 's', turn_index: 18, snippet: 'noise',
+        turn: { type: 'assistant', message: { content: [
+          { type: 'tool_use', name: 'mcp__wechat__reply', input: { text: '你是 GSR' } },
+        ]}},
+        session_has_reply_tool: true,
+      }, { mode: 'compact' })
+      expect(html).toContain('你是 GSR')
+    })
+
+    it('hides tool_result / attachment / system / queue-operation hits (returns "")', () => {
+      const base = { alias: 'x', session_id: 's', turn_index: 10, snippet: 'noise', session_has_reply_tool: true }
+      expect(searchHitRow({ ...base, turn: { type: 'tool_result', content: 'x' } }, { mode: 'compact' })).toBe('')
+      expect(searchHitRow({ ...base, turn: { type: 'attachment', attachment: { path: '/x' } } }, { mode: 'compact' })).toBe('')
+      expect(searchHitRow({ ...base, turn: { type: 'queue-operation' } }, { mode: 'compact' })).toBe('')
+      expect(searchHitRow({ ...base, turn: { type: 'system' } }, { mode: 'compact' })).toBe('')
+    })
+
+    it('hides assistant wrap-up text when session uses reply tool', () => {
+      const html = searchHitRow({
+        alias: 'x', session_id: 's', turn_index: 20, snippet: '已回复',
+        turn: { type: 'assistant', message: { content: [{ type: 'text', text: '已回复。' }] } },
+        session_has_reply_tool: true,
+      }, { mode: 'compact' })
+      expect(html).toBe('')
+    })
+
+    it('hides hit when turn missing or unparsed (back-compat)', () => {
+      expect(searchHitRow({ alias: 'x', session_id: 's', turn_index: 0, snippet: 'matched' }, { mode: 'compact' })).toBe('')
+      expect(searchHitRow({ alias: 'x', session_id: 's', turn_index: 0, snippet: 'matched', turn: null }, { mode: 'compact' })).toBe('')
+    })
+
+    it('detailed mode preserves raw snippet rendering (JSON noise visible)', () => {
+      const html = searchHitRow({
+        alias: 'x', session_id: 's', turn_index: 5,
+        snippet: '"type":"text","text":"我是谁"',
+      }, { mode: 'detailed' })
+      expect(html).toContain('我是谁')
+      // Quotes are HTML-escaped for XSS safety, but the JSON-noise pattern is still visible.
+      expect(html).toContain('&quot;type&quot;')
+    })
+  })
 })
 
 describe('turnHtml', () => {

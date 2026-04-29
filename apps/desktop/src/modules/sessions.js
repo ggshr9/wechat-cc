@@ -361,17 +361,21 @@ export function turnHtmlCompact(turn, opts = {}) {
 }
 
 // Toggle handler — called from main.js when the user clicks one of the
-// segmented buttons. Re-renders the current detail without re-fetching the
-// jsonl: persists the choice, then calls openProjectDetail again with the
-// stored alias from the detail dataset.
+// segmented buttons. Persists the choice, then re-renders whatever's
+// currently visible: detail (re-fetches jsonl), search results
+// (re-renders rows from the existing hits), or just updates the toggle UI.
 export function setSessionsDetailMode(deps, mode) {
   writeSessionsDetailMode(mode)
+  applyModeToToggle(mode)
   const detail = document.getElementById('sessions-detail')
   const alias = detail?.dataset.alias
   if (alias && !detail?.classList.contains('dismissed')) {
     openProjectDetail(deps, alias)
-  } else {
-    applyModeToToggle(mode)
+    return
+  }
+  const searchInput = document.getElementById('sessions-search')
+  if (searchInput?.value && searchInput.value.trim().length >= 2) {
+    runSearch(deps, searchInput.value)
   }
 }
 
@@ -555,7 +559,6 @@ export function wireSearch(deps) {
 async function runSearch(deps, query) {
   const trimmed = (query || '').trim()
   if (trimmed.length < 2) {
-    // Empty/short query → restore the project list
     await loadSessionsList(deps)
     return
   }
@@ -565,22 +568,57 @@ async function runSearch(deps, query) {
   try {
     const resp = await deps.invoke("wechat_cli_json", { args: ["sessions", "search", trimmed, "--json"] })
     const hits = resp.hits || []
-    if (hits.length === 0) {
-      body.innerHTML = `<p class="empty-state">没找到「${escapeHtml(trimmed)}」。</p>`
+    const mode = readSessionsDetailMode()
+    const rows = hits.map(h => searchHitRow(h, { mode })).filter(s => s)
+    if (rows.length === 0) {
+      const note = mode === 'compact' && hits.length > 0
+        ? `没找到「${escapeHtml(trimmed)}」的对话——切到「完整」可看 ${hits.length} 条底层匹配。`
+        : `没找到「${escapeHtml(trimmed)}」。`
+      body.innerHTML = `<p class="empty-state">${note}</p>`
       return
     }
-    body.innerHTML = hits.map(searchHitRow).join("")
+    body.innerHTML = rows.join("")
   } catch (err) {
     body.innerHTML = `<p class="empty-state">搜索失败：${escapeHtml(String(err.message || err))}</p>`
   }
 }
 
-export function searchHitRow(h) {
+/**
+ * Render one search hit row.
+ *
+ * `opts.mode === 'compact'` projects the snippet through the same clean
+ * lens the detail view uses: user text (envelope stripped) for user
+ * turns, reply-tool input (or fallback text) for assistant turns,
+ * everything else hidden. This keeps cross-session search readable for
+ * non-technical users — without it, snippets are raw JSON substrings
+ * (`"type":"text"...`) that look like garbage.
+ *
+ * Returns '' when the hit's turn projects to nothing in compact mode —
+ * the caller filters empty rows so noise-only hits disappear from the
+ * results list.
+ */
+export function searchHitRow(h, opts = {}) {
+  const mode = opts.mode === 'compact' ? 'compact' : 'detailed'
+  let snippetText = h.snippet ?? ''
+
+  if (mode === 'compact') {
+    if (!h.turn || typeof h.turn !== 'object') return ''
+    if (h.turn.type === 'user') {
+      snippetText = extractUserText(h.turn) || ''
+    } else if (h.turn.type === 'assistant') {
+      const replies = extractClaudeReplies(h.turn, { sessionHasReplyTool: !!h.session_has_reply_tool })
+      snippetText = replies.join(' / ')
+    } else {
+      return ''
+    }
+    if (!snippetText) return ''
+  }
+
   return `
     <button class="project-row" data-action="open-project" data-alias="${escapeHtml(h.alias)}" data-turn-index="${escapeHtml(String(h.turn_index))}">
       <span class="star"></span>
       <span class="alias">${escapeHtml(h.alias)}</span>
-      <span class="summary">${escapeHtml(h.snippet)}</span>
+      <span class="summary">${escapeHtml(snippetText)}</span>
       <span class="meta">turn ${h.turn_index}</span>
     </button>
   `
