@@ -19,6 +19,13 @@ export interface CompanionConfig {
   timezone: string
   default_chat_id: string | null
   snooze_until: string | null
+  /**
+   * ISO timestamp of last successful introspect tick. Persisted across
+   * daemon restarts so the 24h cadence isn't reset by every reboot. Null
+   * when introspect has never run on this install. See main.ts
+   * maybeStartupIntrospect for the catch-up logic.
+   */
+  last_introspect_at: string | null
 }
 
 export function defaultCompanionConfig(): CompanionConfig {
@@ -27,6 +34,7 @@ export function defaultCompanionConfig(): CompanionConfig {
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC',
     default_chat_id: null,
     snooze_until: null,
+    last_introspect_at: null,
   }
 }
 
@@ -46,6 +54,7 @@ export function loadCompanionConfig(stateDir: string): CompanionConfig {
       timezone: typeof parsed.timezone === 'string' && parsed.timezone ? parsed.timezone : d.timezone,
       default_chat_id: typeof parsed.default_chat_id === 'string' ? parsed.default_chat_id : null,
       snooze_until: typeof parsed.snooze_until === 'string' ? parsed.snooze_until : null,
+      last_introspect_at: typeof parsed.last_introspect_at === 'string' ? parsed.last_introspect_at : null,
     }
     // Legacy triggers/per_project_persona/triggers fields (if any) are
     // silently dropped on next save — migration path for v1.1 installs.

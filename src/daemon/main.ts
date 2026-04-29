@@ -22,7 +22,7 @@ import { notifyStartup } from './notify-startup'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { startCompanionScheduler } from './companion/scheduler'
-import { loadCompanionConfig } from './companion/config'
+import { loadCompanionConfig, saveCompanionConfig } from './companion/config'
 import { buildDetectorContext } from './milestones/build-context'
 import { detectMilestones } from './milestones/detector'
 import { makeMilestonesStore } from './milestones/store'
@@ -109,6 +109,37 @@ async function main() {
   // (always returns write=false); real SDK integration in v0.4.1.
   const INTROSPECT_TICK_INTERVAL_MS = 24 * 60 * 60 * 1000  // 24 h base
   const INTROSPECT_TICK_JITTER = 0.3
+
+  // Shared introspect tick body — used by both the scheduler's onTick AND
+  // the startup catch-up (maybeStartupIntrospect). Returns true if the tick
+  // ran to completion (success or skip-on-missing-chat); false on agent
+  // failure. Stamps `last_introspect_at` on completion so the startup
+  // check + scheduler cadence both see the same source of truth.
+  async function runIntrospectOnce(): Promise<boolean> {
+    const { resolveIntrospectChatId, makeIntrospectAgent } = await import('./companion/introspect-runtime')
+    const { runIntrospectTick } = await import('./companion/introspect')
+    const { makeEventsStore } = await import('./events/store')
+    const { makeObservationsStore } = await import('./observations/store')
+    const chatId = resolveIntrospectChatId(STATE_DIR)
+    if (!chatId) {
+      log('INTROSPECT', 'skip tick — no default_chat_id configured')
+      return true
+    }
+    const memoryRoot = join(STATE_DIR, 'memory')
+    const events = makeEventsStore(memoryRoot, chatId)
+    const observations = makeObservationsStore(memoryRoot, chatId)
+    const agent = makeIntrospectAgent()
+    await runIntrospectTick({ events, observations, agent, chatId, log: (tag, line) => log(tag, line) })
+    // Persist last_introspect_at so successive boots respect the 24h
+    // cadence — without this, every daemon restart resets the timer and
+    // users who restart daily never see the introspect tick fire.
+    await saveCompanionConfig(STATE_DIR, {
+      ...loadCompanionConfig(STATE_DIR),
+      last_introspect_at: new Date().toISOString(),
+    })
+    return true
+  }
+
   const stopIntrospect = startCompanionScheduler({
     name: 'introspect',
     intervalMs: INTROSPECT_TICK_INTERVAL_MS,
@@ -120,22 +151,30 @@ async function main() {
     },
     log: (tag, line) => log(tag, line),
     onTick: async () => {
-      const { resolveIntrospectChatId, makeIntrospectAgent } = await import('./companion/introspect-runtime')
-      const { runIntrospectTick } = await import('./companion/introspect')
-      const { makeEventsStore } = await import('./events/store')
-      const { makeObservationsStore } = await import('./observations/store')
-      const chatId = resolveIntrospectChatId(STATE_DIR)
-      if (!chatId) {
-        log('INTROSPECT', 'skip tick — no default_chat_id configured')
-        return
-      }
-      const memoryRoot = join(STATE_DIR, 'memory')
-      const events = makeEventsStore(memoryRoot, chatId)
-      const observations = makeObservationsStore(memoryRoot, chatId)
-      const agent = makeIntrospectAgent()
-      await runIntrospectTick({ events, observations, agent, chatId, log: (tag, line) => log(tag, line) })
+      await runIntrospectOnce()
     },
   })
+
+  // On startup, if we haven't introspected within the last 24h (or ever),
+  // fire one tick immediately so users who restart their daemon daily
+  // (auto-update applied, sleep-wake, crash recovery) still see
+  // observations land. Honors the same enabled+snooze gate as the
+  // regular scheduler. Non-blocking — does NOT delay daemon boot.
+  async function maybeStartupIntrospect(): Promise<void> {
+    const cfg = loadCompanionConfig(STATE_DIR)
+    if (!cfg.enabled) return
+    const snooze = cfg.snooze_until
+    if (snooze && Date.parse(snooze) > Date.now()) return
+    const last = cfg.last_introspect_at
+    if (last && Date.now() - Date.parse(last) < 24 * 60 * 60 * 1000) return
+    try {
+      await runIntrospectOnce()
+      log('INTROSPECT', 'startup tick fired')
+    } catch (err) {
+      log('INTROSPECT', `startup tick failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  void maybeStartupIntrospect()
 
   // Milestone detection — non-blocking, fire-and-forget. Runs once on
   // daemon startup (per known chat) and after each successful inbound. The

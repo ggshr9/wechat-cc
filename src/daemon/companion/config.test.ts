@@ -68,4 +68,25 @@ describe('companion/config (v2 — memory-first, no triggers/personas)', () => {
     await saveCompanionConfig(d, { ...defaultCompanionConfig(), enabled: true })
     expect(loadCompanionConfig(d).enabled).toBe(true)
   })
+
+  describe('last_introspect_at field (v0.4 fix-up bundle D)', () => {
+    it('defaults to null when absent on disk', () => {
+      const d = freshDir()
+      const cfg = loadCompanionConfig(d)
+      expect(cfg.last_introspect_at).toBeNull()
+    })
+
+    it('round-trips through save+load', async () => {
+      const d = freshDir()
+      const ts = '2026-04-29T12:00:00Z'
+      await saveCompanionConfig(d, { ...loadCompanionConfig(d), last_introspect_at: ts })
+      expect(loadCompanionConfig(d).last_introspect_at).toBe(ts)
+    })
+
+    it('preserves null when explicitly set', async () => {
+      const d = freshDir()
+      await saveCompanionConfig(d, { ...loadCompanionConfig(d), last_introspect_at: null })
+      expect(loadCompanionConfig(d).last_introspect_at).toBeNull()
+    })
+  })
 })
