@@ -1475,13 +1475,13 @@ input { font: inherit; color: inherit; }
   background: var(--paper-2);
 }
 .phone-frame {
-  /* iPhone 14 dimensions, capped to parent so the phone shrinks if the
-   * pane is shorter than 844px (chat scrolls internally). */
-  width: min(390px, 100%);
-  height: min(844px, 100%);
+  /* iPhone 17 Pro CSS viewport (402×874), capped to parent so the phone
+   * shrinks if the pane is shorter than 874px (chat scrolls internally). */
+  width: min(402px, 100%);
+  height: min(874px, 100%);
   display: flex; flex-direction: column;
   background: #1A1A1A;        /* bezel */
-  border-radius: 40px;
+  border-radius: 44px;
   padding: 6px;
   box-shadow:
     0 12px 40px rgba(0, 0, 0, 0.18),
@@ -1492,22 +1492,36 @@ input { font: inherit; color: inherit; }
 .phone-screen {
   flex: 1;
   background: #EDEDED;
-  border-radius: 34px;
+  border-radius: 38px;
   overflow: hidden;
   display: flex; flex-direction: column;
   min-height: 0;
+  position: relative;          /* anchor for Dynamic Island */
 }
 .phone-status {
   background: #F7F7F7;
-  padding: 10px 24px 6px;
+  padding: 14px 24px 10px;
   display: flex; justify-content: space-between; align-items: center;
   font-family: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
   font-size: 14px; font-weight: 600;
   color: #1A1A1A;
   letter-spacing: -0.02em;
   flex-shrink: 0;
+  min-height: 44px;             /* room for the island */
 }
 .phone-status-icons { display: inline-flex; align-items: center; gap: 5px; color: #1A1A1A; }
+/* Dynamic Island — pill at the top-center of the screen, replacing the
+ * notch since iPhone 14 Pro. Static decoration; no live content. */
+.phone-island {
+  position: absolute;
+  top: 11px; left: 50%;
+  transform: translateX(-50%);
+  width: 110px; height: 32px;
+  background: #000;
+  border-radius: 18px;
+  z-index: 10;
+  pointer-events: none;
+}
 .phone-title {
   background: #F7F7F7;
   padding: 8px 12px 10px;

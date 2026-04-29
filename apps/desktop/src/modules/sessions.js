@@ -480,6 +480,7 @@ function phoneFrameHtml({ contactName, chatContent }) {
   return `
     <div class="phone-frame">
       <div class="phone-screen">
+        <div class="phone-island" aria-hidden="true"></div>
         <div class="phone-status">
           <span class="phone-status-time">5:18</span>
           <span class="phone-status-icons">
