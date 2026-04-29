@@ -22,6 +22,7 @@ export interface SessionRecord {
 export interface SessionStore {
   get(alias: string): SessionRecord | null
   set(alias: string, sessionId: string): void
+  setSummary(alias: string, summary: string): void
   delete(alias: string): void
   all(): Record<string, SessionRecord>
   flush(): Promise<void>
@@ -78,6 +79,16 @@ export function makeSessionStore(
         existing.last_used_at = now
       } else {
         data.sessions[alias] = { session_id: sessionId, last_used_at: now }
+      }
+      markDirty()
+    },
+    setSummary(alias, summary) {
+      const existing = data.sessions[alias]
+      if (!existing) return  // unknown alias — silently skip
+      data.sessions[alias] = {
+        ...existing,
+        summary,
+        summary_updated_at: new Date().toISOString(),
       }
       markDirty()
     },

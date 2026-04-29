@@ -75,4 +75,34 @@ describe('SessionStore', () => {
     s.set('b', 'sb')
     expect(Object.keys(s.all()).sort()).toEqual(['a', 'b'])
   })
+
+  it('setSummary updates summary + summary_updated_at; flush persists', async () => {
+    const store = makeSessionStore(file, { debounceMs: 0 })
+    store.set('compass', 's_abc')
+    store.setSummary('compass', '修了 ilink-glue')
+    await store.flush()
+    const fresh = makeSessionStore(file, { debounceMs: 0 })
+    const rec = fresh.get('compass')
+    expect(rec?.summary).toBe('修了 ilink-glue')
+    expect(rec?.summary_updated_at).toBeDefined()
+    expect(typeof rec?.summary_updated_at).toBe('string')
+  })
+
+  it('setSummary on unknown alias is a no-op', async () => {
+    const store = makeSessionStore(file, { debounceMs: 0 })
+    store.setSummary('nope', 'whatever')
+    await store.flush()
+    const fresh = makeSessionStore(file, { debounceMs: 0 })
+    expect(fresh.get('nope')).toBeNull()
+  })
+
+  it('setSummary preserves existing session_id and last_used_at', async () => {
+    const store = makeSessionStore(file, { debounceMs: 0 })
+    store.set('compass', 's_abc')
+    const before = store.get('compass')
+    store.setSummary('compass', 'a summary')
+    const after = store.get('compass')
+    expect(after?.session_id).toBe(before?.session_id)
+    expect(after?.last_used_at).toBe(before?.last_used_at)
+  })
 })
