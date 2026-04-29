@@ -23,6 +23,10 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { startCompanionScheduler } from './companion/scheduler'
 import { loadCompanionConfig } from './companion/config'
+import { buildDetectorContext } from './milestones/build-context'
+import { detectMilestones } from './milestones/detector'
+import { makeMilestonesStore } from './milestones/store'
+import { makeEventsStore } from './events/store'
 
 const STATE_DIR = join(homedir(), '.claude', 'channels', 'wechat')
 const PID_PATH = join(STATE_DIR, 'server.pid')
@@ -133,6 +137,30 @@ async function main() {
     },
   })
 
+  // Milestone detection — non-blocking, fire-and-forget. Runs once on
+  // daemon startup (per known chat) and after each successful inbound. The
+  // milestones store dedupes by id so repeated invocations are cheap and
+  // idempotent. Errors are logged, never propagated to the caller.
+  async function fireMilestonesFor(chatId: string): Promise<void> {
+    try {
+      const ctx = await buildDetectorContext({ stateDir: STATE_DIR, chatId })
+      const memRoot = join(STATE_DIR, 'memory')
+      const milestones = makeMilestonesStore(memRoot, chatId)
+      const events = makeEventsStore(memRoot, chatId)
+      const fired = await detectMilestones(milestones, ctx)
+      for (const id of fired) {
+        await events.append({
+          kind: 'milestone',
+          trigger: 'detector',
+          reasoning: `milestone ${id} fired`,
+          milestone_id: id,
+        })
+      }
+    } catch (err) {
+      log('MILESTONE', `detect failed for ${chatId}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
   const startedAtIso = new Date().toISOString()
 
   // pollHandle is created after we compose the admin-commands handler, but
@@ -221,6 +249,10 @@ async function main() {
         // only outbound path.
         log: (tag, line) => log(tag, line),
       }, msg)
+      // Fire-and-forget milestone detection after successful routing.
+      // Non-blocking so an unrelated detector failure can never delay the
+      // next inbound or impact reply latency.
+      void fireMilestonesFor(msg.chatId)
     },
   })
 
@@ -263,6 +295,16 @@ async function main() {
   log('DAEMON', `started pid=${process.pid} accounts=${accounts.length} ${modeStr}`)
   if (DANGEROUSLY) {
     log('DAEMON', 'warning: Claude will still confirm destructive ops via natural-language reply, but no permission prompts will appear.')
+  }
+
+  // Startup milestone sweep — gives the detector a chance to fire on chats
+  // whose facts already met a threshold before the daemon ever started
+  // (e.g. an upgrader who already has 100+ turns). v0.4 is single-chat:
+  // only the configured default_chat_id is checked. v0.5 will enumerate
+  // all bound chats from memory/.
+  const bootChatId = loadCompanionConfig(STATE_DIR).default_chat_id
+  if (bootChatId) {
+    void fireMilestonesFor(bootChatId)
   }
 
   // Best-effort startup notification to the bound owner over WeChat. Throttled

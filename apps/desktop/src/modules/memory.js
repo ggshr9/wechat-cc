@@ -228,7 +228,7 @@ function formatBytes(n) {
 // Loads from CLI: observations list + milestones list. Empty state already
 // in HTML (Task 9). Refresh on pane switch + manual button.
 export async function loadMemoryTopZone(deps) {
-  const chatId = currentChatId(deps)
+  const chatId = await currentChatId(deps)
   if (!chatId) return  // no chat configured yet — leave empty-state visible
 
   const obsBox = document.getElementById("memory-observations")
@@ -257,7 +257,7 @@ export async function loadMemoryTopZone(deps) {
 // Lazy-loaded on first toggle expand to avoid a hot-path read on every pane
 // switch.
 export async function loadMemoryDecisions(deps) {
-  const chatId = currentChatId(deps)
+  const chatId = await currentChatId(deps)
   if (!chatId) return
 
   const box = document.getElementById("memory-decisions-body")
@@ -279,7 +279,7 @@ export async function loadMemoryDecisions(deps) {
 }
 
 export async function archiveObservation(deps, obsId) {
-  const chatId = currentChatId(deps)
+  const chatId = await currentChatId(deps)
   if (!chatId) return
   try {
     await deps.invoke("wechat_cli_json", {
@@ -291,9 +291,17 @@ export async function archiveObservation(deps, obsId) {
   }
 }
 
-// Resolve the chat to query — first bound account from doctor poll. v0.4 is
-// single-chat; v0.5 will surface a chat picker.
-function currentChatId(deps) {
-  const rep = deps.doctorPoller?.current
-  return rep?.checks?.accounts?.items?.[0]?.botId ?? null
+// Resolve the chat to query — must be in chat_id format (e.g.
+// `<hash>@im.wechat`), the same key the daemon uses for memory/<chat_id>/.
+// memoryState.users is populated by loadMemoryPane (`memory list --json`)
+// and each user.userId is already a chat_id, so reuse it. v0.4 single-chat
+// owner assumption: the first user IS the chat. v0.5 surfaces a picker.
+//
+// Returns Promise<string|null> — best-effort populates memoryState.users
+// once if the pane was queried before loadMemoryPane completed.
+async function currentChatId(deps) {
+  if (memoryState.users.length === 0) {
+    try { await loadMemoryPane(deps) } catch { /* fall through */ }
+  }
+  return memoryState.users[0]?.userId ?? null
 }

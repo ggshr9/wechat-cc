@@ -1,0 +1,37 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { buildDetectorContext } from './build-context'
+import { makeEventsStore } from '../events/store'
+
+describe('buildDetectorContext', () => {
+  let stateDir: string
+  beforeEach(() => { stateDir = mkdtempSync(join(tmpdir(), 'bdc-')) })
+  afterEach(() => rmSync(stateDir, { recursive: true, force: true }))
+
+  it('returns zeros/empties when no state exists', async () => {
+    const ctx = await buildDetectorContext({ stateDir, chatId: 'chat_x' })
+    expect(ctx.turnCount).toBe(0)
+    expect(ctx.handoffMarkerExists).toBe(false)
+    expect(ctx.pushRepliedHistory).toEqual([])
+    expect(ctx.daysWithMessage).toEqual([])
+    expect(ctx.chatId).toBe('chat_x')
+  })
+
+  it('detects handoff marker', async () => {
+    const memDir = join(stateDir, 'memory', 'chat_x')
+    mkdirSync(memDir, { recursive: true })
+    writeFileSync(join(memDir, '_handoff.md'), 'pointer')
+    const ctx = await buildDetectorContext({ stateDir, chatId: 'chat_x' })
+    expect(ctx.handoffMarkerExists).toBe(true)
+  })
+
+  it('builds pushRepliedHistory from events.jsonl', async () => {
+    const events = makeEventsStore(join(stateDir, 'memory'), 'chat_x')
+    await events.append({ kind: 'cron_eval_pushed', trigger: 'daily', reasoning: 'r', push_text: 'hi' })
+    await events.append({ kind: 'cron_eval_skipped', trigger: 'daily', reasoning: 'r' })
+    const ctx = await buildDetectorContext({ stateDir, chatId: 'chat_x' })
+    expect(ctx.pushRepliedHistory).toHaveLength(1)
+  })
+})
