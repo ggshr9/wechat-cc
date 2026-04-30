@@ -159,9 +159,9 @@ Opt-in 主动模式。`companion_enable` 之后，daemon 跑两个 scheduler：
 - 中部：可编辑的 per-chat markdown（`profile.md` / `preferences.md` / ...）
 - 底部：可折叠的 "Claude 的最近决策" 时间轴（push / skip / observation / milestone / SDK 错误）。点一行看 reasoning
 
-![Memory pane — observation card up top, file tree on left (5 fake files for "Alex"), preferences.md content showing communication style / response patterns / off-limits, decisions timeline collapsed at the bottom](docs/screenshots/memory-pane.png)
+![Memory pane — observation card up top, file tree on left, preferences.md showing tool stack / PR habits / session-resume conventions, decisions timeline collapsed at the bottom](docs/screenshots/memory-pane.png)
 
-<sub><i>示意图，非真实对话。"Alex" 是 mock 用户。</i></sub>
+<sub><i>示意图。Memory 层是个泛用 markdown 容器——这里展示的是项目记忆用法（工具偏好 / PR 习惯 / 会话续接）；同样的容器也能装 Companion 模式下的观察笔记，看 #4 节。</i></sub>
 
 **会话 (Sessions)** —— 你和 Claude 共同的记录
 - 跨 session 全文搜索

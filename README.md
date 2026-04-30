@@ -198,9 +198,9 @@ The desktop dashboard reflects two perspectives on the same relationship:
 - Bottom: collapsible "Claude's recent decisions" timeline (push / skip /
   observation / milestone / SDK error). Click a row to see the reasoning.
 
-![Memory pane — observation card up top, file tree on left, preferences.md showing communication style / response patterns / off-limits zones, decisions timeline collapsed at the bottom](docs/screenshots/memory-pane.png)
+![Memory pane — observation card up top, file tree on left, preferences.md showing tool stack / PR habits / session-resume conventions, decisions timeline collapsed at the bottom](docs/screenshots/memory-pane.png)
 
-<sub><i>Mock data — "Alex" isn't a real user.</i></sub>
+<sub><i>Mock data. Memory is a general markdown container — shown here as project memory (tool preferences, PR habits, session resume); the same container holds Companion-mode observation notes, see §4.</i></sub>
 
 **会话 (Sessions)** — your shared record
 - Cross-session full-text search
