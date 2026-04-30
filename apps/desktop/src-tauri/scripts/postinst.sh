@@ -15,6 +15,10 @@
 
 set +e
 
+# `runuser -u USER -- env ... cmd` is the Debian-stable way; older util-linux
+# (RHEL 7, Debian 9 LTS) and rpm %post environments may not have runuser at
+# all (or it's at /sbin/runuser which isn't always on PATH). `su -s /bin/sh
+# -c '…' USER` is the POSIX-portable fallback.
 restart_for_user() {
     user=$1
     home_dir=$2
@@ -24,15 +28,27 @@ restart_for_user() {
     # Absent → user not logged in; service will pick up the new binary on
     # their next login when systemd starts the unit fresh.
     [ -d "/run/user/$uid" ] || return 0
-    runuser -u "$user" -- env XDG_RUNTIME_DIR="/run/user/$uid" \
-        systemctl --user try-restart wechat-cc.service >/dev/null 2>&1
+    cmd="XDG_RUNTIME_DIR=/run/user/$uid systemctl --user try-restart wechat-cc.service"
+    if command -v runuser >/dev/null 2>&1; then
+        runuser -u "$user" -- sh -c "$cmd" >/dev/null 2>&1
+    else
+        su -s /bin/sh -c "$cmd" "$user" >/dev/null 2>&1
+    fi
 }
 
-for home_dir in /home/*; do
-    [ -d "$home_dir" ] || continue
-    user=$(basename "$home_dir")
-    restart_for_user "$user" "$home_dir"
-done
+# Enumerate users via `getent passwd` rather than globbing /home/*. Globbing
+# is unreliable in rpm %post (the shell may be dash, NULLGLOB may be off,
+# and "/home/*" can stay literal). getent reads nsswitch and returns every
+# real user including ones whose home dirs live outside /home (LDAP users,
+# /var/lib/* service accounts, etc.). Filter to UIDs >= 1000 to skip system
+# accounts.
+if command -v getent >/dev/null 2>&1; then
+    getent passwd | while IFS=: read -r user _ uid _ _ home _; do
+        [ "$uid" -ge 1000 ] 2>/dev/null || continue
+        [ -d "$home" ] || continue
+        restart_for_user "$user" "$home"
+    done
+fi
 restart_for_user root /root
 
 exit 0

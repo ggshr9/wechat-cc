@@ -83,7 +83,7 @@ wechat-cc setup ; wechat-cc run
 |:---|:---|:---|
 | **macOS (Apple Silicon)** | `*.dmg` | 右键 → **打开**（Gatekeeper 提示一次）|
 | **Windows (x64)** | `.exe` (NSIS) 或 `.msi` | SmartScreen → **更多信息** → **仍要运行** |
-| **Linux (x64)** | `.deb` / `.rpm` / `.AppImage` | 没警告 |
+| **Linux (x64)** | `.deb` / `.rpm` | 没警告 |
 
 桌面 app 调用底层 `wechat-cc` CLI，所以源码也得放一份：
 

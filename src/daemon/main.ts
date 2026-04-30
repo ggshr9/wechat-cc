@@ -13,7 +13,7 @@ import { buildBootstrap } from './bootstrap'
 import { routeInbound } from '../core/message-router'
 import { loadAllAccounts, makeIlinkAdapter } from './ilink-glue'
 import { startLongPollLoops, parseUpdates, type RawUpdate } from './poll-loop'
-import { materializeAttachments } from './media'
+import { materializeAttachments, cleanupOldInbox } from './media'
 import { log } from '../../log'
 import { isAdmin, loadAccess } from '../../access'
 import { makeAdminCommands } from './admin-commands'
@@ -394,6 +394,14 @@ async function main() {
   if (bootChatId) {
     void fireMilestonesFor(bootChatId)
   }
+
+  // Sweep old media off inbox/ — without this the 30-day TTL is dead code
+  // (cleanupOldInbox was exported but never invoked) and inbox/ grows
+  // indefinitely. Run async so a slow filesystem can't delay daemon ready.
+  void Promise.resolve().then(() => {
+    const removed = cleanupOldInbox(INBOX_DIR)
+    if (removed > 0) log('INBOX', `cleaned ${removed} files older than 30 days`)
+  }).catch((err) => log('INBOX', `cleanup failed: ${err instanceof Error ? err.message : err}`))
 
   // Best-effort startup notification to the bound owner over WeChat. Throttled
   // to avoid spamming on KeepAlive crash-loops; never blocks daemon readiness.

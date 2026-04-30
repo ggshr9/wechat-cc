@@ -95,7 +95,7 @@ Download the bundle for your platform from the [latest release](https://github.c
 |:---|:---|:---|
 | **macOS (Apple Silicon)** | `*.dmg` | Right-click → **Open** (Gatekeeper warning, once). |
 | **Windows (x64)** | `.exe` (NSIS) or `.msi` | SmartScreen → **More info** → **Run anyway**. |
-| **Linux (x64)** | `.deb` / `.rpm` / `.AppImage` | No warning. |
+| **Linux (x64)** | `.deb` / `.rpm` | No warning. |
 
 The desktop app shells out to the `wechat-cc` CLI under the hood, so you
 also need the source available somewhere:

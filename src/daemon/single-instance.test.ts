@@ -28,4 +28,14 @@ describe('single-instance', () => {
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.reason).toMatch(/already running/i)
   })
+
+  it('steals lock when pid file refers to a live but unrelated process (post-reboot PID reuse)', () => {
+    // Reproduces the post-kernel-panic scenario: the pidfile points at a
+    // PID that IS alive after reboot, but it belongs to some other
+    // process (sshd, login shell, etc.) — not our daemon.
+    // pid 1 (init/systemd) is always alive and never our daemon.
+    writeFileSync(pidPath, '1', 'utf8')
+    const r = acquireInstanceLock(pidPath)
+    expect(r.ok).toBe(true)
+  })
 })
