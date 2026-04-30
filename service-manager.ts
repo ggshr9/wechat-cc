@@ -146,7 +146,17 @@ export function installService(plan: ServicePlan, opts: ServiceSideEffectOpts = 
   if (opts.dryRun) return
   if (plan.serviceFile && plan.fileContent) {
     mkdirSync(dirname(plan.serviceFile), { recursive: true, mode: 0o700 })
-    writeFileSync(plan.serviceFile, plan.fileContent, { mode: 0o600 })
+    if (plan.kind === 'scheduled-task') {
+      // Windows schtasks /XML requires UTF-16 LE with BOM. Bun's
+      // writeFileSync defaults to UTF-8 (no BOM) which schtasks
+      // rejects on non-en-US locales with "cannot switch encoding".
+      // Manually prepend U+FEFF (encodes to 0xFF 0xFE in LE) and
+      // serialize the rest as utf16le.
+      const utf16Buf = Buffer.from('﻿' + plan.fileContent, 'utf16le')
+      writeFileSync(plan.serviceFile, utf16Buf, { mode: 0o600 })
+    } else {
+      writeFileSync(plan.serviceFile, plan.fileContent, { mode: 0o600 })
+    }
   }
   runCommands(plan.installCommands)
 }
@@ -208,10 +218,12 @@ function buildScheduledTaskXml(opts: { command: string; args: string; autoStart:
   const cmdEsc = xmlEsc(opts.command)
   const argsEsc = xmlEsc(opts.args)
   const enabled = opts.autoStart ? 'true' : 'false'
-  // Declare UTF-8 to match writeFileSync's default encoding. schtasks
-  // accepts either UTF-8 or UTF-16 as long as the declaration matches
-  // the actual byte content.
-  return `<?xml version="1.0" encoding="UTF-8"?>
+  // schtasks /XML on Windows is strict about encoding — on locales
+  // like zh-CN it rejects UTF-8 with "无法切换编码" (cannot switch
+  // encoding) regardless of what the declaration claims. Declare
+  // UTF-16 here; installService writes the file as UTF-16 LE with a
+  // BOM (0xFF 0xFE) so schtasks reads it correctly across locales.
+  return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Description>wechat-cc daemon — bridges WeChat ilink to Claude Code</Description>

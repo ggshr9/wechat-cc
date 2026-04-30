@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest'
-import { buildServicePlan } from './service-manager'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { buildServicePlan, installService } from './service-manager'
 
 describe('service-manager', () => {
   it('builds a macOS LaunchAgent plan', () => {
@@ -152,5 +155,33 @@ describe('service-manager', () => {
     })
     const disable = plan.installCommands.find(c => c.includes('/Change') && c.includes('/DISABLE'))
     expect(disable).toBeDefined()
+  })
+
+  // schtasks /XML on Chinese Windows (and other non-en-US locales)
+  // rejects UTF-8 with "无法切换编码" — it requires UTF-16 LE with BOM.
+  // Regression: catch any future writeFileSync change that drops the
+  // explicit utf16le encoding.
+  it('Windows ScheduledTask XML file is written as UTF-16 LE with BOM (0xFF 0xFE)', () => {
+    const tmpHome = mkdtempSync(join(tmpdir(), 'svcmgr-'))
+    try {
+      const plan = buildServicePlan({
+        platform: 'win32',
+        homeDir: tmpHome,
+        cwd: join(tmpHome, 'app'),
+        bunPath: 'C:\\bun.exe',
+      })
+      // Stub commands so installService doesn't actually shell out.
+      const planNoCmds = { ...plan, installCommands: [] }
+      installService(planNoCmds)
+      const bytes = readFileSync(plan.serviceFile!)
+      // UTF-16 LE BOM is the first two bytes
+      expect(bytes[0]).toBe(0xFF)
+      expect(bytes[1]).toBe(0xFE)
+      // After the BOM, the next bytes should encode '<' (0x3C 0x00) — XML opener
+      expect(bytes[2]).toBe(0x3C)
+      expect(bytes[3]).toBe(0x00)
+    } finally {
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
   })
 })
