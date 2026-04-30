@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'node:fs'
 import { platform } from 'node:os'
+import { spawnSync } from 'node:child_process'
 
 export type LockResult = { ok: true } | { ok: false; reason: string; pid: number }
 
@@ -31,7 +32,16 @@ export function releaseInstanceLock(pidPath: string): void {
 // only refuse start if a current process is actually our daemon.
 function isOurDaemon(pid: number): boolean {
   if (!processExists(pid)) return false
-  if (platform() !== 'linux') return true  // /proc only reliable on Linux
+  const pf = platform()
+  if (pf === 'linux') return matchLinuxComm(pid)
+  if (pf === 'win32') return matchWindowsImage(pid)
+  // macOS / others: process exists check only — PID-reuse window is small
+  // because launchd recycles slowly and there's no /proc-equivalent in
+  // a stable cross-version path. Acceptable until a user reports a hit.
+  return true
+}
+
+function matchLinuxComm(pid: number): boolean {
   try {
     const comm = readFileSync(`/proc/${pid}/comm`, 'utf8').trim()
     // The daemon runs as `bun src/daemon/main.ts` (dev), `wechat-cc-cli`
@@ -41,6 +51,27 @@ function isOurDaemon(pid: number): boolean {
     return comm === 'bun' || comm === 'wechat-cc-cli' || comm === 'node'
   } catch {
     // /proc entry vanished between exists check and read — process died.
+    return false
+  }
+}
+
+// Windows equivalent: query the image name via tasklist. Same hazard as
+// Linux — after BSOD / forced power-off the pidfile survives, and on next
+// boot some browser-tab / explorer process can land on the recycled PID
+// and look "alive". tasklist's /FO CSV output is `"image","pid",...`.
+function matchWindowsImage(pid: number): boolean {
+  try {
+    const r = spawnSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8' })
+    if (r.status !== 0 || !r.stdout) return false
+    const head = r.stdout.split('\n')[0]
+    if (!head) return false
+    // INFO: ... means tasklist matched no rows.
+    if (head.startsWith('INFO:')) return false
+    const m = head.match(/^"([^"]+)"/)
+    if (!m) return false
+    const image = m[1]!.toLowerCase()
+    return image === 'bun.exe' || image === 'wechat-cc-cli.exe' || image === 'node.exe'
+  } catch {
     return false
   }
 }

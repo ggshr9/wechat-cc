@@ -54,6 +54,16 @@ export async function downloadCdnMedia(media: CDNMedia, aesKeyHexOverride?: stri
   return decryptAesEcb(encrypted, key)
 }
 
+// NTFS rejects \ / : * ? " < > | and the C0 control range. macOS also
+// chokes on `:` (HFS legacy). Linux only blocks NUL and `/`. Sanitize
+// for the strictest target so a WeChat-supplied filename like
+// `report:2026.docx` or `x<y>.txt` doesn't crash attachment download
+// on Windows users. The Date.now() prefix already neutralizes the
+// reserved-name family (CON, NUL, COM1, etc.) by ensuring the basename
+// starts with digits, but we still strip the trailing `.` / ` ` that
+// Windows silently truncates.
+const ILLEGAL_FILENAME_CHARS = /[\x00-\x1f<>:"/\\|?*]/g
+
 export async function saveToInbox(
   buf: Buffer,
   filename: string,
@@ -62,8 +72,8 @@ export async function saveToInbox(
 ): Promise<string> {
   const dir = userId ? join(inboxDir, userId) : inboxDir
   mkdirSync(dir, { recursive: true })
-  // Sanitize path separators and null bytes, preserve unicode.
-  const safeName = `${Date.now()}-${filename.replace(/[\x00/\\]/g, '_')}`
+  const cleaned = filename.replace(ILLEGAL_FILENAME_CHARS, '_').replace(/[. ]+$/, '')
+  const safeName = `${Date.now()}-${cleaned || 'file'}`
   const filePath = join(dir, safeName)
   writeFileSync(filePath, buf)
   return filePath

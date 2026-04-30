@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process'
+import { platform } from 'node:os'
 
 export interface KillDeps {
   // Returns the full cmdline string for the given pid, or null if the
@@ -17,10 +18,13 @@ export interface KillResult {
   message: string
 }
 
-// Match the entrypoint paths bun is launched with for the daemon. Refuse
-// to signal anything else — protects the user from a typo / stale pid file
-// pointing at an unrelated process.
-const DAEMON_CMDLINE_RE = /(?:cli\.ts(?!\.))|(?:src\/daemon\/main\.ts)/
+// Match either the source-mode entrypoint (`bun cli.ts run …` or `bun
+// src/daemon/main.ts`) or the compiled binary basename. Without the
+// wechat-cc-cli alternative, `wechat-cc daemon kill <pid>` would refuse
+// to signal a daemon launched from the deb-installed binary on either
+// Linux (cmdline `/usr/bin/wechat-cc-cli run --dangerously`) or Windows
+// (tasklist image `wechat-cc-cli.exe`).
+const DAEMON_CMDLINE_RE = /(?:cli\.ts(?!\.))|(?:src[/\\]daemon[/\\]main\.ts)|(?:wechat-cc-cli(?:\.exe)?)/
 
 export async function killDaemonByPid(deps: KillDeps, pid: number): Promise<KillResult> {
   if (!Number.isFinite(pid) || pid <= 0) {
@@ -51,11 +55,22 @@ function isAlive(deps: KillDeps, pid: number): boolean {
 }
 
 export function defaultKillDeps(): KillDeps {
+  const isWindows = platform() === 'win32'
   return {
-    // `ps -o args=` works on macOS + Linux. Returns full argv joined,
-    // empty stdout if pid is gone.
     readCmdline(pid) {
       try {
+        if (isWindows) {
+          // `ps` doesn't ship with Windows. tasklist's CSV output is
+          // `"image","pid","session","#","mem"`. We use the image name as
+          // a stand-in for cmdline — DAEMON_CMDLINE_RE accepts it.
+          const r = spawnSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8' })
+          if (r.status !== 0 || !r.stdout) return null
+          const head = r.stdout.split('\n')[0] ?? ''
+          if (head.startsWith('INFO:') || !head) return null
+          const m = head.match(/^"([^"]+)"/)
+          return m ? m[1]! : null
+        }
+        // POSIX path — `ps -o args=` works on macOS + Linux.
         const r = spawnSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf8' })
         const out = r.stdout?.trim() ?? ''
         return r.status === 0 && out.length > 0 ? out : null

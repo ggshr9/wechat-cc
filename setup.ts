@@ -5,7 +5,7 @@
  */
 
 import { readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, platform } from 'node:os'
 import { join } from 'node:path'
 import { ILINK_BASE_URL, LONG_POLL_TIMEOUT_MS } from './config'
 import { ilinkGet, persistConfirmedAccount, requestSetupQrCode } from './setup-flow'
@@ -77,8 +77,17 @@ while (Date.now() < deadline) {
           const pidPath = join(STATE_DIR, 'server.pid')
           const pid = parseInt(readFileSync(pidPath, 'utf8').trim(), 10)
           if (pid > 0) {
-            process.kill(pid, 'SIGUSR1')
-            console.log(`已通知运行中的 daemon (pid ${pid}) 热加载新账号`)
+            // SIGUSR1 isn't deliverable on Windows — process.kill silently
+            // throws EINVAL there. Tell the user to restart the service so
+            // the new account actually gets picked up; on POSIX we hot-
+            // reload via signal as before.
+            if (platform() === 'win32') {
+              console.log(`检测到运行中的 daemon (pid ${pid})。请重启服务以加载新账号:`)
+              console.log('  schtasks /End /TN wechat-cc && schtasks /Run /TN wechat-cc')
+            } else {
+              process.kill(pid, 'SIGUSR1')
+              console.log(`已通知运行中的 daemon (pid ${pid}) 热加载新账号`)
+            }
           }
         } catch {}
 
