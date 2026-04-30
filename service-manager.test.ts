@@ -25,6 +25,7 @@ describe('service-manager', () => {
       homeDir: 'C:\\Users\\alice',
       cwd: 'C:\\Users\\alice\\AppData\\Local\\wechat-cc',
       bunPath: 'C:\\Users\\alice\\.bun\\bin\\bun.exe',
+      windowsUser: 'alice',
     })
 
     expect(plan.kind).toBe('scheduled-task')
@@ -75,6 +76,7 @@ describe('service-manager', () => {
       homeDir: 'C:\\Users\\alice',
       cwd: 'C:\\Users\\alice\\AppData\\Local\\wechat-cc',
       bunPath: 'C:\\bun.exe',
+      windowsUser: 'alice',
     })
     expect(plan.fileContent).toContain('<Arguments>')
     expect(plan.fileContent).toContain('run --dangerously')
@@ -91,6 +93,7 @@ describe('service-manager', () => {
       cwd: 'C:\\Users\\alice\\AppData\\Local\\wechat-cc',
       bunPath: 'C:\\bun.exe',
       binaryPath: 'D:\\wechat-cc\\wechat-cc-cli.exe',
+      windowsUser: 'alice',
     })
     expect(plan.fileContent).toContain('<Command>D:\\wechat-cc\\wechat-cc-cli.exe</Command>')
     expect(plan.fileContent).toContain('<Arguments>run --dangerously</Arguments>')
@@ -151,10 +154,29 @@ describe('service-manager', () => {
   it('Windows installCommands include /Change /DISABLE step when autoStart=false', () => {
     const plan = buildServicePlan({
       platform: 'win32', homeDir: 'C:\\Users\\alice', cwd: 'C:\\app', bunPath: 'C:\\bun.exe',
+      windowsUser: 'alice',
       autoStart: false,
     })
     const disable = plan.installCommands.find(c => c.includes('/Change') && c.includes('/DISABLE'))
     expect(disable).toBeDefined()
+  })
+
+  // schtasks /XML needs BOTH a <UserId> element AND a /RU flag —
+  // missing either yields a confusing "file not found / access
+  // denied" pair that doesn't actually point at the missing principal.
+  // This test pins both pieces.
+  it('Windows ScheduledTask XML includes <UserId> and command line passes /RU', () => {
+    const plan = buildServicePlan({
+      platform: 'win32',
+      homeDir: 'C:\\Users\\bob',
+      cwd: 'C:\\app',
+      bunPath: 'C:\\bun.exe',
+      windowsUser: 'bob',
+    })
+    expect(plan.fileContent).toContain('<UserId>bob</UserId>')
+    const create = plan.installCommands.find(c => c[1] === '/Create')!
+    expect(create).toContain('/RU')
+    expect(create[create.indexOf('/RU') + 1]).toBe('bob')
   })
 
   // schtasks /XML on Chinese Windows (and other non-en-US locales)
@@ -169,6 +191,7 @@ describe('service-manager', () => {
         homeDir: tmpHome,
         cwd: join(tmpHome, 'app'),
         bunPath: 'C:\\bun.exe',
+        windowsUser: 'alice',
       })
       // Stub commands so installService doesn't actually shell out.
       const planNoCmds = { ...plan, installCommands: [] }

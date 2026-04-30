@@ -31,6 +31,11 @@ export interface ServicePlanInput {
   // Tests on non-macOS platforms inject a fixed uid so assertions are
   // deterministic; production reads `process.getuid()`.
   uid?: number
+  // Windows-only: SAM account name (e.g. "natewanzi") used for the
+  // scheduled-task <UserId> element + /RU flag. Tests on non-Windows
+  // platforms inject a fixed value; production reads
+  // os.userInfo().username.
+  windowsUser?: string
 }
 
 export interface ServicePlan {
@@ -82,18 +87,26 @@ export function buildServicePlan(input: ServicePlanInput): ServicePlan {
     // outer quotes, leaving args dangling outside /TR — schtasks then
     // failed with "Access denied" / "file not found"). XML separates
     // <Command> from <Arguments> so quoting is irrelevant.
+    //
+    // Critical: schtasks /Create /XML needs BOTH a <UserId> element in
+    // the XML AND a /RU flag on the command line. With either missing,
+    // schtasks errors with "The system cannot find the file specified."
+    // followed by "Access is denied." — both noisy generic messages
+    // that don't actually point at the missing principal. (Confirmed
+    // via Microsoft Learn + community threads on schtasks /XML.)
+    const winUser = input.windowsUser ?? userInfo().username
     const command = binaryPath ?? bunPath
     const args = binaryPath
       ? runArgs.join(' ')
       : `"${join(input.cwd, 'cli.ts')}" ${runArgs.join(' ')}`
     const xmlPath = join(homeDir, 'AppData', 'Local', 'Temp', `wechat-cc-task.xml`)
-    const xmlContent = buildScheduledTaskXml({ command, args, autoStart })
+    const xmlContent = buildScheduledTaskXml({ command, args, autoStart, userId: winUser })
     const installCommands: string[][] = [
       // The XML write is an in-memory side effect (handled by installService
       // before runCommands runs) — this command list only contains schtasks
       // calls. We thread the XML content via fileContent, and the file path
       // via serviceFile so installService writes it before /Create.
-      ['schtasks', '/Create', '/TN', serviceName, '/XML', xmlPath, '/F'],
+      ['schtasks', '/Create', '/TN', serviceName, '/XML', xmlPath, '/RU', winUser, '/F'],
     ]
     if (!autoStart) installCommands.push(['schtasks', '/Change', '/TN', serviceName, '/DISABLE'])
     installCommands.push(['schtasks', '/Run', '/TN', serviceName])
@@ -214,9 +227,10 @@ export function isServiceInstalled(plan: ServicePlan): boolean {
  * separate XML elements, so spawnSync arg-list quoting never gets
  * applied to the executable path.
  */
-function buildScheduledTaskXml(opts: { command: string; args: string; autoStart: boolean }): string {
+function buildScheduledTaskXml(opts: { command: string; args: string; autoStart: boolean; userId: string }): string {
   const cmdEsc = xmlEsc(opts.command)
   const argsEsc = xmlEsc(opts.args)
+  const userEsc = xmlEsc(opts.userId)
   const enabled = opts.autoStart ? 'true' : 'false'
   // schtasks /XML on Windows is strict about encoding — on locales
   // like zh-CN it rejects UTF-8 with "无法切换编码" (cannot switch
@@ -235,6 +249,7 @@ function buildScheduledTaskXml(opts: { command: string; args: string; autoStart:
   </Triggers>
   <Principals>
     <Principal id="Author">
+      <UserId>${userEsc}</UserId>
       <LogonType>InteractiveToken</LogonType>
       <RunLevel>LeastPrivilege</RunLevel>
     </Principal>
