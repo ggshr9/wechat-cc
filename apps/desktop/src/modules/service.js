@@ -20,6 +20,28 @@ export async function serviceAction(deps, state, action) {
   const planEl = document.getElementById("service-plan")
   const summaryEl = document.getElementById("service-summary")
   const alertEl = document.getElementById("post-stop-alert")
+  const btn = document.getElementById("service-install")
+  // The whole flow takes 5–10 s (foreground guard + cli invoke + 8 s
+  // settle wait). Without disabling the button + showing in-progress
+  // copy, users click again, see no reaction, and assume the GUI froze.
+  const originalLabel = btn ? btn.innerHTML : ''
+  if (btn) {
+    btn.disabled = true
+    btn.innerHTML = action === "stop" ? "停止中…" : "安装中…"
+  }
+  const restoreBtn = () => {
+    if (!btn) return
+    btn.disabled = false
+    btn.innerHTML = originalLabel
+  }
+  try {
+    return await serviceActionInner(deps, state, action, planEl, summaryEl, alertEl)
+  } finally {
+    restoreBtn()
+  }
+}
+
+async function serviceActionInner(deps, state, action, planEl, summaryEl, alertEl) {
   if (alertEl) alertEl.hidden = true
   if (action === "install") {
     state.unattended = isToggleOn("unattended-toggle")

@@ -5,8 +5,8 @@
 </p>
 
 <p align="center">
-  <img alt="version"  src="https://img.shields.io/badge/cli-v0.4.1-blue">
-  <img alt="desktop"  src="https://img.shields.io/badge/desktop-v0.4.1-blue">
+  <img alt="version"  src="https://img.shields.io/badge/cli-v0.4.2-blue">
+  <img alt="desktop"  src="https://img.shields.io/badge/desktop-v0.4.2-blue">
   <img alt="platform" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey">
   <img alt="runtime"  src="https://img.shields.io/badge/runtime-Bun-black">
   <img alt="license"  src="https://img.shields.io/badge/license-MIT-green">

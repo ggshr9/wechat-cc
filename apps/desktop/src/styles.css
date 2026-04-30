@@ -1538,6 +1538,12 @@ input { font: inherit; color: inherit; }
 .phone-chat {
   flex: 1; min-height: 0;
   overflow-y: auto;
+  /* CSS spec: when only one axis is non-visible, the other becomes auto.
+   * Without this explicit `hidden`, any child with intrinsic width past
+   * the phone frame (a long unbreakable URL, a slightly-too-wide file
+   * card, a code block) triggers a horizontal scrollbar at the bottom
+   * of the chat — looks broken inside an iPhone replica. */
+  overflow-x: hidden;
   background: #EDEDED;
   padding: 12px 10px;
   font-family: -apple-system, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
@@ -1654,6 +1660,11 @@ input { font: inherit; color: inherit; }
   padding: 9px 12px;
   border-radius: 4px;
   word-wrap: break-word;
+  /* `anywhere` is the modern equivalent of word-break: break-all that
+   * breaks long unbreakable strings (long URLs, hash digests, single-
+   * word giant tokens) inside a bubble instead of pushing the bubble
+   * past the phone-frame width. */
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
   position: relative;
 }
