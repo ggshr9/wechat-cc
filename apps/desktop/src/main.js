@@ -100,7 +100,11 @@ async function refreshGuardStatus() {
     if (r.enabled) toggle.classList.add("on")
     else toggle.classList.remove("on")
     toggle.setAttribute("aria-pressed", r.enabled ? "true" : "false")
-    if (!r.enabled) { el.textContent = "未开启"; return }
+    if (!r.enabled) {
+      el.textContent = "未开启"
+      delete el.dataset.state  // wipe stale color from previous run
+      return
+    }
     const ipPart = r.ip ? `IP ${r.ip}` : "IP 未知"
     const probePart = r.reachable ? "google ✓" : "google ✗"
     el.textContent = `${ipPart} · ${probePart}`
