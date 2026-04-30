@@ -46,6 +46,31 @@ async fn wechat_cli_text(app: AppHandle, args: Vec<String>) -> Result<String, St
     run_sidecar(&app, args).await
 }
 
+// Direct file save — sidesteps the missing tauri-plugin-dialog/-fs.
+// Without it, exportProjectMarkdown's `<a download>.click()` blob fallback
+// silently no-ops in the Tauri webview (downloads aren't wired). Writes to
+// $HOME/Downloads/<filename>; refuses anything that would escape that dir.
+#[tauri::command]
+fn save_text_file(filename: String, content: String) -> Result<String, String> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map_err(|err| format!("cannot resolve home dir: {err}"))?;
+    let downloads = std::path::PathBuf::from(home).join("Downloads");
+    std::fs::create_dir_all(&downloads).map_err(|err| format!("mkdir {}: {err}", downloads.display()))?;
+    // Strip any path component from the filename — only the basename is allowed.
+    let basename = std::path::Path::new(&filename)
+        .file_name()
+        .ok_or_else(|| "empty filename".to_string())?
+        .to_string_lossy()
+        .to_string();
+    if basename.is_empty() || basename == "." || basename == ".." {
+        return Err(format!("illegal filename: {filename}"));
+    }
+    let target = downloads.join(&basename);
+    std::fs::write(&target, content).map_err(|err| format!("write {}: {err}", target.display()))?;
+    Ok(target.to_string_lossy().to_string())
+}
+
 #[tauri::command]
 fn render_qr_svg(text: String) -> Result<String, String> {
     use qrcode::render::svg;
@@ -122,6 +147,7 @@ pub fn run() {
             wechat_cli_json,
             wechat_cli_json_via_file,
             wechat_cli_text,
+            save_text_file,
             render_qr_svg
         ])
         .run(tauri::generate_context!())

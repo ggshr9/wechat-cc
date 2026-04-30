@@ -974,16 +974,22 @@ export async function exportProjectMarkdown(deps) {
     const mode = readSessionsDetailMode()
     const md = buildExportMarkdown(resp.alias ?? alias, resp.session_id, resp.turns, mode)
 
-    if (window.__TAURI__?.dialog?.save && window.__TAURI__?.fs?.writeTextFile) {
-      const path = await window.__TAURI__.dialog.save({ defaultPath: `${alias}-session.md` })
-      if (path) await window.__TAURI__.fs.writeTextFile(path, md)
+    // Tauri 2 webview doesn't expose dialog/fs without their respective
+    // plugins (we don't ship them — too much capability for too little).
+    // The blob `<a download>.click()` fallback silently no-ops in WebView2 /
+    // WKWebView too. Use a direct save_text_file Tauri command instead;
+    // writes to ~/Downloads/<filename>.md and returns the absolute path.
+    const filename = `${alias}-session.md`
+    if (window.__TAURI__?.core?.invoke) {
+      const path = await deps.invoke("save_text_file", { filename, content: md })
+      alert(`已导出：${path}`)
     } else {
-      // Shim/browser fallback: download via blob
+      // Pure-browser fallback (no Tauri shim either): blob download.
       const blob = new Blob([md], { type: 'text/markdown' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `${alias}-session.md`
+      a.download = filename
       a.click()
       URL.revokeObjectURL(url)
     }

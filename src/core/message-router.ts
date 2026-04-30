@@ -21,7 +21,17 @@ export async function routeInbound(deps: RouterDeps, msg: InboundMsg): Promise<v
   const handle = await deps.manager.acquire(proj.alias, proj.path)
   const text = deps.format(msg)
   const result = await handle.dispatch(text)
-  for (const assistantText of result?.assistantText ?? []) {
+  const assistantTexts = result?.assistantText ?? []
+  const replyToolCalled = result?.replyToolCalled ?? false
+  // Only forward raw assistant text when Claude did NOT call a reply-family
+  // tool this turn. The system prompt tells Claude to always use `reply`,
+  // but it forgets — most commonly when analyzing an image with `Read` and
+  // describing it as plain text. Without this fallback the user gets
+  // silence; with it they get the description, and we log it loudly so
+  // we can see how often Claude misroutes.
+  if (replyToolCalled || assistantTexts.length === 0) return
+  deps.log('FALLBACK_REPLY', `chat=${msg.chatId} project=${proj.alias} chunks=${assistantTexts.length} preview=${JSON.stringify(assistantTexts[0]?.slice(0, 80) ?? '')}`)
+  for (const assistantText of assistantTexts) {
     await deps.sendAssistantText?.(msg.chatId, assistantText)
   }
 }

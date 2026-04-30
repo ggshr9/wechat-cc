@@ -119,6 +119,42 @@ Bun.serve({
           const result = body.command === 'wechat_cli_json' ? JSON.parse(stdout) : stdout
           return Response.json({ result })
         }
+        if (body.command === 'wechat_cli_json_via_file') {
+          // Mirrors lib.rs's wechat_cli_json_via_file — appends --out-file <tmp>,
+          // runs cli, reads + deletes the temp file, returns parsed JSON.
+          // Without this branch the shim returns "unknown command" and any pane
+          // that uses the via-file path (sessions detail, export markdown)
+          // shows "读取失败：unknown command" instead of working.
+          const cliArgs = body.args?.args ?? []
+          const tmp = join(process.env.TMPDIR ?? '/tmp', `wechat-cc-shim-${Date.now()}-${process.pid}.json`)
+          const r = await runCli([...cliArgs, '--out-file', tmp])
+          if (r.code !== 0) return Response.json({ error: r.stderr.trim() || `cli exit ${r.code}` })
+          try {
+            const body = await Bun.file(tmp).text()
+            return Response.json({ result: JSON.parse(body) })
+          } finally {
+            try { await Bun.file(tmp).unlink?.() } catch {}
+            try { (await import('node:fs')).unlinkSync(tmp) } catch {}
+          }
+        }
+        if (body.command === 'save_text_file') {
+          // Mirrors lib.rs's save_text_file — write to $HOME/Downloads/<basename>.
+          const args = body.args as unknown as { filename?: string; content?: string }
+          const filename = args?.filename ?? ''
+          const content = args?.content ?? ''
+          const home = process.env.HOME ?? ''
+          if (!home) return Response.json({ error: 'HOME unset' })
+          const fs = await import('node:fs')
+          const downloads = join(home, 'Downloads')
+          fs.mkdirSync(downloads, { recursive: true })
+          const basename = filename.split(/[\\/]/).pop() || ''
+          if (!basename || basename === '.' || basename === '..') {
+            return Response.json({ error: `illegal filename: ${filename}` })
+          }
+          const target = join(downloads, basename)
+          fs.writeFileSync(target, content)
+          return Response.json({ result: target })
+        }
         if (body.command === 'render_qr_svg') {
           return Response.json({ result: placeholderQr(body.args?.text ?? '') })
         }

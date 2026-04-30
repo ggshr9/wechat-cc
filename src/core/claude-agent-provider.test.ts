@@ -106,7 +106,7 @@ describe('claude-agent-provider', () => {
       type: 'result', subtype: 'success', session_id: 'sid-1', num_turns: 1, duration_ms: 100,
     })
 
-    expect(await first).toEqual({ assistantText: ['reply-1'] })
+    expect(await first).toEqual({ assistantText: ['reply-1'], replyToolCalled: false })
 
     // Second turn
     ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
@@ -116,7 +116,47 @@ describe('claude-agent-provider', () => {
       type: 'result', subtype: 'success', session_id: 'sid-1', num_turns: 2, duration_ms: 100,
     })
 
-    expect(await second).toEqual({ assistantText: ['reply-2'] })
+    expect(await second).toEqual({ assistantText: ['reply-2'], replyToolCalled: false })
+  })
+
+  it('flags replyToolCalled=true when Claude calls mcp__wechat__reply', async () => {
+    const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
+    const session = await provider.spawn({ alias: 'p', path: '/p' })
+    const turn = session.dispatch('hi')
+    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
+      type: 'assistant',
+      message: { content: [
+        { type: 'text', text: 'thinking aloud' },
+        { type: 'tool_use', name: 'mcp__wechat__reply', input: { chat_id: 'c', text: 'hi back' } },
+      ] },
+    })
+    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
+      type: 'result', subtype: 'success', session_id: 's', num_turns: 1, duration_ms: 0,
+    })
+    const r = await turn
+    expect(r.replyToolCalled).toBe(true)
+  })
+
+  it('flags replyToolCalled=false when Claude only emits text (forgets to call reply)', async () => {
+    const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
+    const session = await provider.spawn({ alias: 'p', path: '/p' })
+    const turn = session.dispatch('hi')
+    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
+      type: 'assistant',
+      message: { content: [
+        { type: 'tool_use', name: 'Read', input: { file_path: '/img.jpg' } },
+      ] },
+    })
+    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: '描述一下图片' }] },
+    })
+    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
+      type: 'result', subtype: 'success', session_id: 's', num_turns: 1, duration_ms: 0,
+    })
+    const r = await turn
+    expect(r.replyToolCalled).toBe(false)
+    expect(r.assistantText).toEqual(['描述一下图片'])
   })
 
   it('close() resolves any still-pending dispatches with empty text instead of hanging', async () => {

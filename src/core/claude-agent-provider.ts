@@ -53,8 +53,25 @@ export function createClaudeAgentProvider(opts: ClaudeAgentProviderOptions): Age
       // every reply on the floor (the v1.2 regression that made WeChat
       // silently stop responding even though the daemon, Claude subprocess,
       // and ilink session were all healthy).
-      type Turn = { texts: string[]; resolve: (v: { assistantText: string[] }) => void; reject: (e: unknown) => void }
+      type Turn = {
+        texts: string[]
+        replyToolCalled: boolean
+        resolve: (v: { assistantText: string[]; replyToolCalled: boolean }) => void
+        reject: (e: unknown) => void
+      }
       const pendingTurns: Turn[] = []
+      // The reply-tool family — any of these means Claude already routed
+      // its message via the proper outbound path (ilink sendMessage /
+      // sendFile / voice). When NONE of them fired but assistantText is
+      // non-empty, the router uses sendAssistantText as a fallback so the
+      // user always gets *something* back.
+      const REPLY_TOOL_NAMES = new Set([
+        'mcp__wechat__reply',
+        'mcp__wechat__reply_voice',
+        'mcp__wechat__send_file',
+        'mcp__wechat__edit_message',
+        'mcp__wechat__broadcast',
+      ])
 
       // Counter for assistant chunks that arrive without a pending turn
       // (no in-flight dispatch). Should normally stay 0 — if it climbs
@@ -68,7 +85,19 @@ export function createClaudeAgentProvider(opts: ClaudeAgentProviderOptions): Age
           for await (const raw of q as AsyncGenerator<SDKMessage>) {
             const msg = narrow(raw)
             if (msg.type === 'assistant') {
-              const text = extractText(msg.message?.content)
+              // Detect any reply-tool invocations in the same message —
+              // SDK groups text + tool_use blocks under one assistant
+              // message most of the time, so this catches the common case.
+              const content = msg.message?.content
+              if (Array.isArray(content) && pendingTurns[0]) {
+                for (const block of content as Array<{ type?: string; name?: string }>) {
+                  if (block?.type === 'tool_use' && block.name && REPLY_TOOL_NAMES.has(block.name)) {
+                    pendingTurns[0].replyToolCalled = true
+                    break
+                  }
+                }
+              }
+              const text = extractText(content)
               if (text) {
                 if (pendingTurns[0]) {
                   pendingTurns[0].texts.push(text)
@@ -88,7 +117,7 @@ export function createClaudeAgentProvider(opts: ClaudeAgentProviderOptions): Age
                 duration_ms: msg.duration_ms ?? 0,
               }
               const head = pendingTurns.shift()
-              if (head) head.resolve({ assistantText: head.texts })
+              if (head) head.resolve({ assistantText: head.texts, replyToolCalled: head.replyToolCalled })
               for (const cb of resultListeners) cb(result)
               if (msg.subtype && msg.subtype !== 'success') {
                 const summary = typeof msg.result === 'string'
@@ -111,9 +140,9 @@ export function createClaudeAgentProvider(opts: ClaudeAgentProviderOptions): Age
       })()
 
       return {
-        async dispatch(text: string): Promise<{ assistantText: string[] }> {
-          return new Promise<{ assistantText: string[] }>((resolve, reject) => {
-            pendingTurns.push({ texts: [], resolve, reject })
+        async dispatch(text: string): Promise<{ assistantText: string[]; replyToolCalled: boolean }> {
+          return new Promise<{ assistantText: string[]; replyToolCalled: boolean }>((resolve, reject) => {
+            pendingTurns.push({ texts: [], replyToolCalled: false, resolve, reject })
             queue.push({
               type: 'user',
               parent_tool_use_id: null,
@@ -129,7 +158,7 @@ export function createClaudeAgentProvider(opts: ClaudeAgentProviderOptions): Age
           // Resolve any still-pending turns with empty text rather than
           // hanging — close() during shutdown shouldn't deadlock callers
           // that are mid-await.
-          while (pendingTurns.length) pendingTurns.shift()!.resolve({ assistantText: [] })
+          while (pendingTurns.length) pendingTurns.shift()!.resolve({ assistantText: [], replyToolCalled: false })
           await drainPromise
         },
         onAssistantText(cb) { assistantListeners.add(cb); return () => { assistantListeners.delete(cb) } },

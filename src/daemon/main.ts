@@ -328,11 +328,18 @@ async function main() {
         resolveProject: resolve,
         manager: sessionManager,
         format: formatInbound,
-        // Plain assistant text is intentionally NOT forwarded to wechat —
-        // the system prompt tells Claude to use the `reply` MCP tool, and
-        // forwarding plain text on top of that produced duplicate messages
-        // ("2" + "已回复 2。"). Drop plain text; tool calls remain the
-        // only outbound path.
+        // Fallback path: forward Claude's raw assistant text ONLY when
+        // it didn't call any reply-family MCP tool this turn. The
+        // duplicate-message worry (raw text + "已回复 2。") only arises
+        // when Claude calls reply AND speaks plain text; the router
+        // skips the fallback entirely in that case. The forgetful-Claude
+        // case (e.g. analyzes an image with Read but never calls reply)
+        // used to silently strand the user with no WeChat reply — now
+        // they get the description verbatim, prefixed [⚠ fallback] so
+        // we can spot the SDK pattern in the daemon log.
+        sendAssistantText: async (chatId, text) => {
+          await ilink.sendMessage(chatId, text)
+        },
         log: (tag, line) => log(tag, line),
       }, msg)
       // Fire-and-forget milestone detection + welcome observation after

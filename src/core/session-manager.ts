@@ -26,7 +26,7 @@ export interface SessionHandle {
   readonly alias: string
   readonly path: string
   lastUsedAt: number
-  dispatch(text: string): Promise<{ assistantText?: string[] } | void>
+  dispatch(text: string): Promise<{ assistantText?: string[]; replyToolCalled?: boolean } | void>
   close(): Promise<void>
   onAssistantText(cb: (text: string) => void): () => void
   onResult(cb: (r: { session_id: string; num_turns: number; duration_ms: number }) => void): () => void
