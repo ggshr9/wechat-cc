@@ -86,6 +86,38 @@ describe('SessionManager', () => {
     await mgr.shutdown()
   })
 
+  it('dedupes concurrent acquires on same alias (no double-spawn)', async () => {
+    // Two callers race on the same alias before the first spawn completes.
+    // Without in-flight Promise dedup, both miss the cache and both fork a
+    // Claude subprocess — the first one ends up orphaned. Reproduces the
+    // companion-tick / inbound-message race on alias `_default`.
+    let spawnCount = 0
+    const provider = {
+      async spawn(_proj: any) {
+        spawnCount++
+        await new Promise(r => setTimeout(r, 30))
+        return {
+          dispatch: async () => ({ assistantText: [] }),
+          close: async () => {},
+          onAssistantText: () => () => {},
+          onResult: () => () => {},
+        }
+      },
+    }
+    const mgr = new SessionManager({
+      maxConcurrent: 4,
+      idleEvictMs: 60_000,
+      provider,
+    } as any)
+    const [h1, h2] = await Promise.all([
+      mgr.acquire('shared', '/p'),
+      mgr.acquire('shared', '/p'),
+    ])
+    expect(spawnCount).toBe(1)
+    expect(h1).toBe(h2)
+    await mgr.shutdown()
+  })
+
   it('dispatch pushes messages in order into the prompt iterable', async () => {
     const seen: string[] = []
     fakeQuery.mockImplementation((params: any) => {

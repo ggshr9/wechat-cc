@@ -40,6 +40,13 @@ interface Internal {
 export class SessionManager {
   private readonly opts: SessionManagerOptions
   private readonly sessions = new Map<string, Internal>()
+  // In-flight spawn promises keyed by alias. acquire() inserts the spawn
+  // promise here BEFORE awaiting provider.spawn(), so a second concurrent
+  // acquire on the same alias returns the in-flight promise instead of
+  // forking a duplicate Claude subprocess. Without this, the companion
+  // tick + an inbound message racing on alias `_default` would both miss
+  // the cache and both spawn — first one's Claude process ends up orphaned.
+  private readonly pending = new Map<string, Promise<SessionHandle>>()
 
   constructor(opts: SessionManagerOptions) {
     this.opts = opts
@@ -51,7 +58,13 @@ export class SessionManager {
       existing.handle.lastUsedAt = Date.now()
       return existing.handle
     }
-    return this.spawn(alias, path)
+    const inFlight = this.pending.get(alias)
+    if (inFlight) return inFlight
+    const promise = this.spawn(alias, path).finally(() => {
+      this.pending.delete(alias)
+    })
+    this.pending.set(alias, promise)
+    return promise
   }
 
   private async spawn(alias: string, path: string): Promise<SessionHandle> {
