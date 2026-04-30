@@ -37,10 +37,7 @@ breadth, see [`cc-connect`](https://github.com/chenhg5/cc-connect). If you
 want a single, deep WeChat × Claude Code experience that feels like a
 relationship, this is it.
 
-<p align="center">
-  <img alt="Dashboard sessions detail — WeChat-replica chat in iPhone 17 Pro frame" src="docs/screenshots/chat-detail.png" width="380">
-</p>
-<p align="center"><sub>Desktop dashboard · session detail. Every WeChat × Claude conversation lives inside a 1:1 iPhone replica — not a SaaS console.</sub></p>
+<!-- TODO: 4-panel screenshot or 30s demo video here -->
 
 ---
 
@@ -54,13 +51,6 @@ relationship, this is it.
 | Caveats | Bundles are unsigned (Apple Dev ID + Windows EV cert not yet provisioned) — first launch needs a one-time OS-warning bypass. macOS Intel not supported (Apple Silicon only). The desktop app shells out to the source-mode CLI, so you also need the source somewhere (or set `WECHAT_CC_ROOT`). | Works everywhere bun runs. |
 
 Most people: grab the desktop bundle. Read on for the terminal path.
-
-![Wizard environment-check step — red rows show inline fix commands with copy buttons; hard-severity reds get a left bar so the eye lands on the actually-blocking item first](docs/screenshots/wizard-doctor.png)
-
-> Missing Claude Code? No bound WeChat? Each red row tells you the fix
-> inline — copy the command and you're moving. Hard-severity rows
-> (selected agent backend missing) get a left bar; soft ones (no
-> account, allowlist empty) can be fixed any time after install.
 
 ---
 
@@ -197,8 +187,6 @@ The desktop dashboard reflects two perspectives on the same relationship:
 - Middle: editable per-chat markdown (profile.md / preferences.md / …)
 - Bottom: collapsible "Claude's recent decisions" timeline (push / skip /
   observation / milestone / SDK error). Click a row to see the reasoning.
-
-![Memory pane with profile.md loaded — observation card up top, file tree, editable markdown body, decisions timeline at the bottom](docs/screenshots/memory-pane.png)
 
 **会话 (Sessions)** — your shared record
 - Cross-session full-text search
