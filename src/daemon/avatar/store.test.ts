@@ -19,7 +19,8 @@ describe('avatar store', () => {
 
     it('hashes arbitrary chat_id to a fs-safe filename', () => {
       const path = avatarPath(stateDir, 'o9cq800sObd3lbrHBgiItB1pooDQ@im.wechat')
-      expect(path).toMatch(/avatars\/[0-9a-f]{16}\.png$/)
+      // [\\/] tolerates either separator — Windows CI uses backslashes.
+      expect(path).toMatch(/avatars[\\/][0-9a-f]{16}\.png$/)
       // Same input → same path (deterministic)
       expect(avatarPath(stateDir, 'o9cq800sObd3lbrHBgiItB1pooDQ@im.wechat')).toBe(path)
     })
