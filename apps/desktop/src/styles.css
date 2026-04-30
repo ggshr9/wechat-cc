@@ -406,6 +406,22 @@ input { font: inherit; color: inherit; }
  * make the install button useless if you ignore it". */
 .env-row.bad-hard { border-left: 2px solid var(--rouge); padding-left: 14px; }
 
+/* Network-guard status pill on the service-screen toggle row.
+ * Inline with the .sub helper text so the IP / probe state shows
+ * without owning a separate row. Color flips by data-state. */
+.guard-status-line {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  background: var(--paper-2);
+  color: var(--ink-3);
+}
+.guard-status-line[data-state="ok"]   { color: var(--green-ink); }
+.guard-status-line[data-state="down"] { color: var(--rouge); }
+
 /* agent picker */
 .agent-grid {
   display: grid;

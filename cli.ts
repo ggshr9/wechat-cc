@@ -60,6 +60,9 @@ export type CliArgs =
   | { cmd: 'avatar-info'; key: string; json: boolean }
   | { cmd: 'avatar-set'; key: string; base64: string; json: boolean }
   | { cmd: 'avatar-remove'; key: string; json: boolean }
+  | { cmd: 'guard-status'; json: boolean }
+  | { cmd: 'guard-enable'; json: boolean }
+  | { cmd: 'guard-disable'; json: boolean }
   | { cmd: 'help' }
 
 export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void }): CliArgs {
@@ -205,6 +208,13 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
         check: rest.includes('--check'),
         json: rest.includes('--json'),
       }
+    }
+    case 'guard': {
+      const json = rest.includes('--json')
+      if (rest[0] === 'status') return { cmd: 'guard-status', json }
+      if (rest[0] === 'enable')  return { cmd: 'guard-enable', json }
+      if (rest[0] === 'disable') return { cmd: 'guard-disable', json }
+      return { cmd: 'help' }
     }
     case 'demo': {
       if (rest[0] === 'seed' || rest[0] === 'unseed') {
@@ -662,6 +672,43 @@ async function main() {
       const result = removeAvatar(STATE_DIR, parsed.key)
       if (parsed.json) console.log(JSON.stringify({ ok: true, ...result }))
       else console.log(`removed ${parsed.key}`)
+      return
+    }
+    case 'guard-status': {
+      // Live one-shot probe (independent of any running daemon's
+      // scheduler). Useful for both the dashboard status row and
+      // operator debugging — `wechat-cc guard status --json` from
+      // any terminal returns the current external IP + reachability.
+      const { loadGuardConfig } = await import('./src/daemon/guard/store')
+      const { fetchPublicIp, probeReachable } = await import('./src/daemon/guard/probe')
+      const cfg = loadGuardConfig(STATE_DIR)
+      const ipRes = await fetchPublicIp({ url: cfg.ipify_url })
+      const probeRes = await probeReachable(cfg.probe_url)
+      const out = {
+        enabled: cfg.enabled,
+        ip: ipRes.ip,
+        reachable: probeRes.reachable,
+        probe_url: cfg.probe_url,
+        ip_error: ipRes.error ?? null,
+        probe_error: probeRes.error ?? null,
+        probe_ms: probeRes.ms,
+      }
+      if (parsed.json) console.log(JSON.stringify(out, null, 2))
+      else {
+        console.log(`enabled: ${out.enabled}`)
+        console.log(`ip:      ${out.ip ?? '?'}${out.ip_error ? ` (${out.ip_error})` : ''}`)
+        console.log(`probe:   ${out.reachable ? 'reachable' : 'UNREACHABLE'} (${cfg.probe_url})${out.probe_error ? ` — ${out.probe_error}` : ''}`)
+      }
+      return
+    }
+    case 'guard-enable':
+    case 'guard-disable': {
+      const { loadGuardConfig, saveGuardConfig } = await import('./src/daemon/guard/store')
+      const cfg = loadGuardConfig(STATE_DIR)
+      cfg.enabled = parsed.cmd === 'guard-enable'
+      saveGuardConfig(STATE_DIR, cfg)
+      if (parsed.json) console.log(JSON.stringify({ ok: true, enabled: cfg.enabled }))
+      else console.log(`guard: ${cfg.enabled ? 'enabled' : 'disabled'}`)
       return
     }
     case 'daemon-kill': {

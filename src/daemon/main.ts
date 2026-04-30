@@ -25,6 +25,8 @@ import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { buildMemorySnapshot } from './memory/snapshot.ts'
 import { startCompanionScheduler } from './companion/scheduler'
 import { loadCompanionConfig, saveCompanionConfig } from './companion/config'
+import { startGuardScheduler } from './guard/scheduler'
+import { loadGuardConfig } from './guard/store'
 import { buildDetectorContext } from './milestones/build-context'
 import { detectMilestones } from './milestones/detector'
 import { makeMilestonesStore } from './milestones/store'
@@ -185,6 +187,26 @@ async function main() {
   }
   void maybeStartupIntrospect()
 
+  // Network guard — disabled by default. When enabled, polls public IP
+  // every 30s; if the IP changes, probes google.com (one HEAD). When the
+  // probe fails, hard-shuts all live Claude sessions so the next inbound
+  // returns a clear "VPN dropped" message instead of dying with cryptic
+  // SDK errors. Recovery is automatic: next IP change that probes
+  // reachable lets the next inbound spawn fresh.
+  const stopGuard = startGuardScheduler({
+    pollMs: 30_000,
+    isEnabled: () => loadGuardConfig(STATE_DIR).enabled,
+    probeUrl: () => loadGuardConfig(STATE_DIR).probe_url,
+    ipifyUrl: () => loadGuardConfig(STATE_DIR).ipify_url,
+    log: (tag, line) => log(tag, line),
+    onStateChange: async (prev, next) => {
+      if (prev.reachable && !next.reachable) {
+        log('GUARD', `network DOWN — shutting down all sessions (was ${prev.ip}, now ${next.ip})`)
+        await sessionManager.shutdown()
+      }
+    },
+  })
+
   // First-inbound welcome observation — when a chat has never had ANY
   // observation (active OR archived), drop one playful welcome line so the
   // dashboard's memory pane top zone has content immediately. Once the user
@@ -322,6 +344,19 @@ async function main() {
         log('PERMISSION', `consumed reply from chat=${msg.chatId}`)
         return
       }
+      // Network guard: if the canary probe last saw the network as
+      // unreachable, refuse to spawn Claude (would burn ~10-15s on
+      // SDK timeout) and tell the user out loud. Sending the alert
+      // via ilink is safe — ilink server is in China, doesn't need
+      // VPN. Per design: NO proactive push when guard flips DOWN —
+      // we only nag when the user is actively trying to use it.
+      const guardCfg = loadGuardConfig(STATE_DIR)
+      const guardState = stopGuard.current()
+      if (guardCfg.enabled && !guardState.reachable && guardState.ip) {
+        log('GUARD', `dropping inbound chat=${msg.chatId} — network DOWN ip=${guardState.ip}`)
+        await ilink.sendMessage(msg.chatId, `🛑 出口 IP ${guardState.ip} → 网络探测失败。VPN 掉了？修好再发。`)
+        return
+      }
       // Download CDN refs to inbox/ before Claude sees the message.
       await materializeAttachments(msg, INBOX_DIR, (tag, line) => log(tag, line))
       await routeInbound({
@@ -355,6 +390,7 @@ async function main() {
     log('DAEMON', 'shutdown initiated')
     await stopScheduler()
     await stopIntrospect()
+    await stopGuard.stop()
     await pollHandle.stop()
     await sessionManager.shutdown()
     await sessionStore.flush()

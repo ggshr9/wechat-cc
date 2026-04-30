@@ -218,6 +218,18 @@ describe('sessions search', () => {
   })
 })
 
+describe('guard', () => {
+  it('parses status / enable / disable', () => {
+    expect(parseCliArgs(['guard', 'status', '--json'])).toEqual({ cmd: 'guard-status', json: true })
+    expect(parseCliArgs(['guard', 'enable'])).toEqual({ cmd: 'guard-enable', json: false })
+    expect(parseCliArgs(['guard', 'disable', '--json'])).toEqual({ cmd: 'guard-disable', json: true })
+  })
+  it('falls back to help on unknown subcommand', () => {
+    expect(parseCliArgs(['guard', 'who-knows'])).toEqual({ cmd: 'help' })
+    expect(parseCliArgs(['guard'])).toEqual({ cmd: 'help' })
+  })
+})
+
 describe('demo seed/unseed', () => {
   it('parses seed with --chat-id', () => {
     expect(parseCliArgs(['demo', 'seed', '--chat-id', 'chat_x', '--json'])).toEqual({

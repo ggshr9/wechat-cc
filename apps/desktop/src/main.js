@@ -84,6 +84,32 @@ const deps = {
   },
 }
 
+// Live status line for the network guard toggle. Pulls fresh probe
+// each refresh — `wechat-cc guard status` is itself one-shot and does
+// the IP + canary fetch synchronously. Fast enough for a click; not
+// fast enough to call on every doctor tick (would burn one google
+// HEAD per 5s), so we trigger only on toggle clicks + on dashboard
+// entry (see setMode below).
+async function refreshGuardStatus() {
+  const el = document.getElementById("guard-status-line")
+  const toggle = document.getElementById("guard-toggle")
+  if (!el || !toggle) return
+  el.textContent = "查询中…"
+  try {
+    const r = await invoke("wechat_cli_json", { args: ["guard", "status", "--json"] })
+    if (r.enabled) toggle.classList.add("on")
+    else toggle.classList.remove("on")
+    toggle.setAttribute("aria-pressed", r.enabled ? "true" : "false")
+    if (!r.enabled) { el.textContent = "未开启"; return }
+    const ipPart = r.ip ? `IP ${r.ip}` : "IP 未知"
+    const probePart = r.reachable ? "google ✓" : "google ✗"
+    el.textContent = `${ipPart} · ${probePart}`
+    el.dataset.state = r.reachable ? "ok" : "down"
+  } catch (err) {
+    el.textContent = `查询失败：${err?.message || err}`
+  }
+}
+
 // ─── mode router ──────────────────────────────────────────────────────
 
 function setMode(mode) {
@@ -103,7 +129,12 @@ function setMode(mode) {
   }
 }
 
-function showStep(name) { wizardShowStep(state, name) }
+function showStep(name) {
+  wizardShowStep(state, name)
+  // Service step has the guard toggle — refresh status when entering so
+  // the line shows current IP + reachability without waiting for a click.
+  if (name === "service") refreshGuardStatus()
+}
 
 // ─── doctor subscribers ──────────────────────────────────────────────
 
@@ -222,12 +253,22 @@ function wireEvents() {
   )
 
   document.querySelectorAll("[data-toggle]").forEach(t => {
-    t.addEventListener("click", () => {
+    t.addEventListener("click", async () => {
       t.classList.toggle("on")
       const on = t.classList.contains("on")
       t.setAttribute("aria-pressed", on ? "true" : "false")
       if (t.id === "unattended-toggle") state.unattended = on
       if (t.id === "autostart-toggle") state.autoStart = on
+      if (t.id === "guard-toggle") {
+        // Persist immediately — guard config lives in its own JSON.
+        // The daemon's scheduler reads loadGuardConfig() each tick so
+        // the change takes effect on the next 30s poll. Refresh
+        // doctor too so the status line picks up the new probe.
+        try {
+          await invoke("wechat_cli_json", { args: ["guard", on ? "enable" : "disable", "--json"] })
+          refreshGuardStatus()
+        } catch { /* best-effort — toggle stays in the UI either way */ }
+      }
     })
   })
 
