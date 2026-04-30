@@ -422,7 +422,7 @@ export async function openProjectDetail(deps, alias, opts = {}) {
   if (!opts.preserveScroll) startDetailAutoRefresh(deps)
 
   try {
-    const resp = await deps.invoke("wechat_cli_json", { args: ["sessions", "read-jsonl", alias, "--json"] })
+    const resp = await deps.invoke("wechat_cli_json_via_file", { args: ["sessions", "read-jsonl", alias, "--json"] })
     if (!resp.ok) {
       jsonlBox.innerHTML = `<p class="empty-state">${escapeHtml(resp.error || '读取失败')}</p>`
       meta.textContent = alias
@@ -964,8 +964,13 @@ export async function exportProjectMarkdown(deps) {
   const alias = detail?.dataset.alias
   if (!alias) return
   try {
-    const resp = await deps.invoke("wechat_cli_json", { args: ["sessions", "read-jsonl", alias, "--json"] })
-    if (!resp.ok) return
+    // via_file path: CLI dumps JSON to a temp file and Rust reads it back.
+    // Plain stdout truncates at MB-scale for bun --compile binaries.
+    const resp = await deps.invoke("wechat_cli_json_via_file", { args: ["sessions", "read-jsonl", alias, "--json"] })
+    if (!resp.ok) {
+      alert(`导出失败：${resp.error || '未知错误'}`)
+      return
+    }
     const mode = readSessionsDetailMode()
     const md = buildExportMarkdown(resp.alias ?? alias, resp.session_id, resp.turns, mode)
 
@@ -984,6 +989,7 @@ export async function exportProjectMarkdown(deps) {
     }
   } catch (err) {
     console.error("export failed", err)
+    alert(`导出失败：${err?.message || err}`)
   }
 }
 

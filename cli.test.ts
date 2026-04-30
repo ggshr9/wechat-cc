@@ -188,6 +188,13 @@ describe('sessions read-jsonl', () => {
       cmd: 'sessions-read-jsonl', alias: 'compass', json: true,
     })
   })
+  it('parses --out-file path', () => {
+    // The desktop sidecar uses this to dump 8 MB+ JSON to disk instead of
+    // stdout — bun --compile binaries lose bytes on MB-sized pipe writes.
+    expect(parseCliArgs(['sessions', 'read-jsonl', 'compass', '--json', '--out-file', '/tmp/x.json'])).toEqual({
+      cmd: 'sessions-read-jsonl', alias: 'compass', json: true, outFile: '/tmp/x.json',
+    })
+  })
 })
 
 describe('sessions delete', () => {

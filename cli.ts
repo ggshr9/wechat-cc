@@ -1,11 +1,32 @@
 #!/usr/bin/env bun
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { writeFileSync } from 'node:fs'
 import { STATE_DIR } from './config'
 import { loadAgentConfig, saveAgentConfig, type AgentProviderKind } from './agent-config'
 import { analyzeDoctor, defaultDoctorDeps, printDoctor, serviceStatus, setupStatus } from './doctor'
 import { buildServicePlan, installService, startService, stopService, uninstallService } from './service-manager'
 import { compiledBinaryPath, compiledRepoRoot } from './runtime-info'
+
+// Write potentially-large JSON to a sibling file, return the small
+// envelope {ok, out_file, bytes} via stdout. Fixes the desktop sessions
+// browser truncation: bun --compile binaries lose bytes when emitting
+// MB-sized payloads to a pipe (observed across console.log, process.stdout
+// .write, and chunked fs.writeSync — the kernel pipe buffer fills, the
+// receiver drains line-by-line, and the producer drops writes on
+// EAGAIN). Tauri-side reads from disk instead. CLI consumers that pass
+// --out-file get the file route; everyone else (terminal users, tests)
+// falls back to plain stdout via console.log.
+function emitJson(data: unknown, outFile: string | undefined): void {
+  if (!outFile) {
+    console.log(JSON.stringify(data, null, 2))
+    return
+  }
+  // Sync write to a regular file: no pipe buffer, no async stdio path.
+  const body = JSON.stringify(data, null, 2)
+  writeFileSync(outFile, body, 'utf8')
+  console.log(JSON.stringify({ ok: true, out_file: outFile, bytes: body.length }))
+}
 
 export type CliArgs =
   | { cmd: 'run'; dangerouslySkipPermissions: boolean }
@@ -28,10 +49,10 @@ export type CliArgs =
   | { cmd: 'observations-list'; chatId: string; json: boolean; includeArchived: boolean }
   | { cmd: 'observations-archive'; chatId: string; obsId: string; json: boolean }
   | { cmd: 'milestones-list'; chatId: string; json: boolean }
-  | { cmd: 'sessions-list-projects'; json: boolean }
-  | { cmd: 'sessions-read-jsonl'; alias: string; json: boolean }
+  | { cmd: 'sessions-list-projects'; json: boolean; outFile?: string }
+  | { cmd: 'sessions-read-jsonl'; alias: string; json: boolean; outFile?: string }
   | { cmd: 'sessions-delete'; alias: string; json: boolean }
-  | { cmd: 'sessions-search'; query: string; json: boolean; limit: number }
+  | { cmd: 'sessions-search'; query: string; json: boolean; limit: number; outFile?: string }
   | { cmd: 'logs'; tail: number; json: boolean }
   | { cmd: 'update'; check: boolean; json: boolean }
   | { cmd: 'demo-seed'; chatId: string | null; json: boolean }
@@ -147,11 +168,13 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
       return { cmd: 'help' }
     }
     case 'sessions': {
+      const outFileIdx = rest.indexOf('--out-file')
+      const outFile = outFileIdx >= 0 ? rest[outFileIdx + 1] : undefined
       if (rest[0] === 'list-projects') {
-        return { cmd: 'sessions-list-projects', json: rest.includes('--json') }
+        return { cmd: 'sessions-list-projects', json: rest.includes('--json'), outFile }
       }
       if (rest[0] === 'read-jsonl' && rest[1]) {
-        return { cmd: 'sessions-read-jsonl', alias: rest[1], json: rest.includes('--json') }
+        return { cmd: 'sessions-read-jsonl', alias: rest[1], json: rest.includes('--json'), outFile }
       }
       if (rest[0] === 'delete' && rest[1]) {
         return { cmd: 'sessions-delete', alias: rest[1], json: rest.includes('--json') }
@@ -159,7 +182,7 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
       if (rest[0] === 'search' && rest[1]) {
         const limitIdx = rest.indexOf('--limit')
         const limit = limitIdx >= 0 ? Number.parseInt(rest[limitIdx + 1] ?? '', 10) : 50
-        return { cmd: 'sessions-search', query: rest[1], json: rest.includes('--json'), limit: Number.isFinite(limit) ? limit : 50 }
+        return { cmd: 'sessions-search', query: rest[1], json: rest.includes('--json'), limit: Number.isFinite(limit) ? limit : 50, outFile }
       }
       return { cmd: 'help' }
     }
@@ -538,7 +561,8 @@ async function main() {
         summary: rec.summary ?? null,
         summary_updated_at: rec.summary_updated_at ?? null,
       }))
-      console.log(parsed.json ? JSON.stringify({ ok: true, projects }, null, 2) : projects.map(p => `${p.alias} ${p.last_used_at}`).join('\n'))
+      if (parsed.json) emitJson({ ok: true, projects }, parsed.outFile)
+      else console.log(projects.map(p => `${p.alias} ${p.last_used_at}`).join('\n'))
 
       // Fire-and-forget: refresh stale summaries in the background. The current
       // request returns immediately with whatever's cached; next list call will
@@ -593,7 +617,8 @@ async function main() {
       }
       const lines = readFileSync(path, 'utf8').split('\n').filter(l => l.length > 0)
       const turns = lines.map(l => { try { return JSON.parse(l) } catch { return null } }).filter(t => t !== null)
-      console.log(parsed.json ? JSON.stringify({ ok: true, alias: parsed.alias, session_id: rec.session_id, turns }, null, 2) : `${turns.length} turns`)
+      if (parsed.json) emitJson({ ok: true, alias: parsed.alias, session_id: rec.session_id, turns }, parsed.outFile)
+      else console.log(`${turns.length} turns`)
       return
     }
     case 'sessions-delete': {
@@ -607,7 +632,8 @@ async function main() {
     case 'sessions-search': {
       const { searchAcrossSessions } = await import('./src/daemon/sessions/searcher')
       const hits = await searchAcrossSessions(parsed.query, { limit: parsed.limit, stateDir: STATE_DIR })
-      console.log(parsed.json ? JSON.stringify({ ok: true, query: parsed.query, hits }, null, 2) : hits.map(h => `${h.alias} · ${h.snippet}`).join('\n'))
+      if (parsed.json) emitJson({ ok: true, query: parsed.query, hits }, parsed.outFile)
+      else console.log(hits.map(h => `${h.alias} · ${h.snippet}`).join('\n'))
       return
     }
     case 'avatar-info': {

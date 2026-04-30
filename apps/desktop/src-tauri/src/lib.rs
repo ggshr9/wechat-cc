@@ -19,6 +19,28 @@ async fn wechat_cli_json(app: AppHandle, args: Vec<String>) -> Result<Value, Str
         .map_err(|err| format!("invalid JSON from wechat-cc: {err}\n{stdout}"))
 }
 
+// Reads payload via a temp file instead of stdout. The bun --compile CLI
+// loses bytes when pushing MB-sized JSON (sessions read-jsonl) through a
+// pipe — pipe-buffer fills, EAGAIN, writes drop. The CLI's --out-file flag
+// dumps the JSON to disk synchronously and prints just the small envelope
+// {ok, out_file, bytes} on stdout, which we then read from disk.
+#[tauri::command]
+async fn wechat_cli_json_via_file(app: AppHandle, args: Vec<String>) -> Result<Value, String> {
+    let id: u64 = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!("wechat-cc-{id}-{}.json", std::process::id()));
+    let tmp_str = tmp.to_string_lossy().to_string();
+    let mut full_args = args;
+    full_args.push("--out-file".into());
+    full_args.push(tmp_str.clone());
+    let _ = run_sidecar(&app, full_args).await?;
+    let body = std::fs::read_to_string(&tmp).map_err(|err| format!("read {tmp_str}: {err}"))?;
+    let _ = std::fs::remove_file(&tmp);
+    serde_json::from_str(&body).map_err(|err| format!("invalid JSON in {tmp_str}: {err}"))
+}
+
 #[tauri::command]
 async fn wechat_cli_text(app: AppHandle, args: Vec<String>) -> Result<String, String> {
     run_sidecar(&app, args).await
@@ -98,6 +120,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             wechat_cli_json,
+            wechat_cli_json_via_file,
             wechat_cli_text,
             render_qr_svg
         ])
