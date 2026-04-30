@@ -362,6 +362,49 @@ input { font: inherit; color: inherit; }
 .env-row .nm { color: var(--ink); font-weight: 500; }
 .env-row .val { font-family: var(--mono); color: var(--ink-3); font-size: 11.5px; word-break: break-all; max-width: 320px; text-align: right; }
 .env-row.bad .val { color: var(--rouge); }
+/* Fix hint sits on a second row inside the env-row grid; the column
+ * span keeps it under `nm + val` so it indents under the check name. */
+.env-row .fix {
+  grid-column: 2 / -1;
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+}
+.env-row .fix-cmd {
+  font-family: var(--mono);
+  background: var(--paper-2);
+  border: 1px solid var(--hair);
+  border-radius: 3px;
+  padding: 2px 6px;
+  color: var(--ink);
+  word-break: break-all;
+  flex: 1;
+  min-width: 0;
+}
+.env-row .fix-copy {
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px solid var(--hair-2);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.env-row .fix-copy:hover { color: var(--ink); border-color: var(--ink-4); }
+.env-row .fix-act { color: var(--ink-2); }
+.env-row .fix-link {
+  color: var(--ink-3);
+  text-decoration: none;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.env-row .fix-link:hover { color: var(--ink); }
+/* Hard-severity reds get a left bar — the visual cue for "this WILL
+ * make the install button useless if you ignore it". */
+.env-row.bad-hard { border-left: 2px solid var(--rouge); padding-left: 14px; }
 
 /* agent picker */
 .agent-grid {

@@ -44,6 +44,16 @@ export async function serviceAction(deps, state, action) {
 async function serviceActionInner(deps, state, action, planEl, summaryEl, alertEl) {
   if (alertEl) alertEl.hidden = true
   if (action === "install") {
+    // Hard-severity gate: if the selected agent backend (Claude/Codex)
+    // isn't installed, registering the systemd unit succeeds but every
+    // inbound message dies in SDK spawn — the "fake success" trap. Refuse
+    // here with a single inline line; user reads the doctor row above
+    // (which already shows the npm install command + 复制 button).
+    const hardReds = collectHardReds(deps.doctorPoller.current)
+    if (hardReds.length > 0) {
+      summaryEl.textContent = `先装 ${hardReds.join("、")} — daemon 起来后无法工作。复制上方命令即可。`
+      return
+    }
     state.unattended = isToggleOn("unattended-toggle")
     state.autoStart = isToggleOn("autostart-toggle")
     // Pre-install guard: if a daemon is currently running OUTSIDE any
@@ -111,6 +121,20 @@ async function serviceActionInner(deps, state, action, planEl, summaryEl, alertE
 function isToggleOn(id) {
   const el = document.getElementById(id)
   return !!el && el.classList.contains("on")
+}
+
+// Walk the doctor checks; return human-friendly names of any failed
+// check whose severity is "hard" (would make the install useless).
+// Soft reds (no bound account, allowlist empty) DON'T block — those
+// can be fixed any time after install.
+function collectHardReds(report) {
+  if (!report?.checks) return []
+  const out = []
+  const c = report.checks
+  if (c.provider && !c.provider.ok && c.provider.severity === "hard") {
+    out.push(c.provider.provider === "codex" ? "Codex" : "Claude Code")
+  }
+  return out
 }
 
 export function showPostStopAlert(pid) {

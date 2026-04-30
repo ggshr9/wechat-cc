@@ -47,17 +47,31 @@ export interface DoctorDeps {
   service: () => ServiceSnapshot
 }
 
+export type FixHint = { command?: string; action?: string; link?: string }
+export type Severity = 'hard' | 'soft'
+export interface DoctorCheckBase {
+  ok: boolean
+  // When !ok: 'hard' = system can't function (e.g. selected agent backend
+  // missing → daemon starts but every reply fails); 'soft' = degraded but
+  // not catastrophic (e.g. no bound accounts → daemon idle, recoverable).
+  // When ok, severity is omitted.
+  severity?: Severity
+  // One-line concrete fix. UI renders ONE of: command (with copy btn) /
+  // action (text) / link (external). Keep copy short — no paragraphs.
+  fix?: FixHint
+}
+
 export interface DoctorReport {
   ready: boolean
   stateDir: string
   checks: {
-    bun: { ok: boolean; path: string | null }
-    git: { ok: boolean; path: string | null }
-    claude: { ok: boolean; path: string | null }
-    codex: { ok: boolean; path: string | null }
-    accounts: { ok: boolean; count: number; items: BoundAccount[] }
-    access: { ok: boolean; dmPolicy: string; allowFromCount: number }
-    provider: { ok: boolean; provider: AgentConfig['provider']; model?: string; binaryPath: string | null }
+    bun: DoctorCheckBase & { path: string | null }
+    git: DoctorCheckBase & { path: string | null }
+    claude: DoctorCheckBase & { path: string | null }
+    codex: DoctorCheckBase & { path: string | null }
+    accounts: DoctorCheckBase & { count: number; items: BoundAccount[] }
+    access: DoctorCheckBase & { dmPolicy: string; allowFromCount: number }
+    provider: DoctorCheckBase & { provider: AgentConfig['provider']; model?: string; binaryPath: string | null }
     daemon: DaemonSnapshot
     service: ServiceSnapshot
   }
@@ -87,22 +101,69 @@ export function analyzeDoctor(deps: DoctorDeps): DoctorReport {
   if (!service.installed) nextActions.push('install_service')
   else if (!daemon.alive) nextActions.push('start_service')
 
+  // Severity rules:
+  //   - selected agent backend missing → hard (daemon starts but every
+  //     reply fails — the "fake success" trap)
+  //   - non-selected backend missing → soft (you'd only use it after
+  //     `wechat-cc provider set`, currently irrelevant)
+  //   - bun/git missing → soft on v0.4+ (compiled binary doesn't need
+  //     them at runtime; hint kept for source-mode users)
+  //   - accounts/access missing → soft (daemon runs idle, fixable any
+  //     time via setup)
+  const claudeIsActive = agent.provider === 'claude'
+  const codexIsActive = agent.provider === 'codex'
   const checks = {
-    bun: { ok: !!bun, path: bun },
-    git: { ok: !!git, path: git },
-    claude: { ok: !!claude, path: claude },
-    codex: { ok: !!codex, path: codex },
-    accounts: { ok: accounts.length > 0, count: accounts.length, items: accounts },
+    bun: {
+      ok: !!bun, path: bun,
+      ...(bun ? {} : { severity: 'soft' as const, fix: { command: 'curl -fsSL https://bun.sh/install | bash' } }),
+    },
+    git: {
+      ok: !!git, path: git,
+      ...(git ? {} : { severity: 'soft' as const }),
+    },
+    claude: {
+      ok: !!claude, path: claude,
+      ...(claude ? {} : {
+        severity: (claudeIsActive ? 'hard' : 'soft') as Severity,
+        fix: { command: 'npm install -g @anthropic-ai/claude-code', link: 'https://docs.claude.com/en/docs/claude-code/install' },
+      }),
+    },
+    codex: {
+      ok: !!codex, path: codex,
+      ...(codex ? {} : {
+        severity: (codexIsActive ? 'hard' : 'soft') as Severity,
+        fix: { link: 'https://github.com/openai/codex#installation' },
+      }),
+    },
+    accounts: {
+      ok: accounts.length > 0,
+      count: accounts.length,
+      items: accounts,
+      ...(accounts.length > 0 ? {} : {
+        severity: 'soft' as const,
+        fix: { action: '点上方「绑定微信」扫码' },
+      }),
+    },
     access: {
       ok: access.dmPolicy === 'allowlist' && access.allowFrom.length > 0,
       dmPolicy: access.dmPolicy,
       allowFromCount: access.allowFrom.length,
+      ...(access.dmPolicy === 'allowlist' && access.allowFrom.length > 0 ? {} : {
+        severity: 'soft' as const,
+        fix: { action: '扫码绑定后会自动加入' },
+      }),
     },
     provider: {
       ok: !!providerBinary,
       provider: agent.provider,
       ...(agent.model ? { model: agent.model } : {}),
       binaryPath: providerBinary,
+      ...(providerBinary ? {} : {
+        severity: 'hard' as const,
+        fix: agent.provider === 'codex'
+          ? { link: 'https://github.com/openai/codex#installation' }
+          : { command: 'npm install -g @anthropic-ai/claude-code', link: 'https://docs.claude.com/en/docs/claude-code/install' },
+      }),
     },
     daemon,
     service,

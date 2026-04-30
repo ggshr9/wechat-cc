@@ -2,15 +2,23 @@
 // from Bun (see view.test.ts) without spinning up a browser.
 
 export function doctorRows(report) {
+  // Re-pack the wrapper objects (accounts/access/provider) with their
+  // human-friendly path while preserving severity + fix from doctor.ts.
+  // Without the spread, the wizard's renderFixHint never sees the fix
+  // metadata for these three checks.
+  const accounts = report.checks.accounts
+  const access = report.checks.access
+  const provider = report.checks.provider
+  const daemon = report.checks.daemon
   return [
     ["Bun", report.checks.bun],
     ["Git", report.checks.git],
     ["Claude", report.checks.claude],
     ["Codex", report.checks.codex],
-    ["微信账号", { ok: report.checks.accounts.ok, path: `${report.checks.accounts.count} 个账号` }],
-    ["Allowlist", { ok: report.checks.access.ok, path: `${report.checks.access.allowFromCount} 个用户` }],
-    ["Provider", { ok: report.checks.provider.ok, path: report.checks.provider.provider }],
-    ["Daemon", { ok: report.checks.daemon.alive, path: report.checks.daemon.alive ? `pid ${report.checks.daemon.pid}` : "stopped" }],
+    ["微信账号", { ...accounts, path: `${accounts.count} 个账号` }],
+    ["Allowlist", { ...access, path: `${access.allowFromCount} 个用户` }],
+    ["Provider", { ...provider, path: provider.provider }],
+    ["Daemon", { ok: daemon.alive, path: daemon.alive ? `pid ${daemon.pid}` : "stopped" }],
   ]
 }
 

@@ -193,6 +193,19 @@ function wireEvents() {
   document.querySelectorAll(".steps .step").forEach(btn =>
     btn.addEventListener("click", () => showStep(btn.dataset.step))
   )
+  // Single delegated handler for any [data-copy] button — used by the
+  // doctor row fix-hints (`复制` button next to npm install commands).
+  // Delegated so newly-rendered rows stay live without re-binding.
+  document.addEventListener("click", async (ev) => {
+    const t = ev.target instanceof HTMLElement ? ev.target.closest("[data-copy]") : null
+    if (!t) return
+    try {
+      await navigator.clipboard.writeText(t.getAttribute("data-copy") || "")
+      const orig = t.textContent
+      t.textContent = "已复制 ✓"
+      setTimeout(() => { t.textContent = orig }, 1200)
+    } catch { /* clipboard denied → silent; the command is visible in the code block */ }
+  })
   document.getElementById("continue-provider").addEventListener("click", () => showStep("provider"))
   document.getElementById("continue-wechat").addEventListener("click", () => showStep("wechat"))
   document.getElementById("continue-service").addEventListener("click", () => showStep("service"))

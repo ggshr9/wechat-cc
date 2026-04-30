@@ -52,7 +52,10 @@ describe('doctorRows', () => {
     expect(rows.map((r: [string, unknown]) => r[0])).toEqual([
       'Bun', 'Git', 'Claude', 'Codex', '微信账号', 'Allowlist', 'Provider', 'Daemon',
     ])
-    expect(rows[4]![1]).toEqual({ ok: true, path: '1 个账号' })
+    // toMatchObject — doctorRows now spreads the full check shape so
+    // wizard.renderFixHint can see severity / fix metadata. Test only
+    // cares about user-visible bits.
+    expect(rows[4]![1]).toMatchObject({ ok: true, path: '1 个账号' })
     expect(rows[7]![1]).toEqual({ ok: false, path: 'stopped' })
   })
 

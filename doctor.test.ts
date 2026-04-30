@@ -5,6 +5,48 @@ const installedSystemd = () => ({ installed: true, kind: 'systemd-user' as const
 const missingSystemd = () => ({ installed: false, kind: 'systemd-user' as const })
 
 describe('doctor installer JSON', () => {
+  it('classifies the selected agent backend as hard severity (gates install)', () => {
+    // provider=claude + claude binary missing → provider check is hard
+    // (registering the systemd unit succeeds but every reply fails since
+    // SDK can't spawn `claude`). codex check is soft because it isn't
+    // the active provider.
+    const report = analyzeDoctor({
+      stateDir: '/state',
+      findOnPath: () => null,
+      readAccounts: () => [],
+      readAccess: () => ({ dmPolicy: 'allowlist', allowFrom: [] }),
+      readAgentConfig: () => ({ provider: 'claude', dangerouslySkipPermissions: true, autoStart: false }),
+      readUserNames: () => ({}),
+      readExpiredBots: () => [],
+      daemon: () => ({ alive: false, pid: null }),
+      service: missingSystemd,
+    })
+
+    expect(report.checks.provider.severity).toBe('hard')
+    expect(report.checks.claude.severity).toBe('hard')
+    expect(report.checks.codex.severity).toBe('soft')
+    expect(report.checks.accounts.severity).toBe('soft')
+    expect(report.checks.provider.fix?.command).toContain('npm install -g @anthropic-ai/claude-code')
+    expect(report.checks.accounts.fix?.action).toBeTruthy()
+  })
+
+  it('flips claude/codex severity when provider=codex', () => {
+    const report = analyzeDoctor({
+      stateDir: '/state',
+      findOnPath: () => null,
+      readAccounts: () => [{ id: 'b', botId: 'b', userId: 'u', baseUrl: 'x' }],
+      readAccess: () => ({ dmPolicy: 'allowlist', allowFrom: ['u'] }),
+      readAgentConfig: () => ({ provider: 'codex', dangerouslySkipPermissions: true, autoStart: false }),
+      readUserNames: () => ({}),
+      readExpiredBots: () => [],
+      daemon: () => ({ alive: false, pid: null }),
+      service: missingSystemd,
+    })
+    expect(report.checks.codex.severity).toBe('hard')
+    expect(report.checks.claude.severity).toBe('soft')
+    expect(report.checks.provider.fix?.link).toContain('codex')
+  })
+
   it('reports ready=false with concrete next actions on a fresh machine', () => {
     const report = analyzeDoctor({
       stateDir: '/state',

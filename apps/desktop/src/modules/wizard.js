@@ -15,17 +15,20 @@ const STEP_ORDER = ["doctor", "provider", "wechat", "service"]
 export function renderDoctorWizard(report) {
   const list = document.getElementById("checks")
   if (!list) return
-  list.innerHTML = doctorRows(report).map(([name, check]) => `
-    <div class="env-row${check.ok ? "" : " bad"}">
-      <span class="ic">${
-        check.ok
-          ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-7"/></svg>'
-          : '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l8 8M12 4l-8 8"/></svg>'
-      }</span>
-      <span class="nm">${escapeHtml(name)}</span>
-      <span class="val">${escapeHtml(check.path || "missing")}</span>
-    </div>
-  `).join("")
+  list.innerHTML = doctorRows(report).map(([name, check]) => {
+    const ic = check.ok
+      ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-7"/></svg>'
+      : '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l8 8M12 4l-8 8"/></svg>'
+    const cls = check.ok ? "" : (check.severity === "hard" ? " bad bad-hard" : " bad")
+    return `
+      <div class="env-row${cls}">
+        <span class="ic">${ic}</span>
+        <span class="nm">${escapeHtml(name)}</span>
+        <span class="val">${escapeHtml(check.path || "missing")}</span>
+        ${!check.ok && check.fix ? renderFixHint(check.fix) : ""}
+      </div>
+    `
+  }).join("")
   document.getElementById("claude-meta").textContent = report.checks.claude.ok ? report.checks.claude.path : "未检测到"
   document.getElementById("codex-meta").textContent = report.checks.codex.ok ? report.checks.codex.path : "未检测到"
   updateFooterStatus(report.checks.daemon)
@@ -77,3 +80,22 @@ export function showStep(stepState, name) {
 }
 
 export const STEP_ORDER_EXPORTED = STEP_ORDER
+
+// One-line fix hint under a failed env check. Renders ONE of:
+//   - command: monospace + a 复制 button
+//   - action: plain instructional sentence
+//   - link: opens externally
+// Combinations (command + link) show command first, link as small "?".
+// Kept tight — no headings, no expandable detail, no long copy.
+function renderFixHint(fix) {
+  if (!fix) return ""
+  const parts = []
+  if (fix.command) {
+    const safe = escapeHtml(fix.command)
+    parts.push(`<code class="fix-cmd">${safe}</code><button class="fix-copy" data-copy="${safe}" type="button">复制</button>`)
+  }
+  if (fix.action) parts.push(`<span class="fix-act">${escapeHtml(fix.action)}</span>`)
+  if (fix.link) parts.push(`<a class="fix-link" href="${escapeHtml(fix.link)}" target="_blank" rel="noopener">↗</a>`)
+  if (parts.length === 0) return ""
+  return `<div class="fix">${parts.join("")}</div>`
+}
