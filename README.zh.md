@@ -29,7 +29,10 @@
 
 定位故意挑窄：**个人 Claude Code 伴侣 × 深度 × 小白**——不追多 IM 多 agent 的广度赛道。要广度去看 [`cc-connect`](https://github.com/chenhg5/cc-connect)。要一段深度的、像关系的微信 × Claude Code 体验，这个对。
 
-<!-- TODO: 4 格截图或 30 秒演示视频 -->
+<p align="center">
+  <img alt="dashboard sessions detail — WeChat-replica chat in iPhone 17 Pro frame" src="docs/screenshots/chat-detail.png" width="380">
+</p>
+<p align="center"><sub>桌面 dashboard · 会话详情。每段微信 × Claude 对话回到 1:1 iPhone 复刻里看，不是 SaaS console。</sub></p>
 
 ---
 
@@ -43,6 +46,10 @@
 | 注意点 | bundle 没签名（Apple Dev ID + Windows EV 证书未配齐）—— 第一次开需要绕一次 OS 警告。Intel Mac 暂不支持（仅 Apple Silicon）。桌面 app 是个壳，调底层的 source-mode CLI，所以源码也得装一份（或设 `WECHAT_CC_ROOT`）| Bun 跑得起来的地方都行 |
 
 大多数人：抓桌面 bundle。下面是终端路径。
+
+![Wizard environment-check step — red rows show inline fix commands with copy buttons; hard-severity reds (Claude Code missing) get a left bar so the eye lands on the actually-blocking item first](docs/screenshots/wizard-doctor.png)
+
+> 装时少了 Claude Code、微信账号没绑——每行都告诉你怎么修，复制即用。Hard 级（agent backend 缺）的红有左竖条，因为它会让 daemon 起来后空跑；soft 级（账号没绑）随后再补也不影响装服务。
 
 ---
 
@@ -151,6 +158,8 @@ Opt-in 主动模式。`companion_enable` 之后，daemon 跑两个 scheduler：
 - 顶部：Claude 最近的几条观察 + 里程碑卡片（"打开才发现的小惊喜"机制；不 push）
 - 中部：可编辑的 per-chat markdown（`profile.md` / `preferences.md` / ...）
 - 底部：可折叠的 "Claude 的最近决策" 时间轴（push / skip / observation / milestone / SDK 错误）。点一行看 reasoning
+
+![Memory pane with profile.md loaded — observation card up top, file tree, editable markdown body, decisions timeline at the bottom](docs/screenshots/memory-pane.png)
 
 **会话 (Sessions)** —— 你和 Claude 共同的记录
 - 跨 session 全文搜索
