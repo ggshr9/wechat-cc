@@ -88,7 +88,7 @@ export async function loadAllAccounts(stateDir: string): Promise<Account[]> {
 
 export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }): IlinkAdapter {
   const ctx = makeIlinkContext(opts)
-  const { accounts, ctxStore, nameStore, acctStore, sessionState, pending, sweepTimer, projectsFile, resolveAccount } = ctx
+  const { accounts, ctxStore, nameStore, acctStore, sessionState, pending, sweepTimer, projectsFile, resolveAccount, assertChatRoutable } = ctx
 
   const voice = makeVoice(ctx)
   const companion = makeCompanion(ctx)
@@ -108,6 +108,10 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }
 
     async sendFile(chatId, filePath) {
       assertSendable(filePath)
+      // Fail before the CDN upload — without on-disk routing state, the
+      // subsequent ilink/sendmessage will fail anyway with a less helpful
+      // errcode. See unknownChatIdError() for the message.
+      assertChatRoutable(chatId)
       const acct = resolveAccount(chatId)
       const item = await buildMediaItemFromFile(filePath, chatId, acct.baseUrl, acct.token)
       const ctxToken = ctxStore.get(chatId)

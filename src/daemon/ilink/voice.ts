@@ -30,12 +30,19 @@ function providerFromConfig(cfg: VoiceConfig): TTSProvider {
 }
 
 export function makeVoice(ctx: IlinkContext): ToolDeps['voice'] {
-  const { stateDir, ctxStore, resolveAccount } = ctx
+  const { stateDir, ctxStore, resolveAccount, assertChatRoutable } = ctx
 
   return {
     async replyVoice(chatId, text) {
       const cfg = loadVoiceConfig(stateDir)
       if (!cfg) return { ok: false as const, reason: 'not_configured' }
+      // Fail fast before spending TTS synthesis time / CDN upload bandwidth
+      // on a chat we won't be able to deliver to.
+      try { assertChatRoutable(chatId) } catch (err) {
+        const errmsg = err instanceof Error ? err.message : String(err)
+        log('VOICE', `replyVoice REJECTED chat=${chatId}: ${errmsg}`)
+        return { ok: false as const, reason: errmsg }
+      }
       try {
         const provider = providerFromConfig(cfg)
         const { audio, mimeType } = await provider.synth(
