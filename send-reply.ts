@@ -9,10 +9,6 @@ import { join } from 'path'
 import { STATE_DIR, MAX_TEXT_CHUNK } from './config.ts'
 import { ilinkSendMessage, botTextMessage } from './ilink.ts'
 
-const ACCOUNTS_DIR = join(STATE_DIR, 'accounts')
-const CONTEXT_TOKENS_FILE = join(STATE_DIR, 'context_tokens.json')
-const USER_ACCOUNT_IDS_FILE = join(STATE_DIR, 'user_account_ids.json')
-
 export interface MinimalAccount {
   baseUrl: string
   token: string
@@ -28,12 +24,13 @@ function readJson<T>(path: string): T | null {
   catch { return null }
 }
 
-function loadAccounts(): MinimalAccount[] {
+function loadAccounts(stateDir: string): MinimalAccount[] {
+  const accountsDir = join(stateDir, 'accounts')
   let ids: string[]
-  try { ids = readdirSync(ACCOUNTS_DIR) } catch { return [] }
+  try { ids = readdirSync(accountsDir) } catch { return [] }
   const out: MinimalAccount[] = []
   for (const id of ids) {
-    const dir = join(ACCOUNTS_DIR, id)
+    const dir = join(accountsDir, id)
     try {
       const token = readFileSync(join(dir, 'token'), 'utf8').trim()
       const account = JSON.parse(readFileSync(join(dir, 'account.json'), 'utf8')) as { baseUrl?: string }
@@ -61,17 +58,28 @@ export function chunk(text: string, limit: number): string[] {
   return out
 }
 
-/** Send a text reply. Shared by MCP `reply` and `wechat-cc reply`. */
-export async function sendReplyOnce(chatId: string, text: string): Promise<SendReplyResult> {
+/**
+ * Send a text reply. Shared by MCP `reply` and `wechat-cc reply`.
+ *
+ * `stateDir` exists only for tests — the production callers always use the
+ * compile-time STATE_DIR; the override matches the same convention as
+ * defaultTerminalChatId() since bun test shares one process and env-based
+ * overrides don't reliably reach this module.
+ */
+export async function sendReplyOnce(
+  chatId: string,
+  text: string,
+  stateDir: string = STATE_DIR,
+): Promise<SendReplyResult> {
   if (!text) return { ok: false, error: 'empty text' }
 
-  const accounts = loadAccounts()
+  const accounts = loadAccounts(stateDir)
   if (accounts.length === 0) {
     return { ok: false, error: 'no accounts configured — run: wechat-cc setup' }
   }
 
-  const userAccountIds = readJson<Record<string, string>>(USER_ACCOUNT_IDS_FILE) ?? {}
-  const contextTokens = readJson<Record<string, string>>(CONTEXT_TOKENS_FILE) ?? {}
+  const userAccountIds = readJson<Record<string, string>>(join(stateDir, 'user_account_ids.json')) ?? {}
+  const contextTokens = readJson<Record<string, string>>(join(stateDir, 'context_tokens.json')) ?? {}
 
   const persistedAccountId = userAccountIds[chatId]
   const account =
@@ -79,6 +87,18 @@ export async function sendReplyOnce(chatId: string, text: string): Promise<SendR
     ?? accounts[0] // last-resort fallback to first account
 
   const ctxToken = contextTokens[chatId]
+
+  // ilink's sendmessage requires a per-chat context_token issued by the
+  // server when the user last messaged the bot. Without it, ilink rejects
+  // the request with errcode != 0 — a confusing failure for callers that
+  // just want to send. Detect the missing token here so the error names
+  // the actual cause + the user-actionable fix.
+  if (!ctxToken && !persistedAccountId) {
+    return {
+      ok: false,
+      error: `unknown chat_id ${chatId} — no contextToken or account routing on record. The user must send a WeChat message to the bot first so the daemon can capture session state.`,
+    }
+  }
 
   try {
     const chunks = chunk(text, MAX_TEXT_CHUNK)

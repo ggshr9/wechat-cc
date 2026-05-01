@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest'
-import { chunk } from './send-reply'
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { chunk, sendReplyOnce } from './send-reply'
 
 describe('chunk', () => {
   it('returns original text if under limit', () => {
@@ -47,5 +50,53 @@ describe('chunk', () => {
     const text = '你好世界这是一个测试的消息内容'
     const parts = chunk(text, 6)
     expect(parts.join('')).toBe(text.replace(/\n/g, ''))
+  })
+})
+
+describe('sendReplyOnce — preflight checks (no network)', () => {
+  let tmpDir: string
+
+  beforeAll(() => { tmpDir = mkdtempSync(join(tmpdir(), 'wechat-cc-send-reply-')) })
+  afterAll(() => { rmSync(tmpDir, { recursive: true, force: true }) })
+  beforeEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true })
+    mkdirSync(tmpDir, { recursive: true })
+  })
+
+  it('rejects empty text', async () => {
+    const r = await sendReplyOnce('u@chat', '', tmpDir)
+    expect(r).toEqual({ ok: false, error: 'empty text' })
+  })
+
+  it('rejects when no accounts directory exists', async () => {
+    const r = await sendReplyOnce('u@chat', 'hi', tmpDir)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toMatch(/no accounts configured/)
+  })
+
+  function seedOneAccount(stateDir: string): void {
+    const acctDir = join(stateDir, 'accounts', 'bot-1')
+    mkdirSync(acctDir, { recursive: true })
+    writeFileSync(join(acctDir, 'token'), 'fake-token')
+    writeFileSync(join(acctDir, 'account.json'), JSON.stringify({ baseUrl: 'https://example.invalid' }))
+  }
+
+  it('rejects unknown chat_id (no contextToken AND no account routing)', async () => {
+    seedOneAccount(tmpDir)
+    const r = await sendReplyOnce('stranger@chat', 'hi', tmpDir)
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.error).toMatch(/unknown chat_id stranger@chat/)
+      expect(r.error).toMatch(/send a WeChat message to the bot first/)
+    }
+  })
+
+  it('passes preflight when only userAccountIds is on record (recovers without contextToken)', async () => {
+    seedOneAccount(tmpDir)
+    writeFileSync(join(tmpDir, 'user_account_ids.json'), JSON.stringify({ 'known@chat': 'bot-1' }))
+    // Will fail at the network call but NOT at preflight — error is fetch-related, not preflight.
+    const r = await sendReplyOnce('known@chat', 'hi', tmpDir)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).not.toMatch(/unknown chat_id/)
   })
 })

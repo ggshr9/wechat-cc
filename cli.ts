@@ -54,6 +54,7 @@ export type CliArgs =
   | { cmd: 'sessions-delete'; alias: string; json: boolean }
   | { cmd: 'sessions-search'; query: string; json: boolean; limit: number; outFile?: string }
   | { cmd: 'logs'; tail: number; json: boolean }
+  | { cmd: 'reply'; chatId?: string; text?: string; json: boolean }
   | { cmd: 'update'; check: boolean; json: boolean }
   | { cmd: 'demo-seed'; chatId: string | null; json: boolean }
   | { cmd: 'demo-unseed'; chatId: string | null; json: boolean }
@@ -233,6 +234,21 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
         json: rest.includes('--json'),
       }
     }
+    case 'reply': {
+      // wechat-cc reply [--to <chat_id>] [text]
+      // text omitted → read from stdin (handled by the dispatch case below).
+      const json = rest.includes('--json')
+      const toIdx = rest.indexOf('--to')
+      const chatId = toIdx >= 0 ? rest[toIdx + 1] : undefined
+      const positional = rest.filter((arg, i) =>
+        arg !== '--json' && arg !== '--to' && (toIdx < 0 || i !== toIdx + 1),
+      )
+      const text = positional.length > 0 ? positional.join(' ') : undefined
+      const out: { cmd: 'reply'; chatId?: string; text?: string; json: boolean } = { cmd: 'reply', json }
+      if (chatId) out.chatId = chatId
+      if (text !== undefined) out.text = text
+      return out
+    }
     default: return { cmd: 'help' }
   }
 }
@@ -310,6 +326,13 @@ Usage:
                         companion default_chat_id if --chat-id omitted.
   wechat-cc demo unseed [--chat-id <id>] [--json]
                         Remove items written by \`demo seed\`. Idempotent.
+  wechat-cc reply [--to <chat_id>] [text] [--json]
+                        Send a text reply via WeChat. Reuses the daemon's
+                        on-disk state (contextToken + account routing) so
+                        recipient resolution matches the running daemon.
+                        --to omitted → most-recently-active chat.
+                        text omitted → read from stdin.
+                        Useful when the daemon's MCP server is unreachable.
   wechat-cc logs [--tail N] [--json]
                         Tail the daemon's channel.log. Default --tail 50.
                         --json returns parsed entries (timestamp, tag,
@@ -828,11 +851,52 @@ async function main() {
       console.log(parsed.json ? JSON.stringify({ ok: true, ...result }, null, 2) : JSON.stringify(result))
       return
     }
+    case 'reply': {
+      // CLI fallback for the MCP `reply` tool — same code path as the
+      // daemon (sendReplyOnce reads state from disk), so recipient
+      // resolution + session continuity are identical whether the
+      // daemon is running or not.
+      const { sendReplyOnce, defaultTerminalChatId } = await import('./send-reply.ts')
+      const emitFailure = (error: string): void => {
+        if (parsed.json) console.log(JSON.stringify({ ok: false, error }))
+        else console.error(`reply failed: ${error}`)
+        process.exit(1)
+      }
+      const chatId = parsed.chatId ?? defaultTerminalChatId() ?? undefined
+      if (!chatId) {
+        emitFailure('no chat resolved — pass --to <chat_id> or send a WeChat message first so the daemon records one')
+        return
+      }
+      const text = parsed.text ?? (await readStdin()).trim()
+      if (!text) {
+        emitFailure('no text — pass it as an argument or pipe it on stdin')
+        return
+      }
+      const result = await sendReplyOnce(chatId, text)
+      if (!result.ok) {
+        emitFailure(result.error)
+        return
+      }
+      if (parsed.json) {
+        console.log(JSON.stringify({ ok: true, chat_id: chatId, chunks: result.chunks, account: result.account }))
+      } else {
+        console.log(`Sent: ${result.chunks} chunk(s) via account ${result.account} → ${chatId}`)
+      }
+      return
+    }
     case 'help': {
       console.log(HELP_TEXT)
       return
     }
   }
+}
+
+/** Read stdin to EOF. Returns '' immediately if stdin is a TTY. */
+async function readStdin(): Promise<string> {
+  if (process.stdin.isTTY) return ''
+  const chunks: Buffer[] = []
+  for await (const c of process.stdin) chunks.push(c as Buffer)
+  return Buffer.concat(chunks).toString('utf8')
 }
 
 if (import.meta.main) {
