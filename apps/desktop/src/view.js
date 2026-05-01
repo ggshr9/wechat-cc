@@ -10,16 +10,22 @@ export function doctorRows(report) {
   const access = report.checks.access
   const provider = report.checks.provider
   const daemon = report.checks.daemon
-  return [
-    ["Bun", report.checks.bun],
-    ["Git", report.checks.git],
-    ["Claude", report.checks.claude],
-    ["Codex", report.checks.codex],
-    ["微信账号", { ...accounts, path: `${accounts.count} 个账号` }],
-    ["Allowlist", { ...access, path: `${access.allowFromCount} 个用户` }],
-    ["Provider", { ...provider, path: provider.provider }],
-    ["Daemon", { ok: daemon.alive, path: daemon.alive ? `pid ${daemon.pid}` : "stopped" }],
-  ]
+  // In compiled-bundle mode the sidecar carries its own bun runtime and
+  // never shells out to git, so showing those rows to a .msi/.dmg user
+  // surfaces a developer-only concern and (worse) tells Win 小白 to run
+  // a Unix-only `curl | bash` install command. Hide them entirely.
+  const rows = []
+  if (report.runtime !== "compiled-bundle") {
+    rows.push(["Bun", report.checks.bun])
+    rows.push(["Git", report.checks.git])
+  }
+  rows.push(["Claude", report.checks.claude])
+  rows.push(["Codex", report.checks.codex])
+  rows.push(["微信账号", { ...accounts, path: `${accounts.count} 个账号` }])
+  rows.push(["Allowlist", { ...access, path: `${access.allowFromCount} 个用户` }])
+  rows.push(["Provider", { ...provider, path: provider.provider }])
+  rows.push(["Daemon", { ok: daemon.alive, path: daemon.alive ? `pid ${daemon.pid}` : "stopped" }])
+  return rows
 }
 
 // Compute the next QR-screen UI state from an incoming setup-poll result.
@@ -84,7 +90,14 @@ export function initialMode(report) {
   const hasAccount = report.checks.accounts.count > 0
   const serviceInstalled = !!report.checks.service?.installed
   if (hasAccount && report.checks.provider.ok && serviceInstalled) return { mode: "dashboard" }
-  if (!report.checks.bun.ok || !report.checks.git.ok) return { mode: "wizard", step: "doctor" }
+  // bun/git only block routing in source mode; in compiled-bundle the
+  // sidecar is self-contained, so a user without system bun on their
+  // Windows machine should NOT get parked on the env-check screen — they
+  // should land where the actual missing piece is (provider / wechat /
+  // service).
+  if (report.runtime !== "compiled-bundle" && (!report.checks.bun.ok || !report.checks.git.ok)) {
+    return { mode: "wizard", step: "doctor" }
+  }
   if (!report.checks.provider.ok) return { mode: "wizard", step: "provider" }
   if (!hasAccount) return { mode: "wizard", step: "wechat" }
   return { mode: "wizard", step: "service" }

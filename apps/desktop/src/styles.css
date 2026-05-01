@@ -346,6 +346,34 @@ input { font: inherit; color: inherit; }
 
 /* env-list (doctor) */
 .env-list { padding: 4px 0; }
+.env-notice {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 10px 16px;
+  margin: 4px 8px 8px;
+  background: var(--soft-bg, rgba(180, 200, 230, 0.08));
+  border: 1px solid var(--hair);
+  border-left: 2px solid var(--ink-3);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.env-notice .ic {
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--ink-3);
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  font-style: normal;
+  font-family: var(--mono);
+}
+.env-notice .nm { font-weight: 500; color: var(--ink); margin-bottom: 2px; }
+.env-notice .val { color: var(--ink-2); line-height: 1.5; max-width: none; text-align: left; font-family: var(--sans, inherit); }
 .env-row {
   display: grid;
   grid-template-columns: 16px 1fr auto;
