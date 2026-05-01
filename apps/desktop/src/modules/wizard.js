@@ -15,7 +15,7 @@ const STEP_ORDER = ["doctor", "provider", "wechat", "service"]
 export function renderDoctorWizard(report) {
   const list = document.getElementById("checks")
   if (!list) return
-  list.innerHTML = doctorRows(report).map(([name, check]) => {
+  const rowsHtml = doctorRows(report).map(([name, check]) => {
     const ic = check.ok
       ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-7"/></svg>'
       : '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l8 8M12 4l-8 8"/></svg>'
@@ -29,9 +29,26 @@ export function renderDoctorWizard(report) {
       </div>
     `
   }).join("")
+  // WSL hint preempts the inevitable "I have Claude in WSL, why doesn't
+  // wechat-cc see it?" question. Honest about the v 当前 limitation; a
+  // proper Windows-GUI ↔ WSL-daemon integration is on the roadmap.
+  list.innerHTML = renderWslNotice(report) + rowsHtml
   document.getElementById("claude-meta").textContent = report.checks.claude.ok ? report.checks.claude.path : "未检测到"
   document.getElementById("codex-meta").textContent = report.checks.codex.ok ? report.checks.codex.path : "未检测到"
   updateFooterStatus(report.checks.daemon)
+}
+
+function renderWslNotice(report) {
+  if (!report.wslDetected) return ""
+  return `
+    <div class="env-notice env-notice-wsl">
+      <span class="ic">i</span>
+      <div>
+        <div class="nm">检测到 WSL</div>
+        <div class="val">当前版本只识别 Windows 端的 Claude / Codex。如果你的 Claude Code 装在 WSL 里，先在 Windows 端再装一份；WSL 集成在路上。</div>
+      </div>
+    </div>
+  `
 }
 
 export function updateFooterStatus(daemon) {
@@ -84,8 +101,8 @@ export const STEP_ORDER_EXPORTED = STEP_ORDER
 // One-line fix hint under a failed env check. Renders ONE of:
 //   - command: monospace + a 复制 button
 //   - action: plain instructional sentence
-//   - link: opens externally
-// Combinations (command + link) show command first, link as small "?".
+//   - link: opens externally — labelled "安装指南 ↗" so 小白 know where it
+//           goes (a lone "↗" looks like decoration).
 // Kept tight — no headings, no expandable detail, no long copy.
 function renderFixHint(fix) {
   if (!fix) return ""
@@ -95,7 +112,7 @@ function renderFixHint(fix) {
     parts.push(`<code class="fix-cmd">${safe}</code><button class="fix-copy" data-copy="${safe}" type="button">复制</button>`)
   }
   if (fix.action) parts.push(`<span class="fix-act">${escapeHtml(fix.action)}</span>`)
-  if (fix.link) parts.push(`<a class="fix-link" href="${escapeHtml(fix.link)}" target="_blank" rel="noopener">↗</a>`)
+  if (fix.link) parts.push(`<a class="fix-link" href="${escapeHtml(fix.link)}" target="_blank" rel="noopener">安装指南 ↗</a>`)
   if (parts.length === 0) return ""
   return `<div class="fix">${parts.join("")}</div>`
 }

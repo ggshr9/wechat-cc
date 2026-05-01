@@ -1,11 +1,12 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { platform as osPlatform } from 'node:os'
 import { STATE_DIR } from './config'
 import { findOnPath } from './util'
 import { loadAgentConfig, type AgentConfig } from './agent-config'
 import { buildServicePlan, isServiceInstalled, type ServiceKind } from './service-manager'
-import { compiledBinaryPath, compiledRepoRoot } from './runtime-info'
+import { compiledBinaryPath, compiledRepoRoot, isCompiledBundle } from './runtime-info'
 
 export interface BoundAccount {
   id: string
@@ -35,6 +36,8 @@ export interface ServiceSnapshot {
   kind: ServiceKind
 }
 
+export type Runtime = 'compiled-bundle' | 'source'
+
 export interface DoctorDeps {
   stateDir: string
   findOnPath: (cmd: string) => string | null
@@ -45,6 +48,19 @@ export interface DoctorDeps {
   readExpiredBots: () => ExpiredBotEntry[]
   daemon: () => DaemonSnapshot
   service: () => ServiceSnapshot
+  // 'compiled-bundle' = the bun-compiled wechat-cc-cli sidecar inside the
+  // Tauri desktop bundle. In that mode the CLI carries its own bun runtime
+  // and never touches the source tree — so a missing system `bun` or `git`
+  // doesn't actually block anything end-user-facing. 'source' = `bun cli.ts`
+  // ran from a cloned repo, where bun + git ARE real preconditions.
+  // Defaults to 'source' when omitted (back-compat with existing callers
+  // and tests).
+  runtime?: Runtime
+  // True on Windows when the `wsl` binary is on PATH. Used by the GUI to
+  // surface a "we detected WSL but currently only support Windows-native
+  // Claude" hint — preempts the support question from users who run
+  // Claude Code in WSL.
+  platform?: NodeJS.Platform
 }
 
 export type FixHint = { command?: string; action?: string; link?: string }
@@ -64,6 +80,14 @@ export interface DoctorCheckBase {
 export interface DoctorReport {
   ready: boolean
   stateDir: string
+  // Source vs compiled-bundle. The GUI uses this to drop bun/git rows from
+  // the env-check list and skip parking at the doctor step purely on bun/git
+  // misses — those are source-mode developer concerns, not end-user ones.
+  runtime: Runtime
+  // True iff platform=win32 AND a `wsl` binary is on PATH. Drives the
+  // wizard's "WSL detected" hint. We don't probe inside WSL — finding the
+  // binary is enough signal to soften user expectations.
+  wslDetected: boolean
   checks: {
     bun: DoctorCheckBase & { path: string | null }
     git: DoctorCheckBase & { path: string | null }
@@ -81,6 +105,8 @@ export interface DoctorReport {
 }
 
 export function analyzeDoctor(deps: DoctorDeps): DoctorReport {
+  const runtime: Runtime = deps.runtime ?? 'source'
+  const isBundle = runtime === 'compiled-bundle'
   const bun = deps.findOnPath('bun')
   const git = deps.findOnPath('git')
   const claude = deps.findOnPath('claude')
@@ -91,10 +117,18 @@ export function analyzeDoctor(deps: DoctorDeps): DoctorReport {
   const daemon = deps.daemon()
   const service = deps.service()
   const providerBinary = agent.provider === 'codex' ? codex : claude
+  // WSL is a Windows-only concept; checking findOnPath('wsl') on non-win32
+  // would risk false positives (some Linux distros ship `wsl` as an unrelated
+  // helper). Gate strictly on platform.
+  const wslDetected = (deps.platform ?? 'linux') === 'win32' && !!deps.findOnPath('wsl')
 
   const nextActions: string[] = []
-  if (!bun) nextActions.push('install_bun')
-  if (!git) nextActions.push('install_git')
+  // Source-mode users (running `bun cli.ts ...` from a clone) genuinely need
+  // bun + git on PATH. Compiled-bundle users get them from inside the
+  // sidecar — surfacing "install bun" to a .msi user is a leak of dev-mode
+  // contract.
+  if (!isBundle && !bun) nextActions.push('install_bun')
+  if (!isBundle && !git) nextActions.push('install_git')
   if (!providerBinary) nextActions.push(agent.provider === 'codex' ? 'install_codex' : 'install_claude')
   if (accounts.length === 0) nextActions.push('run_wechat_setup')
   if (accounts.length > 0 && access.allowFrom.length === 0) nextActions.push('fix_access_allowlist')
@@ -106,20 +140,28 @@ export function analyzeDoctor(deps: DoctorDeps): DoctorReport {
   //     reply fails — the "fake success" trap)
   //   - non-selected backend missing → soft (you'd only use it after
   //     `wechat-cc provider set`, currently irrelevant)
-  //   - bun/git missing → soft on v0.4+ (compiled binary doesn't need
-  //     them at runtime; hint kept for source-mode users)
+  //   - bun/git missing in source mode → soft (CLI source needs them)
+  //   - bun/git missing in compiled-bundle → ok=true, the GUI hides them
+  //     entirely (sidecar carries its own bun runtime, no git operations
+  //     possible against a bundle anyway)
   //   - accounts/access missing → soft (daemon runs idle, fixable any
   //     time via setup)
   const claudeIsActive = agent.provider === 'claude'
   const codexIsActive = agent.provider === 'codex'
   const checks = {
     bun: {
-      ok: !!bun, path: bun,
-      ...(bun ? {} : { severity: 'soft' as const, fix: { command: 'curl -fsSL https://bun.sh/install | bash' } }),
+      // Bundle mode: report ok=true regardless of system bun, since the
+      // sidecar doesn't depend on it. The GUI also filters this row by
+      // `report.runtime`, so end-users never see it; ok=true is the safe
+      // value if the row ever leaks through (e.g. JSON consumers).
+      ok: isBundle ? true : !!bun,
+      path: bun,
+      ...(isBundle || bun ? {} : { severity: 'soft' as const, fix: { command: 'curl -fsSL https://bun.sh/install | bash' } }),
     },
     git: {
-      ok: !!git, path: git,
-      ...(git ? {} : { severity: 'soft' as const }),
+      ok: isBundle ? true : !!git,
+      path: git,
+      ...(isBundle || git ? {} : { severity: 'soft' as const }),
     },
     claude: {
       ok: !!claude, path: claude,
@@ -169,6 +211,9 @@ export function analyzeDoctor(deps: DoctorDeps): DoctorReport {
     service,
   }
 
+  // ready formula: same shape source/bundle, but bun/git slots auto-eval
+  // to true in bundle mode (see checks construction above), so this stays
+  // the single expression of "all green."
   return {
     ready: checks.bun.ok
       && checks.git.ok
@@ -177,6 +222,8 @@ export function analyzeDoctor(deps: DoctorDeps): DoctorReport {
       && checks.provider.ok
       && daemon.alive,
     stateDir: deps.stateDir,
+    runtime,
+    wslDetected,
     checks,
     userNames: deps.readUserNames(),
     expiredBots: deps.readExpiredBots(),
@@ -235,6 +282,8 @@ export function defaultDoctorDeps(stateDir = STATE_DIR): DoctorDeps {
     readExpiredBots: () => readExpiredBots(stateDir),
     daemon: () => readDaemon(stateDir),
     service: () => defaultServiceSnapshot(stateDir),
+    runtime: isCompiledBundle() ? 'compiled-bundle' : 'source',
+    platform: osPlatform(),
   }
 }
 
@@ -346,9 +395,14 @@ function safeReaddir(path: string): string[] {
 
 export function printDoctor(report: DoctorReport): void {
   console.log(report.ready ? 'wechat-cc: ready' : 'wechat-cc: needs attention')
+  console.log(`runtime: ${report.runtime}`)
   console.log(`state: ${report.stateDir}`)
-  console.log(`bun: ${fmt(report.checks.bun)}`)
-  console.log(`git: ${fmt(report.checks.git)}`)
+  // Bundle mode owns its own bun runtime; printing "bun: ok (some path)"
+  // would invite confusion ("which bun?"). Skip these two rows entirely.
+  if (report.runtime === 'source') {
+    console.log(`bun: ${fmt(report.checks.bun)}`)
+    console.log(`git: ${fmt(report.checks.git)}`)
+  }
   console.log(`claude: ${fmt(report.checks.claude)}`)
   console.log(`codex: ${fmt(report.checks.codex)}`)
   console.log(`provider: ${report.checks.provider.provider}${report.checks.provider.model ? ` (${report.checks.provider.model})` : ''}`)
@@ -356,6 +410,7 @@ export function printDoctor(report: DoctorReport): void {
   console.log(`access: ${report.checks.access.dmPolicy}, allowed=${report.checks.access.allowFromCount}`)
   console.log(`service: ${report.checks.service.installed ? `installed (${report.checks.service.kind})` : 'missing'}`)
   console.log(`daemon: ${report.checks.daemon.alive ? `running pid=${report.checks.daemon.pid}` : report.checks.daemon.pid ? `stale pid=${report.checks.daemon.pid}` : 'stopped'}`)
+  if (report.wslDetected) console.log('wsl: detected (Windows-native Claude only — WSL integration on roadmap)')
   if (report.nextActions.length) console.log(`next: ${report.nextActions.join(', ')}`)
 }
 

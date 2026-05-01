@@ -70,6 +70,30 @@ describe('doctorRows', () => {
     })
     expect(rows[7]![1]).toEqual({ ok: true, path: 'pid 4321' })
   })
+
+  // Compiled-bundle mode: the .msi/.dmg sidecar carries its own bun runtime
+  // and doesn't shell out to git, so showing those rows leaks a dev-mode
+  // concern (and gives Win 小白 a Unix-only `curl | bash` install command).
+  // Filter them out — wizard's first screen should only surface what the
+  // end-user can actually act on.
+  it('compiled-bundle: drops Bun + Git rows entirely', () => {
+    const rows = doctorRows({
+      runtime: 'compiled-bundle',
+      checks: {
+        bun: { ok: true, path: null },  // synthesized true in bundle mode
+        git: { ok: true, path: null },
+        claude: { ok: false, path: null },
+        codex: { ok: false, path: null },
+        accounts: { ok: false, count: 0, items: [] },
+        access: { ok: false, allowFromCount: 0 },
+        provider: { ok: false, provider: 'claude' },
+        daemon: { alive: false, pid: null },
+      },
+    })
+    expect(rows.map((r: [string, unknown]) => r[0])).toEqual([
+      'Claude', 'Codex', '微信账号', 'Allowlist', 'Provider', 'Daemon',
+    ])
+  })
 })
 
 describe('pollAdvance', () => {
@@ -196,6 +220,25 @@ describe('initialMode', () => {
         service: { installed: false, kind: 'scheduled-task' },
       },
     }))).toEqual({ mode: 'wizard', step: 'service' })
+  })
+
+  // Bundle mode: bun/git missing must NOT route to doctor — the sidecar
+  // doesn't need them. The user should land where the actual missing
+  // piece is (provider/wechat/service). This was a real bug — Win 小白
+  // got stuck on the env-check screen forever even though their .msi
+  // would have worked.
+  it('compiled-bundle: bun missing does NOT park at doctor', () => {
+    expect(initialMode(fakeReport({
+      runtime: 'compiled-bundle',
+      checks: { bun: { ok: false, path: null } },
+    }))).toEqual({ mode: 'wizard', step: 'wechat' })
+  })
+
+  it('compiled-bundle: git missing does NOT park at doctor', () => {
+    expect(initialMode(fakeReport({
+      runtime: 'compiled-bundle',
+      checks: { git: { ok: false, path: null } },
+    }))).toEqual({ mode: 'wizard', step: 'wechat' })
   })
 })
 

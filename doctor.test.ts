@@ -150,4 +150,88 @@ describe('doctor installer JSON', () => {
       installed: true, alive: false, pid: 999, state: 'stale',
     })
   })
+
+  // Compiled-bundle mode: the wechat-cc-cli sidecar inside the desktop
+  // bundle carries its own bun runtime and never needs git, so missing
+  // bun/git on the host should NOT block install or fail `ready`. These
+  // tests pin that behavior so future refactors don't quietly re-leak the
+  // dev-mode contract back into the GUI env-check.
+  it('compiled-bundle: missing bun + git do not block ready or contribute to nextActions', () => {
+    const report = analyzeDoctor({
+      stateDir: '/state',
+      findOnPath: (cmd) => cmd === 'claude' ? '/c/Program Files/claude/claude.exe' : null,
+      readAccounts: () => [{ id: 'bot-1', botId: 'bot-1', userId: 'u1', baseUrl: 'https://ilink' }],
+      readAccess: () => ({ dmPolicy: 'allowlist', allowFrom: ['u1'] }),
+      readAgentConfig: () => ({ provider: 'claude', dangerouslySkipPermissions: true, autoStart: false }),
+      readUserNames: () => ({}),
+      readExpiredBots: () => [],
+      daemon: () => ({ alive: true, pid: 7 }),
+      service: installedSystemd,
+      runtime: 'compiled-bundle',
+      platform: 'win32',
+    })
+    expect(report.runtime).toBe('compiled-bundle')
+    expect(report.checks.bun.ok).toBe(true)  // synthesized, host bun absent
+    expect(report.checks.git.ok).toBe(true)
+    expect(report.checks.bun.path).toBeNull()  // no system bun was found
+    expect(report.checks.bun.fix).toBeUndefined()  // no bogus install hint
+    expect(report.checks.git.fix).toBeUndefined()
+    expect(report.ready).toBe(true)
+    expect(report.nextActions).not.toContain('install_bun')
+    expect(report.nextActions).not.toContain('install_git')
+  })
+
+  it('compiled-bundle on Windows with WSL detected → wslDetected=true', () => {
+    const report = analyzeDoctor({
+      stateDir: '/state',
+      findOnPath: (cmd) => cmd === 'wsl' ? 'C:\\Windows\\System32\\wsl.exe' : null,
+      readAccounts: () => [],
+      readAccess: () => ({ dmPolicy: 'allowlist', allowFrom: [] }),
+      readAgentConfig: () => ({ provider: 'claude', dangerouslySkipPermissions: true, autoStart: false }),
+      readUserNames: () => ({}),
+      readExpiredBots: () => [],
+      daemon: () => ({ alive: false, pid: null }),
+      service: missingSystemd,
+      runtime: 'compiled-bundle',
+      platform: 'win32',
+    })
+    expect(report.wslDetected).toBe(true)
+  })
+
+  it('non-Windows host: wsl on PATH does NOT trigger wslDetected (no false positives)', () => {
+    // Some Linux distros ship an unrelated `wsl` helper. Gate strictly on
+    // platform so a Linux source-mode user doesn't see a "WSL detected"
+    // banner that makes no sense for them.
+    const report = analyzeDoctor({
+      stateDir: '/state',
+      findOnPath: () => '/usr/bin/wsl',
+      readAccounts: () => [],
+      readAccess: () => ({ dmPolicy: 'allowlist', allowFrom: [] }),
+      readAgentConfig: () => ({ provider: 'claude', dangerouslySkipPermissions: true, autoStart: false }),
+      readUserNames: () => ({}),
+      readExpiredBots: () => [],
+      daemon: () => ({ alive: false, pid: null }),
+      service: missingSystemd,
+      platform: 'linux',
+    })
+    expect(report.wslDetected).toBe(false)
+  })
+
+  it('default runtime is "source" (back-compat for callers that omit it)', () => {
+    const report = analyzeDoctor({
+      stateDir: '/state',
+      findOnPath: () => null,
+      readAccounts: () => [],
+      readAccess: () => ({ dmPolicy: 'allowlist', allowFrom: [] }),
+      readAgentConfig: () => ({ provider: 'claude', dangerouslySkipPermissions: true, autoStart: false }),
+      readUserNames: () => ({}),
+      readExpiredBots: () => [],
+      daemon: () => ({ alive: false, pid: null }),
+      service: missingSystemd,
+    })
+    expect(report.runtime).toBe('source')
+    // Source mode: bun missing → install_bun in nextActions (the existing
+    // contract — bundle mode is the deviation, not the default).
+    expect(report.nextActions).toContain('install_bun')
+  })
 })
