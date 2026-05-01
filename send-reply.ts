@@ -19,6 +19,16 @@ export type SendReplyResult =
   | { ok: true; chunks: number; account: string }
   | { ok: false; error: string }
 
+/**
+ * Single source of truth for the "chat has no on-disk routing state" error.
+ * Shared between sendReplyOnce (CLI/standalone) and the daemon's IlinkContext
+ * so all outbound paths surface the same actionable message instead of
+ * leaking ilink server errcodes to the user.
+ */
+export function unknownChatIdError(chatId: string): string {
+  return `unknown chat_id ${chatId} — no contextToken or account routing on record. The user must send a WeChat message to the bot first so the daemon can capture session state.`
+}
+
 function readJson<T>(path: string): T | null {
   try { return JSON.parse(readFileSync(path, 'utf8')) as T }
   catch { return null }
@@ -94,10 +104,7 @@ export async function sendReplyOnce(
   // just want to send. Detect the missing token here so the error names
   // the actual cause + the user-actionable fix.
   if (!ctxToken && !persistedAccountId) {
-    return {
-      ok: false,
-      error: `unknown chat_id ${chatId} — no contextToken or account routing on record. The user must send a WeChat message to the bot first so the daemon can capture session state.`,
-    }
+    return { ok: false, error: unknownChatIdError(chatId) }
   }
 
   try {

@@ -246,6 +246,38 @@ describe('makeIlinkAdapter (composed)', () => {
     if (!r.ok) expect(r.reason).toBe('not_configured')
   })
 
+  it('voice.replyVoice rejects unknown chat_id with actionable error (no TTS spent)', async () => {
+    // Set up voice config so the not_configured branch doesn't short-circuit.
+    const stateDir = newStateDir()
+    const { saveVoiceConfig } = await import('./tts/voice-config')
+    await saveVoiceConfig(stateDir, {
+      provider: 'http_tts',
+      base_url: 'http://invalid.local/v1',
+      model: 'fake',
+      default_voice: 'default',
+      saved_at: '2026-05-01T00:00:00Z',
+    })
+    const adapter = makeIlinkAdapter({ stateDir, accounts: [acct] })
+    const r = await adapter.voice.replyVoice('stranger@chat', 'hello')
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.reason).toMatch(/unknown chat_id stranger@chat/)
+      expect(r.reason).toMatch(/send a WeChat message to the bot first/)
+    }
+  })
+
+  it('sendFile throws actionable error for unknown chat_id (preflight before CDN upload)', async () => {
+    const adapter = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct] })
+    // Use a real tmp file so assertSendable passes — error must come from
+    // the routing preflight, not the file-existence check.
+    const { mkdtempSync, writeFileSync } = await import('node:fs')
+    const dir = mkdtempSync(join(tmpdir(), 'wcc-sendfile-'))
+    const tmpFile = join(dir, 'note.txt')
+    writeFileSync(tmpFile, 'hi')
+    await expect(adapter.sendFile('stranger@chat', tmpFile))
+      .rejects.toThrow(/unknown chat_id stranger@chat.*send a WeChat message to the bot first/)
+  })
+
   it('companion.enable creates config + returns welcome on first call (no personas)', async () => {
     const stateDir = mkdtempSync(join(tmpdir(), 'wcc-comp-'))
     const adapter = makeIlinkAdapter({ stateDir, accounts: [acct] })

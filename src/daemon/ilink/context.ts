@@ -10,6 +10,7 @@ import { mkdirSync } from 'node:fs'
 import { makeStateStore, type StateStore } from '../state-store'
 import { makeSessionStateStore, type SessionStateStore } from '../session-state'
 import { PendingPermissions } from '../pending-permissions'
+import { unknownChatIdError } from '../../../send-reply'
 
 export interface Account {
   id: string
@@ -43,6 +44,18 @@ export interface IlinkContext {
   lastActiveRef: { current: string | null }
 
   resolveAccount(chatId: string): Account
+  /**
+   * Throw with a user-actionable message when this chat has no on-disk
+   * routing state — i.e. neither a captured contextToken nor a persisted
+   * account routing. Without one of those, ilink's sendmessage rejects
+   * the call with a confusing errcode. Call this at the top of any
+   * outbound send (text/voice/file) so the caller sees the real cause
+   * + the fix ("user must message the bot first").
+   *
+   * Error string is unknownChatIdError() from send-reply.ts so it matches
+   * the CLI's sendReplyOnce error verbatim — single source of truth.
+   */
+  assertChatRoutable(chatId: string): void
 }
 
 export function makeIlinkContext(opts: { stateDir: string; accounts: Account[] }): IlinkContext {
@@ -66,6 +79,12 @@ export function makeIlinkContext(opts: { stateDir: string; accounts: Account[] }
     return found ?? accounts[0] ?? (() => { throw new Error('no accounts configured') })()
   }
 
+  function assertChatRoutable(chatId: string): void {
+    if (!ctxStore.get(chatId) && !acctStore.get(chatId)) {
+      throw new Error(unknownChatIdError(chatId))
+    }
+  }
+
   return {
     stateDir,
     accounts,
@@ -80,5 +99,6 @@ export function makeIlinkContext(opts: { stateDir: string; accounts: Account[] }
     typingTTLMs: 60_000,
     lastActiveRef: { current: null },
     resolveAccount,
+    assertChatRoutable,
   }
 }
