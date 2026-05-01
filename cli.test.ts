@@ -136,6 +136,27 @@ describe('parseCliArgs', () => {
     expect(parseCliArgs(['update', '--check'])).toEqual({ cmd: 'update', check: true, json: false })
     expect(parseCliArgs(['update', '--check', '--json'])).toEqual({ cmd: 'update', check: true, json: true })
   })
+
+  it('parses reply with text positional', () => {
+    expect(parseCliArgs(['reply', 'hello'])).toEqual({
+      cmd: 'reply', text: 'hello', json: false,
+    })
+  })
+  it('parses reply with --to and multi-word text', () => {
+    expect(parseCliArgs(['reply', '--to', 'u@chat', 'hello', 'world'])).toEqual({
+      cmd: 'reply', chatId: 'u@chat', text: 'hello world', json: false,
+    })
+  })
+  it('parses reply with --json and no text (stdin path)', () => {
+    expect(parseCliArgs(['reply', '--json'])).toEqual({
+      cmd: 'reply', json: true,
+    })
+  })
+  it('parses reply with --to but no text', () => {
+    expect(parseCliArgs(['reply', '--to', 'u@chat'])).toEqual({
+      cmd: 'reply', chatId: 'u@chat', json: false,
+    })
+  })
 })
 
 describe('events list', () => {
