@@ -1,0 +1,4 @@
+# Auto-request review from @ggshr9 on every PR. Branch protection
+# requires at least one Code Owner approval before merge — this is the
+# default safety net for any PR that lands on master.
+*       @ggshr9
