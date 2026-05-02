@@ -11,7 +11,7 @@ import { findOnPath } from '../../util'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { makeMemoryFS } from './memory/fs-api'
+import { makeMemoryFS, type MemoryFS } from './memory/fs-api'
 import { makeSessionStore } from '../core/session-store'
 import { homedir } from 'node:os'
 import { loadAgentConfig } from '../../agent-config'
@@ -76,6 +76,14 @@ export interface BootstrapDeps {
     baseUrl: string
     tokenFilePath: string
   }
+  /**
+   * MemoryFS instance to share across the legacy in-process MCP server
+   * AND the standalone wechat-mcp stdio server. When omitted, buildBootstrap
+   * creates one rooted at <stateDir>/memory/ (preserves v0.x behaviour).
+   * P1.B B2 wires main.ts to construct it once and pass it both to
+   * internal-api (so memory_* HTTP routes work) and here.
+   */
+  memoryFS?: MemoryFS
 }
 
 export interface Bootstrap {
@@ -124,7 +132,9 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
   })
   // Claude's long-term memory — sandboxed to <stateDir>/memory/. Claude owns
   // layout and organization; this module only enforces path safety + .md-only.
-  const memoryFS = makeMemoryFS({ rootDir: join(deps.stateDir, 'memory') })
+  // Caller may inject a pre-built MemoryFS so the same instance is shared
+  // with internal-api's memory_* endpoints (RFC 03 P1.B B2).
+  const memoryFS = deps.memoryFS ?? makeMemoryFS({ rootDir: join(deps.stateDir, 'memory') })
 
   const toolDeps: ToolDeps = {
     sendReply: deps.ilink.sendMessage,

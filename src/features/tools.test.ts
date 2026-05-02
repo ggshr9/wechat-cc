@@ -220,39 +220,10 @@ describe('buildWechatMcpServer', () => {
     expect(deps.companion.snooze).toHaveBeenCalledWith(60)
   })
 
-  it('memory_read forwards path', async () => {
-    const deps = makeDeps()
-    deps.memory.read = vi.fn(() => '# hi\ncontent')
-    const { handlers } = buildWechatMcpServer(deps)
-    const out = await handlers.memory_read({ path: 'profile.md' })
-    expect(deps.memory.read).toHaveBeenCalledWith('profile.md')
-    expect(extractText(out)).toContain('hi')
-  })
-
-  it('memory_read returns exists:false for missing', async () => {
-    const deps = makeDeps()
-    deps.memory.read = vi.fn(() => null)
-    const { handlers } = buildWechatMcpServer(deps)
-    const out = await handlers.memory_read({ path: 'nope.md' })
-    expect(extractText(out)).toContain('"exists":false')
-  })
-
-  it('memory_write forwards path + content', async () => {
-    const deps = makeDeps()
-    deps.memory.write = vi.fn()
-    const { handlers } = buildWechatMcpServer(deps)
-    await handlers.memory_write({ path: 'notes/x.md', content: 'hello' })
-    expect(deps.memory.write).toHaveBeenCalledWith('notes/x.md', 'hello')
-  })
-
-  it('memory_list returns file array', async () => {
-    const deps = makeDeps()
-    deps.memory.list = vi.fn(() => ['a.md', 'b/c.md'])
-    const { handlers } = buildWechatMcpServer(deps)
-    const out = await handlers.memory_list({})
-    expect(extractText(out)).toContain('a.md')
-    expect(extractText(out)).toContain('b/c.md')
-  })
+  // memory_read / memory_write / memory_list tests moved to:
+  //   - src/daemon/internal-api.test.ts          (route handlers)
+  //   - src/mcp-servers/wechat/integration.test.ts (end-to-end stdio)
+  // when these tools were extracted out of the in-process MCP in P1.B B2.
 })
 
 function extractText(result: unknown): string {

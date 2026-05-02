@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { createInternalApi, type InternalApi } from '../../daemon/internal-api'
+import { makeMemoryFS } from '../../daemon/memory/fs-api'
 
 /**
  * P1.A end-to-end: this test wires up the complete provider→stdio MCP→
@@ -56,7 +57,8 @@ describe('wechat-mcp stdio integration', () => {
   })
 
   async function bootChain(): Promise<{ client: Client }> {
-    api = createInternalApi({ stateDir, daemonPid: 7777 })
+    const memory = makeMemoryFS({ rootDir: join(stateDir, 'memory') })
+    api = createInternalApi({ stateDir, daemonPid: 7777, memory })
     const { port, tokenFilePath } = await api.start()
 
     const transport = new StdioClientTransport({
@@ -99,6 +101,65 @@ describe('wechat-mcp stdio integration', () => {
     expect(textBlock).toBeDefined()
     const parsed = JSON.parse(textBlock!.text!) as { ok: boolean; daemon_pid: number }
     expect(parsed).toEqual({ ok: true, daemon_pid: 7777 })
+  })
+
+  it('memory_write → memory_read round-trips content through stdio + HTTP + MemoryFS', async () => {
+    const { client } = await bootChain()
+
+    const writeResult = await client.callTool({
+      name: 'memory_write',
+      arguments: { path: 'profile.md', content: '# 用户画像\n端到端写入测试' },
+    })
+    expect(writeResult.isError).toBeFalsy()
+    const writeText = (writeResult.content as Array<{ type: string; text?: string }>)[0]?.text
+    expect(JSON.parse(writeText!)).toEqual({ ok: true })
+
+    const readResult = await client.callTool({
+      name: 'memory_read',
+      arguments: { path: 'profile.md' },
+    })
+    expect(readResult.isError).toBeFalsy()
+    const readText = (readResult.content as Array<{ type: string; text?: string }>)[0]?.text
+    expect(JSON.parse(readText!)).toEqual({
+      exists: true,
+      content: '# 用户画像\n端到端写入测试',
+    })
+  })
+
+  it('memory_list returns files written via memory_write', async () => {
+    const { client } = await bootChain()
+    for (const path of ['top.md', 'sub/a.md', 'sub/b.md']) {
+      await client.callTool({ name: 'memory_write', arguments: { path, content: 'x' } })
+    }
+    const listResult = await client.callTool({ name: 'memory_list', arguments: {} })
+    expect(listResult.isError).toBeFalsy()
+    const listText = (listResult.content as Array<{ type: string; text?: string }>)[0]?.text
+    const parsed = JSON.parse(listText!) as { files: string[] }
+    expect(parsed.files.sort()).toEqual(['sub/a.md', 'sub/b.md', 'top.md'])
+  })
+
+  it('memory_read for missing file surfaces exists:false (legacy wire shape preserved)', async () => {
+    const { client } = await bootChain()
+    const result = await client.callTool({
+      name: 'memory_read',
+      arguments: { path: 'never-existed.md' },
+    })
+    expect(result.isError).toBeFalsy()
+    const text = (result.content as Array<{ type: string; text?: string }>)[0]?.text
+    expect(JSON.parse(text!)).toEqual({ exists: false })
+  })
+
+  it('memory_write with invalid extension surfaces ok:false + error (legacy wire shape preserved)', async () => {
+    const { client } = await bootChain()
+    const result = await client.callTool({
+      name: 'memory_write',
+      arguments: { path: 'bad.txt', content: 'x' },
+    })
+    expect(result.isError).toBeFalsy()
+    const text = (result.content as Array<{ type: string; text?: string }>)[0]?.text
+    const parsed = JSON.parse(text!) as { ok: boolean; error?: string }
+    expect(parsed.ok).toBe(false)
+    expect(parsed.error).toMatch(/\.md/i)
   })
 
   it('ping tool returns isError=true when internal-api is unreachable', async () => {

@@ -24,12 +24,19 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
+import type { MemoryFS } from './memory/fs-api'
 
 export interface InternalApiDeps {
   /** State directory; the token file is written under here. */
   stateDir: string
   /** Daemon process pid — exposed by /v1/health for smoke tests. */
   daemonPid: number
+  /**
+   * Sandbox FS for memory_read / memory_write / memory_list (RFC 03 P1.B
+   * B2). The same MemoryFS instance is shared with the legacy in-process
+   * MCP server until B7 deletes it; both paths see the same files.
+   */
+  memory?: MemoryFS
   /** Optional log hook so api activity surfaces in channel.log. */
   log?: (tag: string, line: string) => void
 }
@@ -76,20 +83,98 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
     res.end(payload)
   }
 
-  function handleRequest(req: IncomingMessage, res: ServerResponse): void {
+  /**
+   * Each route handler receives the parsed query (always present) and the
+   * parsed JSON body (POST only; null on GET). Returns { status, body } —
+   * no streaming, no manual res manipulation. New endpoints in P1.B add a
+   * row to ROUTES below.
+   */
+  type RouteHandler = (
+    query: URLSearchParams,
+    body: unknown,
+  ) => Promise<{ status: number; body: unknown }> | { status: number; body: unknown }
+
+  const ROUTES: Record<string, RouteHandler | undefined> = {
+    'GET /v1/health': () => ({ status: 200, body: { ok: true, daemon_pid: deps.daemonPid } }),
+
+    // ── memory (RFC 03 P1.B B2) ─────────────────────────────────────────
+    'POST /v1/memory/read': (_q, body) => {
+      if (!deps.memory) return { status: 503, body: { error: 'memory_fs_not_wired' } }
+      const path = (body as { path?: unknown } | null)?.path
+      if (typeof path !== 'string') return { status: 400, body: { error: 'path_required' } }
+      try {
+        const content = deps.memory.read(path)
+        return { status: 200, body: content === null ? { exists: false } : { exists: true, content } }
+      } catch (err) {
+        return { status: 200, body: { error: errMsg(err) } }
+      }
+    },
+    'POST /v1/memory/write': (_q, body) => {
+      if (!deps.memory) return { status: 503, body: { error: 'memory_fs_not_wired' } }
+      const b = body as { path?: unknown; content?: unknown } | null
+      if (typeof b?.path !== 'string') return { status: 400, body: { error: 'path_required' } }
+      if (typeof b?.content !== 'string') return { status: 400, body: { error: 'content_required' } }
+      try {
+        deps.memory.write(b.path, b.content)
+        return { status: 200, body: { ok: true } }
+      } catch (err) {
+        return { status: 200, body: { ok: false, error: errMsg(err) } }
+      }
+    },
+    'GET /v1/memory/list': (q) => {
+      if (!deps.memory) return { status: 503, body: { error: 'memory_fs_not_wired' } }
+      const dir = q.get('dir')
+      try {
+        return { status: 200, body: { files: deps.memory.list(dir ?? undefined) } }
+      } catch (err) {
+        return { status: 200, body: { error: errMsg(err) } }
+      }
+    },
+  }
+
+  async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+    const chunks: Buffer[] = []
+    for await (const c of req) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c as string))
+    const text = Buffer.concat(chunks).toString('utf8')
+    if (!text) return null
+    return JSON.parse(text)
+  }
+
+  function errMsg(err: unknown): string {
+    return err instanceof Error ? err.message : String(err)
+  }
+
+  async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!authOk(req)) {
       deps.log?.('INTERNAL_API', `401 ${req.method} ${req.url}`)
       return send(res, 401, { error: 'unauthorized' })
     }
 
     const method = req.method ?? 'GET'
-    const url = req.url ?? '/'
+    const rawUrl = req.url ?? '/'
+    const url = new URL(rawUrl, 'http://internal')
+    const route = ROUTES[`${method} ${url.pathname}`]
 
-    if (method === 'GET' && url === '/v1/health') {
-      return send(res, 200, { ok: true, daemon_pid: deps.daemonPid })
+    if (!route) {
+      return send(res, 404, { error: 'not_found', method, url: rawUrl })
     }
 
-    return send(res, 404, { error: 'not_found', method, url })
+    let body: unknown = null
+    if (method === 'POST') {
+      try {
+        body = await readJsonBody(req)
+      } catch (err) {
+        return send(res, 400, { error: 'malformed_json', detail: errMsg(err) })
+      }
+    }
+
+    try {
+      const out = await route(url.searchParams, body)
+      send(res, out.status, out.body)
+    } catch (err) {
+      deps.log?.('INTERNAL_API', `500 ${method} ${rawUrl}: ${errMsg(err)}`)
+      send(res, 500, { error: 'internal', detail: errMsg(err) })
+    }
   }
 
   return {

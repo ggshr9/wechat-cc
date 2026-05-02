@@ -96,9 +96,6 @@ export interface BuiltWechatMcp {
     companion_disable: (args: Record<string, never>) => Promise<unknown>
     companion_status: (args: Record<string, never>) => Promise<unknown>
     companion_snooze: (args: { minutes: number }) => Promise<unknown>
-    memory_read: (args: { path: string }) => Promise<unknown>
-    memory_write: (args: { path: string; content: string }) => Promise<unknown>
-    memory_list: (args: { dir?: string }) => Promise<unknown>
   }
 }
 
@@ -303,58 +300,11 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
   )
   handlers.companion_snooze = async (a) => (await companionSnoozeDef.handler(a as any, undefined)) as unknown
 
-  // ── Memory: Claude's long-term persistent notes (Companion v2 "wings") ──
-  //
-  // Sandboxed to ~/.claude/channels/wechat/memory/. Only .md files. Claude
-  // decides file layout, naming, and when to consolidate. The three tools
-  // are deliberately minimal: read / write / list. No schema, no helpers.
-  // See docs/specs/2026-04-24-companion-memory.md for philosophy.
-
-  const memoryReadDef = tool(
-    'memory_read',
-    '读 memory/ 下的一个文件。不存在返回 exists:false。相对路径，只允许 .md。',
-    { path: z.string() },
-    async ({ path }) => {
-      try {
-        const content = deps.memory.read(path)
-        return okText(JSON.stringify(content === null
-          ? { exists: false }
-          : { exists: true, content }))
-      } catch (err) {
-        return okText(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
-      }
-    },
-  )
-  handlers.memory_read = async (a) => (await memoryReadDef.handler(a as any, undefined)) as unknown
-
-  const memoryWriteDef = tool(
-    'memory_write',
-    '写 memory/ 下的一个文件（atomic, 覆盖）。相对路径，只允许 .md。单文件 100KB 上限。父目录自动创建。',
-    { path: z.string(), content: z.string() },
-    async ({ path, content }) => {
-      try {
-        deps.memory.write(path, content)
-        return okText(JSON.stringify({ ok: true }))
-      } catch (err) {
-        return okText(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }))
-      }
-    },
-  )
-  handlers.memory_write = async (a) => (await memoryWriteDef.handler(a as any, undefined)) as unknown
-
-  const memoryListDef = tool(
-    'memory_list',
-    '列 memory/ 下所有 .md 文件（递归）。传 dir 只列该子目录。返回相对路径数组。',
-    { dir: z.string().optional() },
-    async ({ dir }) => {
-      try {
-        return okText(JSON.stringify({ files: deps.memory.list(dir) }))
-      } catch (err) {
-        return okText(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
-      }
-    },
-  )
-  handlers.memory_list = async (a) => (await memoryListDef.handler(a as any, undefined)) as unknown
+  // memory_read / memory_write / memory_list moved to the standalone
+  // wechat-mcp stdio server in P1.B B2 (commit history). See
+  // src/mcp-servers/wechat/main.ts for the new tool registration and
+  // src/daemon/internal-api.ts for the route handlers. The MemoryFS
+  // instance is shared across both paths via the daemon's bootstrap.
 
   const config = createSdkMcpServer({
     name: 'wechat',
@@ -365,7 +315,6 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
       listProjectsDef, switchProjectDef, addProjectDef, removeProjectDef,
       replyVoiceDef, saveVoiceConfigDef, voiceConfigStatusDef,
       companionEnableDef, companionDisableDef, companionStatusDef, companionSnoozeDef,
-      memoryReadDef, memoryWriteDef, memoryListDef,
     ],
   })
 

@@ -11,6 +11,7 @@ if (!process.env.CLAUDE_CODE_ENTRYPOINT) {
 import { acquireInstanceLock, releaseInstanceLock } from './single-instance'
 import { buildBootstrap } from './bootstrap'
 import { createInternalApi } from './internal-api'
+import { makeMemoryFS } from './memory/fs-api'
 import { routeInbound } from '../core/message-router'
 import { loadAllAccounts, makeIlinkAdapter } from './ilink-glue'
 import { startLongPollLoops, parseUpdates, type RawUpdate } from './poll-loop'
@@ -55,12 +56,18 @@ async function main() {
   const ilink = makeIlinkAdapter({ stateDir: STATE_DIR, accounts })
   const launchCwd = process.cwd()
 
+  // MemoryFS is shared with the internal-api's memory_* HTTP routes AND
+  // the legacy in-process MCP server (RFC 03 P1.B B2). Construct it once
+  // here so both paths see the same files.
+  const memoryFS = makeMemoryFS({ rootDir: join(STATE_DIR, 'memory') })
+
   // RFC 03 §5 — start the daemon's internal HTTP API before bootstrap so
   // the wechat-mcp stdio MCP servers we register with each provider can
   // call back. Token-authed, loopback-only.
   const internalApi = createInternalApi({
     stateDir: STATE_DIR,
     daemonPid: process.pid,
+    memory: memoryFS,
     log: (tag, line) => log(tag, line),
   })
   const { port: internalApiPort, tokenFilePath: internalTokenFile } = await internalApi.start()
@@ -78,6 +85,7 @@ async function main() {
       baseUrl: `http://127.0.0.1:${internalApiPort}`,
       tokenFilePath: internalTokenFile,
     },
+    memoryFS,
   })
 
   // Companion v2 scheduler — simple interval+jitter tick. When enabled +
