@@ -295,7 +295,11 @@ export function makeRoutes({ deps, getDelegate, maybePrefix }: MakeRoutesContext
       // env so they'd have to fabricate.)
       const depth = typeof b.depth === 'number' ? b.depth : 0
       if (depth > 0) {
-        deps.log?.('DELEGATE', `nested-call rejected: peer=${b.peer} depth=${depth}`)
+        deps.log?.('DELEGATE', `nested-call rejected: peer=${b.peer} depth=${depth}`, {
+          event: 'delegate_nested_rejected',
+          peer: b.peer,
+          depth,
+        })
         return { status: 403, body: { ok: false, reason: 'nested_delegate_rejected', depth } }
       }
       // Compose the actual prompt that the peer sees. The peer is
@@ -308,14 +312,30 @@ export function makeRoutes({ deps, getDelegate, maybePrefix }: MakeRoutesContext
       const cwdArg = typeof b.cwd === 'string' ? b.cwd : undefined
       try {
         const r = await d.dispatchOneShot(b.peer, fullPrompt, cwdArg)
+        const elapsed = Date.now() - started
         if (r.ok) {
-          deps.log?.('DELEGATE', `peer=${b.peer} ok response_chars=${r.response.length} ms=${Date.now() - started}`)
+          deps.log?.('DELEGATE', `peer=${b.peer} ok response_chars=${r.response.length} ms=${elapsed}`, {
+            event: 'delegate_ok',
+            peer: b.peer,
+            response_chars: r.response.length,
+            duration_ms: elapsed,
+          })
         } else {
-          deps.log?.('DELEGATE', `peer=${b.peer} fail reason=${r.reason}`)
+          deps.log?.('DELEGATE', `peer=${b.peer} fail reason=${r.reason}`, {
+            event: 'delegate_fail',
+            peer: b.peer,
+            reason: r.reason,
+            duration_ms: elapsed,
+          })
         }
         return { status: 200, body: r }
       } catch (err) {
-        deps.log?.('DELEGATE', `peer=${b.peer} threw: ${errMsg(err)}`)
+        deps.log?.('DELEGATE', `peer=${b.peer} threw: ${errMsg(err)}`, {
+          event: 'delegate_threw',
+          peer: b.peer,
+          error: errMsg(err),
+          duration_ms: Date.now() - started,
+        })
         return { status: 200, body: { ok: false, reason: errMsg(err) } }
       }
     },

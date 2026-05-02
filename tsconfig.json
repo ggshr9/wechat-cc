@@ -6,7 +6,7 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
-    "types": ["bun-types"],
+    "types": ["bun"],
     "lib": ["ESNext"],
     "esModuleInterop": true,
     "allowImportingTsExtensions": true,

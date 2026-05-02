@@ -92,7 +92,11 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
 
   async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!authOk(req)) {
-      deps.log?.('INTERNAL_API', `401 ${req.method} ${req.url}`)
+      deps.log?.('INTERNAL_API', `401 ${req.method} ${req.url}`, {
+        event: 'auth_rejected',
+        method: req.method,
+        url: req.url,
+      })
       return send(res, 401, { error: 'unauthorized' })
     }
 
@@ -118,7 +122,12 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
       const out = await route(url.searchParams, body)
       send(res, out.status, out.body)
     } catch (err) {
-      deps.log?.('INTERNAL_API', `500 ${method} ${rawUrl}: ${errMsg(err)}`)
+      deps.log?.('INTERNAL_API', `500 ${method} ${rawUrl}: ${errMsg(err)}`, {
+        event: 'route_threw',
+        method,
+        url: rawUrl,
+        error: errMsg(err),
+      })
       send(res, 500, { error: 'internal', detail: errMsg(err) })
     }
   }

@@ -122,7 +122,11 @@ export interface InternalApiDeps {
    */
   delegate?: InternalApiDelegateDep
   /** Optional log hook so api activity surfaces in channel.log. */
-  log?: (tag: string, line: string) => void
+  /**
+   * Optional `fields` arg lands in channel.log.jsonl when wired (the
+   * daemon's real `log` impl supports it; test stubs may ignore).
+   */
+  log?: (tag: string, line: string, fields?: Record<string, unknown>) => void
 }
 
 export interface InternalApi {
