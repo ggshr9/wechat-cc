@@ -217,10 +217,28 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
       // Track last-spoke for next chat session's initial speaker.
       lastChatroomSpeaker.set(msg.chatId, speaker)
 
-      // Parse all assistantText output for @-tag routing. Note: if
-      // replyToolCalled was true, that text already went to user via
-      // internal-api (with prefix). We still parse assistantText
-      // independently — it's the routing channel.
+      // RFC 03 P5 review #1 — if the agent disregarded the "don't use
+      // reply tool in chatroom" hint and called reply anyway, the text
+      // already went to user via internal-api (with [Display] prefix
+      // from maybePrefix). To avoid sending the SAME text TWICE, skip
+      // assistantText parsing/forwarding entirely — accept that this
+      // turn produced no peer-routable output. Loop terminates if no
+      // pending. (Mirrors the parallel-mode `if (replyToolCalled) continue`
+      // guard at the parallel-dispatch path.)
+      if (result.replyToolCalled) {
+        deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} replyToolCalled=true; skipping assistantText routing (would double-send to user)`)
+        if (forced) {
+          const dropped = pending.length
+          pending.length = 0
+          deps.log('COORDINATOR_CHATROOM', `chat=${msg.chatId} max_rounds reached on round ${round}${dropped > 0 ? `; dropped ${dropped} queued relay(s)` : ''}`)
+        }
+        if (pending.length > 0) {
+          speaker = peer
+          peer = peerOf(speaker)
+        }
+        continue
+      }
+
       const allText = result.assistantText.join('\n').trim()
       const segments = allText.length > 0 ? parseAddressing(allText) : []
 

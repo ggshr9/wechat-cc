@@ -74,6 +74,16 @@ export interface CodexAgentProviderOptions {
    * process is supplied by the caller via the `env` field.
    */
   mcpServers?: Record<string, CodexMcpStdioServer>
+  /**
+   * Optional system-prompt-equivalent content prepended to the FIRST
+   * dispatch of each spawned thread (RFC 03 P5 review #4). Codex SDK
+   * doesn't expose a true system prompt slot, so we put the wechat-channel
+   * rules in the conversation history's first user message; subsequent
+   * turns rely on Codex's own context retention.
+   *
+   * Costs ~ N tokens once per thread. Skipped when undefined / empty.
+   */
+  appendInstructions?: string
   /** Test-only: inject a mock Codex factory. Production omits this. */
   codexFactory?: CodexFactory
 }
@@ -115,6 +125,10 @@ export function createCodexAgentProvider(opts: CodexAgentProviderOptions = {}): 
       let turnCount = 0
       let activeAborter: AbortController | null = null
       let closed = false
+      // RFC 03 P5 review #4: prepend appendInstructions exactly once per
+      // session (on the first dispatch). Codex remembers it via SDK
+      // conversation history; subsequent turns are unprefixed.
+      let instructionsInjected = !opts.appendInstructions
 
       return {
         async dispatch(text: string): Promise<{ assistantText: string[]; replyToolCalled: boolean }> {
@@ -126,8 +140,18 @@ export function createCodexAgentProvider(opts: CodexAgentProviderOptions = {}): 
           const turnStarted = Date.now()
           let initEmitted = false
 
+          // First-dispatch-only injection of channel instructions (RFC 03 P5
+          // review #4). Codex SDK has no system_prompt slot; prefix the
+          // user message instead. Subsequent turns rely on Codex's own
+          // history retention.
+          let dispatchedText = text
+          if (!instructionsInjected && opts.appendInstructions) {
+            dispatchedText = `${opts.appendInstructions}\n\n---\n\n${text}`
+            instructionsInjected = true
+          }
+
           try {
-            const { events } = await thread.runStreamed(text, { signal: turnAborter.signal })
+            const { events } = await thread.runStreamed(dispatchedText, { signal: turnAborter.signal })
             for await (const ev of events as AsyncGenerator<ThreadEvent>) {
               if (ev.type === 'thread.started') {
                 if (!initEmitted) {

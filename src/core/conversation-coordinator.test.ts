@@ -727,6 +727,44 @@ describe('ConversationCoordinator', () => {
       expect(sendAssistantText).toHaveBeenCalledWith('chat-1', expect.stringContaining('chatroom error'))
     })
 
+    it('skips assistantText routing when replyToolCalled is true (RFC 03 P5 review #1: avoid double-send)', async () => {
+      // Agent ignored the "don't use reply in chatroom" hint and called
+      // reply anyway. Without the guard, the SAME text would go out
+      // twice — once via reply (with [Display] prefix from internal-api
+      // maybePrefix), once via the coordinator's fallback path here.
+      const { c, sendAssistantText } = setupChatroom({
+        replies: { claude: [{
+          assistantText: ['this should NOT be re-sent', '@codex would have queued but skipped'],
+          replyToolCalled: true,  // ← agent used reply MCP tool
+        }] },
+      })
+      await c.dispatch(inbound('chat-1', 'hi'))
+      // The coordinator must not call sendAssistantText: reply route
+      // already sent the text. Even @codex segments are skipped — the
+      // routing channel is "all or nothing" per turn.
+      expect(sendAssistantText).not.toHaveBeenCalled()
+    })
+
+    it('with replyToolCalled=true and pending non-empty: still rotates speaker for next turn', async () => {
+      // Edge case: claude calls reply (skip route), but a previous
+      // round had queued something for codex. Next turn should still
+      // dispatch to codex with that pending item.
+      const { c, dispatchedTexts } = setupChatroom({
+        replies: {
+          claude: [
+            { assistantText: ['@codex first relay'], replyToolCalled: false },  // round 1: queue for codex
+          ],
+          codex: [
+            // round 2: codex disobeys "no reply", calls reply tool — guard fires
+            { assistantText: ['leaked text'], replyToolCalled: true },
+          ],
+        },
+      })
+      await c.dispatch(inbound('chat-1', 'hi'))
+      // Both rounds dispatched (claude → codex), no extra round.
+      expect(dispatchedTexts.map(d => d.providerId)).toEqual(['claude', 'codex'])
+    })
+
     it('setMode rejects chatroom when one provider is missing', () => {
       const store = makeMockStore()
       const registry = createProviderRegistry()
