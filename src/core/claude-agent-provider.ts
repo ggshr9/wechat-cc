@@ -22,10 +22,21 @@ type ResultMsg = {
   result?: unknown
 }
 type SystemMsg = { type: 'system'; subtype?: string; session_id?: string }
-type NarrowedMsg = AssistantMsg | ResultMsg | SystemMsg | { type: string }
+type NarrowedMsg = AssistantMsg | ResultMsg | SystemMsg
 
-function narrow(msg: SDKMessage): NarrowedMsg {
-  return msg as unknown as NarrowedMsg
+// Returns null for SDK message types we don't branch on (rate_limit_event,
+// stream_event, partial_assistant, etc.). The caller's for-await loop
+// simply skips these. The previous union with `{ type: string }` as a
+// fallback broke discriminated narrowing — `msg.type === 'assistant'`
+// didn't shrink off the fallback because string includes the literal,
+// so reaches like `msg.message` failed strict typecheck (latent issue
+// surfaced when we tightened AgentSession.dispatch in P0 of RFC 03).
+function narrow(msg: SDKMessage): NarrowedMsg | null {
+  const t = (msg as { type?: string }).type
+  if (t === 'assistant' || t === 'result' || t === 'system') {
+    return msg as unknown as NarrowedMsg
+  }
+  return null
 }
 
 export function createClaudeAgentProvider(opts: ClaudeAgentProviderOptions): AgentProvider {
@@ -84,6 +95,7 @@ export function createClaudeAgentProvider(opts: ClaudeAgentProviderOptions): Age
         try {
           for await (const raw of q as AsyncGenerator<SDKMessage>) {
             const msg = narrow(raw)
+            if (!msg) continue
             if (msg.type === 'assistant') {
               // Detect any reply-tool invocations in the same message —
               // SDK groups text + tool_use blocks under one assistant

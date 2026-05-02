@@ -1,6 +1,6 @@
 import { SessionManager } from '../core/session-manager'
 import { createClaudeAgentProvider } from '../core/claude-agent-provider'
-import { createCodexCliProvider } from '../core/codex-cli-provider'
+import { createCodexAgentProvider } from '../core/codex-agent-provider'
 import { makeResolver } from '../core/project-resolver'
 import { makeCanUseTool } from '../core/permission-relay'
 import { formatInbound } from '../core/prompt-format'
@@ -162,30 +162,63 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
   }
 
   // Persistent session_id map — enables `resume` after daemon restart.
-  // Claude Code stores its session jsonl at ~/.claude/projects/<cwd>/<id>.jsonl;
-  // we check that file exists before trying to resume (avoids hard error if
-  // Claude Code rotated or user cleared history).
+  // Each provider stores its session/thread jsonl in a different place:
+  //   Claude:  ~/.claude/projects/<encoded-cwd>/<session_id>.jsonl
+  //   Codex:   ~/.codex/sessions/**/<thread_id>.jsonl  (rollout file)
+  // We probe the right one before trying to resume (avoids hard error if
+  // the SDK rotated or user cleared history).
   const sessionStore = makeSessionStore(join(deps.stateDir, 'sessions.json'), { debounceMs: 500 })
   const HOME = homedir()
-  function sessionJsonlPath(cwd: string, sessionId: string): string {
+  function claudeSessionJsonlPath(cwd: string, sessionId: string): string {
     const encoded = cwd.replace(/\//g, '-')
     return join(HOME, '.claude', 'projects', encoded, `${sessionId}.jsonl`)
   }
-  function canResumeSession(cwd: string, sessionId: string): boolean {
-    return existsSync(sessionJsonlPath(cwd, sessionId))
+  function codexSessionJsonlPaths(threadId: string): string[] {
+    // Codex's session files are sharded by date (~/.codex/sessions/YYYY/MM/DD/<id>.jsonl).
+    // We don't know which date, so we glob via existsSync + a tiny manual walk.
+    // For a P0 cheap check we just look for the unsharded fallback (top-level file)
+    // and the dateless directory; if not found we return [] and skip-resume rather
+    // than do a deep scan. False-negative resume is recoverable; false-positive resume
+    // throws on the SDK side which is louder than we want.
+    const root = join(HOME, '.codex', 'sessions')
+    return [
+      join(root, `${threadId}.jsonl`),
+      join(root, `${threadId}.json`),
+    ]
   }
 
   const configuredAgent = loadAgentConfig(deps.stateDir)
   const agentProviderKind = deps.agentProviderKind
     ?? (process.env.WECHAT_AGENT_PROVIDER === 'codex' ? 'codex' : configuredAgent.provider)
+
+  function canResumeSession(cwd: string, sessionId: string): boolean {
+    if (agentProviderKind === 'codex') {
+      return codexSessionJsonlPaths(sessionId).some(p => existsSync(p))
+    }
+    return existsSync(claudeSessionJsonlPath(cwd, sessionId))
+  }
+
+  // RFC 03 §3.6 / C7 — auth-agnostic. We do NOT pass `apiKey` to the codex
+  // provider. The user's `codex login` (subscription) or OPENAI_API_KEY
+  // env var are honored transparently by the SDK.
   const agentProvider = agentProviderKind === 'codex'
-    ? createCodexCliProvider({ model: process.env.CODEX_MODEL ?? configuredAgent.model })
+    ? createCodexAgentProvider({
+        ...(process.env.CODEX_MODEL || configuredAgent.model
+          ? { model: process.env.CODEX_MODEL ?? configuredAgent.model }
+          : {}),
+        // RFC 03 §10 risk: daemon mode safe defaults — no user in the loop
+        // for individual tool approvals. Spike 3 confirms `on-request` likely
+        // hangs; `never` is the only viable headless setting.
+        approvalPolicy: 'never',
+        sandboxMode: 'workspace-write',
+      })
     : createClaudeAgentProvider({ sdkOptionsForProject })
 
   const sessionManager = new SessionManager({
     maxConcurrent: 6,
     idleEvictMs: 30 * 60_000,
     provider: agentProvider,
+    providerId: agentProviderKind,
     sessionStore,
     canResume: canResumeSession,
     resumeTTLMs: 7 * 24 * 60 * 60_000,

@@ -187,11 +187,20 @@ describe('SessionManager', () => {
   })
 
   describe('session resume', () => {
-    function makeMockStore(initial: Record<string, { session_id: string; last_used_at: string }> = {}) {
-      const data: Record<string, { session_id: string; last_used_at: string }> = { ...initial }
+    function makeMockStore(initial: Record<string, { session_id: string; last_used_at: string; provider?: string }> = {}) {
+      const data: Record<string, { session_id: string; last_used_at: string; provider?: string }> = { ...initial }
       return {
-        get: (alias: string) => data[alias] ?? null,
-        set: vi.fn((alias: string, sid: string) => { data[alias] = { session_id: sid, last_used_at: new Date().toISOString() } }),
+        get: (alias: string, expectedProvider?: string) => {
+          const rec = data[alias]
+          if (!rec) return null
+          const recProv = rec.provider ?? 'claude'
+          if (expectedProvider && recProv !== expectedProvider) return null
+          return rec
+        },
+        set: vi.fn((alias: string, sid: string, provider: string) => {
+          data[alias] = { session_id: sid, last_used_at: new Date().toISOString(), provider }
+        }),
+        setSummary: vi.fn(),
         delete: vi.fn((alias: string) => { delete data[alias] }),
         all: () => ({ ...data }),
         flush: async () => {},
@@ -277,7 +286,7 @@ describe('SessionManager', () => {
       })
       await mgr.acquire('compass', '/p')
       await new Promise(r => setTimeout(r, 10))
-      expect(store.set).toHaveBeenCalledWith('compass', 'sid-new')
+      expect(store.set).toHaveBeenCalledWith('compass', 'sid-new', 'claude')
       await mgr.shutdown()
     })
 

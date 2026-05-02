@@ -1,4 +1,4 @@
-import type { SessionStore } from './session-store'
+import type { ProviderId, SessionStore } from './session-store'
 import type { AgentProvider, AgentResult, AgentSession } from './agent-provider'
 
 export interface SessionManagerOptions {
@@ -6,16 +6,26 @@ export interface SessionManagerOptions {
   idleEvictMs: number
   provider: AgentProvider
   /**
+   * Provider id used to tag session-store records (RFC 03 P0). When
+   * sessionStore is configured, every persisted session_id is annotated
+   * with this id, and reads filter by it — so a daemon configured for
+   * codex won't try to resume a leftover claude session and vice versa.
+   * Defaults to 'claude' for backward compatibility with single-provider
+   * v0.x deployments.
+   */
+  providerId?: ProviderId
+  /**
    * When present, the manager persists the SDK-reported session_id per
    * alias and passes it back as `resume` on the next spawn — slashing
    * daemon-restart cold-start from ~10 s to <3 s. Absent → disabled.
    */
   sessionStore?: SessionStore
   /**
-   * Optional disk check for the resume candidate. The SDK stores its
-   * conversation history as jsonl under `~/.claude/projects/<cwd>/<id>.jsonl`;
-   * if the file is gone (user wiped history or Claude Code rotated), we
-   * can't resume — fall back to fresh. Absent → skip this safety.
+   * Optional disk check for the resume candidate. Each provider stores its
+   * conversation history differently (Claude: `~/.claude/projects/<cwd>/<id>.jsonl`,
+   * Codex: `~/.codex/sessions/<id>`). If the file is gone (user wiped
+   * history or rotation occurred), we can't resume — fall back to fresh.
+   * Absent → skip this safety.
    */
   canResume?: (cwd: string, sessionId: string) => boolean
   /** Stored session_id older than this is treated as stale. Default 7 d. */
@@ -26,7 +36,7 @@ export interface SessionHandle {
   readonly alias: string
   readonly path: string
   lastUsedAt: number
-  dispatch(text: string): Promise<{ assistantText?: string[]; replyToolCalled?: boolean } | void>
+  dispatch(text: string): Promise<{ assistantText: string[]; replyToolCalled: boolean }>
   close(): Promise<void>
   onAssistantText(cb: (text: string) => void): () => void
   onResult(cb: (r: { session_id: string; num_turns: number; duration_ms: number }) => void): () => void
@@ -70,7 +80,8 @@ export class SessionManager {
   private async spawn(alias: string, path: string): Promise<SessionHandle> {
     // Check for a recent session_id to resume — cut cold-start latency.
     const ttl = this.opts.resumeTTLMs ?? 7 * 24 * 60 * 60_000
-    const record = this.opts.sessionStore?.get(alias) ?? null
+    const providerId: ProviderId = this.opts.providerId ?? 'claude'
+    const record = this.opts.sessionStore?.get(alias, providerId) ?? null
     let resumeSessionId: string | undefined
     if (record) {
       const age = Date.now() - Date.parse(record.last_used_at)
@@ -79,7 +90,7 @@ export class SessionManager {
         : true
       if (age < ttl && jsonlStillThere) {
         resumeSessionId = record.session_id
-        console.error(`wechat channel: [SESSION_RESUME] alias=${alias} sid=${record.session_id} age=${Math.round(age / 1000)}s`)
+        console.error(`wechat channel: [SESSION_RESUME] alias=${alias} sid=${record.session_id} provider=${providerId} age=${Math.round(age / 1000)}s`)
       } else {
         // stale — forget so we don't keep retrying
         this.opts.sessionStore?.delete(alias)
@@ -109,7 +120,7 @@ export class SessionManager {
 
     session.onResult((r: AgentResult) => {
       if (r.session_id && this.opts.sessionStore) {
-        this.opts.sessionStore.set(alias, r.session_id)
+        this.opts.sessionStore.set(alias, r.session_id, providerId)
       }
     })
 
