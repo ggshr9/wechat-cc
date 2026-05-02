@@ -64,7 +64,9 @@ export async function buildDetectorContext(deps: BuildContextDeps): Promise<Dete
   // to []; v0.4.1 wires it. The detector's has7DayStreak helper is now
   // fed real data — streak milestone fires when 7 consecutive UTC days
   // each have at least 1 inbound message.
-  const activity = makeActivityStore(memoryRoot, deps.chatId)
+  const activity = makeActivityStore(deps.db, deps.chatId, {
+    migrateFromFile: join(memoryRoot, deps.chatId, 'activity.jsonl'),
+  })
   const recent = await activity.recentDays(7)
   const daysWithMessage = recent.map(r => r.date)
 

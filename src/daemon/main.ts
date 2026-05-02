@@ -329,7 +329,10 @@ async function main() {
   async function recordActivity(chatId: string, when: Date): Promise<void> {
     try {
       const { makeActivityStore } = await import('./activity/store.ts')
-      const store = makeActivityStore(join(STATE_DIR, 'memory'), chatId)
+      const memoryRoot = join(STATE_DIR, 'memory')
+      const store = makeActivityStore(db, chatId, {
+        migrateFromFile: join(memoryRoot, chatId, 'activity.jsonl'),
+      })
       await store.recordInbound(when)
     } catch (err) {
       log('ACTIVITY', `record failed for ${chatId}: ${err instanceof Error ? err.message : err}`)
