@@ -2,7 +2,7 @@
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { writeFileSync } from 'node:fs'
-import { defineCommand, runMain, type CommandDef } from 'citty'
+import { defineCommand, runMain } from 'citty'
 import { STATE_DIR } from './src/lib/config'
 import { loadAgentConfig, saveAgentConfig, type AgentProviderKind } from './src/lib/agent-config'
 import { analyzeDoctor, defaultDoctorDeps, printDoctor, serviceStatus, setupStatus } from './src/cli/doctor'
@@ -433,21 +433,29 @@ const setupStatusCmd = defineCommand({
   },
 })
 
-export const cittyRoot: CommandDef = defineCommand({
+// Subcommands literal first → both `cittyRoot.subCommands` and
+// `MIGRATED_COMMANDS` derive from this single source of truth. Adding a new
+// citty subcommand only requires touching this object — the dispatch set
+// updates itself, and there's no `cittyRoot.subCommands as Record<string,
+// unknown>` cast needed (which would have hidden a future Resolvable<>
+// refactor — citty's type allows lazy / promise forms — from typecheck).
+const SUBCOMMANDS = {
+  status: statusCmd,
+  list: listCmd,
+  install: installCmd,
+  doctor: doctorCmd,
+  'setup-status': setupStatusCmd,
+} as const
+
+export const cittyRoot = defineCommand({
   meta: {
     name: 'wechat-cc',
     description: 'WeChat bridge for Claude Code (Agent SDK daemon)',
   },
-  subCommands: {
-    status: statusCmd,
-    list: listCmd,
-    install: installCmd,
-    doctor: doctorCmd,
-    'setup-status': setupStatusCmd,
-  },
+  subCommands: SUBCOMMANDS,
 })
 
-const MIGRATED_COMMANDS = new Set(Object.keys(cittyRoot.subCommands as Record<string, unknown>))
+const MIGRATED_COMMANDS = new Set<string>(Object.keys(SUBCOMMANDS))
 
 async function main() {
   const argv = process.argv.slice(2)
