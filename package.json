@@ -20,13 +20,17 @@
   "author": "ggshr9",
   "license": "MIT",
   "type": "module",
+  "workspaces": [
+    "apps/*"
+  ],
   "bin": {
     "wechat-cc": "./cli.ts"
   },
   "scripts": {
     "start": "bun install --no-summary && bun src/daemon/main.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "depcheck": "depcruise --config .dependency-cruiser.cjs src cli.ts setup.ts docs.ts log-viewer.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.2.116",
@@ -39,6 +43,7 @@
   },
   "devDependencies": {
     "@types/bun": "^1.3.0",
+    "dependency-cruiser": "^17.0.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.4"
   }

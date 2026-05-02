@@ -14,8 +14,8 @@ describe('activity store', () => {
     await store.recordInbound(new Date('2026-04-29T08:00:00Z'))
     const days = await store.recentDays(30)
     expect(days).toHaveLength(1)
-    expect(days[0].date).toBe('2026-04-29')
-    expect(days[0].msg_count).toBe(1)
+    expect(days[0]!.date).toBe('2026-04-29')
+    expect(days[0]!.msg_count).toBe(1)
   })
 
   it('increments msg_count for same-day messages without adding new entries', async () => {
@@ -25,7 +25,7 @@ describe('activity store', () => {
     await store.recordInbound(new Date('2026-04-29T22:00:00Z'))
     const days = await store.recentDays(30)
     expect(days).toHaveLength(1)
-    expect(days[0].msg_count).toBe(3)
+    expect(days[0]!.msg_count).toBe(3)
   })
 
   it('appends new entries on day change', async () => {

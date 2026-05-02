@@ -16,7 +16,7 @@ describe('milestones store', () => {
     const all = await store.list()
     expect(all).toHaveLength(1)
     expect(all[0]).toMatchObject({ id: 'ms_100msg', body: 'we hit 100 messages' })
-    expect(all[0].ts).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    expect(all[0]!.ts).toMatch(/^\d{4}-\d{2}-\d{2}T/)
   })
 
   it('deduplicates: firing the same id twice is a no-op the second time', async () => {
@@ -25,7 +25,7 @@ describe('milestones store', () => {
     expect(await store.fire({ id: 'ms_100msg', body: 'second (ignored)' })).toBe(false)
     const all = await store.list()
     expect(all).toHaveLength(1)
-    expect(all[0].body).toBe('first')
+    expect(all[0]!.body).toBe('first')
   })
 
   it('list is empty when no milestones', async () => {

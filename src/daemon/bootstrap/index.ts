@@ -1,25 +1,46 @@
-import { SessionManager } from '../core/session-manager'
-import { createClaudeAgentProvider } from '../core/claude-agent-provider'
-import { createCodexAgentProvider } from '../core/codex-agent-provider'
-import { createProviderRegistry, type ProviderRegistry } from '../core/provider-registry'
-import { createConversationCoordinator, type ConversationCoordinator } from '../core/conversation-coordinator'
-import { makeConversationStore, type ConversationStore } from '../core/conversation-store'
-import { providerDisplayName as defaultProviderDisplayName } from './provider-display-names'
-import { buildSystemPrompt } from '../core/prompt-builder'
-import type { ProviderId } from '../core/conversation'
-import { makeResolver } from '../core/project-resolver'
-import { makeCanUseTool } from '../core/permission-relay'
-import { formatInbound } from '../core/prompt-format'
-import type { IlinkAdapter } from './ilink-glue'
+/**
+ * buildBootstrap — wires up the daemon's core dispatch graph.
+ *
+ * Composes:
+ *   - Provider registry (Claude + Codex providers)
+ *   - SessionManager (LRU-evicting cache of (provider, alias) → session)
+ *   - ConversationStore (per-chat mode persistence)
+ *   - ConversationCoordinator (mode-aware dispatch entry)
+ *   - Bare delegate providers (RFC 03 P4 peer-as-tool)
+ *
+ * Helpers extracted for readability:
+ *   - ./mcp-specs.ts   — wechat / delegate stdio MCP spec builders
+ *   - ./session-paths.ts — per-provider jsonl path resolvers (canResume probes)
+ *   - ./delegate.ts    — bare delegate providers + dispatchDelegate
+ *
+ * Imported only by:
+ *   - src/daemon/main.ts (production entry)
+ *   - src/daemon/bootstrap.test.ts (integration tests)
+ */
+import { SessionManager } from '../../core/session-manager'
+import { createClaudeAgentProvider } from '../../core/claude-agent-provider'
+import { createCodexAgentProvider } from '../../core/codex-agent-provider'
+import { createProviderRegistry, type ProviderRegistry } from '../../core/provider-registry'
+import { createConversationCoordinator, type ConversationCoordinator } from '../../core/conversation-coordinator'
+import { makeConversationStore, type ConversationStore } from '../../core/conversation-store'
+import { buildSystemPrompt } from '../../core/prompt-builder'
+import type { ProviderId } from '../../core/conversation'
+import { makeResolver } from '../../core/project-resolver'
+import { makeCanUseTool } from '../../core/permission-relay'
+import { formatInbound } from '../../core/prompt-format'
+import type { IlinkAdapter } from '../ilink-glue'
 import type { Options } from '@anthropic-ai/claude-agent-sdk'
-import { findOnPath } from '../../util'
+import { findOnPath } from '../../lib/util'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { WechatProjectsDep, WechatVoiceDep, WechatCompanionDep } from './wechat-tool-deps'
-import { makeSessionStore } from '../core/session-store'
+import type { WechatProjectsDep, WechatVoiceDep, WechatCompanionDep } from '../wechat-tool-deps'
+import { makeSessionStore } from '../../core/session-store'
 import { homedir } from 'node:os'
-import { loadAgentConfig } from '../../agent-config'
+import { loadAgentConfig } from '../../lib/agent-config'
+import { wechatStdioMcpSpec, delegateStdioMcpSpec, type McpStdioSpec } from './mcp-specs'
+import { claudeSessionJsonlPath, codexSessionJsonlPaths } from './session-paths'
+import { buildDelegateDispatch, type DelegateDispatch } from './delegate'
 
 /**
  * Locate a working Claude Code binary. The SDK's own native-binary detection
@@ -36,7 +57,8 @@ function resolveClaudeBinary(): string | undefined {
   const fromPath = findOnPath('claude')
   if (fromPath && existsSync(fromPath)) return fromPath
   const here = dirname(fileURLToPath(import.meta.url))
-  const bundled = join(here, '..', '..', 'node_modules', '@anthropic-ai', 'claude-agent-sdk-linux-x64', 'claude')
+  // src/daemon/bootstrap/index.ts → ../../../node_modules/...
+  const bundled = join(here, '..', '..', '..', 'node_modules', '@anthropic-ai', 'claude-agent-sdk-linux-x64', 'claude')
   if (existsSync(bundled)) return bundled
   return undefined
 }
@@ -92,7 +114,7 @@ export interface BootstrapDeps {
 
 export interface Bootstrap {
   sessionManager: SessionManager
-  sessionStore: import('../core/session-store').SessionStore
+  sessionStore: import('../../core/session-store').SessionStore
   conversationStore: ConversationStore
   registry: ProviderRegistry
   coordinator: ConversationCoordinator
@@ -108,10 +130,7 @@ export interface Bootstrap {
    * internal-api via setDelegate() right after buildBootstrap returns.
    * Optional `cwd` per RFC 03 review #10.
    */
-  dispatchDelegate: (peer: ProviderId, prompt: string, cwd?: string) => Promise<
-    | { ok: true; response: string; num_turns?: number; duration_ms?: number }
-    | { ok: false; reason: string }
-  >
+  dispatchDelegate: DelegateDispatch
 }
 
 // buildChannelSystemPrompt() moved to src/core/prompt-builder.ts in
@@ -126,10 +145,6 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     loadProjects: deps.loadProjects,
     fallback: deps.fallbackProject,
   })
-  // Note: MemoryFS is no longer constructed here — main.ts owns the
-  // single instance and passes it to createInternalApi (which serves the
-  // memory_* HTTP routes). The legacy in-process `wechat` MCP that used
-  // to consume it via toolDeps is gone in RFC 03 P1.B B1.
 
   const canUseTool = makeCanUseTool({
     askUser: deps.ilink.askUser,
@@ -147,55 +162,14 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
   // RFC 03 §5 — standalone wechat-mcp stdio server. When deps.internalApi is
   // wired, both providers receive a `wechat` MCP server spec that spawns
   // the wechat-mcp child with token-auth env vars.
-  // History: from P1.A through P1.B B6 the stdio server was named
-  // `wechat_ipc` to coexist with the legacy in-process `wechat` server.
-  // After B1 the legacy server is gone and the stdio one inherits the
-  // canonical `wechat` name — keeping tool names like `mcp__wechat__reply`
-  // stable for the agent and the providers' replyToolCalled detection.
-  //
-  // The optional `participantTag` (RFC 03 P3) is the providerId baked into
-  // the child's env so the stdio reply tool can identify which agent
-  // generated each reply. internal-api uses this to prefix `[Claude]` /
-  // `[Codex]` in parallel + chatroom modes.
-  function wechatStdioMcpSpec(participantTag?: ProviderId): { command: string; args: string[]; env: Record<string, string> } | null {
-    if (!deps.internalApi) return null
-    const here = dirname(fileURLToPath(import.meta.url))
-    // src/daemon/bootstrap.ts → ../mcp-servers/wechat/main.ts
-    const mainPath = join(here, '..', 'mcp-servers', 'wechat', 'main.ts')
-    return {
-      command: process.execPath,  // bun or node — whichever is running the daemon
-      args: [mainPath],
-      env: {
-        WECHAT_INTERNAL_API: deps.internalApi.baseUrl,
-        WECHAT_INTERNAL_TOKEN_FILE: deps.internalApi.tokenFilePath,
-        ...(participantTag ? { WECHAT_PARTICIPANT_TAG: participantTag } : {}),
-      },
-    }
-  }
-  const wechatStdioForClaude = wechatStdioMcpSpec('claude')
-  const wechatStdioForCodex = wechatStdioMcpSpec('codex')
+  const wechatStdioForClaude: McpStdioSpec | null = deps.internalApi ? wechatStdioMcpSpec(deps.internalApi, 'claude') : null
+  const wechatStdioForCodex: McpStdioSpec | null = deps.internalApi ? wechatStdioMcpSpec(deps.internalApi, 'codex') : null
 
-  // RFC 03 P4 — delegate-mcp stdio server. Loaded alongside wechat-mcp
-  // so the primary agent can call `delegate_<peer>(prompt)` to consult
-  // the OTHER provider once. The peer is fixed per-spawn via the
-  // WECHAT_DELEGATE_PEER env.
-  function delegateStdioMcpSpec(peer: ProviderId): { command: string; args: string[]; env: Record<string, string> } | null {
-    if (!deps.internalApi) return null
-    const here = dirname(fileURLToPath(import.meta.url))
-    const mainPath = join(here, '..', 'mcp-servers', 'delegate', 'main.ts')
-    return {
-      command: process.execPath,
-      args: [mainPath],
-      env: {
-        WECHAT_INTERNAL_API: deps.internalApi.baseUrl,
-        WECHAT_INTERNAL_TOKEN_FILE: deps.internalApi.tokenFilePath,
-        WECHAT_DELEGATE_PEER: peer,
-      },
-    }
-  }
-  // For each provider session, the peer is the OTHER provider.
-  const delegateStdioForClaude = delegateStdioMcpSpec('codex')  // Claude session → can delegate to Codex
-  const delegateStdioForCodex = delegateStdioMcpSpec('claude')  // Codex session → can delegate to Claude
+  // RFC 03 P4 — delegate-mcp stdio server. Loaded alongside wechat-mcp so
+  // the primary agent can call `delegate_<peer>(prompt)` to consult the
+  // OTHER provider once. The peer is fixed per-spawn.
+  const delegateStdioForClaude: McpStdioSpec | null = deps.internalApi ? delegateStdioMcpSpec(deps.internalApi, 'codex') : null  // Claude session → can delegate to Codex
+  const delegateStdioForCodex: McpStdioSpec | null = deps.internalApi ? delegateStdioMcpSpec(deps.internalApi, 'claude') : null  // Codex session → can delegate to Claude
 
   const sdkOptionsForProject = (_alias: string, path: string): Options => {
     const cstatus = deps.ilink.companion.status()
@@ -228,63 +202,11 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
   }
 
   // Persistent session_id map — enables `resume` after daemon restart.
-  // Each provider stores its session/thread jsonl in a different place:
-  //   Claude:  ~/.claude/projects/<encoded-cwd>/<session_id>.jsonl
-  //   Codex:   ~/.codex/sessions/**/<thread_id>.jsonl  (rollout file)
-  // We probe the right one before trying to resume (avoids hard error if
-  // the SDK rotated or user cleared history).
+  // Each provider stores its session/thread jsonl in a different place; we
+  // probe the right one before trying to resume (avoids hard error if the
+  // SDK rotated or user cleared history). See ./session-paths.ts.
   const sessionStore = makeSessionStore(join(deps.stateDir, 'sessions.json'), { debounceMs: 500 })
   const HOME = homedir()
-  function claudeSessionJsonlPath(cwd: string, sessionId: string): string {
-    const encoded = cwd.replace(/\//g, '-')
-    return join(HOME, '.claude', 'projects', encoded, `${sessionId}.jsonl`)
-  }
-  function codexSessionJsonlPaths(threadId: string): string[] {
-    // Codex's session files are sharded by date (~/.codex/sessions/YYYY/MM/DD/<thread_id>.jsonl).
-    // RFC 03 P5 review #9 — earlier P0 implementation only checked the
-    // unsharded path (`~/.codex/sessions/<id>.jsonl`) which never matches
-    // real Codex output → resume always silently failed. Now does a
-    // bounded depth-3 walk under ~/.codex/sessions for files matching
-    // `<threadId>.jsonl` or `<threadId>.json`.
-    const root = join(HOME, '.codex', 'sessions')
-    const candidates: string[] = [
-      // Unsharded fallback first (cheapest existsSync check).
-      join(root, `${threadId}.jsonl`),
-      join(root, `${threadId}.json`),
-    ]
-    if (!existsSync(root)) return candidates
-    try {
-      // Walk: <root>/<YYYY>/<MM>/<DD>/<id>.{jsonl,json}
-      // Bounded by Codex's known sharding scheme (year/month/day) so we
-      // don't accidentally scan unbounded user dirs.
-      const { readdirSync, statSync } = require('node:fs') as typeof import('node:fs')
-      for (const year of safeReaddir(root, readdirSync)) {
-        const yearDir = join(root, year)
-        if (!isDir(yearDir, statSync)) continue
-        for (const month of safeReaddir(yearDir, readdirSync)) {
-          const monthDir = join(yearDir, month)
-          if (!isDir(monthDir, statSync)) continue
-          for (const day of safeReaddir(monthDir, readdirSync)) {
-            const dayDir = join(monthDir, day)
-            if (!isDir(dayDir, statSync)) continue
-            candidates.push(
-              join(dayDir, `${threadId}.jsonl`),
-              join(dayDir, `${threadId}.json`),
-            )
-          }
-        }
-      }
-    } catch {
-      // permissions / EIO — fall back to unsharded candidates only.
-    }
-    return candidates
-  }
-  function safeReaddir(p: string, readdirSync: typeof import('node:fs').readdirSync): string[] {
-    try { return readdirSync(p) } catch { return [] }
-  }
-  function isDir(p: string, statSync: typeof import('node:fs').statSync): boolean {
-    try { return statSync(p).isDirectory() } catch { return false }
-  }
 
   const configuredAgent = loadAgentConfig(deps.stateDir)
   const defaultProviderId: ProviderId = deps.agentProviderKind
@@ -305,7 +227,7 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     createClaudeAgentProvider({ sdkOptionsForProject }),
     {
       displayName: 'Claude',
-      canResume: (cwd, sid) => existsSync(claudeSessionJsonlPath(cwd, sid)),
+      canResume: (cwd, sid) => existsSync(claudeSessionJsonlPath(HOME, cwd, sid)),
     },
   )
   registry.register(
@@ -336,7 +258,7 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     }),
     {
       displayName: 'Codex',
-      canResume: (_cwd, sid) => codexSessionJsonlPaths(sid).some(p => existsSync(p)),
+      canResume: (_cwd, sid) => codexSessionJsonlPaths(HOME, sid).some(p => existsSync(p)),
     },
   )
 
@@ -376,79 +298,13 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     log: deps.log,
   })
 
-  // RFC 03 P4 — bare delegate providers. Constructed separately from
-  // the registry's main providers because they intentionally have NO
-  // mcpServers configured: a delegated peer must not have access to
-  // wechat tools (would let it pretend to reply directly to the user)
-  // or its own delegate-mcp (would allow recursion). Recursion
-  // prevention is structural here, not counter-based.
-  //
-  // Each delegate call spawns a fresh thread; SessionManager isn't
-  // involved because these are throwaway one-shot consultations.
-  const delegateClaude = createClaudeAgentProvider({
-    sdkOptionsForProject: (_alias: string, path: string): Options => {
-      const o: Options = {
-        cwd: path,
-        // Plain claude_code preset — no wechat-specific append. Peer
-        // doesn't see wechat conversation history; it's a clean slate.
-        systemPrompt: { type: 'preset', preset: 'claude_code' },
-        settingSources: ['user', 'project', 'local'],
-        // Safer than bypassPermissions: delegate is read-mostly. Skip
-        // the permission relay too — there's no human to ask, and
-        // delegated peers shouldn't be writing to disk anyway.
-        permissionMode: 'default',
-        ...(claudeBin ? { pathToClaudeCodeExecutable: claudeBin } : {}),
-      }
-      return o
-    },
+  // RFC 03 P4 — bare delegate providers + one-shot dispatcher.
+  // See ./delegate.ts for why these are constructed separately from the
+  // registry's main providers (no mcpServers — recursion prevention).
+  const dispatchDelegate = buildDelegateDispatch({
+    stateDir: deps.stateDir,
+    ...(claudeBin ? { claudeBin } : {}),
   })
-  const delegateCodex = createCodexAgentProvider({
-    ...(process.env.CODEX_MODEL || configuredAgent.model
-      ? { model: process.env.CODEX_MODEL ?? configuredAgent.model }
-      : {}),
-    approvalPolicy: 'never',
-    // Read-only sandbox: delegate is for "ask a question", not "do work".
-    // Spike 3 confirmed read-only blocks writes cleanly.
-    sandboxMode: 'read-only',
-    // Deliberately NO mcpServers — bare-bones is the structural
-    // recursion-prevention guarantee.
-  })
-
-  /**
-   * Run a one-shot prompt against the bare delegate provider for `peer`.
-   * Used by internal-api's /v1/delegate route. Spawns a fresh thread,
-   * dispatches once, closes. Cold-start cost (~3-5s) per call is
-   * accepted as the price of "consult the peer cleanly."
-   *
-   * `cwd` (RFC 03 review #10): when caller passes one, peer can Read /
-   * Bash files there (e.g. the calling agent's project). Otherwise
-   * peer runs in deps.stateDir (a stable location with no project
-   * files), preserving the "ask, don't do" framing.
-   */
-  async function dispatchDelegate(
-    peer: ProviderId,
-    prompt: string,
-    cwd?: string,
-  ): Promise<{ ok: true; response: string; num_turns?: number; duration_ms?: number } | { ok: false; reason: string }> {
-    const provider = peer === 'claude' ? delegateClaude
-                   : peer === 'codex' ? delegateCodex
-                   : null
-    if (!provider) return { ok: false, reason: `unknown_peer: ${peer}` }
-    const started = Date.now()
-    let session: Awaited<ReturnType<typeof provider.spawn>> | null = null
-    try {
-      session = await provider.spawn({ alias: '_delegate', path: cwd ?? deps.stateDir })
-      const result = await session.dispatch(prompt)
-      const response = result.assistantText.join('\n').trim()
-      return { ok: true, response, duration_ms: Date.now() - started }
-    } catch (err) {
-      return { ok: false, reason: err instanceof Error ? err.message : String(err) }
-    } finally {
-      if (session) {
-        try { await session.close() } catch { /* swallow shutdown errors */ }
-      }
-    }
-  }
 
   return {
     sessionManager,

@@ -2,11 +2,11 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { platform as osPlatform } from 'node:os'
-import { STATE_DIR } from './config'
-import { findOnPath } from './util'
-import { loadAgentConfig, type AgentConfig } from './agent-config'
+import { STATE_DIR } from '../lib/config'
+import { findOnPath } from '../lib/util'
+import { loadAgentConfig, type AgentConfig } from '../lib/agent-config'
 import { buildServicePlan, isServiceInstalled, type ServiceKind } from './service-manager'
-import { compiledBinaryPath, compiledRepoRoot, isCompiledBundle } from './runtime-info'
+import { compiledBinaryPath, compiledRepoRoot, isCompiledBundle } from '../lib/runtime-info'
 
 export interface BoundAccount {
   id: string

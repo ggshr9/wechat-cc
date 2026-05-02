@@ -27,8 +27,8 @@
  * somewhere else themselves — wechat-cc is a transport, not an archive store.
  */
 
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'child_process'
-import { findOnPath } from './util.ts'
+import { spawn, spawnSync, type ChildProcess } from 'child_process'
+import { findOnPath } from './src/lib/util.ts'
 import {
   existsSync,
   mkdirSync,
@@ -563,7 +563,7 @@ interface Server {
 
 let httpServer: Server | null = null
 let tunnelUrl: string | null = null
-let tunnelProc: ChildProcessWithoutNullStreams | null = null
+let tunnelProc: ChildProcess | null = null
 let tunnelPromise: Promise<string> | null = null
 
 const PDF_TIMEOUT_MS = 30_000
@@ -752,12 +752,13 @@ function startHttpServer(): Server {
       return new Response('Not found', { status: 404 })
     },
   })
-  httpServer = {
-    port: bunServer.port,
+  const created: Server = {
+    port: bunServer.port ?? 0,
     stop: async () => { bunServer.stop(true) },
   }
-  process.stderr.write(`wechat channel: doc server on http://localhost:${httpServer.port}\n`)
-  return httpServer
+  httpServer = created
+  process.stderr.write(`wechat channel: doc server on http://localhost:${created.port}\n`)
+  return created
 }
 
 async function startTunnel(port: number): Promise<string> {

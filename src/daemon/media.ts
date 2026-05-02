@@ -187,9 +187,9 @@ export async function materializeAttachments(
 }
 
 // ── Outbound helpers ──────────────────────────────────────────────────────
-import type { MessageItem } from '../../ilink.ts'
-import { ILINK_BASE_INFO, ilinkPost } from '../../ilink.ts'
-import { log } from '../../log.ts'
+import type { MessageItem } from '../lib/ilink'
+import { ILINK_BASE_INFO, ilinkPost } from '../lib/ilink'
+import { log } from '../lib/log'
 
 export const UPLOAD_MEDIA_TYPE = { IMAGE: 1, VIDEO: 2, FILE: 3, VOICE: 4 } as const
 export const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024 // ilink hard cap is higher; 50MB is safe + avoids slow uploads

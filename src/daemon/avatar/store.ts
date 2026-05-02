@@ -46,7 +46,7 @@ export function setAvatar(
   // Strip data-URI prefix if the caller passed one (frontend canvas
   // returns "data:image/png;base64,..."); accept both forms.
   const m = base64Png.match(/^data:image\/[a-z]+;base64,(.*)$/i)
-  const data = (m ? m[1] : base64Png).trim()
+  const data = (m ? m[1]! : base64Png).trim()
   const buf = Buffer.from(data, 'base64')
 
   if (buf.length === 0) throw new Error('avatar bytes are empty')

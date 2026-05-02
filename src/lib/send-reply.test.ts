@@ -28,7 +28,7 @@ describe('chunk', () => {
     const text = 'one two three four five six seven'
     const parts = chunk(text, 10)
     // Cut at space before limit
-    expect(parts[0].length).toBeLessThanOrEqual(10)
+    expect(parts[0]!.length).toBeLessThanOrEqual(10)
     expect(parts.every(p => p.length > 0)).toBe(true)
   })
 
@@ -43,7 +43,7 @@ describe('chunk', () => {
     const text = 'paragraph one\n\nparagraph two'
     const parts = chunk(text, 15)
     // After the split, 'paragraph two' should not start with \n
-    expect(parts[1].startsWith('\n')).toBe(false)
+    expect(parts[1]!.startsWith('\n')).toBe(false)
   })
 
   it('preserves non-ASCII (Chinese) text intact', () => {

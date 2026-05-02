@@ -25,11 +25,11 @@ describe('observations store', () => {
     await store.archive(id1)
     const active = await store.listActive()
     expect(active).toHaveLength(1)
-    expect(active[0].id).toBe(id2)
+    expect(active[0]!.id).toBe(id2)
     const archived = await store.listArchived()
     expect(archived).toHaveLength(1)
-    expect(archived[0].id).toBe(id1)
-    expect(archived[0].archived_at).toBeDefined()
+    expect(archived[0]!.id).toBe(id1)
+    expect(archived[0]!.archived_at).toBeDefined()
   })
 
   it('TTL: items older than ttlDays are not active', async () => {

@@ -57,7 +57,12 @@ export interface ConversationCoordinatorDeps {
   chatroomMaxRounds?: number
   format: (msg: InboundMsg) => string
   sendAssistantText?: (chatId: string, text: string) => Promise<void>
-  log: (tag: string, line: string) => void
+  /**
+   * Optional `fields` arg lands in the JSONL sidecar (channel.log.jsonl)
+   * for programmatic consumers. Stubs that don't care can ignore it
+   * (third arg is optional in the daemon's real `log` impl too).
+   */
+  log: (tag: string, line: string, fields?: Record<string, unknown>) => void
 }
 
 export interface ConversationCoordinator {
@@ -142,7 +147,12 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     proj: { alias: string; path: string },
     providerId: ProviderId,
   ): Promise<void> {
-    deps.log('COORDINATOR', `solo chat=${msg.chatId} → project=${proj.alias} provider=${providerId}`)
+    deps.log('COORDINATOR', `solo chat=${msg.chatId} → project=${proj.alias} provider=${providerId}`, {
+      event: 'dispatch_solo',
+      chat_id: msg.chatId,
+      project_alias: proj.alias,
+      provider: providerId,
+    })
     const handle = await deps.manager.acquire(proj.alias, proj.path, providerId)
     const text = deps.format(msg)
     const result = await handle.dispatch(text)

@@ -18,8 +18,8 @@ import { makeModeCommands } from './mode-commands'
 import { loadAllAccounts, makeIlinkAdapter } from './ilink-glue'
 import { startLongPollLoops, parseUpdates, type RawUpdate } from './poll-loop'
 import { materializeAttachments, cleanupOldInbox } from './media'
-import { log } from '../../log'
-import { isAdmin, loadAccess } from '../../access'
+import { log } from '../lib/log'
+import { isAdmin, loadAccess } from '../lib/access'
 import { makeAdminCommands } from './admin-commands'
 import { makeOnboardingHandler } from './onboarding'
 import { notifyStartup } from './notify-startup'
@@ -368,7 +368,7 @@ async function main() {
   const onboarding = makeOnboardingHandler({
     isKnownUser: (userId) => ilink.resolveUserName(userId) !== undefined,
     setUserName: (chatId, name) => ilink.setUserName(chatId, name),
-    sendMessage: (chatId, text) => ilink.sendMessage(chatId, text),
+    sendMessage: async (chatId, text) => { await ilink.sendMessage(chatId, text) },
     log: (tag, line) => log(tag, line),
   })
 

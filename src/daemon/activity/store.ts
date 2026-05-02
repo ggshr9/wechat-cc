@@ -53,7 +53,8 @@ export function makeActivityStore(stateRoot: string, chatId: string): ActivitySt
       const all = await readAll()
       const idx = all.findIndex(r => r.date === date)
       if (idx >= 0) {
-        all[idx] = { ...all[idx], msg_count: all[idx].msg_count + 1 }
+        const existing = all[idx]!
+        all[idx] = { ...existing, msg_count: existing.msg_count + 1 }
         await rewriteAll(all)
         return
       }

@@ -14,15 +14,15 @@ import type { InboundMsg } from '../core/prompt-format'
 import type { WechatProjectsDep, WechatVoiceDep, WechatCompanionDep } from './wechat-tool-deps'
 import { parsePermissionReply } from './pending-permissions'
 import { buildMediaItemFromFile, assertSendable } from './media'
-import { ilinkSendMessage } from '../../ilink'
+import { ilinkSendMessage } from '../lib/ilink'
 import type { SessionStateStore } from './session-state'
-import { sendReplyOnce } from '../../send-reply'
+import { sendReplyOnce } from '../lib/send-reply'
 import {
   addProject,
   listProjects,
   setCurrent,
   removeProject,
-} from '../../project-registry'
+} from '../lib/project-registry'
 import {
   sharePage as docsShare,
   resurfacePage as docsResurface,
