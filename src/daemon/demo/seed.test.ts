@@ -24,7 +24,7 @@ describe('seedDemo + unseedDemo', () => {
     const result = await seedDemo({ stateDir, chatId: 'chat_x', db })
     expect(result).toEqual({ observations: 3, milestones: 1, events: 5 })
     const memoryRoot = join(stateDir, 'memory')
-    expect((await makeObservationsStore(memoryRoot, 'chat_x').listActive())).toHaveLength(3)
+    expect((await makeObservationsStore(db, 'chat_x').listActive())).toHaveLength(3)
     expect((await makeMilestonesStore(db, 'chat_x').list())).toHaveLength(1)
     expect((await makeEventsStore(memoryRoot, 'chat_x').list())).toHaveLength(5)
   })
@@ -32,11 +32,11 @@ describe('seedDemo + unseedDemo', () => {
   it('unseed removes seeded entries by stable id prefix + back-pointer', async () => {
     await seedDemo({ stateDir, chatId: 'chat_x', db })
     // Add a non-demo observation that should survive unseed
-    await makeObservationsStore(join(stateDir, 'memory'), 'chat_x').append({ body: 'real observation', tone: 'curious' })
+    await makeObservationsStore(db, 'chat_x').append({ body: 'real observation', tone: 'curious' })
     const r = await unseedDemo({ stateDir, chatId: 'chat_x', db })
     expect(r.removed).toBeGreaterThan(0)
     const memoryRoot = join(stateDir, 'memory')
-    expect((await makeObservationsStore(memoryRoot, 'chat_x').listActive())).toHaveLength(1)  // only real one survives
+    expect((await makeObservationsStore(db, 'chat_x').listActive())).toHaveLength(1)  // only real one survives
     expect((await makeMilestonesStore(db, 'chat_x').list())).toHaveLength(0)
     expect((await makeEventsStore(memoryRoot, 'chat_x').list())).toHaveLength(0)  // all events were demo
   })

@@ -28,7 +28,9 @@ export interface SeedDeps {
 export async function seedDemo(deps: SeedDeps): Promise<{ observations: number; milestones: number; events: number }> {
   const now = deps.now ?? Date.now
   const memoryRoot = join(deps.stateDir, 'memory')
-  const obs = makeObservationsStore(memoryRoot, deps.chatId)
+  const obs = makeObservationsStore(deps.db, deps.chatId, {
+    migrateFromFile: join(memoryRoot, deps.chatId, 'observations.jsonl'),
+  })
   const ms = makeMilestonesStore(deps.db, deps.chatId, {
     migrateFromFile: join(memoryRoot, deps.chatId, 'milestones.jsonl'),
   })
@@ -70,9 +72,11 @@ export async function unseedDemo(deps: { stateDir: string; chatId: string; db: D
   // jsonl scrubber below catches them. The two paths are union — we hit
   // both so unseed works mid-migration too.
 
-  // SQLite-backed: milestones (PR7.5).
+  // SQLite-backed: milestones (PR7.5), observations (PR7.6).
   const delMs = deps.db.prepare("DELETE FROM milestones WHERE chat_id = ? AND id LIKE 'ms_demo_%'")
   removed += (delMs.run(deps.chatId).changes ?? 0) as number
+  const delObs = deps.db.prepare("DELETE FROM observations WHERE chat_id = ? AND id LIKE 'obs_demo_%'")
+  removed += (delObs.run(deps.chatId).changes ?? 0) as number
 
   for (const fname of ['observations.jsonl', 'milestones.jsonl', 'events.jsonl']) {
     const path = join(chatDir, fname)

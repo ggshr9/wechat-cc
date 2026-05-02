@@ -222,7 +222,9 @@ async function main() {
     }
     const memoryRoot = join(STATE_DIR, 'memory')
     const events = makeEventsStore(memoryRoot, chatId)
-    const observations = makeObservationsStore(memoryRoot, chatId)
+    const observations = makeObservationsStore(db, chatId, {
+      migrateFromFile: join(memoryRoot, chatId, 'observations.jsonl'),
+    })
     const agent = makeIntrospectAgent({
       chatId,
       events,
@@ -308,7 +310,10 @@ async function main() {
   async function maybeWriteWelcomeObservation(chatId: string): Promise<void> {
     try {
       const { makeObservationsStore } = await import('./observations/store.ts')
-      const obs = makeObservationsStore(join(STATE_DIR, 'memory'), chatId)
+      const memoryRoot = join(STATE_DIR, 'memory')
+      const obs = makeObservationsStore(db, chatId, {
+        migrateFromFile: join(memoryRoot, chatId, 'observations.jsonl'),
+      })
       const existing = await obs.listActive()
       const archived = await obs.listArchived()
       if (existing.length === 0 && archived.length === 0) {

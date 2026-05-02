@@ -568,16 +568,24 @@ async function main() {
     }
     case 'observations-list': {
       const { makeObservationsStore } = await import('./src/daemon/observations/store')
+      const { openDb } = await import('./src/lib/db')
       const memoryRoot = join(STATE_DIR, 'memory')
-      const store = makeObservationsStore(memoryRoot, parsed.chatId)
+      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+      const store = makeObservationsStore(db, parsed.chatId, {
+        migrateFromFile: join(memoryRoot, parsed.chatId, 'observations.jsonl'),
+      })
       const list = parsed.includeArchived ? await store.listArchived() : await store.listActive()
       console.log(parsed.json ? JSON.stringify({ ok: true, observations: list }, null, 2) : list.map(o => `${o.ts} ${o.body}`).join('\n'))
       return
     }
     case 'observations-archive': {
       const { makeObservationsStore } = await import('./src/daemon/observations/store')
+      const { openDb } = await import('./src/lib/db')
       const memoryRoot = join(STATE_DIR, 'memory')
-      const store = makeObservationsStore(memoryRoot, parsed.chatId)
+      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+      const store = makeObservationsStore(db, parsed.chatId, {
+        migrateFromFile: join(memoryRoot, parsed.chatId, 'observations.jsonl'),
+      })
       await store.archive(parsed.obsId)
       console.log(parsed.json ? JSON.stringify({ ok: true, archived: parsed.obsId }, null, 2) : `archived ${parsed.obsId}`)
       return
