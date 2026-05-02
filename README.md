@@ -21,11 +21,17 @@
 
 ## What is this?
 
-`wechat-cc` is a Bun daemon that bridges your **WeChat (微信)** account to a
-**Claude Code** session running on your computer. Once set up, you can:
+`wechat-cc` is a Bun daemon that bridges your **WeChat (微信)** account to
+**Claude Code** (and, since v2.0, **Codex** alongside it) running on your
+computer. Once set up, you can:
 
-- Send a text / image / file / voice message from your phone — Claude on your
-  desktop receives it, runs tools, and replies back into the chat.
+- Send a text / image / file / voice message from your phone — your chosen
+  agent on the desktop receives it, runs tools, and replies back into the
+  chat.
+- Pick a **conversation mode** per chat with `/cc` (Claude only), `/codex`
+  (Codex only), `/both` (both answer in parallel), or `/chat` (they discuss
+  with each other before answering you). See
+  [Features §4](#4--multi-agent-cc-codex-both-chat--claude--codex-on-the-same-chat).
 - Walk away from your desk and keep a long-running task moving via your phone.
 - Let Claude **reach out to you**, not just respond. The Companion layer +
   the v0.4 dashboard turn it into a long-running AI presence that writes
@@ -127,12 +133,13 @@ install. After that you land in the dashboard.
 
 ## Features
 
-### 1 · Two-way chat with Claude on your desk
+### 1 · Two-way chat with the agent on your desk
 
-Send text / images / files / voice from your phone; Claude sees everything,
-runs tools (Edit, Bash, etc.), and replies back into the chat. ilink uploads
-media via CDN with AES-128-ECB encryption. Voice transcription comes from
-ilink (displayed inline) and untranscribed audio is saved to your inbox.
+Send text / images / files / voice from your phone; the agent (Claude or
+Codex, picked per chat — see §4) sees everything, runs tools (Edit, Bash,
+etc.), and replies back into the chat. ilink uploads media via CDN with
+AES-128-ECB encryption. Voice transcription comes from ilink (displayed
+inline) and untranscribed audio is saved to your inbox.
 
 ### 2 · `share_page` — long-form output you can read on your phone
 
@@ -168,7 +175,57 @@ delivered after reconnect. When you reference an earlier conversation
 pointer file written on switch) and reads the source jsonl on demand —
 nothing is eagerly copied across projects.
 
-### 4 · Companion — the Claude that reaches out
+### 4 · Multi-agent (`/cc` `/codex` `/both` `/chat`) — Claude × Codex on the same chat
+
+Pick the **conversation mode** per chat with a slash command. Each chat
+remembers its choice across daemon restarts (`conversations.json`).
+
+| Command | Mode | Who answers | What you see |
+|---|---|---|---|
+| `/cc`            | **Solo · Claude** | Claude only | Single reply |
+| `/codex`         | **Solo · Codex**  | Codex only  | Single reply |
+| `/both`          | **Parallel** | Claude + Codex independently | `[Claude] ...` + `[Codex] ...` (two replies) |
+| `/cc + codex`    | **Primary + Tool** | Claude main, Codex on call | Single reply; Claude self-decides when to invoke `delegate_codex` |
+| `/codex + cc`    | **Primary + Tool** | Codex main, Claude on call | Same shape, roles swapped |
+| `/chat`          | **Chatroom** | Both, multi-round dialogue | Mixed `[Claude]` / `[Codex]` lines as they discuss, then a final answer |
+| `/solo`          | revert to single-provider default | — | — |
+| `/stop`          | cancel the current `/chat` loop | — | — |
+| `/mode`          | show the current mode for this chat | — | — |
+
+In **chatroom** mode (`/chat`) the assistants address each other with
+line-anchored `@-tags`:
+
+```
+@user 我们一致认为是 X
+@codex 你帮我 check src/foo.ts:42 这一段
+```
+
+Lines starting with `@user` (or no tag at all) are user-facing; `@codex` /
+`@claude` lines are routed to the other agent for the next round. The loop
+ends when one of them just `@user`s a final answer, or when `max_rounds=4`
+is hit. `/stop` aborts immediately.
+
+The architecture is **open** — providers are an open string brand registered
+through `ProviderRegistry`, not a Claude+Codex enum. Adding a third SDK
+(Cursor / Gemini / your own) is a new file in `src/core/` plus a registry
+entry. See [`docs/rfc/03-multi-agent-architecture.md`](docs/rfc/03-multi-agent-architecture.md)
+Appendix D.
+
+> **Auth-agnostic for Codex.** Whether you authed via `codex login`
+> (subscription) or set `OPENAI_API_KEY` (API plan), the daemon doesn't know
+> or care — both paths just work.
+
+> **Where do the tools live?** v2.0 moved all 22 tools (reply / share_page /
+> memory / companion / delegate / …) into stdio MCP servers. Both providers
+> talk to the same tool surface via a localhost-only daemon HTTP API
+> (bearer-token, `0o600` token file, depth-header recursion guard).
+> See [`docs/releases/2026-05-02-rfc03.md`](docs/releases/2026-05-02-rfc03.md).
+
+The dashboard's **会话模式 · Conversations** card shows the current mode for
+every active chat as a tinted pill. Read-only — flips happen in the chat
+itself so there's a single source of truth.
+
+### 5 · Companion — the Claude that reaches out
 
 Opt-in proactive mode. When `companion_enable` is set, the daemon runs two
 schedulers:
@@ -187,7 +244,7 @@ Natural-language controls:
 - `切到陪伴` / `换回小助手`
 - `别烦我` / `snooze 3 小时`
 
-### 5 · Two mirrors of accompaniment (v0.4 dashboard)
+### 6 · Two mirrors of accompaniment (v0.4 dashboard)
 
 The desktop dashboard reflects two perspectives on the same relationship:
 
@@ -218,7 +275,7 @@ per-chat `activity.jsonl`).
 > [`docs/specs/2026-04-29-v0.4.1.md`](docs/specs/2026-04-29-v0.4.1.md) for
 > SDK + activity tracking specifics.
 
-### 6 · Hearth integration — vault governance from your phone
+### 7 · Hearth integration — vault governance from your phone
 
 Capture text into a personal markdown vault, propose a `ChangePlan`, review
 the rendered `share_page`, tap ✓ Approve — all without leaving WeChat. Built
@@ -243,7 +300,7 @@ export HEARTH_VAULT=/path/to/your/vault
 export HEARTH_AGENT=mock                # or "claude" with an Anthropic key
 ```
 
-### 7 · Voice replies
+### 8 · Voice replies
 
 Say "念一下 X" / "speak it" and Claude voices the response. Primary provider
 is [VoxCPM2](https://huggingface.co/openbmb/VoxCPM2) via `vllm serve --omni`
@@ -251,7 +308,7 @@ is [VoxCPM2](https://huggingface.co/openbmb/VoxCPM2) via `vllm serve --omni`
 Configured entirely via WeChat conversation — Claude walks you through the
 API-key / base-URL setup the first time you ask.
 
-### 8 · CLI fallback
+### 9 · CLI fallback
 
 If the daemon crashes, you can still reply from any terminal:
 
@@ -271,19 +328,29 @@ restarted.
 ## How it works
 
 ```
-[your phone]                    [your desktop]
-   WeChat ──────────► ilink ──► wechat-cc daemon ──► Claude Agent SDK ──► Claude
-       │              (long-poll)     │                                       │
-       ▼                               ▼                                       │
-   share_page ◄── cloudflared ◄── Bun.serve(local) ◄────── reply tool ◄───────┘
+[your phone]                  [your desktop]
+                                                 ┌─► Claude Agent SDK ─► Claude
+   WeChat ──────► ilink ──► wechat-cc daemon ────┤
+       │         (long-poll)        │            └─► Codex SDK ─────────► Codex
+       │                            │
+       │                            └─► coordinator ── mode-aware dispatch
+       ▼                                              (solo / parallel /
+   share_page ◄── cloudflared ◄── Bun.serve(local)     primary_tool / chatroom)
+                                                ▲
+   stdio MCP ────────────────────► daemon internal HTTP (localhost-only,
+   (wechat tools + delegate)                            bearer token, 0o600)
 ```
 
 - **Receive**: per-account long-polling `POST /ilink/bot/getupdates`
 - **Send**: `POST /ilink/bot/sendmessage` (requires the user's
   `context_token` — they must message the bot first)
-- **Driver**: `@anthropic-ai/claude-agent-sdk` 0.2.116 pinned. The daemon
-  manages claude subprocesses internally — no Claude Code MCP channel
-  registration needed
+- **Drivers**: `@anthropic-ai/claude-agent-sdk` and `@openai/codex-sdk`,
+  registered side-by-side via `ProviderRegistry`. Adding a third provider
+  (Cursor / Gemini / your own) is a new file in `src/core/`. See
+  [`docs/rfc/03-multi-agent-architecture.md`](docs/rfc/03-multi-agent-architecture.md)
+- **Tools**: 22 tools (reply / share_page / memory / companion / delegate /
+  …) live in stdio MCP servers under `src/mcp-servers/`. Both providers
+  reach them through the daemon's localhost-only internal HTTP API
 - **State**: everything under `~/.claude/channels/wechat/` (see [State layout](#state-layout))
 - **Companion**: two schedulers (push + introspect) with separate cadences;
   isolated SDK evals for introspect / summary so the prompt style doesn't
@@ -485,7 +552,10 @@ the OS package manager.
 
 ## Versions
 
-- **CLI / daemon**: 1.2.0 — see [`package.json`](./package.json)
+- **CLI / daemon**: see [`package.json`](./package.json). The latest
+  shipped milestone is **RFC 03 multi-agent** (Claude × Codex modes / stdio
+  MCP / open provider registry) — see
+  [`docs/releases/2026-05-02-rfc03.md`](./docs/releases/2026-05-02-rfc03.md).
 - **Desktop bundle**: latest signed release is
   [`desktop-v0.4.0`](https://github.com/ggshr9/wechat-cc/releases/tag/desktop-v0.4.0).
   v0.4 / v0.4.1 features (双面镜子 dashboard, real introspect SDK,
