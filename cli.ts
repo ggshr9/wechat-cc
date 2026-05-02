@@ -2,6 +2,7 @@
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { writeFileSync } from 'node:fs'
+import { defineCommand, runMain, type CommandDef } from 'citty'
 import { STATE_DIR } from './src/lib/config'
 import { loadAgentConfig, saveAgentConfig, type AgentProviderKind } from './src/lib/agent-config'
 import { analyzeDoctor, defaultDoctorDeps, printDoctor, serviceStatus, setupStatus } from './src/cli/doctor'
@@ -28,15 +29,14 @@ function emitJson(data: unknown, outFile: string | undefined): void {
   console.log(JSON.stringify({ ok: true, out_file: outFile, bytes: body.length }))
 }
 
+// CliArgs only covers commands NOT yet migrated to citty (see `cittyRoot` below).
+// Migrated subcommands (status / list / install / doctor / setup-status) are
+// dispatched in `main()` directly to citty before reaching parseCliArgs, so
+// keeping them in this union would be dead code.
 export type CliArgs =
   | { cmd: 'run'; dangerouslySkipPermissions: boolean }
   | { cmd: 'setup'; qrJson?: boolean }
   | { cmd: 'setup-poll'; qrcode: string; baseUrl?: string; json: boolean }
-  | { cmd: 'install'; userScope: boolean }
-  | { cmd: 'status' }
-  | { cmd: 'list' }
-  | { cmd: 'doctor'; json: boolean }
-  | { cmd: 'setup-status'; json: boolean }
   | { cmd: 'service'; action: 'status' | 'install' | 'start' | 'stop' | 'uninstall'; json: boolean; unattended?: boolean; autoStart?: boolean }
   | { cmd: 'provider-set'; provider: AgentProviderKind; model?: string; unattended?: boolean }
   | { cmd: 'provider-show'; json: boolean }
@@ -94,11 +94,6 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
         ? { cmd: 'setup-poll', qrcode, baseUrl, json: rest.includes('--json') }
         : { cmd: 'setup-poll', qrcode, json: rest.includes('--json') }
     }
-    case 'install': return { cmd: 'install', userScope: rest.includes('--user') }
-    case 'status': return { cmd: 'status' }
-    case 'list': return { cmd: 'list' }
-    case 'doctor': return { cmd: 'doctor', json: rest.includes('--json') }
-    case 'setup-status': return { cmd: 'setup-status', json: rest.includes('--json') }
     case 'service': {
       if (rest[0] === 'status' || rest[0] === 'install' || rest[0] === 'start' || rest[0] === 'stop' || rest[0] === 'uninstall') {
         return {
@@ -364,8 +359,110 @@ Notes for 0.x users:
     the daemon process.
 `
 
+/**
+ * citty migration — batch 1.
+ *
+ * Subcommands listed in `MIGRATED_COMMANDS` go through the citty root below;
+ * everything else still falls through to legacy `parseCliArgs` + the
+ * executor switch in `main()`. Each batch will move ~5-10 more commands from
+ * the legacy switch into `cittyRoot.subCommands` until the legacy parser is
+ * empty.
+ *
+ * Subcommand `run` handlers preserve the dynamic-import pattern
+ * (`await import('./src/cli/X.ts')`) so cold-start cost stays the same.
+ */
+const statusListRun = async (cmd: 'status' | 'list'): Promise<void> => {
+  const { runStatus } = await import('./src/cli/cli-status.ts')
+  await runStatus(cmd)
+}
+
+const statusCmd = defineCommand({
+  meta: { name: 'status', description: 'Show daemon status + accounts' },
+  async run() { await statusListRun('status') },
+})
+
+const listCmd = defineCommand({
+  meta: { name: 'list', description: 'List bound accounts' },
+  async run() { await statusListRun('list') },
+})
+
+const installCmd = defineCommand({
+  meta: {
+    name: 'install',
+    description: 'Deprecated since v1.0 — use `wechat-cc service install`',
+  },
+  args: {
+    user: { type: 'boolean', description: 'legacy --user scope (ignored)' },
+  },
+  run() {
+    // `wechat-cc install [--user]` was the v0.x entrypoint that wrote a
+    // wechat MCP server entry into ~/.claude.json so Claude Code would
+    // spawn the channel as a child MCP. v1.0+ flipped the model: the
+    // daemon now drives Claude via the Agent SDK directly, so an MCP
+    // entry serves no purpose. Tell the user the new path instead of
+    // silently writing a broken entry.
+    console.error('wechat-cc install is deprecated since v1.0.')
+    console.error('Use `wechat-cc service install` to register the daemon (macOS launchd / Linux systemd / Windows ScheduledTask),')
+    console.error('or open the desktop app and walk through the setup wizard.')
+    process.exit(2)
+  },
+})
+
+const doctorCmd = defineCommand({
+  meta: { name: 'doctor', description: 'Diagnose install/setup state' },
+  args: {
+    json: { type: 'boolean', description: 'machine-readable output' },
+  },
+  run({ args }) {
+    const report = analyzeDoctor(defaultDoctorDeps())
+    if (args.json) console.log(JSON.stringify(report, null, 2))
+    else printDoctor(report)
+  },
+})
+
+const setupStatusCmd = defineCommand({
+  meta: { name: 'setup-status', description: 'Machine-readable setup status for desktop UI' },
+  args: {
+    json: { type: 'boolean', description: 'JSON envelope (vs single-line text)' },
+  },
+  run({ args }) {
+    const deps = defaultDoctorDeps()
+    const status = setupStatus(deps)
+    if (args.json) console.log(JSON.stringify(status, null, 2))
+    else console.log(status.bound ? 'wechat: bound' : 'wechat: not bound')
+  },
+})
+
+export const cittyRoot: CommandDef = defineCommand({
+  meta: {
+    name: 'wechat-cc',
+    description: 'WeChat bridge for Claude Code (Agent SDK daemon)',
+  },
+  subCommands: {
+    status: statusCmd,
+    list: listCmd,
+    install: installCmd,
+    doctor: doctorCmd,
+    'setup-status': setupStatusCmd,
+  },
+})
+
+const MIGRATED_COMMANDS = new Set(Object.keys(cittyRoot.subCommands as Record<string, unknown>))
+
 async function main() {
-  const parsed = parseCliArgs(process.argv.slice(2))
+  const argv = process.argv.slice(2)
+  const first = argv[0]
+  // Route migrated subcommands through citty before falling through to the
+  // legacy parseCliArgs switch. `--help` / `-h` / `help` still hit legacy
+  // (which prints HELP_TEXT covering migrated + legacy commands together);
+  // `wechat-cc status --help` etc. hit citty's auto-generated subcommand help.
+  if (first && MIGRATED_COMMANDS.has(first)) {
+    // runMain (vs runCommand) gives us auto `--help` / `-h` handling per
+    // subcommand and prints citty's auto-generated usage on errors.
+    await runMain(cittyRoot, { rawArgs: argv })
+    return
+  }
+  const parsed = parseCliArgs(argv)
   const here = dirname(fileURLToPath(import.meta.url))
   switch (parsed.cmd) {
     case 'run': {
@@ -400,38 +497,6 @@ async function main() {
       const result = await pollSetupQrStatus({ qrcode: parsed.qrcode, baseUrl: parsed.baseUrl, stateDir: STATE_DIR })
       if (parsed.json) console.log(JSON.stringify(result, null, 2))
       else console.log(result.status)
-      return
-    }
-    case 'install': {
-      // `wechat-cc install [--user]` was the v0.x entrypoint that wrote a
-      // wechat MCP server entry into ~/.claude.json so Claude Code would
-      // spawn the channel as a child MCP. v1.0+ flipped the model: the
-      // daemon now drives Claude via the Agent SDK directly, so an MCP
-      // entry serves no purpose — the args we used to write
-      // (`['run', '--cwd', here, '--silent', 'start']`) aren't even valid
-      // for the v1.2 cli parser. Tell the user the new path instead of
-      // silently writing a broken entry.
-      console.error('wechat-cc install is deprecated since v1.0.')
-      console.error('Use `wechat-cc service install` to register the daemon (macOS launchd / Linux systemd / Windows ScheduledTask),')
-      console.error('or open the desktop app and walk through the setup wizard.')
-      process.exit(2)
-    }
-    case 'status': case 'list': {
-      const { runStatus } = await import('./src/cli/cli-status.ts')
-      await runStatus(parsed.cmd)
-      return
-    }
-    case 'doctor': {
-      const report = analyzeDoctor(defaultDoctorDeps())
-      if (parsed.json) console.log(JSON.stringify(report, null, 2))
-      else printDoctor(report)
-      return
-    }
-    case 'setup-status': {
-      const deps = defaultDoctorDeps()
-      const status = setupStatus(deps)
-      if (parsed.json) console.log(JSON.stringify(status, null, 2))
-      else console.log(status.bound ? 'wechat: bound' : 'wechat: not bound')
       return
     }
     case 'service': {
