@@ -6,10 +6,12 @@
 import { invoke as ipcInvoke, formatInvokeError } from "./ipc.js"
 import { initialMode, restartButtonState } from "./view.js"
 import { createDoctorPoller } from "./doctor-poller.js"
+import { createConversationsPoller } from "./conversations-poller.js"
 import { renderDoctorWizard, refreshEnterDashboardButton, updateFooterStatus, showStep as wizardShowStep } from "./modules/wizard.js"
 import { refreshQr } from "./modules/qr.js"
 import { serviceAction, forceKillDaemon } from "./modules/service.js"
 import { renderDashboard, renderRestartButton, setPending, updateClock, restartDaemon, stopDaemon, handleAccountRowClick } from "./modules/dashboard.js"
+import { renderConversations } from "./modules/conversations.js"
 import { loadMemoryPane, wireMemoryButtons, loadMemoryTopZone, loadMemoryDecisions, archiveObservation } from "./modules/memory.js"
 import { loadLogsPane, startLogsAutoRefresh, stopLogsAutoRefresh } from "./modules/logs.js"
 import { loadSessionsList, openProjectDetail, closeProjectDetail, toggleFavorite, exportProjectMarkdown, deleteProject, wireSearch, startSessionsAutoRefresh, stopSessionsAutoRefresh, stopDetailAutoRefresh, setSessionsDetailMode } from "./modules/sessions.js"
@@ -65,6 +67,7 @@ async function withRefreshFeedback(button, fn) {
 const invoke = (cmd, args) => ipcInvoke(cmd, args, state)
 
 const doctorPoller = createDoctorPoller({ invoke, intervalMs: 5000 })
+const conversationsPoller = createConversationsPoller({ invoke, intervalMs: 10000 })
 
 // Bag passed to module functions instead of imported singletons. Keeps each
 // module testable in isolation (any conformant deps object → run the module
@@ -121,6 +124,7 @@ function setMode(mode) {
   document.documentElement.dataset.mode = mode
   if (mode === "dashboard") {
     doctorPoller.start()
+    conversationsPoller.start()
     if (!state.clockTimer) state.clockTimer = setInterval(updateClock, 1000)
     updateClock()
     if (!state.updateProbed) {
@@ -129,6 +133,7 @@ function setMode(mode) {
     }
   } else {
     doctorPoller.stop()
+    conversationsPoller.stop()
     if (state.clockTimer) { clearInterval(state.clockTimer); state.clockTimer = null }
   }
 }
@@ -148,6 +153,9 @@ function wireDoctorSubscribers() {
   doctorPoller.subscribe(report => updateFooterStatus(report.checks.daemon))
   doctorPoller.subscribe(renderDashboardIfActive)
   doctorPoller.subscribe(renderRestartButton)
+  conversationsPoller.subscribe(report => {
+    if (state.mode === "dashboard") renderConversations(report)
+  })
 }
 
 function renderDashboardIfActive(report) {

@@ -3,7 +3,7 @@ import {
   doctorRows, pollAdvance, daemonStatusLine, escapeHtml,
   initialMode, dashboardHero, accountRows, configRows, formatRelativeTime,
   updateProbeLine, updateApplyLine, restartButtonState, deleteAccountConfirmCopy,
-  UPDATE_REASON_COPY,
+  UPDATE_REASON_COPY, modeBadge, conversationRows,
 // @ts-expect-error — vanilla JS sibling module; covered at runtime.
 } from './view.js'
 
@@ -312,6 +312,56 @@ describe('configRows', () => {
   it('returns the four config rows in stable order', () => {
     const rows = configRows(fakeReport(), '~/.claude/channels/wechat')
     expect(rows.map((r: [string, string, string]) => r[0])).toEqual(['Provider', 'Provider binary', 'Allowlist', 'State directory'])
+  })
+})
+
+describe('modeBadge', () => {
+  it('solo → label "Solo" + provider in detail', () => {
+    expect(modeBadge({ kind: 'solo', provider: 'claude' })).toEqual({
+      label: 'Solo', detail: 'claude', tone: 'solo',
+    })
+  })
+  it('parallel → label "Parallel" + providers joined', () => {
+    expect(modeBadge({ kind: 'parallel', providers: ['claude', 'codex'] })).toEqual({
+      label: 'Parallel', detail: 'claude + codex', tone: 'parallel',
+    })
+  })
+  it('primary_tool → label "Primary" + primary (tool: secondary)', () => {
+    expect(modeBadge({ kind: 'primary_tool', primary: 'claude', secondary: 'codex' })).toEqual({
+      label: 'Primary', detail: 'claude (tool: codex)', tone: 'primary',
+    })
+  })
+  it('chatroom → label "Chatroom" + a ↔ b', () => {
+    expect(modeBadge({ kind: 'chatroom', providers: ['claude', 'codex'] })).toEqual({
+      label: 'Chatroom', detail: 'claude ↔ codex', tone: 'chatroom',
+    })
+  })
+  it('handles legacy/partial shapes without crashing', () => {
+    expect(modeBadge(null).label).toBe('—')
+    expect(modeBadge(undefined).label).toBe('—')
+    expect(modeBadge({ kind: 'solo' }).detail).toBe('—')           // no provider
+    expect(modeBadge({ kind: 'parallel' }).detail).toBe('—')       // no providers list
+    expect(modeBadge({ kind: 'unknown_future' }).label).toBe('unknown_future')
+  })
+})
+
+describe('conversationRows', () => {
+  it('maps conversations[] → {chatId, name, badge} sorted by tone then chat_id', () => {
+    const rows = conversationRows([
+      { chat_id: 'c2', user_name: 'Bob', mode: { kind: 'solo', provider: 'codex' } },
+      { chat_id: 'c1', user_name: 'Alice', mode: { kind: 'chatroom', providers: ['claude', 'codex'] } },
+      { chat_id: 'c3', user_name: null,  mode: { kind: 'solo', provider: 'claude' } },
+    ])
+    // Sort by tone (chatroom < solo) then chat_id ascending.
+    expect(rows.map(r => r.chatId)).toEqual(['c1', 'c2', 'c3'])
+    // Falls back to chat_id when user_name is null.
+    expect(rows[2]).toMatchObject({ chatId: 'c3', name: 'c3' })
+    expect(rows[0].badge.tone).toBe('chatroom')
+  })
+  it('returns [] for empty / non-array input', () => {
+    expect(conversationRows([])).toEqual([])
+    expect(conversationRows(undefined as unknown as never[])).toEqual([])
+    expect(conversationRows(null as unknown as never[])).toEqual([])
   })
 })
 

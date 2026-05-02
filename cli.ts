@@ -53,6 +53,7 @@ export type CliArgs =
   | { cmd: 'sessions-read-jsonl'; alias: string; json: boolean; outFile?: string }
   | { cmd: 'sessions-delete'; alias: string; json: boolean }
   | { cmd: 'sessions-search'; query: string; json: boolean; limit: number; outFile?: string }
+  | { cmd: 'conversations-list'; json: boolean }
   | { cmd: 'logs'; tail: number; json: boolean }
   | { cmd: 'reply'; chatId?: string; text?: string; json: boolean }
   | { cmd: 'update'; check: boolean; json: boolean }
@@ -187,6 +188,12 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
         const limitIdx = rest.indexOf('--limit')
         const limit = limitIdx >= 0 ? Number.parseInt(rest[limitIdx + 1] ?? '', 10) : 50
         return { cmd: 'sessions-search', query: rest[1], json: rest.includes('--json'), limit: Number.isFinite(limit) ? limit : 50, outFile }
+      }
+      return { cmd: 'help' }
+    }
+    case 'conversations': {
+      if (rest[0] === 'list') {
+        return { cmd: 'conversations-list', json: rest.includes('--json') }
       }
       return { cmd: 'help' }
     }
@@ -667,6 +674,23 @@ async function main() {
       const hits = await searchAcrossSessions(parsed.query, { limit: parsed.limit, stateDir: STATE_DIR })
       if (parsed.json) emitJson({ ok: true, query: parsed.query, hits }, parsed.outFile)
       else console.log(hits.map(h => `${h.alias} · ${h.snippet}`).join('\n'))
+      return
+    }
+    case 'conversations-list': {
+      // Read-only snapshot of conversations.json + user_names.json. Used by
+      // the desktop dashboard (P5.2) to display per-chat mode badges. Falls
+      // back to chat_id as user_name when no name has been captured yet.
+      const { makeConversationStore } = await import('./src/core/conversation-store')
+      const { makeStateStore } = await import('./src/daemon/state-store')
+      const store = makeConversationStore(join(STATE_DIR, 'conversations.json'), { debounceMs: 0 })
+      const names = makeStateStore(join(STATE_DIR, 'user_names.json'), { debounceMs: 0 })
+      const conversations = Object.entries(store.all()).map(([chat_id, rec]) => ({
+        chat_id,
+        user_name: names.get(chat_id) ?? null,
+        mode: rec.mode,
+      }))
+      if (parsed.json) console.log(JSON.stringify({ ok: true, conversations }, null, 2))
+      else console.log(conversations.map(c => `${c.chat_id} ${c.user_name ?? ''} ${c.mode.kind}`).join('\n'))
       return
     }
     case 'avatar-info': {

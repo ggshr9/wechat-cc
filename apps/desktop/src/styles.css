@@ -209,6 +209,25 @@ input { font: inherit; color: inherit; }
 .badge.warn { background: var(--amber-soft); color: var(--amber); }
 .badge.warn .b-dot { background: var(--amber); }
 
+/* ─── mode badges (RFC 03 P5.2) ──────────────────────────────────────── */
+/* Per-chat mode pill on the dashboard's Conversations table. Tone maps */
+/* to the four conversation modes: solo / parallel / primary / chatroom. */
+.mode-badge {
+  display: inline-flex; align-items: center;
+  height: 20px; padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px; font-weight: 500;
+  letter-spacing: 0.2px;
+}
+.mode-badge.mode-solo     { background: var(--green-soft); color: var(--green-ink); }
+.mode-badge.mode-parallel { background: var(--amber-soft); color: var(--amber); }
+.mode-badge.mode-primary  { background: #e3e8f0;          color: #3b4a63; }
+.mode-badge.mode-chatroom { background: #ece1f4;          color: #6b3e8a; }
+.mode-detail {
+  margin-left: 8px;
+  font-size: 11px; color: var(--ink-3);
+}
+
 /* ═══════════════════════════════════════════════════════════════════════ */
 /*  WIZARD MODE                                                           */
 /* ═══════════════════════════════════════════════════════════════════════ */

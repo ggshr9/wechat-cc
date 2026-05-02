@@ -239,6 +239,23 @@ describe('sessions search', () => {
   })
 })
 
+describe('conversations list', () => {
+  it('parses --json', () => {
+    expect(parseCliArgs(['conversations', 'list', '--json'])).toEqual({
+      cmd: 'conversations-list', json: true,
+    })
+  })
+  it('defaults json to false without --json', () => {
+    expect(parseCliArgs(['conversations', 'list'])).toEqual({
+      cmd: 'conversations-list', json: false,
+    })
+  })
+  it('falls back to help when subcommand is unknown', () => {
+    expect(parseCliArgs(['conversations', 'bogus']).cmd).toBe('help')
+    expect(parseCliArgs(['conversations']).cmd).toBe('help')
+  })
+})
+
 describe('guard', () => {
   it('parses status / enable / disable', () => {
     expect(parseCliArgs(['guard', 'status', '--json'])).toEqual({ cmd: 'guard-status', json: true })
