@@ -162,6 +162,76 @@ describe('wechat-mcp stdio integration', () => {
     expect(parsed.error).toMatch(/\.md/i)
   })
 
+  // ── B3: projects + set_user_name end-to-end ─────────────────────────────
+
+  async function bootChainWithProjects(): Promise<{ client: Client; setUserNameCalls: Array<[string, string]>; switchToCalls: string[] }> {
+    const memory = makeMemoryFS({ rootDir: join(stateDir, 'memory') })
+    const setUserNameCalls: Array<[string, string]> = []
+    const switchToCalls: string[] = []
+    const projects = {
+      list: () => [
+        { alias: 'compass', path: '/p/compass', current: true },
+        { alias: 'mobile', path: '/p/mobile', current: false },
+      ],
+      switchTo: async (alias: string) => {
+        switchToCalls.push(alias)
+        return alias === 'compass' || alias === 'mobile'
+          ? { ok: true as const, path: `/p/${alias}` }
+          : { ok: false as const, reason: 'alias_not_found' }
+      },
+      add: async () => {},
+      remove: async () => {},
+    }
+    const setUserName = async (chatId: string, name: string) => { setUserNameCalls.push([chatId, name]) }
+    api = createInternalApi({ stateDir, daemonPid: 7777, memory, projects, setUserName })
+    const { port, tokenFilePath } = await api.start()
+    const transport = new StdioClientTransport({
+      command: RUNTIME,
+      args: [WECHAT_MCP_MAIN],
+      env: {
+        ...process.env as Record<string, string>,
+        WECHAT_INTERNAL_API: `http://127.0.0.1:${port}`,
+        WECHAT_INTERNAL_TOKEN_FILE: tokenFilePath,
+      },
+      stderr: 'pipe',
+    })
+    const c = new Client({ name: 'integration-projects', version: '0.0.1' }, { capabilities: {} })
+    await c.connect(transport)
+    client = c
+    return { client: c, setUserNameCalls, switchToCalls }
+  }
+
+  it('list_projects round-trips through stdio + HTTP + projects.list()', async () => {
+    const { client } = await bootChainWithProjects()
+    const result = await client.callTool({ name: 'list_projects', arguments: {} })
+    expect(result.isError).toBeFalsy()
+    const text = (result.content as Array<{ type: string; text?: string }>)[0]?.text
+    const arr = JSON.parse(text!) as Array<{ alias: string; current: boolean }>
+    expect(arr).toHaveLength(2)
+    expect(arr[0]).toMatchObject({ alias: 'compass', current: true })
+  })
+
+  it('switch_project surfaces ok:false reason from server through stdio', async () => {
+    const { client, switchToCalls } = await bootChainWithProjects()
+    const result = await client.callTool({ name: 'switch_project', arguments: { alias: 'ghost' } })
+    expect(result.isError).toBeFalsy()
+    const text = (result.content as Array<{ type: string; text?: string }>)[0]?.text
+    expect(JSON.parse(text!)).toEqual({ ok: false, reason: 'alias_not_found' })
+    expect(switchToCalls).toEqual(['ghost'])
+  })
+
+  it('set_user_name forwards chat_id + name through full chain', async () => {
+    const { client, setUserNameCalls } = await bootChainWithProjects()
+    const result = await client.callTool({
+      name: 'set_user_name',
+      arguments: { chat_id: 'user@bot', name: '丸子' },
+    })
+    expect(result.isError).toBeFalsy()
+    const text = (result.content as Array<{ type: string; text?: string }>)[0]?.text
+    expect(JSON.parse(text!)).toEqual({ ok: true })
+    expect(setUserNameCalls).toEqual([['user@bot', '丸子']])
+  })
+
   it('ping tool returns isError=true when internal-api is unreachable', async () => {
     // Don't start internal-api — point the child at a port that nothing
     // is listening on. The child should still come up (no precondition

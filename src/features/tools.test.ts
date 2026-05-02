@@ -89,28 +89,10 @@ describe('buildWechatMcpServer', () => {
     expect(deps.sharePage).toHaveBeenCalledWith('t', '# hi', undefined)
   })
 
-  it('switch_project surfaces failure reason', async () => {
-    const deps = makeDeps({
-      projects: {
-        list: () => [],
-        switchTo: async () => ({ ok: false, reason: 'alias not found' }),
-        add: async () => {},
-        remove: async () => {},
-      },
-    })
-    const { handlers } = buildWechatMcpServer(deps)
-    const out = await handlers.switch_project({ alias: 'ghost' })
-    expect(extractText(out)).toContain('alias not found')
-  })
+  // list_projects / switch_project / add_project / remove_project /
+  // set_user_name tests moved to internal-api.test.ts + integration.test.ts
+  // when these tools were extracted to wechat-mcp stdio in P1.B B3.
 
-  it('list_projects returns JSON list', async () => {
-    const deps = makeDeps()
-    const { handlers } = buildWechatMcpServer(deps)
-    const out = await handlers.list_projects({})
-    const parsed = JSON.parse(extractText(out)) as Array<{ alias: string }>
-    expect(parsed).toHaveLength(1)
-    expect(parsed[0]?.alias).toBe('P')
-  })
 
   it('reply_voice delegates to deps.voice.replyVoice', async () => {
     const deps = makeDeps()

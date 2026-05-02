@@ -68,6 +68,8 @@ async function main() {
     stateDir: STATE_DIR,
     daemonPid: process.pid,
     memory: memoryFS,
+    projects: ilink.projects,
+    setUserName: (chatId, name) => ilink.setUserName(chatId, name),
     log: (tag, line) => log(tag, line),
   })
   const { port: internalApiPort, tokenFilePath: internalTokenFile } = await internalApi.start()

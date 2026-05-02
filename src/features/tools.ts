@@ -74,15 +74,10 @@ export interface BuiltWechatMcp {
   handlers: {
     reply: (args: { chat_id: string; text: string }) => Promise<unknown>
     edit_message: (args: { chat_id: string; msg_id: string; text: string }) => Promise<unknown>
-    set_user_name: (args: { chat_id: string; name: string }) => Promise<unknown>
     send_file: (args: { chat_id: string; path: string }) => Promise<unknown>
     broadcast: (args: { text: string; account_id?: string }) => Promise<unknown>
     share_page: (args: { title: string; content: string; needs_approval?: boolean; chat_id?: string; account_id?: string }) => Promise<unknown>
     resurface_page: (args: { slug?: string; title_fragment?: string }) => Promise<unknown>
-    list_projects: (args: Record<string, never>) => Promise<unknown>
-    switch_project: (args: { alias: string }) => Promise<unknown>
-    add_project: (args: { alias: string; path: string }) => Promise<unknown>
-    remove_project: (args: { alias: string }) => Promise<unknown>
     reply_voice: (args: { chat_id: string; text: string }) => Promise<unknown>
     save_voice_config: (args: {
       provider: 'http_tts' | 'qwen'
@@ -132,16 +127,8 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
   )
   handlers.edit_message = async (a) => (await editDef.handler(a, undefined)) as unknown
 
-  const setNameDef = tool(
-    'set_user_name',
-    '记住新用户的显示名称。',
-    { chat_id: z.string(), name: z.string() },
-    async ({ chat_id, name }) => {
-      await deps.setUserName(chat_id, name)
-      return okText(JSON.stringify({ ok: true }))
-    },
-  )
-  handlers.set_user_name = async (a) => (await setNameDef.handler(a, undefined)) as unknown
+  // set_user_name moved to wechat-mcp stdio server in P1.B B3.
+  // See src/mcp-servers/wechat/main.ts and src/daemon/internal-api.ts.
 
   const sendFileDef = tool(
     'send_file',
@@ -191,43 +178,8 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
   )
   handlers.resurface_page = async (a) => (await resurfaceDef.handler(a as any, undefined)) as unknown
 
-  const listProjectsDef = tool(
-    'list_projects',
-    '列出已注册的项目及当前项目。',
-    {},
-    async () => okText(JSON.stringify(deps.projects.list())),
-  )
-  handlers.list_projects = async (a) => (await listProjectsDef.handler(a, undefined)) as unknown
-
-  const switchProjectDef = tool(
-    'switch_project',
-    '切换到指定项目别名。',
-    { alias: z.string() },
-    async ({ alias }) => okText(JSON.stringify(await deps.projects.switchTo(alias))),
-  )
-  handlers.switch_project = async (a) => (await switchProjectDef.handler(a, undefined)) as unknown
-
-  const addProjectDef = tool(
-    'add_project',
-    '注册一个新项目（别名 + 绝对路径）。',
-    { alias: z.string(), path: z.string() },
-    async ({ alias, path }) => {
-      await deps.projects.add(alias, path)
-      return okText(JSON.stringify({ ok: true }))
-    },
-  )
-  handlers.add_project = async (a) => (await addProjectDef.handler(a, undefined)) as unknown
-
-  const removeProjectDef = tool(
-    'remove_project',
-    '移除一个已注册的项目。',
-    { alias: z.string() },
-    async ({ alias }) => {
-      await deps.projects.remove(alias)
-      return okText(JSON.stringify({ ok: true }))
-    },
-  )
-  handlers.remove_project = async (a) => (await removeProjectDef.handler(a, undefined)) as unknown
+  // list_projects / switch_project / add_project / remove_project moved
+  // to wechat-mcp stdio server in P1.B B3.
 
   const replyVoiceDef = tool(
     'reply_voice',
@@ -310,9 +262,8 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
     name: 'wechat',
     version: '1.0.0',
     tools: [
-      replyDef, editDef, setNameDef, sendFileDef, broadcastDef,
+      replyDef, editDef, sendFileDef, broadcastDef,
       shareDef, resurfaceDef,
-      listProjectsDef, switchProjectDef, addProjectDef, removeProjectDef,
       replyVoiceDef, saveVoiceConfigDef, voiceConfigStatusDef,
       companionEnableDef, companionDisableDef, companionStatusDef, companionSnoozeDef,
     ],

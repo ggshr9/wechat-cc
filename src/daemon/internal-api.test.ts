@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, statSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -246,5 +246,193 @@ describe('internal-api', () => {
     })
     expect(resp.status).toBe(400)
     expect(await resp.json()).toMatchObject({ error: 'malformed_json' })
+  })
+
+  // ─── projects + user_name routes (RFC 03 P1.B B3) ─────────────────────
+
+  describe('projects + user_name routes', () => {
+    interface MockProjects {
+      list: () => { alias: string; path: string; current: boolean }[]
+      switchTo: (alias: string) => Promise<{ ok: true; path: string } | { ok: false; reason: string }>
+      add: (alias: string, path: string) => Promise<void>
+      remove: (alias: string) => Promise<void>
+    }
+
+    function startWithProjects(opts: {
+      projects?: MockProjects
+      setUserName?: (chatId: string, name: string) => Promise<void>
+    } = {}): Promise<{ port: number; token: string }> {
+      api = createInternalApi({
+        stateDir,
+        daemonPid: 1,
+        ...(opts.projects ? { projects: opts.projects } : {}),
+        ...(opts.setUserName ? { setUserName: opts.setUserName } : {}),
+      })
+      return api.start().then(({ port, tokenFilePath }) => ({
+        port,
+        token: readFileSync(tokenFilePath, 'utf8').trim(),
+      }))
+    }
+
+    it('GET /v1/projects/list returns array (legacy unwrapped shape)', async () => {
+      const { port, token } = await startWithProjects({
+        projects: {
+          list: () => [{ alias: 'a', path: '/p/a', current: true }, { alias: 'b', path: '/p/b', current: false }],
+          switchTo: async () => ({ ok: true, path: '/p/a' }),
+          add: async () => {},
+          remove: async () => {},
+        },
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/projects/list`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      expect(resp.status).toBe(200)
+      const body = await resp.json() as Array<{ alias: string; current: boolean }>
+      expect(body).toHaveLength(2)
+      expect(body[0]).toMatchObject({ alias: 'a', current: true })
+    })
+
+    it('POST /v1/projects/switch forwards alias and returns ok:true on success', async () => {
+      const switchTo = vi.fn(async () => ({ ok: true as const, path: '/x' }))
+      const { port, token } = await startWithProjects({
+        projects: { list: () => [], switchTo, add: async () => {}, remove: async () => {} },
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/projects/switch`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ alias: 'mobile' }),
+      })
+      expect(resp.status).toBe(200)
+      expect(await resp.json()).toEqual({ ok: true, path: '/x' })
+      expect(switchTo).toHaveBeenCalledWith('mobile')
+    })
+
+    it('POST /v1/projects/switch surfaces ok:false reason on failure', async () => {
+      const { port, token } = await startWithProjects({
+        projects: {
+          list: () => [],
+          switchTo: async () => ({ ok: false, reason: 'alias_not_found' }),
+          add: async () => {}, remove: async () => {},
+        },
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/projects/switch`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ alias: 'ghost' }),
+      })
+      expect(resp.status).toBe(200)
+      expect(await resp.json()).toEqual({ ok: false, reason: 'alias_not_found' })
+    })
+
+    it('POST /v1/projects/switch returns 400 when alias missing', async () => {
+      const { port, token } = await startWithProjects({
+        projects: { list: () => [], switchTo: async () => ({ ok: true, path: '/' }), add: async () => {}, remove: async () => {} },
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/projects/switch`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      expect(resp.status).toBe(400)
+      expect(await resp.json()).toMatchObject({ error: 'alias_required' })
+    })
+
+    it('POST /v1/projects/add forwards alias + path', async () => {
+      const add = vi.fn(async () => {})
+      const { port, token } = await startWithProjects({
+        projects: { list: () => [], switchTo: async () => ({ ok: true, path: '/' }), add, remove: async () => {} },
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/projects/add`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ alias: 'newp', path: '/abs/path' }),
+      })
+      expect(resp.status).toBe(200)
+      expect(await resp.json()).toEqual({ ok: true })
+      expect(add).toHaveBeenCalledWith('newp', '/abs/path')
+    })
+
+    it('POST /v1/projects/add catches add() errors and returns ok:false (legacy shape)', async () => {
+      const { port, token } = await startWithProjects({
+        projects: {
+          list: () => [],
+          switchTo: async () => ({ ok: true, path: '/' }),
+          add: async () => { throw new Error('alias already exists') },
+          remove: async () => {},
+        },
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/projects/add`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ alias: 'dup', path: '/p' }),
+      })
+      expect(resp.status).toBe(200)
+      const body = await resp.json() as { ok: boolean; error?: string }
+      expect(body.ok).toBe(false)
+      expect(body.error).toContain('alias already exists')
+    })
+
+    it('POST /v1/projects/remove forwards alias', async () => {
+      const remove = vi.fn(async () => {})
+      const { port, token } = await startWithProjects({
+        projects: { list: () => [], switchTo: async () => ({ ok: true, path: '/' }), add: async () => {}, remove },
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/projects/remove`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ alias: 'x' }),
+      })
+      expect(resp.status).toBe(200)
+      expect(await resp.json()).toEqual({ ok: true })
+      expect(remove).toHaveBeenCalledWith('x')
+    })
+
+    it('POST /v1/user/set_name forwards chat_id + name', async () => {
+      const setUserName = vi.fn(async () => {})
+      const { port, token } = await startWithProjects({ setUserName })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/user/set_name`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ chat_id: 'chat@bot', name: '丸子' }),
+      })
+      expect(resp.status).toBe(200)
+      expect(await resp.json()).toEqual({ ok: true })
+      expect(setUserName).toHaveBeenCalledWith('chat@bot', '丸子')
+    })
+
+    it('POST /v1/user/set_name returns 400 on missing fields', async () => {
+      const { port, token } = await startWithProjects({ setUserName: async () => {} })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/user/set_name`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ chat_id: 'c' }),  // name missing
+      })
+      expect(resp.status).toBe(400)
+      expect(await resp.json()).toMatchObject({ error: 'name_required' })
+    })
+
+    it('returns 503 when projects dep is not wired', async () => {
+      api = createInternalApi({ stateDir, daemonPid: 1 })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/projects/list`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      expect(resp.status).toBe(503)
+      expect(await resp.json()).toEqual({ error: 'projects_not_wired' })
+    })
+
+    it('returns 503 when set_user_name dep is not wired', async () => {
+      api = createInternalApi({ stateDir, daemonPid: 1 })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/user/set_name`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ chat_id: 'c', name: 'n' }),
+      })
+      expect(resp.status).toBe(503)
+      expect(await resp.json()).toEqual({ error: 'set_user_name_not_wired' })
+    })
   })
 })

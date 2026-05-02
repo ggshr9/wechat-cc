@@ -102,7 +102,7 @@ server.registerTool(
       // Preserve legacy wire shape: agent sees the same JSON it always saw.
       return { content: [{ type: 'text', text: JSON.stringify(resp) }] }
     } catch (err) {
-      return memoryErrorResult(err, 'memory_read')
+      return passthroughErrorResult(err, 'memory_read')
     }
   },
 )
@@ -121,7 +121,7 @@ server.registerTool(
       )
       return { content: [{ type: 'text', text: JSON.stringify(resp) }] }
     } catch (err) {
-      return memoryErrorResult(err, 'memory_write')
+      return passthroughErrorResult(err, 'memory_write')
     }
   },
 )
@@ -141,17 +141,105 @@ server.registerTool(
       )
       return { content: [{ type: 'text', text: JSON.stringify(resp) }] }
     } catch (err) {
-      return memoryErrorResult(err, 'memory_list')
+      return passthroughErrorResult(err, 'memory_list')
     }
   },
 )
 
-function memoryErrorResult(err: unknown, tool: string): { content: Array<{ type: 'text'; text: string }> } {
-  // The legacy in-process tools never threw — they caught everything and
-  // returned `{error: "..."}` JSON so the agent could see the failure
-  // mode. We do the same shape here on transport-layer failures (cannot
-  // reach internal-api, etc.); MemoryFS errors come back as 200 + body
-  // already in this shape via the route handler.
+
+// ─── projects + user name (RFC 03 P1.B B3) ───────────────────────────────
+// Legacy descriptions kept verbatim — agent's mental model unchanged.
+
+server.registerTool(
+  'list_projects',
+  {
+    title: 'List projects',
+    description: '列出已注册的项目及当前项目。',
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const arr = await client.request<unknown>('GET', '/v1/projects/list')
+      return { content: [{ type: 'text', text: JSON.stringify(arr) }] }
+    } catch (err) {
+      return passthroughErrorResult(err, 'list_projects')
+    }
+  },
+)
+
+server.registerTool(
+  'switch_project',
+  {
+    title: 'Switch project',
+    description: '切换到指定项目别名。',
+    inputSchema: { alias: z.string() },
+  },
+  async ({ alias }) => {
+    try {
+      const r = await client.request<unknown>('POST', '/v1/projects/switch', { alias })
+      return { content: [{ type: 'text', text: JSON.stringify(r) }] }
+    } catch (err) {
+      return passthroughErrorResult(err, 'switch_project')
+    }
+  },
+)
+
+server.registerTool(
+  'add_project',
+  {
+    title: 'Register a new project',
+    description: '注册一个新项目（别名 + 绝对路径）。',
+    inputSchema: { alias: z.string(), path: z.string() },
+  },
+  async ({ alias, path }) => {
+    try {
+      const r = await client.request<unknown>('POST', '/v1/projects/add', { alias, path })
+      return { content: [{ type: 'text', text: JSON.stringify(r) }] }
+    } catch (err) {
+      return passthroughErrorResult(err, 'add_project')
+    }
+  },
+)
+
+server.registerTool(
+  'remove_project',
+  {
+    title: 'Remove a project',
+    description: '移除一个已注册的项目。',
+    inputSchema: { alias: z.string() },
+  },
+  async ({ alias }) => {
+    try {
+      const r = await client.request<unknown>('POST', '/v1/projects/remove', { alias })
+      return { content: [{ type: 'text', text: JSON.stringify(r) }] }
+    } catch (err) {
+      return passthroughErrorResult(err, 'remove_project')
+    }
+  },
+)
+
+server.registerTool(
+  'set_user_name',
+  {
+    title: 'Persist a wechat user display name',
+    description: '记住新用户的显示名称。',
+    inputSchema: { chat_id: z.string(), name: z.string() },
+  },
+  async ({ chat_id, name }) => {
+    try {
+      const r = await client.request<unknown>('POST', '/v1/user/set_name', { chat_id, name })
+      return { content: [{ type: 'text', text: JSON.stringify(r) }] }
+    } catch (err) {
+      return passthroughErrorResult(err, 'set_user_name')
+    }
+  },
+)
+
+function passthroughErrorResult(err: unknown, tool: string): { content: Array<{ type: 'text'; text: string }> } {
+  // Surface transport-layer failures as `{error: "..."}` JSON in a text
+  // block. Keeps the legacy "tool never throws" promise that the
+  // in-process versions enforced — agent sees a structured failure
+  // result, not an MCP exception.
   const detail = formatError(err)
   logErr(`${tool} transport failed: ${detail}`)
   return { content: [{ type: 'text', text: JSON.stringify({ error: detail }) }] }

@@ -26,6 +26,19 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
 import type { MemoryFS } from './memory/fs-api'
 
+/**
+ * Project registry deps (RFC 03 P1.B B3). Shape matches features/tools.ts
+ * `ToolDeps['projects']`; ilink-glue.ts already exposes the same object so
+ * main.ts wires the same closure into both internal-api and the legacy
+ * in-process MCP. B7 removes the legacy path.
+ */
+export interface InternalApiProjectsDep {
+  list(): { alias: string; path: string; current: boolean }[]
+  switchTo(alias: string): Promise<{ ok: true; path: string } | { ok: false; reason: string }>
+  add(alias: string, path: string): Promise<void>
+  remove(alias: string): Promise<void>
+}
+
 export interface InternalApiDeps {
   /** State directory; the token file is written under here. */
   stateDir: string
@@ -37,6 +50,10 @@ export interface InternalApiDeps {
    * MCP server until B7 deletes it; both paths see the same files.
    */
   memory?: MemoryFS
+  /** Project registry (RFC 03 P1.B B3). */
+  projects?: InternalApiProjectsDep
+  /** Persist a wechat user's display name (RFC 03 P1.B B3). */
+  setUserName?: (chatId: string, name: string) => Promise<void>
   /** Optional log hook so api activity surfaces in channel.log. */
   log?: (tag: string, line: string) => void
 }
@@ -128,6 +145,62 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
         return { status: 200, body: { files: deps.memory.list(dir ?? undefined) } }
       } catch (err) {
         return { status: 200, body: { error: errMsg(err) } }
+      }
+    },
+
+    // ── projects (RFC 03 P1.B B3) ───────────────────────────────────────
+    'GET /v1/projects/list': () => {
+      if (!deps.projects) return { status: 503, body: { error: 'projects_not_wired' } }
+      // Legacy wire shape returned the array directly (not wrapped). Preserve.
+      return { status: 200, body: deps.projects.list() }
+    },
+    'POST /v1/projects/switch': async (_q, body) => {
+      if (!deps.projects) return { status: 503, body: { error: 'projects_not_wired' } }
+      const alias = (body as { alias?: unknown } | null)?.alias
+      if (typeof alias !== 'string') return { status: 400, body: { error: 'alias_required' } }
+      const r = await deps.projects.switchTo(alias)
+      return { status: 200, body: r }
+    },
+    'POST /v1/projects/add': async (_q, body) => {
+      if (!deps.projects) return { status: 503, body: { error: 'projects_not_wired' } }
+      const b = body as { alias?: unknown; path?: unknown } | null
+      if (typeof b?.alias !== 'string') return { status: 400, body: { error: 'alias_required' } }
+      if (typeof b?.path !== 'string') return { status: 400, body: { error: 'path_required' } }
+      try {
+        await deps.projects.add(b.alias, b.path)
+        return { status: 200, body: { ok: true } }
+      } catch (err) {
+        // Match legacy behaviour: in-process tool handler did not catch
+        // here; the SDK surfaced the error. Mirror that by returning 200
+        // with {ok:false,error} so the agent sees a structured result
+        // rather than a transport exception. Stricter callers can read
+        // the body and decide.
+        return { status: 200, body: { ok: false, error: errMsg(err) } }
+      }
+    },
+    'POST /v1/projects/remove': async (_q, body) => {
+      if (!deps.projects) return { status: 503, body: { error: 'projects_not_wired' } }
+      const alias = (body as { alias?: unknown } | null)?.alias
+      if (typeof alias !== 'string') return { status: 400, body: { error: 'alias_required' } }
+      try {
+        await deps.projects.remove(alias)
+        return { status: 200, body: { ok: true } }
+      } catch (err) {
+        return { status: 200, body: { ok: false, error: errMsg(err) } }
+      }
+    },
+
+    // ── user name (RFC 03 P1.B B3) ──────────────────────────────────────
+    'POST /v1/user/set_name': async (_q, body) => {
+      if (!deps.setUserName) return { status: 503, body: { error: 'set_user_name_not_wired' } }
+      const b = body as { chat_id?: unknown; name?: unknown } | null
+      if (typeof b?.chat_id !== 'string') return { status: 400, body: { error: 'chat_id_required' } }
+      if (typeof b?.name !== 'string') return { status: 400, body: { error: 'name_required' } }
+      try {
+        await deps.setUserName(b.chat_id, b.name)
+        return { status: 200, body: { ok: true } }
+      } catch (err) {
+        return { status: 200, body: { ok: false, error: errMsg(err) } }
       }
     },
   }
