@@ -28,12 +28,12 @@ export interface SessionRecord {
   session_id: string
   last_used_at: string  // ISO
   /**
-   * Which agent provider produced this session_id. Always present in
-   * SQLite-backed records. Optional in the type only because legacy
-   * JSON readers used to default it to 'claude'; readers that need
-   * a guaranteed value should treat it as required.
+   * Which agent provider produced this session_id. Always present —
+   * the SQLite schema's PK is (alias, provider) NOT NULL. Legacy v0.x
+   * JSON records that lacked the field are defaulted to 'claude' at
+   * migration time (see LEGACY_PROVIDER below).
    */
-  provider?: ProviderId
+  provider: ProviderId
   summary?: string      // 1-line LLM summary, cached
   summary_updated_at?: string  // when summary was last refreshed
 }
