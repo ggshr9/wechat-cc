@@ -119,7 +119,7 @@ async function main() {
   const { port: internalApiPort, tokenFilePath: internalTokenFile } = await internalApi.start()
   log('BOOT', `internal-api listening on 127.0.0.1:${internalApiPort} (token: ${internalTokenFile})`)
 
-  const { sessionManager, sessionStore, registry, coordinator, resolve, formatInbound, sdkOptionsForProject, defaultProviderId } = buildBootstrap({
+  const { sessionManager, sessionStore, registry, coordinator, resolve, formatInbound, sdkOptionsForProject, defaultProviderId, dispatchDelegate } = buildBootstrap({
     stateDir: STATE_DIR,
     ilink,
     loadProjects: ilink.loadProjects,
@@ -132,6 +132,15 @@ async function main() {
       tokenFilePath: internalTokenFile,
     },
     conversationStore,
+  })
+
+  // RFC 03 P4 — late-bind the delegate dispatcher into internal-api.
+  // The bare delegate providers live in bootstrap; internal-api was
+  // constructed before bootstrap so it couldn't take this at creation
+  // time. setDelegate is the seam for this circular dependency.
+  internalApi.setDelegate({
+    dispatchOneShot: dispatchDelegate,
+    knownPeers: () => registry.list(),
   })
 
   // Companion v2 scheduler — simple interval+jitter tick. When enabled +

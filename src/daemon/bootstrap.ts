@@ -102,6 +102,14 @@ export interface Bootstrap {
   defaultProviderId: ProviderId
   /** Backward-compat alias for defaultProviderId. Pre-P2 callers expected this name. */
   agentProviderKind: ProviderId
+  /**
+   * RFC 03 P4 — one-shot delegate dispatcher. main.ts wires this into
+   * internal-api via setDelegate() right after buildBootstrap returns.
+   */
+  dispatchDelegate: (peer: ProviderId, prompt: string) => Promise<
+    | { ok: true; response: string; num_turns?: number; duration_ms?: number }
+    | { ok: false; reason: string }
+  >
 }
 
 function buildChannelSystemPrompt(companionEnabled: boolean, _currentPersona: string | null): string {
@@ -188,6 +196,28 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
   const wechatStdioForClaude = wechatStdioMcpSpec('claude')
   const wechatStdioForCodex = wechatStdioMcpSpec('codex')
 
+  // RFC 03 P4 — delegate-mcp stdio server. Loaded alongside wechat-mcp
+  // so the primary agent can call `delegate_<peer>(prompt)` to consult
+  // the OTHER provider once. The peer is fixed per-spawn via the
+  // WECHAT_DELEGATE_PEER env.
+  function delegateStdioMcpSpec(peer: ProviderId): { command: string; args: string[]; env: Record<string, string> } | null {
+    if (!deps.internalApi) return null
+    const here = dirname(fileURLToPath(import.meta.url))
+    const mainPath = join(here, '..', 'mcp-servers', 'delegate', 'main.ts')
+    return {
+      command: process.execPath,
+      args: [mainPath],
+      env: {
+        WECHAT_INTERNAL_API: deps.internalApi.baseUrl,
+        WECHAT_INTERNAL_TOKEN_FILE: deps.internalApi.tokenFilePath,
+        WECHAT_DELEGATE_PEER: peer,
+      },
+    }
+  }
+  // For each provider session, the peer is the OTHER provider.
+  const delegateStdioForClaude = delegateStdioMcpSpec('codex')  // Claude session → can delegate to Codex
+  const delegateStdioForCodex = delegateStdioMcpSpec('claude')  // Codex session → can delegate to Claude
+
   const sdkOptionsForProject = (_alias: string, path: string): Options => {
     const cstatus = deps.ilink.companion.status()
     // Companion v2 dropped per_project_persona — Claude self-adjusts tone from
@@ -197,6 +227,7 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
       cwd: path,
       mcpServers: {
         ...(wechatStdioForClaude ? { wechat: { type: 'stdio' as const, ...wechatStdioForClaude } } : {}),
+        ...(delegateStdioForClaude ? { delegate: { type: 'stdio' as const, ...delegateStdioForClaude } } : {}),
       },
       // Using preset+append (instead of raw string) keeps MCP tools inline in
       // the system prompt — otherwise they're deferred behind ToolSearch,
@@ -271,7 +302,10 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
       // hangs; `never` is the only viable headless setting.
       approvalPolicy: 'never',
       sandboxMode: 'workspace-write',
-      ...(wechatStdioForCodex ? { mcpServers: { wechat: wechatStdioForCodex } } : {}),
+      mcpServers: {
+        ...(wechatStdioForCodex ? { wechat: wechatStdioForCodex } : {}),
+        ...(delegateStdioForCodex ? { delegate: delegateStdioForCodex } : {}),
+      },
     }),
     {
       displayName: 'Codex',
@@ -315,6 +349,79 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     log: deps.log,
   })
 
+  // RFC 03 P4 — bare delegate providers. Constructed separately from
+  // the registry's main providers because they intentionally have NO
+  // mcpServers configured: a delegated peer must not have access to
+  // wechat tools (would let it pretend to reply directly to the user)
+  // or its own delegate-mcp (would allow recursion). Recursion
+  // prevention is structural here, not counter-based.
+  //
+  // Each delegate call spawns a fresh thread; SessionManager isn't
+  // involved because these are throwaway one-shot consultations.
+  const delegateClaude = createClaudeAgentProvider({
+    sdkOptionsForProject: (_alias: string, path: string): Options => {
+      const o: Options = {
+        cwd: path,
+        // Plain claude_code preset — no wechat-specific append. Peer
+        // doesn't see wechat conversation history; it's a clean slate.
+        systemPrompt: { type: 'preset', preset: 'claude_code' },
+        settingSources: ['user', 'project', 'local'],
+        // Safer than bypassPermissions: delegate is read-mostly. Skip
+        // the permission relay too — there's no human to ask, and
+        // delegated peers shouldn't be writing to disk anyway.
+        permissionMode: 'default',
+        ...(claudeBin ? { pathToClaudeCodeExecutable: claudeBin } : {}),
+      }
+      return o
+    },
+  })
+  const delegateCodex = createCodexAgentProvider({
+    ...(process.env.CODEX_MODEL || configuredAgent.model
+      ? { model: process.env.CODEX_MODEL ?? configuredAgent.model }
+      : {}),
+    approvalPolicy: 'never',
+    // Read-only sandbox: delegate is for "ask a question", not "do work".
+    // Spike 3 confirmed read-only blocks writes cleanly.
+    sandboxMode: 'read-only',
+    // Deliberately NO mcpServers — bare-bones is the structural
+    // recursion-prevention guarantee.
+  })
+
+  /**
+   * Run a one-shot prompt against the bare delegate provider for `peer`.
+   * Used by internal-api's /v1/delegate route. Spawns a fresh thread,
+   * dispatches once, closes. Cold-start cost (~3-5s) per call is
+   * accepted as the price of "consult the peer cleanly."
+   *
+   * Cwd: launches in deps.stateDir (a stable location with no
+   * project-specific files). Pragmatic compromise — peer doesn't get
+   * project file access, which is consistent with "ask question, not
+   * do work" framing.
+   */
+  async function dispatchDelegate(
+    peer: ProviderId,
+    prompt: string,
+  ): Promise<{ ok: true; response: string; num_turns?: number; duration_ms?: number } | { ok: false; reason: string }> {
+    const provider = peer === 'claude' ? delegateClaude
+                   : peer === 'codex' ? delegateCodex
+                   : null
+    if (!provider) return { ok: false, reason: `unknown_peer: ${peer}` }
+    const started = Date.now()
+    let session: Awaited<ReturnType<typeof provider.spawn>> | null = null
+    try {
+      session = await provider.spawn({ alias: '_delegate', path: deps.stateDir })
+      const result = await session.dispatch(prompt)
+      const response = result.assistantText.join('\n').trim()
+      return { ok: true, response, duration_ms: Date.now() - started }
+    } catch (err) {
+      return { ok: false, reason: err instanceof Error ? err.message : String(err) }
+    } finally {
+      if (session) {
+        try { await session.close() } catch { /* swallow shutdown errors */ }
+      }
+    }
+  }
+
   return {
     sessionManager,
     sessionStore,
@@ -326,5 +433,10 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     sdkOptionsForProject,
     defaultProviderId,
     agentProviderKind: defaultProviderId,
+    /**
+     * RFC 03 P4 — late-bound into internal-api by main.ts after
+     * buildBootstrap returns. The route is 503 until that wiring lands.
+     */
+    dispatchDelegate,
   }
 }

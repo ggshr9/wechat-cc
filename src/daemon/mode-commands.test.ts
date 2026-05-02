@@ -133,19 +133,85 @@ describe('makeModeCommands', () => {
     expect(sentMessages[0]?.[1]).toContain('missing: codex')
   })
 
-  it('/chat and /cc + codex still placeholder ("not yet implemented")', async () => {
+  it('/chat still placeholder ("not yet implemented")', async () => {
     const { cmds, set, sentMessages } = setup()
     await cmds.handle(inbound('/chat'))
-    await cmds.handle(inbound('/cc + codex'))
     expect(set).not.toHaveBeenCalled()
     expect(sentMessages[0]?.[1]).toContain('P5')
-    expect(sentMessages[1]?.[1]).toContain('P4')
   })
 
-  it('/mode lists /both as available', async () => {
+  it('/mode lists /both and /cc + codex as available', async () => {
     const { cmds, sentMessages } = setup()
     await cmds.handle(inbound('/mode'))
     expect(sentMessages[0]?.[1]).toContain('/both')
+    expect(sentMessages[0]?.[1]).toContain('/cc + codex')
+    expect(sentMessages[0]?.[1]).toContain('/codex + cc')
+  })
+
+  // ── /cc + codex / /codex + cc — primary_tool (RFC 03 P4) ─────────────
+
+  it('/cc + codex switches to primary_tool with claude primary', async () => {
+    const { cmds, set, sentMessages } = setup({ registered: ['claude', 'codex'] })
+    const consumed = await cmds.handle(inbound('/cc + codex'))
+    expect(consumed).toBe(true)
+    expect(set).toHaveBeenCalledWith('chat-1', { kind: 'primary_tool', primary: 'claude' })
+    expect(sentMessages[0]?.[1]).toContain('主从模式开启')
+    expect(sentMessages[0]?.[1]).toContain('Claude')
+    expect(sentMessages[0]?.[1]).toContain('delegate_codex')
+  })
+
+  it('/codex + cc switches to primary_tool with codex primary', async () => {
+    const { cmds, set, sentMessages } = setup({ registered: ['claude', 'codex'] })
+    await cmds.handle(inbound('/codex + cc'))
+    expect(set).toHaveBeenCalledWith('chat-1', { kind: 'primary_tool', primary: 'codex' })
+    expect(sentMessages[0]?.[1]).toContain('Codex')
+    expect(sentMessages[0]?.[1]).toContain('delegate_claude')
+  })
+
+  it('/cc + codex tolerates whitespace variations', async () => {
+    const { cmds, set } = setup({ registered: ['claude', 'codex'] })
+    await cmds.handle(inbound('/cc +codex'))
+    expect(set).toHaveBeenLastCalledWith('chat-1', { kind: 'primary_tool', primary: 'claude' })
+    await cmds.handle(inbound('/cc +   codex   '))
+    expect(set).toHaveBeenLastCalledWith('chat-1', { kind: 'primary_tool', primary: 'claude' })
+  })
+
+  it('/cc + cc rejects same-provider self-delegation', async () => {
+    const { cmds, set, sentMessages } = setup({ registered: ['claude', 'codex'] })
+    await cmds.handle(inbound('/cc + cc'))
+    expect(set).not.toHaveBeenCalled()
+    expect(sentMessages[0]?.[1]).toContain('不能是同一个 provider')
+  })
+
+  it('/cc + foo rejects unknown peer with hint', async () => {
+    const { cmds, set, sentMessages } = setup({ registered: ['claude', 'codex'] })
+    await cmds.handle(inbound('/cc + foo'))
+    expect(set).not.toHaveBeenCalled()
+    expect(sentMessages[0]?.[1]).toContain('未知的 peer')
+  })
+
+  it('/cc + codex surfaces validation error when peer missing from registry', async () => {
+    const sentMessages: Array<[string, string]> = []
+    const sendMessage = vi.fn(async (chatId: string, text: string) => {
+      sentMessages.push([chatId, text]); return { msgId: 'm' }
+    })
+    const cmds = makeModeCommands({
+      coordinator: {
+        getMode: () => ({ kind: 'solo', provider: 'claude' }),
+        setMode: () => { throw new Error("mode 'primary_tool' requires both providers claude, codex; missing: codex") },
+      },
+      registry: {
+        has: (id: string) => id === 'claude',
+        get: () => ({ provider: {} as never, opts: { displayName: 'Claude', canResume: () => true } }),
+        list: () => ['claude'],
+      },
+      defaultProviderId: 'claude',
+      sendMessage: sendMessage as unknown as Parameters<typeof makeModeCommands>[0]['sendMessage'],
+      log: () => {},
+    })
+    await cmds.handle(inbound('/cc + codex'))
+    expect(sentMessages[0]?.[1]).toContain('启用失败')
+    expect(sentMessages[0]?.[1]).toContain('missing: codex')
   })
 
   it('returns false for unrecognised slash words like /health (lets admin-commands handle)', async () => {

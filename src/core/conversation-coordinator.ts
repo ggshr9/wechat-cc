@@ -90,6 +90,13 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
       if (!deps.registry.has(mode.primary)) {
         throw new Error(`unknown primary provider: ${mode.primary}`)
       }
+      // The peer (other registered provider) must also be available so
+      // delegate-mcp can actually do something. parallelProviders is
+      // also the "all participating providers" set for primary_tool.
+      const missing = parallelProviders.filter(p => !deps.registry.has(p))
+      if (missing.length > 0) {
+        throw new Error(`mode 'primary_tool' requires both providers ${parallelProviders.join(', ')}; missing: ${missing.join(', ')}`)
+      }
     }
     if (mode.kind === 'parallel' || mode.kind === 'chatroom') {
       // Both modes need every parallel-set provider registered.
@@ -199,7 +206,19 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
           }
           return dispatchParallel(msg, proj)
         }
-        case 'primary_tool':
+        case 'primary_tool': {
+          // RFC 03 P4 — dispatch to the primary; the peer is reachable
+          // via the delegate-mcp tool that's already loaded in the
+          // primary's session config. Behaviourally identical to
+          // solo+primary at the dispatch layer; the difference is the
+          // user's framing (they signalled they want the other AI as
+          // a tool) and how the agent uses delegate_<peer>.
+          if (!deps.registry.has(mode.primary)) {
+            deps.log('COORDINATOR', `chat=${msg.chatId} primary_tool primary '${mode.primary}' not registered; falling back to solo+${deps.defaultProviderId}`)
+            return dispatchSolo(msg, proj, deps.defaultProviderId)
+          }
+          return dispatchSolo(msg, proj, mode.primary)
+        }
         case 'chatroom':
           throw new ModeNotImplementedError(mode.kind)
       }

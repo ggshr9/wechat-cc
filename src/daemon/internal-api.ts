@@ -44,6 +44,30 @@ export interface InternalApiPrefixDeps {
 }
 
 /**
+ * RFC 03 P4 — primary+tool mode. The `delegate-mcp` child posts here
+ * when its `delegate_<peer>` tool fires. The handler runs the prompt
+ * against a BARE-BONES peer SDK (no mcpServers) so the peer can't
+ * recurse — recursion prevention is structural, not counter-based.
+ *
+ * The dispatch function may be set late via `setDelegate()` because
+ * provider construction belongs to bootstrap which runs after
+ * createInternalApi. Until set, the route returns 503.
+ */
+export interface InternalApiDelegateDep {
+  /**
+   * Run a one-shot consultation against `peer` and return the assistant
+   * text. The implementation owns provider construction + thread
+   * spawn + close. ok=false should surface a user-readable reason.
+   */
+  dispatchOneShot(peer: ProviderId, prompt: string): Promise<
+    | { ok: true; response: string; num_turns?: number; duration_ms?: number }
+    | { ok: false; reason: string }
+  >
+  /** List of accepted peer ids — for 400 validation. */
+  knownPeers(): ProviderId[]
+}
+
+/**
  * Ilink-bound message-sending deps (RFC 03 P1.B B1). These call out to
  * the WeChat client over ilink — the riskiest slice with real side
  * effects. main.ts wires them as closures over `ilink.sendMessage` etc.
@@ -105,6 +129,12 @@ export interface InternalApiDeps {
    * tags supplied by clients are silently ignored (legacy solo behaviour).
    */
   prefix?: InternalApiPrefixDeps
+  /**
+   * Optional delegate dispatch (RFC 03 P4). Late-binding via
+   * `InternalApi.setDelegate()` because the bare delegate providers
+   * are constructed inside bootstrap, which runs after createInternalApi.
+   */
+  delegate?: InternalApiDelegateDep
   /** Optional log hook so api activity surfaces in channel.log. */
   log?: (tag: string, line: string) => void
 }
@@ -118,6 +148,12 @@ export interface InternalApi {
   port(): number
   /** Filesystem path of the token file. */
   tokenFilePath(): string
+  /**
+   * RFC 03 P4 — late-bind the delegate dispatcher after bootstrap has
+   * constructed the bare delegate providers. /v1/delegate route returns
+   * 503 until this is called.
+   */
+  setDelegate(d: InternalApiDelegateDep): void
 }
 
 const TOKEN_FILE = 'internal-token'
@@ -127,6 +163,8 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
   let server: Server | null = null
   let boundPort: number | null = null
   let token: Buffer | null = null
+  // RFC 03 P4 late binding — main.ts wires this in after bootstrap returns.
+  let lateDelegate: InternalApiDelegateDep | null = deps.delegate ?? null
 
   function authOk(req: IncomingMessage): boolean {
     if (!token) return false
@@ -411,6 +449,38 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
         return { status: 200, body: { ok: false, error: errMsg(err) } }
       }
     },
+    // ── delegate consultation (RFC 03 P4) ───────────────────────────────
+    'POST /v1/delegate': async (_q, body) => {
+      const d = lateDelegate
+      if (!d) return { status: 503, body: { error: 'delegate_not_wired' } }
+      const b = body as { peer?: unknown; prompt?: unknown; context_summary?: unknown } | null
+      if (typeof b?.peer !== 'string') return { status: 400, body: { error: 'peer_required' } }
+      if (typeof b?.prompt !== 'string') return { status: 400, body: { error: 'prompt_required' } }
+      const known = d.knownPeers()
+      if (!known.includes(b.peer)) {
+        return { status: 400, body: { error: 'unknown_peer', allowed: known } }
+      }
+      // Compose the actual prompt that the peer sees. The peer is
+      // bare-bones (no conversation history, no wechat tools), so the
+      // prompt is self-contained.
+      const fullPrompt = typeof b.context_summary === 'string' && b.context_summary.length > 0
+        ? `${b.prompt}\n\nContext from the calling agent:\n${b.context_summary}`
+        : b.prompt
+      const started = Date.now()
+      try {
+        const r = await d.dispatchOneShot(b.peer, fullPrompt)
+        if (r.ok) {
+          deps.log?.('DELEGATE', `peer=${b.peer} ok response_chars=${r.response.length} ms=${Date.now() - started}`)
+        } else {
+          deps.log?.('DELEGATE', `peer=${b.peer} fail reason=${r.reason}`)
+        }
+        return { status: 200, body: r }
+      } catch (err) {
+        deps.log?.('DELEGATE', `peer=${b.peer} threw: ${errMsg(err)}`)
+        return { status: 200, body: { ok: false, reason: errMsg(err) } }
+      }
+    },
+
     'POST /v1/wechat/broadcast': async (_q, body) => {
       if (!deps.ilink) return { status: 503, body: { error: 'ilink_not_wired' } }
       const b = body as { text?: unknown; account_id?: unknown } | null
@@ -570,6 +640,10 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
 
     tokenFilePath() {
       return tokenPath
+    },
+
+    setDelegate(d) {
+      lateDelegate = d
     },
   }
 }

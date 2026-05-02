@@ -89,12 +89,35 @@ export function makeModeCommands(deps: ModeCommandsDeps): ModeCommands {
           deps.log('MODE_CMD', `chat=${msg.chatId} → solo+${providerId}`)
           return true
         }
-        // /cc + codex / /codex + cc — reserved for P4
-        if (tail.startsWith('+')) {
-          await reply(msg.chatId, `🚧 主从模式（${slashWord} ${tail}）在 P4 才上线，当前版本未实现。`)
+        // /cc + codex / /codex + cc — primary_tool mode (RFC 03 P4)
+        const peerMatch = /^\+\s*([a-z][a-z_-]*)\s*$/i.exec(tail)
+        if (peerMatch) {
+          const peerSlash = peerMatch[1]!
+          const peerProviderId = isProviderCommand(peerSlash)
+          if (!peerProviderId) {
+            await reply(msg.chatId, `❓ 未知的 peer \`${peerSlash}\`。支持: cc, codex (例: /cc + codex / /codex + cc)`)
+            return true
+          }
+          if (peerProviderId === providerId) {
+            await reply(msg.chatId, `❓ 主从模式两侧不能是同一个 provider (你写的是 ${peerSlash} + ${peerSlash})。`)
+            return true
+          }
+          try {
+            deps.coordinator.setMode(msg.chatId, { kind: 'primary_tool', primary: providerId })
+          } catch (err) {
+            await reply(msg.chatId, `❌ /${slashWord} + ${peerSlash} 启用失败: ${err instanceof Error ? err.message : String(err)}`)
+            return true
+          }
+          const primaryDn = deps.registry.get(providerId)?.opts.displayName ?? providerId
+          const peerDn = deps.registry.get(peerProviderId)?.opts.displayName ?? peerProviderId
+          await reply(
+            msg.chatId,
+            `✅ 主从模式开启: ${primaryDn} 主导，需要时它会调 \`delegate_${peerProviderId}\` 工具去咨询 ${peerDn}（一次性，无对话历史）。`,
+          )
+          deps.log('MODE_CMD', `chat=${msg.chatId} → primary_tool primary=${providerId} peer=${peerProviderId}`)
           return true
         }
-        await reply(msg.chatId, `❓ \`/${slashWord}\` 不支持参数 \`${tail}\`。试试 \`/${slashWord}\`、\`/solo\` 或 \`/mode\`。`)
+        await reply(msg.chatId, `❓ \`/${slashWord}\` 不支持参数 \`${tail}\`。试试 \`/${slashWord}\`、\`/${slashWord} + ${providerId === 'claude' ? 'codex' : 'cc'}\`、\`/solo\` 或 \`/mode\`。`)
         return true
       }
 
@@ -119,8 +142,8 @@ export function makeModeCommands(deps: ModeCommandsDeps): ModeCommands {
           `已注册 provider: ${deps.registry.list().join(', ')}`,
           `默认: ${deps.defaultProviderId}`,
           '',
-          '可用命令: /cc /codex /both /solo /mode',
-          '即将支持 (P4-P5): /chat /cc + codex /codex + cc',
+          '可用命令: /cc /codex /both /cc + codex /codex + cc /solo /mode',
+          '即将支持 (P5): /chat',
         ]
         await reply(msg.chatId, lines.join('\n'))
         return true

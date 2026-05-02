@@ -1297,6 +1297,144 @@ describe('internal-api', () => {
       })
     })
 
+    // ── delegate route (RFC 03 P4) ─────────────────────────────────────
+
+    describe('/v1/delegate route', () => {
+      it('returns 503 before setDelegate has been called', async () => {
+        api = createInternalApi({ stateDir, daemonPid: 1 })
+        const { port, tokenFilePath } = await api.start()
+        const token = readFileSync(tokenFilePath, 'utf8').trim()
+        const resp = await fetch(`http://127.0.0.1:${port}/v1/delegate`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ peer: 'codex', prompt: 'hi' }),
+        })
+        expect(resp.status).toBe(503)
+        expect(await resp.json()).toEqual({ error: 'delegate_not_wired' })
+      })
+
+      it('routes through dispatchOneShot after setDelegate', async () => {
+        const dispatchOneShot = vi.fn(async (peer: string, prompt: string) => ({
+          ok: true as const, response: `from ${peer}: ${prompt.slice(0, 20)}...`, duration_ms: 5,
+        }))
+        api = createInternalApi({ stateDir, daemonPid: 1 })
+        const { port, tokenFilePath } = await api.start()
+        api.setDelegate({ dispatchOneShot, knownPeers: () => ['claude', 'codex'] })
+        const token = readFileSync(tokenFilePath, 'utf8').trim()
+        const resp = await fetch(`http://127.0.0.1:${port}/v1/delegate`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ peer: 'codex', prompt: 'review this code' }),
+        })
+        expect(resp.status).toBe(200)
+        const body = await resp.json() as { ok: boolean; response: string }
+        expect(body.ok).toBe(true)
+        expect(body.response).toContain('from codex')
+        expect(dispatchOneShot).toHaveBeenCalledWith('codex', 'review this code')
+      })
+
+      it('appends context_summary to prompt when supplied', async () => {
+        const dispatchOneShot = vi.fn(async (_peer: string, prompt: string) => ({
+          ok: true as const, response: prompt, duration_ms: 0,
+        }))
+        api = createInternalApi({ stateDir, daemonPid: 1 })
+        const { port, tokenFilePath } = await api.start()
+        api.setDelegate({ dispatchOneShot, knownPeers: () => ['claude', 'codex'] })
+        const token = readFileSync(tokenFilePath, 'utf8').trim()
+        await fetch(`http://127.0.0.1:${port}/v1/delegate`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({
+            peer: 'codex',
+            prompt: 'should we use map or set?',
+            context_summary: 'we are deduping ~10k strings',
+          }),
+        })
+        const fullPrompt = dispatchOneShot.mock.calls[0]![1]
+        expect(fullPrompt).toContain('should we use map or set?')
+        expect(fullPrompt).toContain('Context from the calling agent:')
+        expect(fullPrompt).toContain('we are deduping ~10k strings')
+      })
+
+      it('returns 400 on missing peer/prompt', async () => {
+        api = createInternalApi({ stateDir, daemonPid: 1 })
+        const { port, tokenFilePath } = await api.start()
+        api.setDelegate({ dispatchOneShot: async () => ({ ok: true, response: '', duration_ms: 0 }), knownPeers: () => ['claude', 'codex'] })
+        const token = readFileSync(tokenFilePath, 'utf8').trim()
+
+        const r1 = await fetch(`http://127.0.0.1:${port}/v1/delegate`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ prompt: 'hi' }),
+        })
+        expect(r1.status).toBe(400)
+        expect(await r1.json()).toMatchObject({ error: 'peer_required' })
+
+        const r2 = await fetch(`http://127.0.0.1:${port}/v1/delegate`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ peer: 'codex' }),
+        })
+        expect(r2.status).toBe(400)
+        expect(await r2.json()).toMatchObject({ error: 'prompt_required' })
+      })
+
+      it('returns 400 on unknown peer with allowed list', async () => {
+        api = createInternalApi({ stateDir, daemonPid: 1 })
+        const { port, tokenFilePath } = await api.start()
+        api.setDelegate({
+          dispatchOneShot: async () => ({ ok: true, response: '', duration_ms: 0 }),
+          knownPeers: () => ['claude', 'codex'],
+        })
+        const token = readFileSync(tokenFilePath, 'utf8').trim()
+        const resp = await fetch(`http://127.0.0.1:${port}/v1/delegate`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ peer: 'gemini', prompt: 'hi' }),
+        })
+        expect(resp.status).toBe(400)
+        const body = await resp.json() as { error: string; allowed?: string[] }
+        expect(body.error).toBe('unknown_peer')
+        expect(body.allowed).toEqual(['claude', 'codex'])
+      })
+
+      it('passes ok:false from dispatchOneShot through verbatim', async () => {
+        api = createInternalApi({ stateDir, daemonPid: 1 })
+        const { port, tokenFilePath } = await api.start()
+        api.setDelegate({
+          dispatchOneShot: async () => ({ ok: false, reason: 'codex CLI not authenticated' }),
+          knownPeers: () => ['claude', 'codex'],
+        })
+        const token = readFileSync(tokenFilePath, 'utf8').trim()
+        const resp = await fetch(`http://127.0.0.1:${port}/v1/delegate`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ peer: 'codex', prompt: 'hi' }),
+        })
+        expect(resp.status).toBe(200)
+        expect(await resp.json()).toEqual({ ok: false, reason: 'codex CLI not authenticated' })
+      })
+
+      it('catches dispatchOneShot throw and returns ok:false', async () => {
+        api = createInternalApi({ stateDir, daemonPid: 1 })
+        const { port, tokenFilePath } = await api.start()
+        api.setDelegate({
+          dispatchOneShot: async () => { throw new Error('SDK exploded') },
+          knownPeers: () => ['claude', 'codex'],
+        })
+        const token = readFileSync(tokenFilePath, 'utf8').trim()
+        const resp = await fetch(`http://127.0.0.1:${port}/v1/delegate`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ peer: 'codex', prompt: 'hi' }),
+        })
+        expect(resp.status).toBe(200)
+        const body = await resp.json() as { ok: boolean; reason: string }
+        expect(body.ok).toBe(false)
+        expect(body.reason).toContain('SDK exploded')
+      })
+    })
+
     it('returns 503 when ilink dep not wired', async () => {
       api = createInternalApi({ stateDir, daemonPid: 1 })
       const { port, tokenFilePath } = await api.start()

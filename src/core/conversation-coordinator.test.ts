@@ -148,7 +148,7 @@ describe('ConversationCoordinator', () => {
   it('dispatch falls back to default provider when persisted mode references unknown provider', async () => {
     const store = makeMockStore()
     store.set('chat-1', { kind: 'solo', provider: 'gemini' })  // not registered
-    const acquire = vi.fn(async () => ({
+    const acquire = vi.fn(async (_alias: string, _path: string, _providerId: string) => ({
       alias: 'a', path: '/p', providerId: 'claude', lastUsedAt: 0,
       dispatch: async () => ({ assistantText: [], replyToolCalled: false }),
       close: async () => {},
@@ -173,14 +173,14 @@ describe('ConversationCoordinator', () => {
   })
 
   it('skips fallback sendAssistantText when reply tool was called', async () => {
-    const acquire = vi.fn(async () => ({
+    const acquire = vi.fn(async (_alias: string, _path: string, _providerId: string) => ({
       alias: 'a', path: '/p', providerId: 'claude', lastUsedAt: 0,
       dispatch: async () => ({ assistantText: ['hi from agent'], replyToolCalled: true }),
       close: async () => {},
       onAssistantText: () => () => {},
       onResult: () => () => {},
     }))
-    const sendAssistantText = vi.fn(async () => {})
+    const sendAssistantText = vi.fn(async (_chatId: string, _text: string) => {})
     const registry = createProviderRegistry()
     registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
     const c = createConversationCoordinator({
@@ -198,14 +198,14 @@ describe('ConversationCoordinator', () => {
   })
 
   it('forwards assistantText via fallback when reply tool was NOT called', async () => {
-    const acquire = vi.fn(async () => ({
+    const acquire = vi.fn(async (_alias: string, _path: string, _providerId: string) => ({
       alias: 'a', path: '/p', providerId: 'claude', lastUsedAt: 0,
       dispatch: async () => ({ assistantText: ['raw text 1', 'raw text 2'], replyToolCalled: false }),
       close: async () => {},
       onAssistantText: () => () => {},
       onResult: () => () => {},
     }))
-    const sendAssistantText = vi.fn(async () => {})
+    const sendAssistantText = vi.fn(async (_chatId: string, _text: string) => {})
     const registry = createProviderRegistry()
     registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
     const c = createConversationCoordinator({
@@ -224,10 +224,11 @@ describe('ConversationCoordinator', () => {
     expect(sendAssistantText).toHaveBeenCalledWith('chat-1', 'raw text 2')
   })
 
-  it('throws ModeNotImplementedError for primary_tool/chatroom (P4-P5 still pending)', async () => {
+  it('throws ModeNotImplementedError for chatroom (P5 still pending)', async () => {
     const store = makeMockStore()
     const registry = createProviderRegistry()
     registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
+    registry.register('codex', dummyProvider, { displayName: 'Codex', canResume: () => true })
     const c = createConversationCoordinator({
       resolveProject: () => ({ alias: 'a', path: '/p' }),
       manager: { acquire: vi.fn() },
@@ -237,13 +238,99 @@ describe('ConversationCoordinator', () => {
       format: () => 'x',
       log: () => {},
     })
-    for (const m of [
-      { kind: 'primary_tool' as const, primary: 'claude' },
-      { kind: 'chatroom' as const },
-    ]) {
-      store.set('chat-x', m)
-      await expect(c.dispatch(inbound('chat-x', 'hi'))).rejects.toBeInstanceOf(ModeNotImplementedError)
+    store.set('chat-x', { kind: 'chatroom' })
+    await expect(c.dispatch(inbound('chat-x', 'hi'))).rejects.toBeInstanceOf(ModeNotImplementedError)
+  })
+
+  // ─── primary_tool mode (RFC 03 P4) ──────────────────────────────────
+
+  describe('primary_tool mode (P4)', () => {
+    function setupPrimaryTool(opts: { initialMode?: { kind: 'primary_tool'; primary: string } } = {}) {
+      const store = makeMockStore()
+      if (opts.initialMode) store.set('chat-1', opts.initialMode)
+      const registry = createProviderRegistry()
+      registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
+      registry.register('codex', dummyProvider, { displayName: 'Codex', canResume: () => true })
+      const dispatchMock = vi.fn(async () => ({ assistantText: ['hi from primary'], replyToolCalled: true }))
+      const acquire = vi.fn(async (_alias: string, _path: string, providerId: string) => ({
+        alias: 'a', path: '/p', providerId, lastUsedAt: 0,
+        dispatch: dispatchMock,
+        close: async () => {},
+        onAssistantText: () => () => {},
+        onResult: () => () => {},
+      }))
+      const log = vi.fn()
+      const c = createConversationCoordinator({
+        resolveProject: () => ({ alias: 'a', path: '/p' }),
+        manager: { acquire },
+        conversationStore: store,
+        registry,
+        defaultProviderId: 'claude',
+        format: () => 'x',
+        log,
+      })
+      return { c, acquire, dispatchMock, log, store }
     }
+
+    it('dispatches solo to the primary provider (peer reachable via delegate-mcp tool, not parallel session)', async () => {
+      const { c, acquire, dispatchMock } = setupPrimaryTool({ initialMode: { kind: 'primary_tool', primary: 'claude' } })
+      await c.dispatch(inbound('chat-1', 'hi'))
+      expect(acquire).toHaveBeenCalledTimes(1)
+      expect(acquire.mock.calls[0]?.[2]).toBe('claude')
+      expect(dispatchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('reverse — primary_tool with codex primary dispatches to codex', async () => {
+      const { c, acquire } = setupPrimaryTool({ initialMode: { kind: 'primary_tool', primary: 'codex' } })
+      await c.dispatch(inbound('chat-1', 'hi'))
+      expect(acquire.mock.calls[0]?.[2]).toBe('codex')
+    })
+
+    it('falls back to solo+default when persisted primary is no longer registered', async () => {
+      const store = makeMockStore()
+      store.set('chat-1', { kind: 'primary_tool', primary: 'gemini' })
+      const registry = createProviderRegistry()
+      registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
+      registry.register('codex', dummyProvider, { displayName: 'Codex', canResume: () => true })
+      const acquire = vi.fn(async (_alias: string, _path: string, _providerId: string) => ({
+        alias: 'a', path: '/p', providerId: 'claude', lastUsedAt: 0,
+        dispatch: async () => ({ assistantText: [], replyToolCalled: true }),
+        close: async () => {},
+        onAssistantText: () => () => {},
+        onResult: () => () => {},
+      }))
+      const log = vi.fn()
+      const c = createConversationCoordinator({
+        resolveProject: () => ({ alias: 'a', path: '/p' }),
+        manager: { acquire },
+        conversationStore: store,
+        registry,
+        defaultProviderId: 'claude',
+        format: () => 'x',
+        log,
+      })
+      await c.dispatch(inbound('chat-1', 'hi'))
+      expect(acquire.mock.calls[0]?.[2]).toBe('claude')
+      expect(log).toHaveBeenCalledWith('COORDINATOR', expect.stringContaining("primary 'gemini' not registered"))
+    })
+
+    it('setMode rejects primary_tool when peer provider missing from registry', () => {
+      const store = makeMockStore()
+      const registry = createProviderRegistry()
+      registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
+      // codex missing
+      const c = createConversationCoordinator({
+        resolveProject: () => null,
+        manager: { acquire: vi.fn() },
+        conversationStore: store,
+        registry,
+        defaultProviderId: 'claude',
+        format: () => 'x',
+        log: () => {},
+      })
+      expect(() => c.setMode('chat-1', { kind: 'primary_tool', primary: 'claude' }))
+        .toThrow(/missing: codex/)
+    })
   })
 
   // ─── parallel mode (RFC 03 P3) ───────────────────────────────────────
@@ -260,7 +347,7 @@ describe('ConversationCoordinator', () => {
       const registry = createProviderRegistry()
       registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
       registry.register('codex', dummyProvider, { displayName: 'Codex', canResume: () => true })
-      const sendAssistantText = vi.fn(async () => {})
+      const sendAssistantText = vi.fn(async (_chatId: string, _text: string) => {})
       const dispatchCalls: Array<{ providerId: string; text: string }> = []
       const acquire = vi.fn(async (alias: string, path: string, providerId: string) => ({
         alias, path, providerId, lastUsedAt: 0,
@@ -341,7 +428,7 @@ describe('ConversationCoordinator', () => {
       // Only claude registered — codex missing
       const registry = createProviderRegistry()
       registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
-      const acquire = vi.fn(async () => ({
+      const acquire = vi.fn(async (_alias: string, _path: string, _providerId: string) => ({
         alias: 'a', path: '/p', providerId: 'claude', lastUsedAt: 0,
         dispatch: async () => ({ assistantText: [], replyToolCalled: true }),
         close: async () => {},
@@ -396,7 +483,7 @@ describe('ConversationCoordinator', () => {
         onAssistantText: () => () => {},
         onResult: () => () => {},
       }))
-      const sendAssistantText = vi.fn(async () => {})
+      const sendAssistantText = vi.fn(async (_chatId: string, _text: string) => {})
       const c = createConversationCoordinator({
         resolveProject: () => ({ alias: 'a', path: '/p' }),
         manager: { acquire },
