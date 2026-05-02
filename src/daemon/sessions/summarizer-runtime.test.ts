@@ -4,15 +4,21 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { triggerStaleSummaryRefresh } from './summarizer-runtime'
 import { makeSessionStore } from '../../core/session-store'
+import { openTestDb, type Db } from '../../lib/db'
 
 describe('triggerStaleSummaryRefresh', () => {
   let stateDir: string
   let projectsRoot: string
+  let db: Db
   beforeEach(() => {
     stateDir = mkdtempSync(join(tmpdir(), 'sumref-'))
     projectsRoot = join(homedir(), '.claude', 'projects')
+    db = openTestDb()
   })
-  afterEach(() => rmSync(stateDir, { recursive: true, force: true }))
+  afterEach(() => {
+    db.close()
+    rmSync(stateDir, { recursive: true, force: true })
+  })
 
   function seedSessions(records: Record<string, { session_id: string; last_used_at: string; summary?: string; summary_updated_at?: string }>) {
     writeFileSync(join(stateDir, 'sessions.json'), JSON.stringify({ version: 1, sessions: records }))
@@ -30,7 +36,7 @@ describe('triggerStaleSummaryRefresh', () => {
     const fresh = new Date().toISOString()
     seedSessions({ compass: { session_id: 's_fresh', last_used_at: fresh, summary: 'cached', summary_updated_at: fresh } })
     const sdkEval = vi.fn(async () => 'should-not-be-called')
-    await triggerStaleSummaryRefresh({ stateDir, sdkEval, log: vi.fn() })
+    await triggerStaleSummaryRefresh({ stateDir, db, sdkEval, log: vi.fn() })
     expect(sdkEval).not.toHaveBeenCalled()
   })
 
@@ -44,9 +50,9 @@ describe('triggerStaleSummaryRefresh', () => {
     ])
     try {
       const sdkEval = vi.fn(async () => '修了 ilink-glue 的 token bug')
-      await triggerStaleSummaryRefresh({ stateDir, sdkEval, log: vi.fn() })
+      await triggerStaleSummaryRefresh({ stateDir, db, sdkEval, log: vi.fn() })
       expect(sdkEval).toHaveBeenCalledOnce()
-      const fresh2 = makeSessionStore(join(stateDir, 'sessions.json'), { debounceMs: 0 })
+      const fresh2 = makeSessionStore(db)
       expect(fresh2.get('compass')?.summary).toBe('修了 ilink-glue 的 token bug')
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
@@ -60,8 +66,8 @@ describe('triggerStaleSummaryRefresh', () => {
     ])
     try {
       const sdkEval = vi.fn(async () => { throw new Error('SDK timeout') })
-      await triggerStaleSummaryRefresh({ stateDir, sdkEval, log: vi.fn() })
-      const after = makeSessionStore(join(stateDir, 'sessions.json'), { debounceMs: 0 })
+      await triggerStaleSummaryRefresh({ stateDir, db, sdkEval, log: vi.fn() })
+      const after = makeSessionStore(db)
       expect(after.get('compass')?.summary).toBe('old summary')
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
@@ -76,8 +82,8 @@ describe('triggerStaleSummaryRefresh', () => {
     try {
       const longQuoted = '「' + 'x'.repeat(80) + '」'
       const sdkEval = vi.fn(async () => longQuoted)
-      await triggerStaleSummaryRefresh({ stateDir, sdkEval, log: vi.fn() })
-      const after = makeSessionStore(join(stateDir, 'sessions.json'), { debounceMs: 0 })
+      await triggerStaleSummaryRefresh({ stateDir, db, sdkEval, log: vi.fn() })
+      const after = makeSessionStore(db)
       const s = after.get('compass')?.summary
       expect(s).toBeDefined()
       expect(s!.length).toBeLessThanOrEqual(50)
@@ -102,6 +108,7 @@ describe('triggerStaleSummaryRefresh', () => {
       const sdkEval = async (prompt: string) => { receivedPrompt = prompt; return '随便聊了点天' }
       await triggerStaleSummaryRefresh({
         stateDir,
+        db,
         sdkEval,
         resolveChatId: () => 'chat_test',
         log: vi.fn(),
@@ -126,6 +133,7 @@ describe('triggerStaleSummaryRefresh', () => {
       const sdkEval = async (prompt: string) => { receivedPrompt = prompt; return 'short' }
       await triggerStaleSummaryRefresh({
         stateDir,
+        db,
         sdkEval,
         resolveChatId: () => null,
         log: vi.fn(),

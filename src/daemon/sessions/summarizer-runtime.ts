@@ -18,12 +18,14 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { makeSessionStore } from '../../core/session-store'
+import type { Db } from '../../lib/db'
 import { needsRefresh, formatSummaryRequest } from './summarizer'
 import { resolveProjectJsonlPath } from './path-resolver'
 import { buildMemorySnapshot } from '../memory/snapshot'
 
 export interface SummaryRefreshDeps {
   stateDir: string
+  db: Db
   sdkEval: (prompt: string) => Promise<string>
   /**
    * Resolve the chat whose memory should be loaded as context for ALL
@@ -55,7 +57,7 @@ export async function triggerStaleSummaryRefresh(deps: SummaryRefreshDeps): Prom
       }
     }
 
-    const store = makeSessionStore(join(deps.stateDir, 'sessions.json'), { debounceMs: 0 })
+    const store = makeSessionStore(deps.db, { migrateFromFile: join(deps.stateDir, 'sessions.json') })
     const all = store.all()
     for (const [alias, rec] of Object.entries(all)) {
       if (!needsRefresh(rec)) continue

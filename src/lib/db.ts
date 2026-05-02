@@ -44,6 +44,23 @@ const migrations: Migration[] = [
       ) STRICT;
     `)
   },
+  // v2 — sessions (alias × provider → SDK session_id for resume). PR7 commit 2.
+  // Composite PK so a single alias can hold one claude + one codex session
+  // independently (legacy v0.x format collapsed both into a single row).
+  (db) => {
+    db.exec(`
+      CREATE TABLE sessions (
+        alias TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        last_used_at TEXT NOT NULL,
+        summary TEXT,
+        summary_updated_at TEXT,
+        PRIMARY KEY (alias, provider)
+      ) STRICT;
+      CREATE INDEX sessions_alias_last_used ON sessions(alias, last_used_at DESC);
+    `)
+  },
 ]
 
 export interface OpenDbOpts {
@@ -62,6 +79,11 @@ export function openDb(opts: OpenDbOpts): Database {
   const db = new Database(opts.path, { create: true })
   db.exec('PRAGMA journal_mode = WAL;')
   db.exec('PRAGMA foreign_keys = ON;')
+  // 5s busy_timeout — the CLI process and daemon may try to write the same
+  // db simultaneously (e.g. `wechat-cc sessions delete` while the daemon
+  // bumps last_used_at). With WAL the conflict window is short; the
+  // timeout makes it transparent.
+  db.exec('PRAGMA busy_timeout = 5000;')
   applyMigrations(db)
   return db
 }

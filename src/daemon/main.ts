@@ -127,6 +127,7 @@ async function main() {
 
   const { sessionManager, sessionStore, registry, coordinator, resolve, formatInbound, sdkOptionsForProject, defaultProviderId, dispatchDelegate } = buildBootstrap({
     stateDir: STATE_DIR,
+    db,
     ilink,
     loadProjects: ilink.loadProjects,
     lastActiveChatId: ilink.lastActiveChatId,
@@ -341,7 +342,7 @@ async function main() {
   // idempotent. Errors are logged, never propagated to the caller.
   async function fireMilestonesFor(chatId: string): Promise<void> {
     try {
-      const ctx = await buildDetectorContext({ stateDir: STATE_DIR, chatId })
+      const ctx = await buildDetectorContext({ stateDir: STATE_DIR, chatId, db })
       const memRoot = join(STATE_DIR, 'memory')
       const milestones = makeMilestonesStore(memRoot, chatId)
       const events = makeEventsStore(memRoot, chatId)

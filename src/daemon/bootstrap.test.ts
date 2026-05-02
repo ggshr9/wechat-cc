@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { buildBootstrap } from './bootstrap'
 import { saveAgentConfig } from '../lib/agent-config'
+import { openTestDb } from '../lib/db'
 
 function makeIlinkStub() {
   return {
@@ -41,6 +42,7 @@ function makeIlinkStub() {
 describe('bootstrap', () => {
   it('sdkOptionsForProject returns cwd, wechat stdio mcpServer, canUseTool, systemPrompt', () => {
     const b = buildBootstrap({
+      db: openTestDb(),
       stateDir: '/tmp/state',
       ilink: makeIlinkStub() as any,
       loadProjects: () => ({ projects: { P: { path: '/p', last_active: 0 } }, current: 'P' }),
@@ -71,6 +73,7 @@ describe('bootstrap', () => {
 
   it('resolve uses projects.current', () => {
     const b = buildBootstrap({
+      db: openTestDb(),
       stateDir: '/tmp/state',
       ilink: makeIlinkStub() as any,
       loadProjects: () => ({ projects: { P: { path: '/p', last_active: 0 } }, current: 'P' }),
@@ -82,6 +85,7 @@ describe('bootstrap', () => {
 
   it('with dangerouslySkipPermissions=true, sdkOptionsForProject uses bypassPermissions and no canUseTool', () => {
     const b = buildBootstrap({
+      db: openTestDb(),
       stateDir: '/tmp/state',
       ilink: makeIlinkStub() as any,
       loadProjects: () => ({ projects: { P: { path: '/p', last_active: 0 } }, current: 'P' }),
@@ -96,6 +100,7 @@ describe('bootstrap', () => {
 
   it('with dangerouslySkipPermissions=false, sdkOptionsForProject keeps Phase 1 default + canUseTool', () => {
     const b = buildBootstrap({
+      db: openTestDb(),
       stateDir: '/tmp/state',
       ilink: makeIlinkStub() as any,
       loadProjects: () => ({ projects: { P: { path: '/p', last_active: 0 } }, current: 'P' }),
@@ -110,6 +115,7 @@ describe('bootstrap', () => {
 
   it('defaults dangerouslySkipPermissions to false when omitted', () => {
     const b = buildBootstrap({
+      db: openTestDb(),
       stateDir: '/tmp/state',
       ilink: makeIlinkStub() as any,
       loadProjects: () => ({ projects: {}, current: null }),
@@ -123,6 +129,7 @@ describe('bootstrap', () => {
 
   it('defaults to the Claude agent provider', () => {
     const b = buildBootstrap({
+      db: openTestDb(),
       stateDir: '/tmp/state',
       ilink: makeIlinkStub() as any,
       loadProjects: () => ({ projects: {}, current: null }),
@@ -134,6 +141,7 @@ describe('bootstrap', () => {
 
   it('can select the Codex agent provider explicitly', () => {
     const b = buildBootstrap({
+      db: openTestDb(),
       stateDir: '/tmp/state',
       ilink: makeIlinkStub() as any,
       loadProjects: () => ({ projects: {}, current: null }),
@@ -149,6 +157,7 @@ describe('bootstrap', () => {
     try {
       saveAgentConfig(stateDir, { provider: 'codex', model: 'gpt-5.3-codex', dangerouslySkipPermissions: true, autoStart: false })
       const b = buildBootstrap({
+      db: openTestDb(),
         stateDir,
         ilink: makeIlinkStub() as any,
         loadProjects: () => ({ projects: {}, current: null }),
@@ -165,6 +174,7 @@ describe('bootstrap', () => {
 
   it('registers BOTH claude and codex providers regardless of default (RFC 03 P2)', () => {
     const b = buildBootstrap({
+      db: openTestDb(),
       stateDir: '/tmp/state',
       ilink: makeIlinkStub() as any,
       loadProjects: () => ({ projects: {}, current: null }),
@@ -181,6 +191,7 @@ describe('bootstrap', () => {
 
   it('exposes the conversation coordinator and dispatchDelegate', () => {
     const b = buildBootstrap({
+      db: openTestDb(),
       stateDir: '/tmp/state',
       ilink: makeIlinkStub() as any,
       loadProjects: () => ({ projects: {}, current: null }),
@@ -199,6 +210,7 @@ describe('bootstrap', () => {
 
   it('default mode for any chat is solo + agentProviderKind', () => {
     const b = buildBootstrap({
+      db: openTestDb(),
       stateDir: '/tmp/state',
       ilink: makeIlinkStub() as any,
       loadProjects: () => ({ projects: {}, current: null }),
@@ -211,6 +223,7 @@ describe('bootstrap', () => {
 
   it('sdkOptionsForProject wires BOTH wechat AND delegate stdio servers (RFC 03 P4)', () => {
     const b = buildBootstrap({
+      db: openTestDb(),
       stateDir: '/tmp/state',
       ilink: makeIlinkStub() as any,
       loadProjects: () => ({ projects: {}, current: null }),
@@ -230,6 +243,7 @@ describe('bootstrap', () => {
 
   it('omits stdio mcpServers entirely when internalApi is not wired (no leaks)', () => {
     const b = buildBootstrap({
+      db: openTestDb(),
       stateDir: '/tmp/state',
       ilink: makeIlinkStub() as any,
       loadProjects: () => ({ projects: {}, current: null }),
@@ -243,6 +257,7 @@ describe('bootstrap', () => {
 
   it('system prompt is the prompt-builder output (mentions delegate_codex for claude sessions)', () => {
     const b = buildBootstrap({
+      db: openTestDb(),
       stateDir: '/tmp/state',
       ilink: makeIlinkStub() as any,
       loadProjects: () => ({ projects: {}, current: null }),

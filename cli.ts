@@ -592,7 +592,9 @@ async function main() {
     }
     case 'sessions-list-projects': {
       const { makeSessionStore } = await import('./src/core/session-store')
-      const store = makeSessionStore(join(STATE_DIR, 'sessions.json'), { debounceMs: 500 })
+      const { openDb } = await import('./src/lib/db')
+      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+      const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
       const all = store.all()
       const projects = Object.entries(all).map(([alias, rec]) => ({
         alias,
@@ -620,6 +622,7 @@ async function main() {
             const { query } = await import('@anthropic-ai/claude-agent-sdk')
             await triggerStaleSummaryRefresh({
               stateDir: STATE_DIR,
+              db,
               resolveChatId: () => resolveIntrospectChatId(STATE_DIR),
               sdkEval: async (prompt) => {
                 let text = ''
@@ -642,7 +645,9 @@ async function main() {
     }
     case 'sessions-read-jsonl': {
       const { makeSessionStore } = await import('./src/core/session-store')
-      const store = makeSessionStore(join(STATE_DIR, 'sessions.json'), { debounceMs: 0 })
+      const { openDb } = await import('./src/lib/db')
+      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+      const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
       const rec = store.get(parsed.alias)
       if (!rec) {
         console.log(parsed.json ? JSON.stringify({ ok: false, error: 'no such alias' }, null, 2) : 'no such alias')
@@ -663,7 +668,9 @@ async function main() {
     }
     case 'sessions-delete': {
       const { makeSessionStore } = await import('./src/core/session-store')
-      const store = makeSessionStore(join(STATE_DIR, 'sessions.json'), { debounceMs: 0 })
+      const { openDb } = await import('./src/lib/db')
+      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+      const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
       store.delete(parsed.alias)
       await store.flush()
       console.log(parsed.json ? JSON.stringify({ ok: true, deleted: parsed.alias }, null, 2) : `deleted ${parsed.alias}`)
@@ -671,7 +678,9 @@ async function main() {
     }
     case 'sessions-search': {
       const { searchAcrossSessions } = await import('./src/daemon/sessions/searcher')
-      const hits = await searchAcrossSessions(parsed.query, { limit: parsed.limit, stateDir: STATE_DIR })
+      const { openDb } = await import('./src/lib/db')
+      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+      const hits = await searchAcrossSessions(parsed.query, { limit: parsed.limit, stateDir: STATE_DIR, db })
       if (parsed.json) emitJson({ ok: true, query: parsed.query, hits }, parsed.outFile)
       else console.log(hits.map(h => `${h.alias} · ${h.snippet}`).join('\n'))
       return

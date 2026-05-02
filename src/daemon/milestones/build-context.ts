@@ -18,11 +18,13 @@ import type { DetectorContext } from './detector'
 import { makeEventsStore } from '../events/store'
 import { makeActivityStore } from '../activity/store'
 import { makeSessionStore } from '../../core/session-store'
+import type { Db } from '../../lib/db'
 import { resolveProjectJsonlPath } from '../sessions/path-resolver'
 
 export interface BuildContextDeps {
   stateDir: string
   chatId: string
+  db: Db
 }
 
 export async function buildDetectorContext(deps: BuildContextDeps): Promise<DetectorContext> {
@@ -35,7 +37,7 @@ export async function buildDetectorContext(deps: BuildContextDeps): Promise<Dete
   // anyway, so they fire eventually as work accumulates.
   let turnCount = 0
   try {
-    const sessions = makeSessionStore(join(deps.stateDir, 'sessions.json'), { debounceMs: 0 })
+    const sessions = makeSessionStore(deps.db, { migrateFromFile: join(deps.stateDir, 'sessions.json') })
     const rec = sessions.get('_default')
     if (rec) {
       const path = resolveProjectJsonlPath('_default', rec.session_id)

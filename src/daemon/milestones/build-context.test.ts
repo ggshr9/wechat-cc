@@ -4,14 +4,22 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildDetectorContext } from './build-context'
 import { makeEventsStore } from '../events/store'
+import { openTestDb, type Db } from '../../lib/db'
 
 describe('buildDetectorContext', () => {
   let stateDir: string
-  beforeEach(() => { stateDir = mkdtempSync(join(tmpdir(), 'bdc-')) })
-  afterEach(() => rmSync(stateDir, { recursive: true, force: true }))
+  let db: Db
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), 'bdc-'))
+    db = openTestDb()
+  })
+  afterEach(() => {
+    db.close()
+    rmSync(stateDir, { recursive: true, force: true })
+  })
 
   it('returns zeros/empties when no state exists', async () => {
-    const ctx = await buildDetectorContext({ stateDir, chatId: 'chat_x' })
+    const ctx = await buildDetectorContext({ stateDir, chatId: 'chat_x', db })
     expect(ctx.turnCount).toBe(0)
     expect(ctx.handoffMarkerExists).toBe(false)
     expect(ctx.pushRepliedHistory).toEqual([])
@@ -23,7 +31,7 @@ describe('buildDetectorContext', () => {
     const memDir = join(stateDir, 'memory', 'chat_x')
     mkdirSync(memDir, { recursive: true })
     writeFileSync(join(memDir, '_handoff.md'), 'pointer')
-    const ctx = await buildDetectorContext({ stateDir, chatId: 'chat_x' })
+    const ctx = await buildDetectorContext({ stateDir, chatId: 'chat_x', db })
     expect(ctx.handoffMarkerExists).toBe(true)
   })
 
@@ -31,7 +39,7 @@ describe('buildDetectorContext', () => {
     const events = makeEventsStore(join(stateDir, 'memory'), 'chat_x')
     await events.append({ kind: 'cron_eval_pushed', trigger: 'daily', reasoning: 'r', push_text: 'hi' })
     await events.append({ kind: 'cron_eval_skipped', trigger: 'daily', reasoning: 'r' })
-    const ctx = await buildDetectorContext({ stateDir, chatId: 'chat_x' })
+    const ctx = await buildDetectorContext({ stateDir, chatId: 'chat_x', db })
     expect(ctx.pushRepliedHistory).toHaveLength(1)
   })
 
@@ -50,7 +58,7 @@ describe('buildDetectorContext', () => {
     ).join('\n') + '\n'
     writeFileSync(join(memDir, 'activity.jsonl'), lines)
 
-    const ctx = await buildDetectorContext({ stateDir, chatId: 'chat_x' })
+    const ctx = await buildDetectorContext({ stateDir, chatId: 'chat_x', db })
     expect(ctx.daysWithMessage).toHaveLength(7)
     expect(ctx.daysWithMessage).toEqual(dates)
   })
