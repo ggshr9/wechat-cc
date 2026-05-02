@@ -235,6 +235,51 @@ server.registerTool(
   },
 )
 
+// ─── voice config (RFC 03 P1.B B4) ───────────────────────────────────────
+// Note: `reply_voice` lives in B1 — it crosses the ilink boundary to
+// actually send a voice message and is the riskier slice. These two
+// just read/write the local TTS config.
+
+server.registerTool(
+  'voice_config_status',
+  {
+    title: 'Get TTS config status',
+    description: '查询当前 TTS 配置状态。不返回 api_key，只返回 provider、默认音色、base_url/model（如果是 http_tts）、saved_at。',
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const r = await client.request<unknown>('GET', '/v1/voice/status')
+      return { content: [{ type: 'text', text: JSON.stringify(r) }] }
+    } catch (err) {
+      return passthroughErrorResult(err, 'voice_config_status')
+    }
+  },
+)
+
+server.registerTool(
+  'save_voice_config',
+  {
+    title: 'Save TTS config (with test-synth validation)',
+    description: '保存 TTS 配置。provider=http_tts 时必须提供 base_url + model（常见：VoxCPM2 通过本地 vllm serve --omni 部署）；provider=qwen 时必须提供 api_key。保存前会做一次 1 秒测试合成验证。',
+    inputSchema: {
+      provider: z.enum(['http_tts', 'qwen']),
+      base_url: z.string().url().optional(),
+      model: z.string().optional(),
+      api_key: z.string().optional(),
+      default_voice: z.string().optional(),
+    },
+  },
+  async (args) => {
+    try {
+      const r = await client.request<unknown>('POST', '/v1/voice/save_config', args)
+      return { content: [{ type: 'text', text: JSON.stringify(r) }] }
+    } catch (err) {
+      return passthroughErrorResult(err, 'save_voice_config')
+    }
+  },
+)
+
 function passthroughErrorResult(err: unknown, tool: string): { content: Array<{ type: 'text'; text: string }> } {
   // Surface transport-layer failures as `{error: "..."}` JSON in a text
   // block. Keeps the legacy "tool never throws" promise that the

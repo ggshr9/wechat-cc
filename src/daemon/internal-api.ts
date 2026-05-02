@@ -39,6 +39,35 @@ export interface InternalApiProjectsDep {
   remove(alias: string): Promise<void>
 }
 
+/**
+ * TTS config deps (RFC 03 P1.B B4). Subset of features/tools.ts
+ * `ToolDeps['voice']` — only the two config-shaped methods used by
+ * `voice_config_status` and `save_voice_config`. `replyVoice` (used by
+ * the `reply_voice` tool) lives in B1 since it crosses the ilink boundary.
+ */
+export interface InternalApiVoiceDep {
+  saveConfig(input: {
+    provider: 'http_tts' | 'qwen'
+    base_url?: string
+    model?: string
+    api_key?: string
+    default_voice?: string
+  }): Promise<
+    | { ok: true; tested_ms: number; provider: string; default_voice: string }
+    | { ok: false; reason: string; detail?: string }
+  >
+  configStatus():
+    | { configured: false }
+    | {
+        configured: true
+        provider: 'http_tts' | 'qwen'
+        default_voice: string
+        base_url?: string
+        model?: string
+        saved_at: string
+      }
+}
+
 export interface InternalApiDeps {
   /** State directory; the token file is written under here. */
   stateDir: string
@@ -54,6 +83,8 @@ export interface InternalApiDeps {
   projects?: InternalApiProjectsDep
   /** Persist a wechat user's display name (RFC 03 P1.B B3). */
   setUserName?: (chatId: string, name: string) => Promise<void>
+  /** TTS config + status (RFC 03 P1.B B4). */
+  voice?: InternalApiVoiceDep
   /** Optional log hook so api activity surfaces in channel.log. */
   log?: (tag: string, line: string) => void
 }
@@ -201,6 +232,42 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
         return { status: 200, body: { ok: true } }
       } catch (err) {
         return { status: 200, body: { ok: false, error: errMsg(err) } }
+      }
+    },
+
+    // ── voice config (RFC 03 P1.B B4) ───────────────────────────────────
+    'GET /v1/voice/status': () => {
+      if (!deps.voice) return { status: 503, body: { error: 'voice_not_wired' } }
+      // configStatus is sync, never throws — direct return.
+      return { status: 200, body: deps.voice.configStatus() }
+    },
+    'POST /v1/voice/save_config': async (_q, body) => {
+      if (!deps.voice) return { status: 503, body: { error: 'voice_not_wired' } }
+      const b = body as {
+        provider?: unknown
+        base_url?: unknown
+        model?: unknown
+        api_key?: unknown
+        default_voice?: unknown
+      } | null
+      if (b?.provider !== 'http_tts' && b?.provider !== 'qwen') {
+        return { status: 400, body: { error: 'provider_required', allowed: ['http_tts', 'qwen'] } }
+      }
+      // saveConfig handles its own validation + test-synth; surface its
+      // ok-true / ok-false-reason verbatim. Catch transport-level
+      // unexpected errors and shape them into the same {ok:false,reason}
+      // contract so the agent sees a structured failure.
+      try {
+        const r = await deps.voice.saveConfig({
+          provider: b.provider,
+          ...(typeof b.base_url === 'string' ? { base_url: b.base_url } : {}),
+          ...(typeof b.model === 'string' ? { model: b.model } : {}),
+          ...(typeof b.api_key === 'string' ? { api_key: b.api_key } : {}),
+          ...(typeof b.default_voice === 'string' ? { default_voice: b.default_voice } : {}),
+        })
+        return { status: 200, body: r }
+      } catch (err) {
+        return { status: 200, body: { ok: false, reason: 'unexpected_error', detail: errMsg(err) } }
       }
     },
   }

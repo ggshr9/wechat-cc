@@ -111,46 +111,8 @@ describe('buildWechatMcpServer', () => {
     expect(extractText(out)).toContain('too_long')
   })
 
-  it('save_voice_config passes http_tts args through', async () => {
-    const deps = makeDeps()
-    const { handlers } = buildWechatMcpServer(deps)
-    const out = await handlers.save_voice_config({
-      provider: 'http_tts',
-      base_url: 'http://mac:8000/v1/audio/speech',
-      model: 'openbmb/VoxCPM2',
-    })
-    expect(deps.voice.saveConfig).toHaveBeenCalledWith({
-      provider: 'http_tts',
-      base_url: 'http://mac:8000/v1/audio/speech',
-      model: 'openbmb/VoxCPM2',
-    })
-    expect(extractText(out)).toContain('tested_ms')
-  })
-
-  it('voice_config_status returns current configured state as JSON', async () => {
-    const deps = makeDeps({
-      voice: {
-        replyVoice: vi.fn(),
-        saveConfig: vi.fn(),
-        configStatus: () => ({
-          configured: true as const,
-          provider: 'http_tts' as const,
-          default_voice: 'default',
-          base_url: 'http://mac:8000/v1/audio/speech',
-          model: 'openbmb/VoxCPM2',
-          saved_at: '2026-04-22T00:00:00Z',
-        }),
-      },
-    } as any)
-    const { handlers } = buildWechatMcpServer(deps)
-    const out = await handlers.voice_config_status({})
-    const parsed = JSON.parse(extractText(out))
-    expect(parsed.configured).toBe(true)
-    expect(parsed.provider).toBe('http_tts')
-    expect(parsed.base_url).toBe('http://mac:8000/v1/audio/speech')
-    // never return api_key
-    expect(parsed.api_key).toBeUndefined()
-  })
+  // save_voice_config / voice_config_status tests moved to
+  // internal-api.test.ts + integration.test.ts in P1.B B4.
 
   it('companion_enable returns welcome message on first enable', async () => {
     const deps = makeDeps()

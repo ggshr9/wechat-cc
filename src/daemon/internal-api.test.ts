@@ -435,4 +435,173 @@ describe('internal-api', () => {
       expect(await resp.json()).toEqual({ error: 'set_user_name_not_wired' })
     })
   })
+
+  // ─── voice routes (RFC 03 P1.B B4) ────────────────────────────────────
+
+  describe('voice routes', () => {
+    interface MockVoice {
+      saveConfig: (input: {
+        provider: 'http_tts' | 'qwen'
+        base_url?: string
+        model?: string
+        api_key?: string
+        default_voice?: string
+      }) => Promise<
+        | { ok: true; tested_ms: number; provider: string; default_voice: string }
+        | { ok: false; reason: string; detail?: string }
+      >
+      configStatus: () => { configured: false } | {
+        configured: true
+        provider: 'http_tts' | 'qwen'
+        default_voice: string
+        base_url?: string
+        model?: string
+        saved_at: string
+      }
+    }
+
+    function startWithVoice(voice: MockVoice): Promise<{ port: number; token: string }> {
+      api = createInternalApi({ stateDir, daemonPid: 1, voice })
+      return api.start().then(({ port, tokenFilePath }) => ({
+        port,
+        token: readFileSync(tokenFilePath, 'utf8').trim(),
+      }))
+    }
+
+    it('GET /v1/voice/status returns configStatus() result verbatim (configured)', async () => {
+      const status = {
+        configured: true as const,
+        provider: 'http_tts' as const,
+        default_voice: 'default',
+        base_url: 'http://mac:8000/v1/audio/speech',
+        model: 'openbmb/VoxCPM2',
+        saved_at: '2026-04-22T00:00:00Z',
+      }
+      const { port, token } = await startWithVoice({
+        configStatus: () => status,
+        saveConfig: async () => ({ ok: false, reason: 'unused' }),
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/voice/status`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      expect(resp.status).toBe(200)
+      expect(await resp.json()).toEqual(status)
+    })
+
+    it('GET /v1/voice/status returns {configured:false} when unset', async () => {
+      const { port, token } = await startWithVoice({
+        configStatus: () => ({ configured: false }),
+        saveConfig: async () => ({ ok: false, reason: 'unused' }),
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/voice/status`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      expect(await resp.json()).toEqual({ configured: false })
+    })
+
+    it('does NOT leak api_key in status response (legacy security guarantee)', async () => {
+      // configStatus() never includes api_key by contract; route is a
+      // pass-through, so as long as we don't add fields, we're safe. Test
+      // that the route does not synthesize the field even when input has it.
+      const { port, token } = await startWithVoice({
+        configStatus: () => ({
+          configured: true, provider: 'qwen', default_voice: 'qingyu',
+          saved_at: '2026-04-22T00:00:00Z',
+        }),
+        saveConfig: async () => ({ ok: true, tested_ms: 0, provider: 'qwen', default_voice: 'qingyu' }),
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/voice/status`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const body = await resp.json() as Record<string, unknown>
+      expect(body.api_key).toBeUndefined()
+    })
+
+    it('POST /v1/voice/save_config forwards http_tts args + returns ok+tested_ms', async () => {
+      const saveConfig = vi.fn(async () => ({
+        ok: true as const, tested_ms: 800, provider: 'http_tts', default_voice: 'default',
+      }))
+      const { port, token } = await startWithVoice({
+        saveConfig, configStatus: () => ({ configured: false }),
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/voice/save_config`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          provider: 'http_tts',
+          base_url: 'http://mac:8000/v1/audio/speech',
+          model: 'openbmb/VoxCPM2',
+        }),
+      })
+      expect(resp.status).toBe(200)
+      const body = await resp.json() as { ok: boolean; tested_ms: number }
+      expect(body.ok).toBe(true)
+      expect(body.tested_ms).toBe(800)
+      expect(saveConfig).toHaveBeenCalledWith({
+        provider: 'http_tts',
+        base_url: 'http://mac:8000/v1/audio/speech',
+        model: 'openbmb/VoxCPM2',
+      })
+    })
+
+    it('POST /v1/voice/save_config surfaces ok:false reason on validation fail', async () => {
+      const { port, token } = await startWithVoice({
+        saveConfig: async () => ({ ok: false, reason: 'http_tts_unreachable', detail: 'ECONNREFUSED' }),
+        configStatus: () => ({ configured: false }),
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/voice/save_config`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'http_tts', base_url: 'http://nope:9999/x', model: 'm' }),
+      })
+      expect(resp.status).toBe(200)
+      expect(await resp.json()).toEqual({
+        ok: false, reason: 'http_tts_unreachable', detail: 'ECONNREFUSED',
+      })
+    })
+
+    it('POST /v1/voice/save_config returns 400 on bad provider', async () => {
+      const { port, token } = await startWithVoice({
+        saveConfig: async () => ({ ok: true, tested_ms: 0, provider: 'http_tts', default_voice: 'd' }),
+        configStatus: () => ({ configured: false }),
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/voice/save_config`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'mystery' }),
+      })
+      expect(resp.status).toBe(400)
+      const body = await resp.json() as { error: string; allowed?: string[] }
+      expect(body.error).toBe('provider_required')
+      expect(body.allowed).toEqual(['http_tts', 'qwen'])
+    })
+
+    it('POST /v1/voice/save_config catches saveConfig() throw and shapes ok:false', async () => {
+      const { port, token } = await startWithVoice({
+        saveConfig: async () => { throw new Error('disk full') },
+        configStatus: () => ({ configured: false }),
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/voice/save_config`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'qwen', api_key: 'sk-x' }),
+      })
+      expect(resp.status).toBe(200)
+      const body = await resp.json() as { ok: boolean; reason?: string; detail?: string }
+      expect(body.ok).toBe(false)
+      expect(body.reason).toBe('unexpected_error')
+      expect(body.detail).toContain('disk full')
+    })
+
+    it('returns 503 when voice dep not wired', async () => {
+      api = createInternalApi({ stateDir, daemonPid: 1 })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/voice/status`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      expect(resp.status).toBe(503)
+      expect(await resp.json()).toEqual({ error: 'voice_not_wired' })
+    })
+  })
 })

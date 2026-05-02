@@ -79,14 +79,6 @@ export interface BuiltWechatMcp {
     share_page: (args: { title: string; content: string; needs_approval?: boolean; chat_id?: string; account_id?: string }) => Promise<unknown>
     resurface_page: (args: { slug?: string; title_fragment?: string }) => Promise<unknown>
     reply_voice: (args: { chat_id: string; text: string }) => Promise<unknown>
-    save_voice_config: (args: {
-      provider: 'http_tts' | 'qwen'
-      base_url?: string
-      model?: string
-      api_key?: string
-      default_voice?: string
-    }) => Promise<unknown>
-    voice_config_status: (args: Record<string, never>) => Promise<unknown>
     companion_enable: (args: Record<string, never>) => Promise<unknown>
     companion_disable: (args: Record<string, never>) => Promise<unknown>
     companion_status: (args: Record<string, never>) => Promise<unknown>
@@ -195,30 +187,9 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
   )
   handlers.reply_voice = async (a) => (await replyVoiceDef.handler(a, undefined)) as unknown
 
-  const saveVoiceConfigDef = tool(
-    'save_voice_config',
-    '保存 TTS 配置。provider=http_tts 时必须提供 base_url + model（常见：VoxCPM2 通过本地 vllm serve --omni 部署）；provider=qwen 时必须提供 api_key。保存前会做一次 1 秒测试合成验证。',
-    {
-      provider: z.enum(['http_tts', 'qwen']),
-      base_url: z.string().url().optional(),
-      model: z.string().optional(),
-      api_key: z.string().optional(),
-      default_voice: z.string().optional(),
-    },
-    async (args) => {
-      const r = await deps.voice.saveConfig(args)
-      return okText(JSON.stringify(r))
-    },
-  )
-  handlers.save_voice_config = async (a) => (await saveVoiceConfigDef.handler(a as any, undefined)) as unknown
-
-  const voiceConfigStatusDef = tool(
-    'voice_config_status',
-    '查询当前 TTS 配置状态。不返回 api_key，只返回 provider、默认音色、base_url/model（如果是 http_tts）、saved_at。',
-    {},
-    async () => okText(JSON.stringify(deps.voice.configStatus())),
-  )
-  handlers.voice_config_status = async (a) => (await voiceConfigStatusDef.handler(a, undefined)) as unknown
+  // save_voice_config / voice_config_status moved to wechat-mcp stdio
+  // server in P1.B B4. reply_voice (also voice-related) stays here until
+  // B1 because it crosses ilink to actually send a message.
 
   const companionEnableDef = tool(
     'companion_enable',
@@ -264,7 +235,7 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
     tools: [
       replyDef, editDef, sendFileDef, broadcastDef,
       shareDef, resurfaceDef,
-      replyVoiceDef, saveVoiceConfigDef, voiceConfigStatusDef,
+      replyVoiceDef,
       companionEnableDef, companionDisableDef, companionStatusDef, companionSnoozeDef,
     ],
   })

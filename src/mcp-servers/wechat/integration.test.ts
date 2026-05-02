@@ -232,6 +232,64 @@ describe('wechat-mcp stdio integration', () => {
     expect(setUserNameCalls).toEqual([['user@bot', '丸子']])
   })
 
+  // ── B4: voice config tools end-to-end ───────────────────────────────────
+
+  it('save_voice_config → voice_config_status round-trips through stdio + HTTP', async () => {
+    const memory = makeMemoryFS({ rootDir: join(stateDir, 'memory') })
+    let stored: { provider: 'http_tts'; default_voice: string; base_url: string; model: string; saved_at: string } | null = null
+    const voice = {
+      saveConfig: async (input: { provider: 'http_tts' | 'qwen'; base_url?: string; model?: string; default_voice?: string }) => {
+        stored = {
+          provider: 'http_tts' as const,
+          default_voice: input.default_voice ?? 'default',
+          base_url: input.base_url!,
+          model: input.model!,
+          saved_at: new Date('2026-04-22T00:00:00Z').toISOString(),
+        }
+        return { ok: true as const, tested_ms: 800, provider: input.provider, default_voice: stored.default_voice }
+      },
+      configStatus: () => stored
+        ? { configured: true as const, ...stored }
+        : { configured: false as const },
+    }
+    api = createInternalApi({ stateDir, daemonPid: 7777, memory, voice })
+    const { port, tokenFilePath } = await api.start()
+    const transport = new StdioClientTransport({
+      command: RUNTIME, args: [WECHAT_MCP_MAIN],
+      env: {
+        ...process.env as Record<string, string>,
+        WECHAT_INTERNAL_API: `http://127.0.0.1:${port}`,
+        WECHAT_INTERNAL_TOKEN_FILE: tokenFilePath,
+      },
+      stderr: 'pipe',
+    })
+    const c = new Client({ name: 'integration-voice', version: '0.0.1' }, { capabilities: {} })
+    await c.connect(transport)
+    client = c
+
+    // Initially unset
+    const status1 = await c.callTool({ name: 'voice_config_status', arguments: {} })
+    expect(JSON.parse(((status1.content as Array<{ text?: string }>)[0]?.text)!)).toEqual({ configured: false })
+
+    // Save
+    const save = await c.callTool({
+      name: 'save_voice_config',
+      arguments: { provider: 'http_tts', base_url: 'http://mac:8000/v1/audio/speech', model: 'openbmb/VoxCPM2' },
+    })
+    const saveBody = JSON.parse(((save.content as Array<{ text?: string }>)[0]?.text)!) as { ok: boolean; tested_ms: number }
+    expect(saveBody.ok).toBe(true)
+    expect(saveBody.tested_ms).toBe(800)
+
+    // Status now reflects saved config
+    const status2 = await c.callTool({ name: 'voice_config_status', arguments: {} })
+    const status2Body = JSON.parse(((status2.content as Array<{ text?: string }>)[0]?.text)!) as Record<string, unknown>
+    expect(status2Body.configured).toBe(true)
+    expect(status2Body.provider).toBe('http_tts')
+    expect(status2Body.base_url).toBe('http://mac:8000/v1/audio/speech')
+    // never leak api_key
+    expect(status2Body.api_key).toBeUndefined()
+  })
+
   it('ping tool returns isError=true when internal-api is unreachable', async () => {
     // Don't start internal-api — point the child at a port that nothing
     // is listening on. The child should still come up (no precondition

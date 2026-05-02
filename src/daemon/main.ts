@@ -70,6 +70,10 @@ async function main() {
     memory: memoryFS,
     projects: ilink.projects,
     setUserName: (chatId, name) => ilink.setUserName(chatId, name),
+    voice: {
+      saveConfig: (input) => ilink.voice.saveConfig(input),
+      configStatus: () => ilink.voice.configStatus(),
+    },
     log: (tag, line) => log(tag, line),
   })
   const { port: internalApiPort, tokenFilePath: internalTokenFile } = await internalApi.start()
