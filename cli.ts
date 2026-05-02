@@ -35,20 +35,14 @@ function emitJson(data: unknown, outFile: string | undefined): void {
 //   PR4 batch 1: status / list / install / doctor / setup-status
 //   PR4 batch 2: events / observations / milestones / conversations / logs
 //   PR4 batch 3a: sessions / avatar / guard / provider
+//   PR4 batch 3b: memory / account / daemon / demo
 export type CliArgs =
   | { cmd: 'run'; dangerouslySkipPermissions: boolean }
   | { cmd: 'setup'; qrJson?: boolean }
   | { cmd: 'setup-poll'; qrcode: string; baseUrl?: string; json: boolean }
   | { cmd: 'service'; action: 'status' | 'install' | 'start' | 'stop' | 'uninstall'; json: boolean; unattended?: boolean; autoStart?: boolean }
-  | { cmd: 'account-remove'; botId: string; json: boolean }
-  | { cmd: 'daemon-kill'; pid: number; json: boolean }
-  | { cmd: 'memory-list'; json: boolean }
-  | { cmd: 'memory-read'; userId: string; path: string; json: boolean }
-  | { cmd: 'memory-write'; userId: string; path: string; bodyBase64: string; json: boolean }
   | { cmd: 'reply'; chatId?: string; text?: string; json: boolean }
   | { cmd: 'update'; check: boolean; json: boolean }
-  | { cmd: 'demo-seed'; chatId: string | null; json: boolean }
-  | { cmd: 'demo-unseed'; chatId: string | null; json: boolean }
   | { cmd: 'help' }
 
 export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void }): CliArgs {
@@ -88,52 +82,17 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
       }
       return { cmd: 'help' }
     }
-    case 'account': {
-      if (rest[0] === 'remove' && rest[1]) {
-        return { cmd: 'account-remove', botId: rest[1], json: rest.includes('--json') }
-      }
-      return { cmd: 'help' }
-    }
-    case 'daemon': {
-      if (rest[0] === 'kill' && rest[1]) {
-        const pid = Number.parseInt(rest[1], 10)
-        if (!Number.isFinite(pid) || pid <= 0) return { cmd: 'help' }
-        return { cmd: 'daemon-kill', pid, json: rest.includes('--json') }
-      }
-      return { cmd: 'help' }
-    }
-    case 'memory': {
-      if (rest[0] === 'list') return { cmd: 'memory-list', json: rest.includes('--json') }
-      if (rest[0] === 'read' && rest[1] && rest[2]) {
-        return { cmd: 'memory-read', userId: rest[1], path: rest[2], json: rest.includes('--json') }
-      }
-      if (rest[0] === 'write' && rest[1] && rest[2]) {
-        const idx = rest.indexOf('--body-base64')
-        if (idx < 0 || !rest[idx + 1]) return { cmd: 'help' }
-        return { cmd: 'memory-write', userId: rest[1], path: rest[2], bodyBase64: rest[idx + 1]!, json: rest.includes('--json') }
-      }
-      return { cmd: 'help' }
-    }
     // events / observations / milestones / conversations / logs — migrated
     // to citty in PR4 batch 2 (see SUBCOMMANDS map below). MIGRATED_COMMANDS
     // routes them before parseCliArgs runs, so these cases are dead.
     // sessions / avatar / guard / provider — migrated to citty in PR4 batch 3a.
-    // MIGRATED_COMMANDS routes them before parseCliArgs runs, so these cases
-    // would be dead.
+    // memory / account / daemon / demo — migrated to citty in PR4 batch 3b.
     case 'update': {
       return {
         cmd: 'update',
         check: rest.includes('--check'),
         json: rest.includes('--json'),
       }
-    }
-    case 'demo': {
-      if (rest[0] === 'seed' || rest[0] === 'unseed') {
-        const chatIdx = rest.indexOf('--chat-id')
-        const chatId = chatIdx >= 0 ? rest[chatIdx + 1] ?? null : null
-        return { cmd: rest[0] === 'seed' ? 'demo-seed' : 'demo-unseed', chatId, json: rest.includes('--json') }
-      }
-      return { cmd: 'help' }
     }
     case 'reply': {
       // wechat-cc reply [--to <chat_id>] [text]
@@ -834,6 +793,202 @@ function parseBoolValue(value: string | undefined): boolean | undefined {
   return undefined
 }
 
+// ── PR4 batch 3b — memory / account / daemon / demo ─────────────────
+//
+// 4 namespaces, 7 leaves total. Same shape as 3a: bounded surface,
+// no daemon-restart, no ilink. memory-write decodes a base64 body
+// (sandboxed: .md only, ≤100KB, traversal-safe), account-remove wipes
+// a single account dir, daemon-kill signals a process by pid (with
+// cmdline verification), demo seed/unseed mutate a per-chat slice
+// of the SQLite db.
+
+const memoryListCmd = defineCommand({
+  meta: { name: 'list', description: 'List Companion v2 memory files (per user)' },
+  args: { json: { type: 'boolean', description: 'JSON envelope' } },
+  async run({ args }) {
+    const { listAllMemory } = await import('./src/cli/memory.ts')
+    const users = listAllMemory(STATE_DIR)
+    if (args.json) console.log(JSON.stringify(users, null, 2))
+    else {
+      if (users.length === 0) console.log('(no memory files)')
+      for (const u of users) {
+        console.log(`${u.userId}  (${u.fileCount} 文件 · ${u.totalBytes} 字节)`)
+        for (const f of u.files) console.log(`  - ${f.path}  (${f.size}B)`)
+      }
+    }
+  },
+})
+
+const memoryReadCmd = defineCommand({
+  meta: { name: 'read', description: 'Read one .md memory file (path is relative to the user dir, traversal-safe)' },
+  args: {
+    userId: { type: 'positional', required: true, description: 'User id', valueHint: 'user-id' },
+    path: { type: 'positional', required: true, description: 'Path under the user memory dir', valueHint: 'path' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    const { readMemoryFile } = await import('./src/cli/memory.ts')
+    try {
+      const content = readMemoryFile(STATE_DIR, args.userId, args.path)
+      if (args.json) console.log(JSON.stringify({ ok: true, userId: args.userId, path: args.path, content }, null, 2))
+      else process.stdout.write(content)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      // --json: emit ok:false on stdout + exit 0 so GUI callers can read
+      // the structured error. Non-JSON: stderr + exit 1 (matches the
+      // pattern in `update --json` and is what the GUI invoke path
+      // expects — error info travels via JSON.ok=false, not exit code).
+      if (args.json) {
+        console.log(JSON.stringify({ ok: false, error: msg }))
+        return
+      }
+      console.error(`memory read failed: ${msg}`)
+      process.exit(1)
+    }
+  },
+})
+
+const memoryWriteCmd = defineCommand({
+  meta: { name: 'write', description: 'Write/overwrite one .md memory file (sandboxed: .md only, ≤100KB, no traversal)' },
+  args: {
+    userId: { type: 'positional', required: true, description: 'User id', valueHint: 'user-id' },
+    path: { type: 'positional', required: true, description: 'Path under the user memory dir', valueHint: 'path' },
+    'body-base64': { type: 'string', required: true, description: 'Base64-encoded UTF-8 body (avoids shell-quote pain)' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    const { writeMemoryFile } = await import('./src/cli/memory.ts')
+    try {
+      // Body comes in via base64 to dodge shell-quoting hell on multi-line
+      // markdown content (Tauri sidecar IPC passes args as a list, but
+      // the underlying CLI would still see CRLF/quote/backtick sequences
+      // unsafely if we tried to inline the content). Decoder + UTF-8
+      // assumption matches the GUI's btoa(unescape(encodeURIComponent(body))).
+      const body = Buffer.from(args['body-base64'], 'base64').toString('utf8')
+      const result = writeMemoryFile(STATE_DIR, args.userId, args.path, body)
+      if (args.json) console.log(JSON.stringify({ ok: true, userId: args.userId, path: args.path, ...result }, null, 2))
+      else console.log(`${result.created ? 'created' : 'updated'}: ${args.userId}/${args.path} (${result.bytesWritten}B)`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (args.json) {
+        console.log(JSON.stringify({ ok: false, error: msg }))
+        return
+      }
+      console.error(`memory write failed: ${msg}`)
+      process.exit(1)
+    }
+  },
+})
+
+const memoryCmd = defineCommand({
+  meta: { name: 'memory', description: 'Companion v2 memory files (per user)' },
+  subCommands: {
+    list: memoryListCmd,
+    read: memoryReadCmd,
+    write: memoryWriteCmd,
+  },
+})
+
+const accountRemoveCmd = defineCommand({
+  meta: { name: 'remove', description: 'Decommission a bound bot — wipes account dir + related state. Restart daemon afterwards.' },
+  args: {
+    botId: { type: 'positional', required: true, description: 'Bot id', valueHint: 'bot-id' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    const { removeAccount } = await import('./src/cli/account-remove.ts')
+    try {
+      const result = removeAccount({ stateDir: STATE_DIR }, args.botId)
+      if (args.json) {
+        console.log(JSON.stringify({ ok: true, ...result, restartRequired: true }, null, 2))
+      } else {
+        console.log(`removed: ${result.botId}`)
+        for (const r of result.removed) console.log(`  - ${r}`)
+        for (const w of result.warnings) console.log(`  ! ${w}`)
+        console.log('\nrestart daemon for the change to take effect.')
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+      else console.error(`account remove failed: ${msg}`)
+      process.exit(1)
+    }
+  },
+})
+
+const accountCmd = defineCommand({
+  meta: { name: 'account', description: 'Account management (decommission a bound bot)' },
+  subCommands: { remove: accountRemoveCmd },
+})
+
+const daemonKillCmd = defineCommand({
+  meta: { name: 'kill', description: 'Force-kill a daemon process by pid (verifies cmdline; SIGTERM 1.5s grace then SIGKILL)' },
+  args: {
+    pid: { type: 'positional', required: true, description: 'Process id (positive integer)', valueHint: 'pid' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    const pid = Number.parseInt(args.pid, 10)
+    if (!Number.isFinite(pid) || pid <= 0) {
+      console.error(`pid must be a positive integer (got: ${args.pid})`)
+      process.exit(2)
+    }
+    const { killDaemonByPid, defaultKillDeps } = await import('./src/cli/daemon-kill.ts')
+    const result = await killDaemonByPid(defaultKillDeps(), pid)
+    if (args.json) console.log(JSON.stringify(result, null, 2))
+    else console.log(result.killed ? `killed pid ${result.pid}` : `failed: ${result.message}`)
+    if (!result.killed) process.exit(1)
+  },
+})
+
+const daemonCmd = defineCommand({
+  meta: { name: 'daemon', description: 'Daemon process control' },
+  subCommands: { kill: daemonKillCmd },
+})
+
+async function runDemo(verb: 'seed' | 'unseed', chatIdArg: string | undefined, json: boolean): Promise<void> {
+  const { loadCompanionConfig } = await import('./src/daemon/companion/config')
+  const cfg = loadCompanionConfig(STATE_DIR)
+  const chatId = chatIdArg ?? cfg.default_chat_id
+  if (!chatId) {
+    const msg = 'no default chat configured — pass --chat-id or run setup first'
+    console.error(json ? JSON.stringify({ ok: false, error: msg }, null, 2) : msg)
+    process.exit(1)
+  }
+  const { seedDemo, unseedDemo } = await import('./src/daemon/demo/seed')
+  const { openDb } = await import('./src/lib/db')
+  const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+  const fn = verb === 'seed' ? seedDemo : unseedDemo
+  const result = await fn({ stateDir: STATE_DIR, chatId, db })
+  console.log(json ? JSON.stringify({ ok: true, ...result }, null, 2) : JSON.stringify(result))
+}
+
+const demoSeedCmd = defineCommand({
+  meta: { name: 'seed', description: 'Populate sample observations + milestones + events for first-impression / screenshot use' },
+  args: {
+    'chat-id': { type: 'string', description: 'Target chat (defaults to companion default_chat_id)' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) { await runDemo('seed', args['chat-id'], Boolean(args.json)) },
+})
+
+const demoUnseedCmd = defineCommand({
+  meta: { name: 'unseed', description: 'Remove items written by `demo seed`. Idempotent.' },
+  args: {
+    'chat-id': { type: 'string', description: 'Target chat (defaults to companion default_chat_id)' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) { await runDemo('unseed', args['chat-id'], Boolean(args.json)) },
+})
+
+const demoCmd = defineCommand({
+  meta: { name: 'demo', description: 'Seed/unseed demo data for the dashboard' },
+  subCommands: {
+    seed: demoSeedCmd,
+    unseed: demoUnseedCmd,
+  },
+})
+
 // Subcommands literal first → both `cittyRoot.subCommands` and
 // `MIGRATED_COMMANDS` derive from this single source of truth. Adding a new
 // citty subcommand only requires touching this object — the dispatch set
@@ -857,6 +1012,11 @@ const SUBCOMMANDS = {
   avatar: avatarCmd,
   guard: guardCmd,
   provider: providerCmd,
+  // PR4 batch 3b — memory / account / daemon / demo namespaces.
+  memory: memoryCmd,
+  account: accountCmd,
+  daemon: daemonCmd,
+  demo: demoCmd,
 } as const
 
 export const cittyRoot = defineCommand({
@@ -970,91 +1130,6 @@ async function main() {
       else console.log(`service ${parsed.action}: ok${dryRun ? ' (dry-run)' : ''}`)
       return
     }
-    case 'memory-list': {
-      const { listAllMemory } = await import('./src/cli/memory.ts')
-      const users = listAllMemory(STATE_DIR)
-      if (parsed.json) console.log(JSON.stringify(users, null, 2))
-      else {
-        if (users.length === 0) console.log('(no memory files)')
-        for (const u of users) {
-          console.log(`${u.userId}  (${u.fileCount} 文件 · ${u.totalBytes} 字节)`)
-          for (const f of u.files) console.log(`  - ${f.path}  (${f.size}B)`)
-        }
-      }
-      return
-    }
-    case 'memory-read': {
-      const { readMemoryFile } = await import('./src/cli/memory.ts')
-      try {
-        const content = readMemoryFile(STATE_DIR, parsed.userId, parsed.path)
-        if (parsed.json) console.log(JSON.stringify({ ok: true, userId: parsed.userId, path: parsed.path, content }, null, 2))
-        else process.stdout.write(content)
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        // --json: emit ok:false on stdout + exit 0 so GUI callers can read
-        // the structured error. Non-JSON: stderr + exit 1 (matches the
-        // pattern in `update --json` and is what the GUI invoke path
-        // expects — error info travels via JSON.ok=false, not exit code).
-        if (parsed.json) {
-          console.log(JSON.stringify({ ok: false, error: msg }))
-          return
-        }
-        console.error(`memory read failed: ${msg}`)
-        process.exit(1)
-      }
-      return
-    }
-    case 'memory-write': {
-      const { writeMemoryFile } = await import('./src/cli/memory.ts')
-      try {
-        // Body comes in via base64 to dodge shell-quoting hell on multi-line
-        // markdown content (Tauri sidecar IPC passes args as a list, but
-        // the underlying CLI would still see CRLF/quote/backtick sequences
-        // unsafely if we tried to inline the content). Decoder + UTF-8
-        // assumption matches the GUI's btoa(unescape(encodeURIComponent(body))).
-        const body = Buffer.from(parsed.bodyBase64, 'base64').toString('utf8')
-        const result = writeMemoryFile(STATE_DIR, parsed.userId, parsed.path, body)
-        if (parsed.json) console.log(JSON.stringify({ ok: true, userId: parsed.userId, path: parsed.path, ...result }, null, 2))
-        else console.log(`${result.created ? 'created' : 'updated'}: ${parsed.userId}/${parsed.path} (${result.bytesWritten}B)`)
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        if (parsed.json) {
-          console.log(JSON.stringify({ ok: false, error: msg }))
-          return
-        }
-        console.error(`memory write failed: ${msg}`)
-        process.exit(1)
-      }
-      return
-    }
-    case 'daemon-kill': {
-      const { killDaemonByPid, defaultKillDeps } = await import('./src/cli/daemon-kill.ts')
-      const result = await killDaemonByPid(defaultKillDeps(), parsed.pid)
-      if (parsed.json) console.log(JSON.stringify(result, null, 2))
-      else console.log(result.killed ? `killed pid ${result.pid}` : `failed: ${result.message}`)
-      if (!result.killed) process.exit(1)
-      return
-    }
-    case 'account-remove': {
-      const { removeAccount } = await import('./src/cli/account-remove.ts')
-      try {
-        const result = removeAccount({ stateDir: STATE_DIR }, parsed.botId)
-        if (parsed.json) {
-          console.log(JSON.stringify({ ok: true, ...result, restartRequired: true }, null, 2))
-        } else {
-          console.log(`removed: ${result.botId}`)
-          for (const r of result.removed) console.log(`  - ${r}`)
-          for (const w of result.warnings) console.log(`  ! ${w}`)
-          console.log('\nrestart daemon for the change to take effect.')
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        if (parsed.json) console.log(JSON.stringify({ ok: false, error: msg }))
-        else console.error(`account remove failed: ${msg}`)
-        process.exit(1)
-      }
-      return
-    }
     case 'update': {
       const { analyzeUpdate, applyUpdate, defaultUpdateDeps } = await import('./src/cli/update.ts')
       // Compiled-bundle short-circuit: when the binary is shipped inside a
@@ -1103,24 +1178,6 @@ async function main() {
         const lockNote = result.lockfileChanged ? ', deps reinstalled' : ''
         console.log(`updated: ${result.fromCommit} → ${result.toCommit}${lockNote}, daemon=${result.daemonAction} (${result.elapsedMs}ms)`)
       }
-      return
-    }
-    case 'demo-seed':
-    case 'demo-unseed': {
-      const { loadCompanionConfig } = await import('./src/daemon/companion/config')
-      const cfg = loadCompanionConfig(STATE_DIR)
-      const chatId = parsed.chatId ?? cfg.default_chat_id
-      if (!chatId) {
-        const msg = 'no default chat configured — pass --chat-id or run setup first'
-        console.error(parsed.json ? JSON.stringify({ ok: false, error: msg }, null, 2) : msg)
-        process.exit(1)
-      }
-      const { seedDemo, unseedDemo } = await import('./src/daemon/demo/seed')
-      const { openDb } = await import('./src/lib/db')
-      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
-      const fn = parsed.cmd === 'demo-seed' ? seedDemo : unseedDemo
-      const result = await fn({ stateDir: STATE_DIR, chatId, db })
-      console.log(parsed.json ? JSON.stringify({ ok: true, ...result }, null, 2) : JSON.stringify(result))
       return
     }
     case 'reply': {

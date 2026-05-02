@@ -42,55 +42,9 @@ describe('parseCliArgs', () => {
   it('unknown subcommand returns help', () => {
     expect(parseCliArgs(['whatever']).cmd).toBe('help')
   })
-  it('parses account remove <bot-id> [--json]', () => {
-    expect(parseCliArgs(['account', 'remove', 'abc-im-bot'])).toEqual({
-      cmd: 'account-remove', botId: 'abc-im-bot', json: false,
-    })
-    expect(parseCliArgs(['account', 'remove', 'abc-im-bot', '--json'])).toEqual({
-      cmd: 'account-remove', botId: 'abc-im-bot', json: true,
-    })
-  })
-  it('account without remove falls through to help', () => {
-    expect(parseCliArgs(['account']).cmd).toBe('help')
-    expect(parseCliArgs(['account', 'remove']).cmd).toBe('help')
-  })
-  it('parses daemon kill <pid> [--json]', () => {
-    expect(parseCliArgs(['daemon', 'kill', '12345'])).toEqual({
-      cmd: 'daemon-kill', pid: 12345, json: false,
-    })
-    expect(parseCliArgs(['daemon', 'kill', '12345', '--json'])).toEqual({
-      cmd: 'daemon-kill', pid: 12345, json: true,
-    })
-  })
-  it('daemon kill rejects non-numeric or missing pid', () => {
-    expect(parseCliArgs(['daemon']).cmd).toBe('help')
-    expect(parseCliArgs(['daemon', 'kill']).cmd).toBe('help')
-    expect(parseCliArgs(['daemon', 'kill', 'abc']).cmd).toBe('help')
-    expect(parseCliArgs(['daemon', 'kill', '0']).cmd).toBe('help')
-  })
-  it('parses memory list / read subcommands', () => {
-    expect(parseCliArgs(['memory', 'list', '--json'])).toEqual({ cmd: 'memory-list', json: true })
-    expect(parseCliArgs(['memory', 'read', 'u@x', 'profile.md'])).toEqual({
-      cmd: 'memory-read', userId: 'u@x', path: 'profile.md', json: false,
-    })
-    expect(parseCliArgs(['memory']).cmd).toBe('help')
-    expect(parseCliArgs(['memory', 'read']).cmd).toBe('help')
-    expect(parseCliArgs(['memory', 'read', 'u@x']).cmd).toBe('help')
-  })
-  it('parses memory write <user> <path> --body-base64 <b64> [--json]', () => {
-    expect(parseCliArgs(['memory', 'write', 'u@x', 'profile.md', '--body-base64', 'IyBoaQ=='])).toEqual({
-      cmd: 'memory-write', userId: 'u@x', path: 'profile.md', bodyBase64: 'IyBoaQ==', json: false,
-    })
-    expect(parseCliArgs(['memory', 'write', 'u@x', 'sub/note.md', '--body-base64', 'eA==', '--json'])).toEqual({
-      cmd: 'memory-write', userId: 'u@x', path: 'sub/note.md', bodyBase64: 'eA==', json: true,
-    })
-  })
-  it('memory write rejects malformed args', () => {
-    expect(parseCliArgs(['memory', 'write', 'u@x', 'profile.md']).cmd).toBe('help')
-    expect(parseCliArgs(['memory', 'write', 'u@x', 'profile.md', '--body-base64']).cmd).toBe('help')
-    expect(parseCliArgs(['memory', 'write', 'u@x']).cmd).toBe('help')
-    expect(parseCliArgs(['memory', 'write']).cmd).toBe('help')
-  })
+  // account / daemon / memory parseCliArgs tests removed in PR4 batch 3b —
+  // these namespaces are now citty-routed; see the `citty migrated commands`
+  // block below for the new test surface.
   it('accepts --dangerously on run subcommand', () => {
     expect(parseCliArgs(['run', '--dangerously'])).toEqual({
       cmd: 'run',
@@ -145,23 +99,8 @@ describe('parseCliArgs', () => {
 // batch 3a — these namespaces are now citty-routed; see the
 // `citty migrated commands` block below for the new test surface.
 
-describe('demo seed/unseed', () => {
-  it('parses seed with --chat-id', () => {
-    expect(parseCliArgs(['demo', 'seed', '--chat-id', 'chat_x', '--json'])).toEqual({
-      cmd: 'demo-seed', chatId: 'chat_x', json: true,
-    })
-  })
-  it('parses seed without --chat-id (null)', () => {
-    expect(parseCliArgs(['demo', 'seed'])).toEqual({
-      cmd: 'demo-seed', chatId: null, json: false,
-    })
-  })
-  it('parses unseed', () => {
-    expect(parseCliArgs(['demo', 'unseed', '--json'])).toEqual({
-      cmd: 'demo-unseed', chatId: null, json: true,
-    })
-  })
-})
+// demo seed/unseed parseCliArgs tests removed in PR4 batch 3b — see
+// the `citty migrated commands` block below.
 
 describe('citty migrated commands', () => {
   // Citty-migrated subcommands. Asserted via a stub `run` override (citty
@@ -204,17 +143,21 @@ describe('citty migrated commands', () => {
     return captured
   }
 
-  it('exposes the migrated subcommands (batch 1 + batch 2 + batch 3a)', () => {
+  it('exposes the migrated subcommands (batch 1 + batch 2 + batch 3a + batch 3b)', () => {
     const subs = cittyRoot.subCommands as Record<string, unknown>
     expect(Object.keys(subs).sort()).toEqual([
+      'account',
       'avatar',
       'conversations',
+      'daemon',
+      'demo',
       'doctor',
       'events',
       'guard',
       'install',
       'list',
       'logs',
+      'memory',
       'milestones',
       'observations',
       'provider',
@@ -395,5 +338,70 @@ describe('citty migrated commands', () => {
     expect(r?.args.provider).toBe('codex')
     expect(r?.args.model).toBe('gpt-5.3-codex')
     expect(r?.args.unattended).toBe('true')  // string, parsed to bool inside the run handler
+  })
+
+  // ── PR4 batch 3b — memory / account / daemon / demo ─────────────────
+
+  it('memory list parses --json', async () => {
+    const r = await runWithNestedStub(['memory', 'list', '--json'], ['memory', 'list'])
+    expect(r?.args.json).toBe(true)
+  })
+
+  it('memory read parses user-id + path positionals', async () => {
+    const r = await runWithNestedStub(
+      ['memory', 'read', 'u@x', 'profile.md', '--json'],
+      ['memory', 'read'],
+    )
+    expect(r?.args.userId).toBe('u@x')
+    expect(r?.args.path).toBe('profile.md')
+    expect(r?.args.json).toBe(true)
+  })
+
+  it('memory write parses positionals + required --body-base64', async () => {
+    const r = await runWithNestedStub(
+      ['memory', 'write', 'u@x', 'profile.md', '--body-base64', 'IyBoaQ==', '--json'],
+      ['memory', 'write'],
+    )
+    expect(r?.args.userId).toBe('u@x')
+    expect(r?.args.path).toBe('profile.md')
+    expect(r?.args['body-base64']).toBe('IyBoaQ==')
+    expect(r?.args.json).toBe(true)
+  })
+
+  it('account remove parses bot-id positional', async () => {
+    const r = await runWithNestedStub(
+      ['account', 'remove', 'abc-im-bot', '--json'],
+      ['account', 'remove'],
+    )
+    expect(r?.args.botId).toBe('abc-im-bot')
+    expect(r?.args.json).toBe(true)
+  })
+
+  it('daemon kill parses pid positional (string; coerced inside run)', async () => {
+    const r = await runWithNestedStub(
+      ['daemon', 'kill', '12345', '--json'],
+      ['daemon', 'kill'],
+    )
+    expect(r?.args.pid).toBe('12345')
+    expect(r?.args.json).toBe(true)
+  })
+
+  it('demo seed parses --chat-id', async () => {
+    const r = await runWithNestedStub(
+      ['demo', 'seed', '--chat-id', 'chat_x', '--json'],
+      ['demo', 'seed'],
+    )
+    expect(r?.args['chat-id']).toBe('chat_x')
+    expect(r?.args.json).toBe(true)
+  })
+
+  it('demo seed without --chat-id (handler resolves default)', async () => {
+    const r = await runWithNestedStub(['demo', 'seed'], ['demo', 'seed'])
+    expect(r?.args['chat-id']).toBeFalsy()
+  })
+
+  it('demo unseed parses --json', async () => {
+    const r = await runWithNestedStub(['demo', 'unseed', '--json'], ['demo', 'unseed'])
+    expect(r?.args.json).toBe(true)
   })
 })
