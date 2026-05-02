@@ -20,7 +20,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { openDb, type Db } from './db'
+import { openTestDb, type Db } from './db'
 import { makeSessionStateStore } from '../daemon/session-state'
 import { makeSessionStore } from '../core/session-store'
 import { makeConversationStore } from '../core/conversation-store'
@@ -47,7 +47,12 @@ describe('full state-dir migration — upgrading-user smoke', () => {
   beforeEach(() => {
     stateDir = mkdtempSync(join(tmpdir(), 'wechat-state-mig-'))
     fixtureLegacyFiles(stateDir, [CHAT_A, CHAT_B])
-    db = openDb({ path: join(stateDir, 'wechat-cc.db') })
+    // In-memory db: no .db-wal / .db-shm files to leak Windows handles
+    // (Windows file locking treats those as busy after `db.close()` for
+    // a few ms, racing rmSync). The migration logic only reads JSON
+    // from disk and writes into the db — the db itself doesn't need
+    // to be a real file for this test.
+    db = openTestDb()
   })
 
   afterEach(() => {
