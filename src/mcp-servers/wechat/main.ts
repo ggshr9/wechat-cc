@@ -280,6 +280,51 @@ server.registerTool(
   },
 )
 
+// ─── share_page / resurface_page (RFC 03 P1.B B5) ────────────────────────
+
+server.registerTool(
+  'share_page',
+  {
+    title: 'Publish Markdown to a one-time URL',
+    description: '把 Markdown 内容发布为一次性 URL。返回 {url, slug}。needs_approval=true 时页面会渲染 ✓ Approve 按钮（默认 false，纯内容文档不带按钮）。chat_id 传入后页脚会出现"📄 发 PDF 到微信"按钮，点击会把 PDF 推到该 chat。',
+    inputSchema: {
+      title: z.string(),
+      content: z.string(),
+      needs_approval: z.boolean().optional(),
+      chat_id: z.string().optional(),
+      account_id: z.string().optional(),
+    },
+  },
+  async (args) => {
+    try {
+      const r = await client.request<unknown>('POST', '/v1/share/page', args)
+      return { content: [{ type: 'text', text: JSON.stringify(r) }] }
+    } catch (err) {
+      return passthroughErrorResult(err, 'share_page')
+    }
+  },
+)
+
+server.registerTool(
+  'resurface_page',
+  {
+    title: 'Resurface a previously shared page',
+    description: '根据 slug 或标题片段重新生成一个有效 URL。',
+    inputSchema: {
+      slug: z.string().optional(),
+      title_fragment: z.string().optional(),
+    },
+  },
+  async (args) => {
+    try {
+      const r = await client.request<unknown>('POST', '/v1/share/resurface', args)
+      return { content: [{ type: 'text', text: JSON.stringify(r) }] }
+    } catch (err) {
+      return passthroughErrorResult(err, 'resurface_page')
+    }
+  },
+)
+
 function passthroughErrorResult(err: unknown, tool: string): { content: Array<{ type: 'text'; text: string }> } {
   // Surface transport-layer failures as `{error: "..."}` JSON in a text
   // block. Keeps the legacy "tool never throws" promise that the

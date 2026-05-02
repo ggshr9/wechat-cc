@@ -234,6 +234,76 @@ describe('wechat-mcp stdio integration', () => {
 
   // ── B4: voice config tools end-to-end ───────────────────────────────────
 
+  // ── B5: share_page / resurface_page end-to-end ────────────────────────
+
+  it('share_page publishes then resurface_page returns the same record (legacy wire shapes preserved)', async () => {
+    const memory = makeMemoryFS({ rootDir: join(stateDir, 'memory') })
+    const published = new Map<string, { url: string; slug: string; title: string }>()
+    const sharePage = async (
+      title: string,
+      _content: string,
+      opts?: { needs_approval?: boolean; chat_id?: string; account_id?: string },
+    ) => {
+      const slug = `s-${published.size + 1}`
+      const url = `https://share.example/${slug}${opts?.needs_approval ? '?approve=1' : ''}`
+      published.set(slug, { url, slug, title })
+      return { url, slug }
+    }
+    const resurfacePage = async (q: { slug?: string; title_fragment?: string }) => {
+      if (q.slug && published.has(q.slug)) {
+        const r = published.get(q.slug)!
+        return { url: r.url, slug: r.slug }
+      }
+      if (q.title_fragment) {
+        for (const r of published.values()) {
+          if (r.title.includes(q.title_fragment)) return { url: r.url, slug: r.slug }
+        }
+      }
+      return null
+    }
+    api = createInternalApi({ stateDir, daemonPid: 7777, memory, sharePage, resurfacePage })
+    const { port, tokenFilePath } = await api.start()
+    const transport = new StdioClientTransport({
+      command: RUNTIME, args: [WECHAT_MCP_MAIN],
+      env: {
+        ...process.env as Record<string, string>,
+        WECHAT_INTERNAL_API: `http://127.0.0.1:${port}`,
+        WECHAT_INTERNAL_TOKEN_FILE: tokenFilePath,
+      },
+      stderr: 'pipe',
+    })
+    const c = new Client({ name: 'integration-share', version: '0.0.1' }, { capabilities: {} })
+    await c.connect(transport)
+    client = c
+
+    // Publish
+    const pub = await c.callTool({
+      name: 'share_page',
+      arguments: { title: 'My Plan', content: '# todo\n- x', needs_approval: true },
+    })
+    const pubBody = JSON.parse(((pub.content as Array<{ text?: string }>)[0]?.text)!) as { url: string; slug: string }
+    expect(pubBody.slug).toBe('s-1')
+    expect(pubBody.url).toContain('approve=1')
+
+    // Resurface by slug
+    const bySlug = await c.callTool({
+      name: 'resurface_page',
+      arguments: { slug: pubBody.slug },
+    })
+    expect(JSON.parse(((bySlug.content as Array<{ text?: string }>)[0]?.text)!)).toEqual({
+      url: pubBody.url, slug: pubBody.slug,
+    })
+
+    // Resurface miss → legacy {ok:false, reason:'not found'} shape
+    const miss = await c.callTool({
+      name: 'resurface_page',
+      arguments: { slug: 'never-existed' },
+    })
+    expect(JSON.parse(((miss.content as Array<{ text?: string }>)[0]?.text)!)).toEqual({
+      ok: false, reason: 'not found',
+    })
+  })
+
   it('save_voice_config → voice_config_status round-trips through stdio + HTTP', async () => {
     const memory = makeMemoryFS({ rootDir: join(stateDir, 'memory') })
     let stored: { provider: 'http_tts'; default_voice: string; base_url: string; model: string; saved_at: string } | null = null

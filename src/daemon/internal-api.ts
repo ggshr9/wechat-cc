@@ -85,6 +85,22 @@ export interface InternalApiDeps {
   setUserName?: (chatId: string, name: string) => Promise<void>
   /** TTS config + status (RFC 03 P1.B B4). */
   voice?: InternalApiVoiceDep
+  /**
+   * Publish a Markdown page to a one-time URL (RFC 03 P1.B B5).
+   * Shape matches features/tools.ts ToolDeps.sharePage.
+   */
+  sharePage?: (
+    title: string,
+    content: string,
+    opts?: { needs_approval?: boolean; chat_id?: string; account_id?: string },
+  ) => Promise<{ url: string; slug: string }>
+  /**
+   * Re-issue a URL for an existing page (RFC 03 P1.B B5).
+   * Shape matches features/tools.ts ToolDeps.resurfacePage.
+   */
+  resurfacePage?: (
+    q: { slug?: string; title_fragment?: string },
+  ) => Promise<{ url: string; slug: string } | null>
   /** Optional log hook so api activity surfaces in channel.log. */
   log?: (tag: string, line: string) => void
 }
@@ -230,6 +246,50 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
       try {
         await deps.setUserName(b.chat_id, b.name)
         return { status: 200, body: { ok: true } }
+      } catch (err) {
+        return { status: 200, body: { ok: false, error: errMsg(err) } }
+      }
+    },
+
+    // ── share_page / resurface_page (RFC 03 P1.B B5) ────────────────────
+    'POST /v1/share/page': async (_q, body) => {
+      if (!deps.sharePage) return { status: 503, body: { error: 'share_page_not_wired' } }
+      const b = body as {
+        title?: unknown; content?: unknown
+        needs_approval?: unknown; chat_id?: unknown; account_id?: unknown
+      } | null
+      if (typeof b?.title !== 'string') return { status: 400, body: { error: 'title_required' } }
+      if (typeof b?.content !== 'string') return { status: 400, body: { error: 'content_required' } }
+      // Mirror legacy behaviour: only forward opts the agent supplied;
+      // omit the entire arg if all opts are absent (deps.sharePage relies
+      // on `undefined` to mean "use defaults" — passing {} would override).
+      const opts: { needs_approval?: boolean; chat_id?: string; account_id?: string } = {}
+      if (b.needs_approval === true) opts.needs_approval = true
+      if (typeof b.chat_id === 'string') opts.chat_id = b.chat_id
+      if (typeof b.account_id === 'string') opts.account_id = b.account_id
+      try {
+        const r = await deps.sharePage(b.title, b.content, Object.keys(opts).length ? opts : undefined)
+        return { status: 200, body: r }
+      } catch (err) {
+        return { status: 200, body: { ok: false, error: errMsg(err) } }
+      }
+    },
+    'POST /v1/share/resurface': async (_q, body) => {
+      if (!deps.resurfacePage) return { status: 503, body: { error: 'resurface_page_not_wired' } }
+      const b = body as { slug?: unknown; title_fragment?: unknown } | null
+      if (b?.slug !== undefined && typeof b.slug !== 'string') {
+        return { status: 400, body: { error: 'slug_must_be_string' } }
+      }
+      if (b?.title_fragment !== undefined && typeof b.title_fragment !== 'string') {
+        return { status: 400, body: { error: 'title_fragment_must_be_string' } }
+      }
+      try {
+        const r = await deps.resurfacePage({
+          ...(typeof b?.slug === 'string' ? { slug: b.slug } : {}),
+          ...(typeof b?.title_fragment === 'string' ? { title_fragment: b.title_fragment } : {}),
+        })
+        // Legacy wire shape: returns the page record OR `{ok:false, reason:'not found'}`.
+        return { status: 200, body: r ?? { ok: false, reason: 'not found' } }
       } catch (err) {
         return { status: 200, body: { ok: false, error: errMsg(err) } }
       }

@@ -67,28 +67,9 @@ describe('buildWechatMcpServer', () => {
     expect(out).toMatchObject({ content: [{ type: 'text' }] })
   })
 
-  it('share_page returns URL (no needs_approval → undefined opts)', async () => {
-    const deps = makeDeps()
-    const { handlers } = buildWechatMcpServer(deps)
-    const out = await handlers.share_page({ title: 't', content: '# hi' })
-    expect(deps.sharePage).toHaveBeenCalledWith('t', '# hi', undefined)
-    expect(extractText(out)).toContain('https://x/abc')
-  })
-
-  it('share_page passes needs_approval through to deps when true', async () => {
-    const deps = makeDeps()
-    const { handlers } = buildWechatMcpServer(deps)
-    await handlers.share_page({ title: 't', content: '# hi', needs_approval: true })
-    expect(deps.sharePage).toHaveBeenCalledWith('t', '# hi', { needs_approval: true })
-  })
-
-  it('share_page omits opts when needs_approval is false (default off)', async () => {
-    const deps = makeDeps()
-    const { handlers } = buildWechatMcpServer(deps)
-    await handlers.share_page({ title: 't', content: '# hi', needs_approval: false })
-    expect(deps.sharePage).toHaveBeenCalledWith('t', '# hi', undefined)
-  })
-
+  // share_page / resurface_page tests moved to internal-api.test.ts +
+  // integration.test.ts when extracted to wechat-mcp stdio in P1.B B5.
+  //
   // list_projects / switch_project / add_project / remove_project /
   // set_user_name tests moved to internal-api.test.ts + integration.test.ts
   // when these tools were extracted to wechat-mcp stdio in P1.B B3.

@@ -74,6 +74,8 @@ async function main() {
       saveConfig: (input) => ilink.voice.saveConfig(input),
       configStatus: () => ilink.voice.configStatus(),
     },
+    sharePage: (title, content, opts) => ilink.sharePage(title, content, opts),
+    resurfacePage: (q) => ilink.resurfacePage(q),
     log: (tag, line) => log(tag, line),
   })
   const { port: internalApiPort, tokenFilePath: internalTokenFile } = await internalApi.start()

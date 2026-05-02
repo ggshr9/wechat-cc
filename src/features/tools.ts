@@ -76,8 +76,6 @@ export interface BuiltWechatMcp {
     edit_message: (args: { chat_id: string; msg_id: string; text: string }) => Promise<unknown>
     send_file: (args: { chat_id: string; path: string }) => Promise<unknown>
     broadcast: (args: { text: string; account_id?: string }) => Promise<unknown>
-    share_page: (args: { title: string; content: string; needs_approval?: boolean; chat_id?: string; account_id?: string }) => Promise<unknown>
-    resurface_page: (args: { slug?: string; title_fragment?: string }) => Promise<unknown>
     reply_voice: (args: { chat_id: string; text: string }) => Promise<unknown>
     companion_enable: (args: Record<string, never>) => Promise<unknown>
     companion_disable: (args: Record<string, never>) => Promise<unknown>
@@ -144,34 +142,9 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
   )
   handlers.broadcast = async (a) => (await broadcastDef.handler(a as any, undefined)) as unknown
 
-  const shareDef = tool(
-    'share_page',
-    '把 Markdown 内容发布为一次性 URL。返回 {url, slug}。needs_approval=true 时页面会渲染 ✓ Approve 按钮（默认 false，纯内容文档不带按钮）。chat_id 传入后页脚会出现"📄 发 PDF 到微信"按钮，点击会把 PDF 推到该 chat。',
-    { title: z.string(), content: z.string(), needs_approval: z.boolean().optional(), chat_id: z.string().optional(), account_id: z.string().optional() },
-    async ({ title, content, needs_approval, chat_id, account_id }) => {
-      const opts: { needs_approval?: boolean; chat_id?: string; account_id?: string } = {}
-      if (needs_approval) opts.needs_approval = true
-      if (chat_id) opts.chat_id = chat_id
-      if (account_id) opts.account_id = account_id
-      const r = await deps.sharePage(title, content, Object.keys(opts).length ? opts : undefined)
-      return okText(JSON.stringify(r))
-    },
-  )
-  handlers.share_page = async (a) => (await shareDef.handler(a as any, undefined)) as unknown
-
-  const resurfaceDef = tool(
-    'resurface_page',
-    '根据 slug 或标题片段重新生成一个有效 URL。',
-    { slug: z.string().optional(), title_fragment: z.string().optional() },
-    async ({ slug, title_fragment }) => {
-      const r = await deps.resurfacePage({ slug: slug ?? undefined, title_fragment: title_fragment ?? undefined })
-      return okText(JSON.stringify(r ?? { ok: false, reason: 'not found' }))
-    },
-  )
-  handlers.resurface_page = async (a) => (await resurfaceDef.handler(a as any, undefined)) as unknown
-
-  // list_projects / switch_project / add_project / remove_project moved
-  // to wechat-mcp stdio server in P1.B B3.
+  // share_page / resurface_page moved to wechat-mcp stdio server in
+  // P1.B B5. list_projects / switch_project / add_project /
+  // remove_project moved in P1.B B3.
 
   const replyVoiceDef = tool(
     'reply_voice',
@@ -234,7 +207,6 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
     version: '1.0.0',
     tools: [
       replyDef, editDef, sendFileDef, broadcastDef,
-      shareDef, resurfaceDef,
       replyVoiceDef,
       companionEnableDef, companionDisableDef, companionStatusDef, companionSnoozeDef,
     ],

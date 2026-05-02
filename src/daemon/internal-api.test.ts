@@ -604,4 +604,178 @@ describe('internal-api', () => {
       expect(await resp.json()).toEqual({ error: 'voice_not_wired' })
     })
   })
+
+  // ─── share / resurface routes (RFC 03 P1.B B5) ────────────────────────
+
+  describe('share routes', () => {
+    function startWithShare(opts: {
+      sharePage?: (title: string, content: string, o?: { needs_approval?: boolean; chat_id?: string; account_id?: string }) => Promise<{ url: string; slug: string }>
+      resurfacePage?: (q: { slug?: string; title_fragment?: string }) => Promise<{ url: string; slug: string } | null>
+    } = {}): Promise<{ port: number; token: string }> {
+      api = createInternalApi({
+        stateDir, daemonPid: 1,
+        ...(opts.sharePage ? { sharePage: opts.sharePage } : {}),
+        ...(opts.resurfacePage ? { resurfacePage: opts.resurfacePage } : {}),
+      })
+      return api.start().then(({ port, tokenFilePath }) => ({
+        port, token: readFileSync(tokenFilePath, 'utf8').trim(),
+      }))
+    }
+
+    it('POST /v1/share/page omits opts when no flags supplied (legacy semantics)', async () => {
+      const sharePage = vi.fn(async () => ({ url: 'https://x/abc', slug: 'abc' }))
+      const { port, token } = await startWithShare({ sharePage })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/share/page`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 't', content: '# hi' }),
+      })
+      expect(resp.status).toBe(200)
+      expect(await resp.json()).toEqual({ url: 'https://x/abc', slug: 'abc' })
+      // sharePage receives undefined opts (not {}) — legacy contract
+      expect(sharePage).toHaveBeenCalledWith('t', '# hi', undefined)
+    })
+
+    it('POST /v1/share/page forwards needs_approval=true', async () => {
+      const sharePage = vi.fn(async () => ({ url: 'u', slug: 's' }))
+      const { port, token } = await startWithShare({ sharePage })
+      await fetch(`http://127.0.0.1:${port}/v1/share/page`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 't', content: '# hi', needs_approval: true }),
+      })
+      expect(sharePage).toHaveBeenCalledWith('t', '# hi', { needs_approval: true })
+    })
+
+    it('POST /v1/share/page omits opts when needs_approval is explicitly false (legacy default-off)', async () => {
+      const sharePage = vi.fn(async () => ({ url: 'u', slug: 's' }))
+      const { port, token } = await startWithShare({ sharePage })
+      await fetch(`http://127.0.0.1:${port}/v1/share/page`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 't', content: '# hi', needs_approval: false }),
+      })
+      expect(sharePage).toHaveBeenCalledWith('t', '# hi', undefined)
+    })
+
+    it('POST /v1/share/page forwards chat_id + account_id when supplied', async () => {
+      const sharePage = vi.fn(async () => ({ url: 'u', slug: 's' }))
+      const { port, token } = await startWithShare({ sharePage })
+      await fetch(`http://127.0.0.1:${port}/v1/share/page`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 't', content: '# hi', chat_id: 'c1', account_id: 'a1' }),
+      })
+      expect(sharePage).toHaveBeenCalledWith('t', '# hi', { chat_id: 'c1', account_id: 'a1' })
+    })
+
+    it('POST /v1/share/page returns 400 when title or content missing', async () => {
+      const { port, token } = await startWithShare({ sharePage: async () => ({ url: 'u', slug: 's' }) })
+      const r1 = await fetch(`http://127.0.0.1:${port}/v1/share/page`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ content: '# hi' }),
+      })
+      expect(r1.status).toBe(400)
+      expect(await r1.json()).toMatchObject({ error: 'title_required' })
+      const r2 = await fetch(`http://127.0.0.1:${port}/v1/share/page`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 't' }),
+      })
+      expect(r2.status).toBe(400)
+      expect(await r2.json()).toMatchObject({ error: 'content_required' })
+    })
+
+    it('POST /v1/share/page catches sharePage() throw and returns ok:false', async () => {
+      const { port, token } = await startWithShare({
+        sharePage: async () => { throw new Error('cloudflared not running') },
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/share/page`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 't', content: '# hi' }),
+      })
+      expect(resp.status).toBe(200)
+      const body = await resp.json() as { ok: boolean; error?: string }
+      expect(body.ok).toBe(false)
+      expect(body.error).toContain('cloudflared')
+    })
+
+    it('POST /v1/share/resurface returns the page record on hit', async () => {
+      const resurfacePage = vi.fn(async () => ({ url: 'https://x/abc', slug: 'abc' }))
+      const { port, token } = await startWithShare({ resurfacePage })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/share/resurface`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ slug: 'abc' }),
+      })
+      expect(resp.status).toBe(200)
+      expect(await resp.json()).toEqual({ url: 'https://x/abc', slug: 'abc' })
+      expect(resurfacePage).toHaveBeenCalledWith({ slug: 'abc' })
+    })
+
+    it('POST /v1/share/resurface returns {ok:false, reason:not found} on miss (legacy shape)', async () => {
+      const { port, token } = await startWithShare({
+        resurfacePage: async () => null,
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/share/resurface`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ title_fragment: 'never' }),
+      })
+      expect(resp.status).toBe(200)
+      expect(await resp.json()).toEqual({ ok: false, reason: 'not found' })
+    })
+
+    it('POST /v1/share/resurface forwards both slug and title_fragment when supplied', async () => {
+      const resurfacePage = vi.fn(async () => ({ url: 'u', slug: 's' }))
+      const { port, token } = await startWithShare({ resurfacePage })
+      await fetch(`http://127.0.0.1:${port}/v1/share/resurface`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ slug: 's1', title_fragment: 'review' }),
+      })
+      expect(resurfacePage).toHaveBeenCalledWith({ slug: 's1', title_fragment: 'review' })
+    })
+
+    it('POST /v1/share/resurface returns 400 when slug or title_fragment have wrong type', async () => {
+      const { port, token } = await startWithShare({
+        resurfacePage: async () => null,
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/share/resurface`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ slug: 123 }),
+      })
+      expect(resp.status).toBe(400)
+      expect(await resp.json()).toMatchObject({ error: 'slug_must_be_string' })
+    })
+
+    it('returns 503 when share_page dep not wired', async () => {
+      api = createInternalApi({ stateDir, daemonPid: 1 })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/share/page`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 't', content: 'c' }),
+      })
+      expect(resp.status).toBe(503)
+      expect(await resp.json()).toEqual({ error: 'share_page_not_wired' })
+    })
+
+    it('returns 503 when resurface_page dep not wired', async () => {
+      api = createInternalApi({ stateDir, daemonPid: 1 })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/share/resurface`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ slug: 's' }),
+      })
+      expect(resp.status).toBe(503)
+      expect(await resp.json()).toEqual({ error: 'resurface_page_not_wired' })
+    })
+  })
 })
