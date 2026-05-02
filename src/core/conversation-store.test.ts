@@ -57,7 +57,11 @@ describe('ConversationStore', () => {
     s1.set('chat-2', { kind: 'parallel' })
     await s1.flush()
     const st = statSync(file)
-    expect((st.mode & 0o777).toString(8)).toBe('600')
+    // POSIX 0600 is the contract; Windows / NTFS doesn't model POSIX modes
+    // and fs.stat returns 0666. Skip the mode assertion there.
+    if (process.platform !== 'win32') {
+      expect((st.mode & 0o777).toString(8)).toBe('600')
+    }
 
     const s2 = makeConversationStore(file, { debounceMs: 0 })
     expect(s2.get('chat-1')?.mode).toEqual({ kind: 'solo', provider: 'codex' })

@@ -30,9 +30,15 @@ describe('internal-api', () => {
     expect(port).toBeGreaterThan(0)
     expect(token).toMatch(/^[0-9a-f]{64}$/)
     const st = statSync(tokenFilePath)
-    // Mode bits: must be readable/writable by owner only (0600). Mask with
-    // 0o777 to drop file-type bits.
-    expect((st.mode & 0o777).toString(8)).toBe('600')
+    // POSIX mode 0600 is the contract; Windows / NTFS doesn't model POSIX
+    // permissions and reports 0666 from fs.stat. Skip the mode assertion
+    // there — security on Windows comes from the user-profile ACL on the
+    // state directory, not file modes.
+    if (process.platform !== 'win32') {
+      // Mode bits: must be readable/writable by owner only (0600). Mask with
+      // 0o777 to drop file-type bits.
+      expect((st.mode & 0o777).toString(8)).toBe('600')
+    }
   })
 
   it('GET /v1/health with valid bearer token returns ok=true and daemon_pid', async () => {
