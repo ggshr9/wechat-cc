@@ -880,7 +880,7 @@ async function main() {
       // daemon (sendReplyOnce reads state from disk), so recipient
       // resolution + session continuity are identical whether the
       // daemon is running or not.
-      const { sendReplyOnce, defaultTerminalChatId } = await import('./src/cli/send-reply.ts')
+      const { sendReplyOnce, defaultTerminalChatId } = await import('./src/lib/send-reply.ts')
       const emitFailure = (error: string): void => {
         if (parsed.json) console.log(JSON.stringify({ ok: false, error }))
         else console.error(`reply failed: ${error}`)

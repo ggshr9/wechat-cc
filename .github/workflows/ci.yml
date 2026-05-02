@@ -32,6 +32,12 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      - name: Module-boundary check
+        # Fast layer-violation guard. Runs only on linux to keep matrix
+        # parallelism cheap — the rules are platform-independent.
+        if: matrix.os == 'ubuntu-latest'
+        run: bun run depcheck
+
       - name: Build cli.ts
         run: bun build cli.ts --target=node --outfile=dist/cli.js
 

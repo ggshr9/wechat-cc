@@ -16,7 +16,7 @@ import { parsePermissionReply } from './pending-permissions'
 import { buildMediaItemFromFile, assertSendable } from './media'
 import { ilinkSendMessage } from '../lib/ilink'
 import type { SessionStateStore } from './session-state'
-import { sendReplyOnce } from '../cli/send-reply'
+import { sendReplyOnce } from '../lib/send-reply'
 import {
   addProject,
   listProjects,
