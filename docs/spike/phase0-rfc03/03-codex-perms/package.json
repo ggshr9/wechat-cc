@@ -1,0 +1,14 @@
+{
+  "name": "spike-rfc03-03-codex-perms",
+  "version": "0.0.1",
+  "description": "RFC 03 Phase 0 Spike 3: empirically map Codex SDK (sandboxMode × approvalPolicy) permission matrix",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "run": "bun spike.ts"
+  },
+  "dependencies": {
+    "@openai/codex": "0.128.0",
+    "@openai/codex-sdk": "0.128.0"
+  }
+}
