@@ -24,6 +24,7 @@ function setup(opts: {
     coordinator: {
       getMode: () => stored ?? { kind: 'solo', provider: opts.defaultProviderId ?? 'claude' },
       setMode: (chatId, mode) => { stored = mode; set(chatId, mode) },
+      cancel: () => false,
     },
     registry: {
       has: (id: string) => registered.includes(id),
@@ -118,6 +119,7 @@ describe('makeModeCommands', () => {
       coordinator: {
         getMode: () => ({ kind: 'solo', provider: 'claude' }),
         setMode: () => { throw new Error("mode 'parallel' requires providers claude, codex; missing: codex") },
+        cancel: () => false,
       },
       registry: {
         has: (id: string) => id === 'claude',
@@ -155,6 +157,7 @@ describe('makeModeCommands', () => {
       coordinator: {
         getMode: () => ({ kind: 'solo', provider: 'claude' }),
         setMode: () => { throw new Error("mode 'chatroom' requires providers claude, codex; missing: codex") },
+        cancel: () => false,
       },
       registry: {
         has: (id: string) => id === 'claude',
@@ -182,6 +185,56 @@ describe('makeModeCommands', () => {
     expect(set).toHaveBeenCalledWith('chat-1', { kind: 'solo', provider: 'codex' })
     expect(sentMessages[0]?.[1]).toContain('已退出当前模式')
     expect(sentMessages[0]?.[1]).toContain('Codex')
+  })
+
+  it('/stop also calls coordinator.cancel and notifies on in-flight chatroom (RFC 03 review #11)', async () => {
+    const sentMessages: Array<[string, string]> = []
+    const sendMessage = vi.fn(async (chatId: string, text: string) => {
+      sentMessages.push([chatId, text]); return { msgId: 'm' }
+    })
+    const cancel = vi.fn(() => true)  // signals an in-flight loop
+    const cmds = makeModeCommands({
+      coordinator: {
+        getMode: () => ({ kind: 'chatroom' }),
+        setMode: () => {},
+        cancel,
+      },
+      registry: {
+        has: () => true,
+        get: () => ({ provider: {} as never, opts: { displayName: 'Claude', canResume: () => true } }),
+        list: () => ['claude', 'codex'],
+      },
+      defaultProviderId: 'claude',
+      sendMessage: sendMessage as unknown as Parameters<typeof makeModeCommands>[0]['sendMessage'],
+      log: () => {},
+    })
+    await cmds.handle(inbound('/stop'))
+    expect(cancel).toHaveBeenCalledWith('chat-1')
+    expect(sentMessages[0]?.[1]).toContain('已中止 in-flight chatroom')
+  })
+
+  it('/stop without in-flight loop does NOT mention cancel suffix', async () => {
+    const sentMessages: Array<[string, string]> = []
+    const sendMessage = vi.fn(async (chatId: string, text: string) => {
+      sentMessages.push([chatId, text]); return { msgId: 'm' }
+    })
+    const cmds = makeModeCommands({
+      coordinator: {
+        getMode: () => ({ kind: 'solo', provider: 'claude' }),
+        setMode: () => {},
+        cancel: () => false,  // nothing in flight
+      },
+      registry: {
+        has: () => true,
+        get: () => ({ provider: {} as never, opts: { displayName: 'Claude', canResume: () => true } }),
+        list: () => ['claude', 'codex'],
+      },
+      defaultProviderId: 'claude',
+      sendMessage: sendMessage as unknown as Parameters<typeof makeModeCommands>[0]['sendMessage'],
+      log: () => {},
+    })
+    await cmds.handle(inbound('/stop'))
+    expect(sentMessages[0]?.[1]).not.toContain('已中止')
   })
 
   it('/mode lists /chat and /stop as available now', async () => {
@@ -250,6 +303,7 @@ describe('makeModeCommands', () => {
       coordinator: {
         getMode: () => ({ kind: 'solo', provider: 'claude' }),
         setMode: () => { throw new Error("mode 'primary_tool' requires both providers claude, codex; missing: codex") },
+        cancel: () => false,
       },
       registry: {
         has: (id: string) => id === 'claude',

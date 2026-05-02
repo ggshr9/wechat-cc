@@ -765,6 +765,100 @@ describe('ConversationCoordinator', () => {
       expect(dispatchedTexts.map(d => d.providerId)).toEqual(['claude', 'codex'])
     })
 
+    it('cancel(chatId) returns false when no in-flight loop', async () => {
+      const { c } = setupChatroom({ replies: { claude: [{ assistantText: ['@user done'] }] } })
+      // Before any dispatch: nothing in flight.
+      expect(c.cancel('chat-1')).toBe(false)
+      // After a sync-completing dispatch: still nothing in flight.
+      await c.dispatch(inbound('chat-1', 'hi'))
+      expect(c.cancel('chat-1')).toBe(false)
+    })
+
+    it('cancel(chatId) preempts an in-flight loop at the next turn boundary (RFC 03 review #11)', async () => {
+      // Slow-dispatching speakers that yield control between turns so
+      // the test can call cancel between rounds.
+      let claudeTurn = 0
+      const claudeStarted = { round1: false, round2: false }
+      const dispatchOrder: string[] = []
+      const store = (() => {
+        const data = new Map<string, { mode: Mode }>()
+        data.set('chat-1', { mode: { kind: 'chatroom' } })
+        return {
+          get: (chatId: string) => data.get(chatId) ?? null,
+          set: vi.fn((chatId: string, mode: Mode) => { data.set(chatId, { mode }) }),
+        }
+      })()
+      const registry = createProviderRegistry()
+      registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
+      registry.register('codex', dummyProvider, { displayName: 'Codex', canResume: () => true })
+      let coordinatorRef: ReturnType<typeof createConversationCoordinator> | null = null
+      const acquire = vi.fn(async (_alias: string, _path: string, providerId: string) => ({
+        alias: 'a', path: '/p', providerId, lastUsedAt: 0,
+        dispatch: async () => {
+          dispatchOrder.push(providerId)
+          if (providerId === 'claude') {
+            claudeTurn++
+            if (claudeTurn === 1) {
+              claudeStarted.round1 = true
+              return { assistantText: ['@codex round 1'], replyToolCalled: false }
+            }
+            claudeStarted.round2 = true
+            return { assistantText: ['@user fallback after cancel'], replyToolCalled: false }
+          }
+          // codex: fire cancel BEFORE returning so the next turn (back to
+          // claude round 2) sees the abort.
+          coordinatorRef!.cancel('chat-1')
+          return { assistantText: ['@claude relay 2'], replyToolCalled: false }
+        },
+        close: async () => {},
+        onAssistantText: () => () => {},
+        onResult: () => () => {},
+      }))
+      const sendAssistantText = vi.fn(async (_c: string, _t: string) => {})
+      const c = createConversationCoordinator({
+        resolveProject: () => ({ alias: 'a', path: '/p' }),
+        manager: { acquire },
+        conversationStore: store,
+        registry,
+        defaultProviderId: 'claude',
+        format: () => 'x',
+        sendAssistantText,
+        log: () => {},
+      })
+      coordinatorRef = c
+      await c.dispatch(inbound('chat-1', 'hi'))
+      // Sequence: claude r1 (queued for codex) → codex r2 (calls cancel,
+      // queued for claude) → claude r3 SHOULD NOT happen due to cancel.
+      expect(dispatchOrder).toEqual(['claude', 'codex'])
+      expect(claudeStarted.round2).toBe(false)
+      // User receives the abort notice
+      expect(sendAssistantText.mock.calls.some(([, t]) => t.includes('收到 /stop'))).toBe(true)
+    })
+
+    it('setMode chatroom→solo clears lastChatroomSpeaker (RFC 03 review #3 partial)', async () => {
+      const { c, dispatchedTexts, sendAssistantText: _ } = setupChatroom({
+        replies: {
+          claude: [{ assistantText: ['@codex relay'] }],
+          codex: [{ assistantText: ['@user done'] }],
+        },
+      })
+      // Run a chatroom session — leaves lastChatroomSpeaker=codex.
+      await c.dispatch(inbound('chat-1', 'first'))
+      // Confirm codex was the last speaker.
+      expect(dispatchedTexts.at(-1)?.providerId).toBe('codex')
+
+      // Flip to solo+claude and back to chatroom — the cleared
+      // lastChatroomSpeaker means we restart with default (claude),
+      // not stale codex.
+      c.setMode('chat-1', { kind: 'solo', provider: 'claude' })
+      c.setMode('chat-1', { kind: 'chatroom' })
+      // Run another chatroom session.
+      await c.dispatch(inbound('chat-1', 'second'))
+      // The third dispatch (first turn of second chatroom session) is
+      // claude not codex — proves lastChatroomSpeaker was cleared.
+      expect(dispatchedTexts[2]?.providerId).toBe('claude')
+    })
+
     it('setMode rejects chatroom when one provider is missing', () => {
       const store = makeMockStore()
       const registry = createProviderRegistry()

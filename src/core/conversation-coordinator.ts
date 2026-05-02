@@ -69,9 +69,20 @@ export interface ConversationCoordinator {
   getMode(chatId: string): Mode
   /**
    * Set the mode for a chat. Validates that any ProviderId mentioned in
-   * the mode is actually registered.
+   * the mode is actually registered. As a side effect: clears any
+   * chatroom-specific per-chat memory when the chat exits chatroom
+   * (RFC 03 review #3 partial — full session release is left to LRU /
+   * idle eviction because the (alias, providerId) key is shared across
+   * chats and per-chat release would leak across boundaries).
    */
   setMode(chatId: string, mode: Mode): void
+  /**
+   * Abort an in-flight chatroom dispatch loop for this chat (RFC 03
+   * review #11). Returns true iff a loop was actually in flight and
+   * was signalled. Other-mode dispatches are not preemptable (they're
+   * single-turn).
+   */
+  cancel(chatId: string): boolean
 }
 
 export function createConversationCoordinator(deps: ConversationCoordinatorDeps): ConversationCoordinator {
@@ -89,7 +100,12 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
   // Per-chat in-memory state for chatroom: who spoke last, used as the
   // initial speaker for the next round. Volatile across daemon restart
   // (small cost: first chatroom turn after restart goes to default).
+  // Cleared by setMode when the chat leaves chatroom mode (RFC 03 review #3).
   const lastChatroomSpeaker = new Map<string, ProviderId>()
+  // RFC 03 review #11 — per-chat AbortController for in-flight chatroom
+  // loops. dispatchChatroom registers; coordinator.cancel() signals; /stop
+  // in mode-commands triggers cancel before flipping mode.
+  const inFlightAborters = new Map<string, AbortController>()
 
   function validateMode(mode: Mode): void {
     // Reject unknown providers up front so the caller (mode-commands or
@@ -189,9 +205,27 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     const pending: PendingTurn[] = [{ from: 'user', text: deps.format(msg) }]
     let round = 0
 
+    // RFC 03 review #11 — per-chat AbortController so /stop can preempt
+    // an in-flight loop. Concurrent dispatches for the same chat will
+    // overwrite the slot — only the latest is cancellable. The
+    // overwritten controller's owner runs to completion (acceptable;
+    // dispatch promises serialise via main.ts await chain anyway).
+    const aborter = new AbortController()
+    inFlightAborters.set(msg.chatId, aborter)
+
     deps.log('COORDINATOR', `chatroom chat=${msg.chatId} → start speaker=${speaker} peer=${peer} max=${chatroomMaxRounds}`)
 
+    try {
     while (pending.length > 0) {
+      // Check abort BEFORE starting a turn. Mid-turn abort is not
+      // supported (we'd have to wire AbortSignal through to AgentSession
+      // which neither SDK uniformly accepts). Per-turn check is the
+      // pragmatic granularity — at most one extra LLM call after /stop.
+      if (aborter.signal.aborted) {
+        deps.log('COORDINATOR_CHATROOM', `chat=${msg.chatId} aborted at round ${round} (pending=${pending.length})`)
+        await deps.sendAssistantText?.(msg.chatId, '⏸ chatroom 已收到 /stop，提前终止本轮（已派出的 turn 无法撤回）。')
+        break
+      }
       round += 1
       const forced = round >= chatroomMaxRounds
       const turn = pending.shift()!
@@ -285,6 +319,13 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     }
 
     deps.log('COORDINATOR', `chatroom chat=${msg.chatId} → done after ${round} round(s)`)
+    } finally {
+      // Clean up our slot — but only if it's still us. A concurrent
+      // dispatch on the same chat could have replaced it; don't stomp.
+      if (inFlightAborters.get(msg.chatId) === aborter) {
+        inFlightAborters.delete(msg.chatId)
+      }
+    }
   }
 
   /**
@@ -330,7 +371,22 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     getMode,
     setMode(chatId, mode) {
       validateMode(mode)
+      const oldMode = getMode(chatId)
       deps.conversationStore.set(chatId, mode)
+      // RFC 03 review #3 (partial) — clear chatroom-specific per-chat
+      // memory when leaving chatroom. Cross-chat session release is left
+      // to LRU / idle eviction because the (alias, providerId) key is
+      // shared across chats; per-chat release would interfere.
+      if (oldMode.kind === 'chatroom' && mode.kind !== 'chatroom') {
+        lastChatroomSpeaker.delete(chatId)
+      }
+    },
+    cancel(chatId) {
+      const ac = inFlightAborters.get(chatId)
+      if (!ac) return false
+      ac.abort()
+      // delete is done in dispatchChatroom's finally; double-delete is harmless.
+      return true
     },
     async dispatch(msg) {
       const proj = deps.resolveProject(msg.chatId)

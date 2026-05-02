@@ -26,7 +26,7 @@ import type { Mode, ProviderId } from '../core/conversation'
 import type { InboundMsg } from '../core/prompt-format'
 
 export interface ModeCommandsDeps {
-  coordinator: Pick<ConversationCoordinator, 'getMode' | 'setMode'>
+  coordinator: Pick<ConversationCoordinator, 'getMode' | 'setMode' | 'cancel'>
   registry: Pick<ProviderRegistry, 'has' | 'get' | 'list'>
   /** Default provider id, surfaced by /mode + /solo for status messages. */
   defaultProviderId: ProviderId
@@ -178,14 +178,16 @@ export function makeModeCommands(deps: ModeCommandsDeps): ModeCommands {
       }
 
       // /stop — exit chatroom (or any non-default mode), revert to default solo.
-      // Alias for /solo. Doesn't preempt an in-flight chatroom loop;
-      // applies to next inbound. (RFC 03 §4.4 noted /stop is the
-      // user-facing escape hatch even if it's just a /solo synonym.)
+      // RFC 03 review #11: also signals any in-flight chatroom loop to
+      // preempt at its next turn boundary (mid-turn cancel isn't
+      // supported — neither SDK exposes a uniform AbortSignal).
       if (slashWord.toLowerCase() === 'stop' && tail === '') {
+        const wasInFlight = deps.coordinator.cancel(msg.chatId)
         deps.coordinator.setMode(msg.chatId, { kind: 'solo', provider: deps.defaultProviderId })
         const dn = deps.registry.get(deps.defaultProviderId)?.opts.displayName ?? deps.defaultProviderId
-        await reply(msg.chatId, `✅ 已退出当前模式，恢复默认 (solo · ${dn})。`)
-        deps.log('MODE_CMD', `chat=${msg.chatId} → /stop reset to default`)
+        const suffix = wasInFlight ? '；已中止 in-flight chatroom（最多多收到 1 个 turn 的输出后停止）' : ''
+        await reply(msg.chatId, `✅ 已退出当前模式，恢复默认 (solo · ${dn})${suffix}。`)
+        deps.log('MODE_CMD', `chat=${msg.chatId} → /stop reset to default${wasInFlight ? ' + cancel in-flight' : ''}`)
         return true
       }
 
