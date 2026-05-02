@@ -347,7 +347,9 @@ async function main() {
     try {
       const ctx = await buildDetectorContext({ stateDir: STATE_DIR, chatId, db })
       const memRoot = join(STATE_DIR, 'memory')
-      const milestones = makeMilestonesStore(memRoot, chatId)
+      const milestones = makeMilestonesStore(db, chatId, {
+        migrateFromFile: join(memRoot, chatId, 'milestones.jsonl'),
+      })
       const events = makeEventsStore(memRoot, chatId)
       const fired = await detectMilestones(milestones, ctx)
       for (const id of fired) {

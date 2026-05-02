@@ -584,8 +584,12 @@ async function main() {
     }
     case 'milestones-list': {
       const { makeMilestonesStore } = await import('./src/daemon/milestones/store')
+      const { openDb } = await import('./src/lib/db')
       const memoryRoot = join(STATE_DIR, 'memory')
-      const store = makeMilestonesStore(memoryRoot, parsed.chatId)
+      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+      const store = makeMilestonesStore(db, parsed.chatId, {
+        migrateFromFile: join(memoryRoot, parsed.chatId, 'milestones.jsonl'),
+      })
       const list = await store.list()
       console.log(parsed.json ? JSON.stringify({ ok: true, milestones: list }, null, 2) : list.map(m => `${m.ts} ${m.body}`).join('\n'))
       return
@@ -881,8 +885,10 @@ async function main() {
         process.exit(1)
       }
       const { seedDemo, unseedDemo } = await import('./src/daemon/demo/seed')
+      const { openDb } = await import('./src/lib/db')
+      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
       const fn = parsed.cmd === 'demo-seed' ? seedDemo : unseedDemo
-      const result = await fn({ stateDir: STATE_DIR, chatId })
+      const result = await fn({ stateDir: STATE_DIR, chatId, db })
       console.log(parsed.json ? JSON.stringify({ ok: true, ...result }, null, 2) : JSON.stringify(result))
       return
     }

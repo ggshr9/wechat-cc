@@ -16,10 +16,12 @@ import { join } from 'node:path'
 import { makeEventsStore } from '../events/store'
 import { makeObservationsStore } from '../observations/store'
 import { makeMilestonesStore } from '../milestones/store'
+import type { Db } from '../../lib/db'
 
 export interface SeedDeps {
   stateDir: string
   chatId: string
+  db: Db
   now?: () => number  // for testability
 }
 
@@ -27,7 +29,9 @@ export async function seedDemo(deps: SeedDeps): Promise<{ observations: number; 
   const now = deps.now ?? Date.now
   const memoryRoot = join(deps.stateDir, 'memory')
   const obs = makeObservationsStore(memoryRoot, deps.chatId)
-  const ms = makeMilestonesStore(memoryRoot, deps.chatId)
+  const ms = makeMilestonesStore(deps.db, deps.chatId, {
+    migrateFromFile: join(memoryRoot, deps.chatId, 'milestones.jsonl'),
+  })
   const ev = makeEventsStore(memoryRoot, deps.chatId)
   const t = now()
 
@@ -55,10 +59,20 @@ export async function seedDemo(deps: SeedDeps): Promise<{ observations: number; 
   return { observations: 3, milestones: 1, events: 5 }
 }
 
-export async function unseedDemo(deps: { stateDir: string; chatId: string }): Promise<{ removed: number }> {
+export async function unseedDemo(deps: { stateDir: string; chatId: string; db: Db }): Promise<{ removed: number }> {
   const memoryRoot = join(deps.stateDir, 'memory')
   const chatDir = join(memoryRoot, deps.chatId)
   let removed = 0
+
+  // Per-store-migration sweep. Each store moves to SQLite incrementally
+  // (PR7.5+); when a store is migrated, its legacy file is renamed to
+  // .migrated and demo rows live in the db. When still file-based, the
+  // jsonl scrubber below catches them. The two paths are union — we hit
+  // both so unseed works mid-migration too.
+
+  // SQLite-backed: milestones (PR7.5).
+  const delMs = deps.db.prepare("DELETE FROM milestones WHERE chat_id = ? AND id LIKE 'ms_demo_%'")
+  removed += (delMs.run(deps.chatId).changes ?? 0) as number
 
   for (const fname of ['observations.jsonl', 'milestones.jsonl', 'events.jsonl']) {
     const path = join(chatDir, fname)
