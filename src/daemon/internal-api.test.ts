@@ -440,6 +440,10 @@ describe('internal-api', () => {
 
   describe('voice routes', () => {
     interface MockVoice {
+      replyVoice: (chatId: string, text: string) => Promise<
+        | { ok: true; msgId: string }
+        | { ok: false; reason: string }
+      >
       saveConfig: (input: {
         provider: 'http_tts' | 'qwen'
         base_url?: string
@@ -460,14 +464,16 @@ describe('internal-api', () => {
       }
     }
 
-    function startWithVoice(voice: MockVoice): Promise<{ port: number; token: string }> {
+    const stubReplyVoice: MockVoice['replyVoice'] = async () => ({ ok: false, reason: 'unused_in_b4_tests' })
+
+    function startWithVoice(voiceParts: Omit<MockVoice, 'replyVoice'> & Partial<Pick<MockVoice, 'replyVoice'>>): Promise<{ port: number; token: string }> {
+      const voice: MockVoice = { replyVoice: voiceParts.replyVoice ?? stubReplyVoice, saveConfig: voiceParts.saveConfig, configStatus: voiceParts.configStatus }
       api = createInternalApi({ stateDir, daemonPid: 1, voice })
       return api.start().then(({ port, tokenFilePath }) => ({
         port,
         token: readFileSync(tokenFilePath, 'utf8').trim(),
       }))
     }
-
     it('GET /v1/voice/status returns configStatus() result verbatim (configured)', async () => {
       const status = {
         configured: true as const,
@@ -952,6 +958,221 @@ describe('internal-api', () => {
       })
       expect(resp.status).toBe(503)
       expect(await resp.json()).toEqual({ error: 'companion_not_wired' })
+    })
+  })
+
+  // ─── ilink-bound message family routes (RFC 03 P1.B B1) ──────────────
+
+  describe('ilink message routes', () => {
+    interface MockIlink {
+      sendReply: (chatId: string, text: string) => Promise<{ msgId: string; error?: string }>
+      sendFile: (chatId: string, path: string) => Promise<void>
+      editMessage: (chatId: string, msgId: string, text: string) => Promise<void>
+      broadcast: (text: string, accountId?: string) => Promise<{ ok: number; failed: number }>
+    }
+
+    function startWithIlink(opts: {
+      ilink?: MockIlink
+      replyVoice?: (chatId: string, text: string) => Promise<{ ok: true; msgId: string } | { ok: false; reason: string }>
+    } = {}): Promise<{ port: number; token: string }> {
+      const voice: WechatVoiceImports = opts.replyVoice
+        ? {
+            replyVoice: opts.replyVoice,
+            saveConfig: async () => ({ ok: false, reason: 'unused' }),
+            configStatus: () => ({ configured: false }),
+          }
+        : undefined as unknown as WechatVoiceImports
+      api = createInternalApi({
+        stateDir, daemonPid: 1,
+        ...(opts.ilink ? { ilink: opts.ilink } : {}),
+        ...(voice ? { voice } : {}),
+      })
+      return api.start().then(({ port, tokenFilePath }) => ({
+        port, token: readFileSync(tokenFilePath, 'utf8').trim(),
+      }))
+    }
+
+    // Local alias for the import shape used inside startWithIlink (avoids
+    // pulling the real type just for the test conditional).
+    type WechatVoiceImports = {
+      replyVoice: (chatId: string, text: string) => Promise<{ ok: true; msgId: string } | { ok: false; reason: string }>
+      saveConfig: (i: { provider: 'http_tts' | 'qwen' }) => Promise<{ ok: false; reason: string }>
+      configStatus: () => { configured: false }
+    } | undefined
+
+    it('POST /v1/wechat/reply forwards chat_id+text and returns ok+msg_id (legacy reshape)', async () => {
+      const sendReply = vi.fn(async () => ({ msgId: 'm-123' }))
+      const { port, token } = await startWithIlink({
+        ilink: { sendReply, sendFile: async () => {}, editMessage: async () => {}, broadcast: async () => ({ ok: 0, failed: 0 }) },
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/wechat/reply`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ chat_id: 'c@bot', text: 'hi' }),
+      })
+      expect(resp.status).toBe(200)
+      // Legacy in-process tool reshaped {msgId,error?} → {ok,msg_id} or
+      // {ok:false,error}. Test asserts the reshape so the agent's mental
+      // model survives the migration unchanged.
+      expect(await resp.json()).toEqual({ ok: true, msg_id: 'm-123' })
+      expect(sendReply).toHaveBeenCalledWith('c@bot', 'hi')
+    })
+
+    it('POST /v1/wechat/reply surfaces ok:false+error when ilink reports an error', async () => {
+      const { port, token } = await startWithIlink({
+        ilink: {
+          sendReply: async () => ({ msgId: '', error: 'session timeout' }),
+          sendFile: async () => {}, editMessage: async () => {},
+          broadcast: async () => ({ ok: 0, failed: 0 }),
+        },
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/wechat/reply`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ chat_id: 'c', text: 't' }),
+      })
+      expect(await resp.json()).toEqual({ ok: false, error: 'session timeout' })
+    })
+
+    it('POST /v1/wechat/reply returns 400 on missing fields', async () => {
+      const { port, token } = await startWithIlink({
+        ilink: { sendReply: async () => ({ msgId: 'm' }), sendFile: async () => {}, editMessage: async () => {}, broadcast: async () => ({ ok: 0, failed: 0 }) },
+      })
+      const r1 = await fetch(`http://127.0.0.1:${port}/v1/wechat/reply`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ text: 't' }),
+      })
+      expect(r1.status).toBe(400)
+      expect(await r1.json()).toMatchObject({ error: 'chat_id_required' })
+      const r2 = await fetch(`http://127.0.0.1:${port}/v1/wechat/reply`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ chat_id: 'c' }),
+      })
+      expect(r2.status).toBe(400)
+      expect(await r2.json()).toMatchObject({ error: 'text_required' })
+    })
+
+    it('POST /v1/wechat/reply catches sendReply throw and returns ok:false', async () => {
+      const { port, token } = await startWithIlink({
+        ilink: {
+          sendReply: async () => { throw new Error('ilink down') },
+          sendFile: async () => {}, editMessage: async () => {},
+          broadcast: async () => ({ ok: 0, failed: 0 }),
+        },
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/wechat/reply`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ chat_id: 'c', text: 't' }),
+      })
+      expect(resp.status).toBe(200)
+      const body = await resp.json() as { ok: boolean; error?: string }
+      expect(body.ok).toBe(false)
+      expect(body.error).toContain('ilink down')
+    })
+
+    it('POST /v1/wechat/reply_voice forwards chat_id+text and returns voice result', async () => {
+      const replyVoice = vi.fn(async () => ({ ok: true as const, msgId: 'voice-1' }))
+      const { port, token } = await startWithIlink({ replyVoice })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/wechat/reply_voice`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ chat_id: 'c', text: '念这一段' }),
+      })
+      expect(resp.status).toBe(200)
+      expect(await resp.json()).toEqual({ ok: true, msgId: 'voice-1' })
+      expect(replyVoice).toHaveBeenCalledWith('c', '念这一段')
+    })
+
+    it('POST /v1/wechat/reply_voice rejects text > 500 chars (legacy cap)', async () => {
+      const replyVoice = vi.fn()
+      const { port, token } = await startWithIlink({ replyVoice: replyVoice as never })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/wechat/reply_voice`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ chat_id: 'c', text: 'x'.repeat(501) }),
+      })
+      expect(resp.status).toBe(200)
+      expect(await resp.json()).toEqual({ ok: false, reason: 'too_long', limit: 500 })
+      // dep was NOT called — input rejected before crossing the boundary
+      expect(replyVoice).not.toHaveBeenCalled()
+    })
+
+    it('POST /v1/wechat/send_file forwards chat_id+path and returns ok:true', async () => {
+      const sendFile = vi.fn(async () => {})
+      const { port, token } = await startWithIlink({
+        ilink: { sendReply: async () => ({ msgId: 'm' }), sendFile, editMessage: async () => {}, broadcast: async () => ({ ok: 0, failed: 0 }) },
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/wechat/send_file`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ chat_id: 'c', path: '/abs/file.pdf' }),
+      })
+      expect(resp.status).toBe(200)
+      expect(await resp.json()).toEqual({ ok: true })
+      expect(sendFile).toHaveBeenCalledWith('c', '/abs/file.pdf')
+    })
+
+    it('POST /v1/wechat/edit_message forwards all 3 args and returns ok:true', async () => {
+      const editMessage = vi.fn(async () => {})
+      const { port, token } = await startWithIlink({
+        ilink: { sendReply: async () => ({ msgId: 'm' }), sendFile: async () => {}, editMessage, broadcast: async () => ({ ok: 0, failed: 0 }) },
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/wechat/edit_message`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ chat_id: 'c', msg_id: 'm-1', text: 'edited' }),
+      })
+      expect(resp.status).toBe(200)
+      expect(await resp.json()).toEqual({ ok: true })
+      expect(editMessage).toHaveBeenCalledWith('c', 'm-1', 'edited')
+    })
+
+    it('POST /v1/wechat/broadcast forwards text + optional account_id', async () => {
+      const broadcast = vi.fn(async () => ({ ok: 5, failed: 1 }))
+      const { port, token } = await startWithIlink({
+        ilink: { sendReply: async () => ({ msgId: 'm' }), sendFile: async () => {}, editMessage: async () => {}, broadcast },
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/wechat/broadcast`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ text: 'hi all', account_id: 'a-2' }),
+      })
+      expect(resp.status).toBe(200)
+      expect(await resp.json()).toEqual({ ok: 5, failed: 1 })
+      expect(broadcast).toHaveBeenCalledWith('hi all', 'a-2')
+    })
+
+    it('POST /v1/wechat/broadcast forwards undefined account_id when missing (legacy semantics)', async () => {
+      const broadcast = vi.fn(async () => ({ ok: 0, failed: 0 }))
+      const { port, token } = await startWithIlink({
+        ilink: { sendReply: async () => ({ msgId: 'm' }), sendFile: async () => {}, editMessage: async () => {}, broadcast },
+      })
+      await fetch(`http://127.0.0.1:${port}/v1/wechat/broadcast`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ text: 'hi' }),
+      })
+      // Legacy in-process tool passed `account_id ?? undefined` — not {} —
+      // so deps.broadcast's optional second argument behaves as "use default".
+      expect(broadcast).toHaveBeenCalledWith('hi', undefined)
+    })
+
+    it('returns 503 when ilink dep not wired', async () => {
+      api = createInternalApi({ stateDir, daemonPid: 1 })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      for (const path of ['/v1/wechat/reply', '/v1/wechat/send_file', '/v1/wechat/edit_message', '/v1/wechat/broadcast']) {
+        const resp = await fetch(`http://127.0.0.1:${port}${path}`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ chat_id: 'c', text: 't', path: '/p', msg_id: 'm' }),
+        })
+        expect(resp.status).toBe(503)
+        expect(await resp.json()).toEqual({ error: 'ilink_not_wired' })
+      }
     })
   })
 })

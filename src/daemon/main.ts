@@ -71,6 +71,7 @@ async function main() {
     projects: ilink.projects,
     setUserName: (chatId, name) => ilink.setUserName(chatId, name),
     voice: {
+      replyVoice: (chatId, text) => ilink.voice.replyVoice(chatId, text),
       saveConfig: (input) => ilink.voice.saveConfig(input),
       configStatus: () => ilink.voice.configStatus(),
     },
@@ -81,6 +82,15 @@ async function main() {
       disable: () => ilink.companion.disable(),
       status: () => ilink.companion.status(),
       snooze: (minutes) => ilink.companion.snooze(minutes),
+    },
+    // Ilink-bound message family (RFC 03 P1.B B1). reply_voice goes
+    // through `voice.replyVoice` above; the four below cover the rest of
+    // the reply-tool family (reply / send_file / edit_message / broadcast).
+    ilink: {
+      sendReply: (chatId, text) => ilink.sendMessage(chatId, text).then(r => r as { msgId: string; error?: string }),
+      sendFile: (chatId, path) => ilink.sendFile(chatId, path),
+      editMessage: (chatId, msgId, text) => ilink.editMessage(chatId, msgId, text),
+      broadcast: (text, accountId) => ilink.broadcast(text, accountId),
     },
     log: (tag, line) => log(tag, line),
   })
@@ -99,7 +109,6 @@ async function main() {
       baseUrl: `http://127.0.0.1:${internalApiPort}`,
       tokenFilePath: internalTokenFile,
     },
-    memoryFS,
   })
 
   // Companion v2 scheduler — simple interval+jitter tick. When enabled +

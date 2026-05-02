@@ -234,6 +234,116 @@ describe('wechat-mcp stdio integration', () => {
 
   // ── B4: voice config tools end-to-end ───────────────────────────────────
 
+  // ── B1: ilink-bound message family end-to-end ─────────────────────────
+
+  it('reply / send_file / edit_message / broadcast / reply_voice round-trip through stdio + HTTP + ilink mocks', async () => {
+    const memory = makeMemoryFS({ rootDir: join(stateDir, 'memory') })
+    const calls: Array<[string, ...unknown[]]> = []
+    const ilinkDep = {
+      sendReply: async (chatId: string, text: string) => {
+        calls.push(['sendReply', chatId, text])
+        return { msgId: 'm-reply-1' }
+      },
+      sendFile: async (chatId: string, path: string) => {
+        calls.push(['sendFile', chatId, path])
+      },
+      editMessage: async (chatId: string, msgId: string, text: string) => {
+        calls.push(['editMessage', chatId, msgId, text])
+      },
+      broadcast: async (text: string, accountId?: string) => {
+        calls.push(['broadcast', text, accountId])
+        return { ok: 3, failed: 0 }
+      },
+    }
+    const voice = {
+      replyVoice: async (chatId: string, text: string) => {
+        calls.push(['replyVoice', chatId, text])
+        return { ok: true as const, msgId: 'm-voice-1' }
+      },
+      saveConfig: async (): Promise<{ ok: false; reason: string }> => ({ ok: false, reason: 'unused' }),
+      configStatus: () => ({ configured: false as const }),
+    }
+    api = createInternalApi({ stateDir, daemonPid: 7777, memory, ilink: ilinkDep, voice })
+    const { port, tokenFilePath } = await api.start()
+    const transport = new StdioClientTransport({
+      command: RUNTIME, args: [WECHAT_MCP_MAIN],
+      env: {
+        ...process.env as Record<string, string>,
+        WECHAT_INTERNAL_API: `http://127.0.0.1:${port}`,
+        WECHAT_INTERNAL_TOKEN_FILE: tokenFilePath,
+      },
+      stderr: 'pipe',
+    })
+    const c = new Client({ name: 'integration-ilink', version: '0.0.1' }, { capabilities: {} })
+    await c.connect(transport)
+    client = c
+
+    // reply
+    const reply = await c.callTool({ name: 'reply', arguments: { chat_id: 'u@bot', text: 'hi' } })
+    expect(JSON.parse(((reply.content as Array<{ text?: string }>)[0]?.text)!)).toEqual({
+      ok: true, msg_id: 'm-reply-1',
+    })
+    expect(calls[0]).toEqual(['sendReply', 'u@bot', 'hi'])
+
+    // reply_voice
+    const replyVoice = await c.callTool({ name: 'reply_voice', arguments: { chat_id: 'u@bot', text: '念这一段' } })
+    expect(JSON.parse(((replyVoice.content as Array<{ text?: string }>)[0]?.text)!)).toEqual({
+      ok: true, msgId: 'm-voice-1',
+    })
+    expect(calls[1]).toEqual(['replyVoice', 'u@bot', '念这一段'])
+
+    // send_file
+    const sendFile = await c.callTool({ name: 'send_file', arguments: { chat_id: 'u@bot', path: '/abs/x.pdf' } })
+    expect(JSON.parse(((sendFile.content as Array<{ text?: string }>)[0]?.text)!)).toEqual({ ok: true })
+    expect(calls[2]).toEqual(['sendFile', 'u@bot', '/abs/x.pdf'])
+
+    // edit_message
+    const edit = await c.callTool({
+      name: 'edit_message',
+      arguments: { chat_id: 'u@bot', msg_id: 'm-1', text: 'edited' },
+    })
+    expect(JSON.parse(((edit.content as Array<{ text?: string }>)[0]?.text)!)).toEqual({ ok: true })
+    expect(calls[3]).toEqual(['editMessage', 'u@bot', 'm-1', 'edited'])
+
+    // broadcast
+    const bc = await c.callTool({ name: 'broadcast', arguments: { text: 'hi all' } })
+    expect(JSON.parse(((bc.content as Array<{ text?: string }>)[0]?.text)!)).toEqual({ ok: 3, failed: 0 })
+    expect(calls[4]).toEqual(['broadcast', 'hi all', undefined])
+  })
+
+  it('reply_voice with text > 500 chars surfaces ok:false reason without crossing ilink (legacy cap)', async () => {
+    const memory = makeMemoryFS({ rootDir: join(stateDir, 'memory') })
+    const replyVoiceCalls: number[] = []
+    const voice = {
+      replyVoice: async () => { replyVoiceCalls.push(1); return { ok: true as const, msgId: 'should-not-be-called' } },
+      saveConfig: async (): Promise<{ ok: false; reason: string }> => ({ ok: false, reason: 'unused' }),
+      configStatus: () => ({ configured: false as const }),
+    }
+    api = createInternalApi({ stateDir, daemonPid: 7777, memory, voice })
+    const { port, tokenFilePath } = await api.start()
+    const transport = new StdioClientTransport({
+      command: RUNTIME, args: [WECHAT_MCP_MAIN],
+      env: {
+        ...process.env as Record<string, string>,
+        WECHAT_INTERNAL_API: `http://127.0.0.1:${port}`,
+        WECHAT_INTERNAL_TOKEN_FILE: tokenFilePath,
+      },
+      stderr: 'pipe',
+    })
+    const c = new Client({ name: 'integration-voice-cap', version: '0.0.1' }, { capabilities: {} })
+    await c.connect(transport)
+    client = c
+
+    const result = await c.callTool({
+      name: 'reply_voice',
+      arguments: { chat_id: 'u@bot', text: 'x'.repeat(501) },
+    })
+    expect(JSON.parse(((result.content as Array<{ text?: string }>)[0]?.text)!)).toEqual({
+      ok: false, reason: 'too_long', limit: 500,
+    })
+    expect(replyVoiceCalls).toHaveLength(0)  // dep was NOT crossed
+  })
+
   // ── B5: share_page / resurface_page end-to-end ────────────────────────
 
   it('share_page publishes then resurface_page returns the same record (legacy wire shapes preserved)', async () => {
@@ -378,6 +488,7 @@ describe('wechat-mcp stdio integration', () => {
     const memory = makeMemoryFS({ rootDir: join(stateDir, 'memory') })
     let stored: { provider: 'http_tts'; default_voice: string; base_url: string; model: string; saved_at: string } | null = null
     const voice = {
+      replyVoice: async (): Promise<{ ok: false; reason: string }> => ({ ok: false, reason: 'unused_in_voice_config_test' }),
       saveConfig: async (input: { provider: 'http_tts' | 'qwen'; base_url?: string; model?: string; default_voice?: string }) => {
         stored = {
           provider: 'http_tts' as const,

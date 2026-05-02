@@ -5,12 +5,12 @@
  * scheduler (enabled / snooze) and records the default_chat_id.
  */
 import { mkdirSync } from 'node:fs'
-import type { ToolDeps } from '../../features/tools'
+import type { WechatCompanionDep } from '../wechat-tool-deps'
 import { companionDir } from '../companion/paths'
 import { loadCompanionConfig, saveCompanionConfig, defaultCompanionConfig } from '../companion/config'
 import type { IlinkContext } from './context'
 
-export function makeCompanion(ctx: IlinkContext): ToolDeps['companion'] {
+export function makeCompanion(ctx: IlinkContext): WechatCompanionDep {
   const { stateDir, acctStore, lastActiveRef } = ctx
 
   return {
@@ -69,5 +69,5 @@ export function makeCompanion(ctx: IlinkContext): ToolDeps['companion'] {
       await saveCompanionConfig(stateDir, cfg)
       return { ok: true as const, until }
     },
-  } satisfies ToolDeps['companion']
+  } satisfies WechatCompanionDep
 }

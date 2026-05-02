@@ -39,20 +39,26 @@ function makeIlinkStub() {
 }
 
 describe('bootstrap', () => {
-  it('sdkOptionsForProject returns cwd, wechat mcpServer, canUseTool, systemPrompt', () => {
+  it('sdkOptionsForProject returns cwd, wechat stdio mcpServer, canUseTool, systemPrompt', () => {
     const b = buildBootstrap({
       stateDir: '/tmp/state',
       ilink: makeIlinkStub() as any,
       loadProjects: () => ({ projects: { P: { path: '/p', last_active: 0 } }, current: 'P' }),
       lastActiveChatId: () => 'chat-1',
       log: () => {},
+      // After RFC 03 P1.B B1, wechat MCP is exclusively the stdio server
+      // wired via internalApi. Without internalApi the daemon would never
+      // expose any wechat tools — that's not a real production code path.
+      internalApi: { baseUrl: 'http://127.0.0.1:0', tokenFilePath: '/tmp/token' },
     })
     const opts = b.sdkOptionsForProject('P', '/p')
     expect(opts.cwd).toBe('/p')
     expect(opts.mcpServers).toBeDefined()
     const wechatCfg = opts.mcpServers!['wechat']
     expect(wechatCfg).toBeDefined()
-    expect(wechatCfg!.type).toBe('sdk')
+    // Stdio MCP server (renamed from wechat_ipc back to wechat in B1
+    // when the legacy in-process server was deleted).
+    expect(wechatCfg!.type).toBe('stdio')
     expect(typeof opts.canUseTool).toBe('function')
     // systemPrompt is now the preset+append form (we switched from raw string
     // to avoid SDK ToolSearch deferring MCP tools). Accept string OR preset object.

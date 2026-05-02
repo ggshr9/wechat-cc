@@ -4,14 +4,13 @@ import { createCodexAgentProvider } from '../core/codex-agent-provider'
 import { makeResolver } from '../core/project-resolver'
 import { makeCanUseTool } from '../core/permission-relay'
 import { formatInbound } from '../core/prompt-format'
-import { buildWechatMcpServer, type ToolDeps } from '../features/tools'
 import type { IlinkAdapter } from './ilink-glue'
 import type { Options } from '@anthropic-ai/claude-agent-sdk'
 import { findOnPath } from '../../util'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { makeMemoryFS, type MemoryFS } from './memory/fs-api'
+import type { WechatProjectsDep, WechatVoiceDep, WechatCompanionDep } from './wechat-tool-deps'
 import { makeSessionStore } from '../core/session-store'
 import { homedir } from 'node:os'
 import { loadAgentConfig } from '../../agent-config'
@@ -46,9 +45,9 @@ export interface BootstrapDeps {
     sharePage: (title: string, content: string, opts?: { needs_approval?: boolean; chat_id?: string; account_id?: string }) => Promise<{ url: string; slug: string }>
     resurfacePage: (q: { slug?: string; title_fragment?: string }) => Promise<{ url: string; slug: string } | null>
     setUserName: (chatId: string, name: string) => Promise<void>
-    projects: ToolDeps['projects']
-    voice: IlinkAdapter['voice']
-    companion: IlinkAdapter['companion']
+    projects: WechatProjectsDep
+    voice: WechatVoiceDep
+    companion: WechatCompanionDep
     askUser: (chatId: string, prompt: string, hash: string, timeoutMs: number) => Promise<'allow'|'deny'|'timeout'>
   }
   loadProjects: () => { projects: Record<string, { path: string; last_active: number }>; current: string | null }
@@ -64,7 +63,7 @@ export interface BootstrapDeps {
   agentProviderKind?: 'claude' | 'codex'
   /**
    * When provided, the standalone wechat-mcp stdio MCP server (RFC 03 §5)
-   * is registered with both providers as `wechat_ipc`. The MCP child
+   * is registered with both providers as `wechat`. The MCP child
    * process gets these env vars on spawn:
    *    WECHAT_INTERNAL_API        = baseUrl
    *    WECHAT_INTERNAL_TOKEN_FILE = tokenFilePath
@@ -76,14 +75,6 @@ export interface BootstrapDeps {
     baseUrl: string
     tokenFilePath: string
   }
-  /**
-   * MemoryFS instance to share across the legacy in-process MCP server
-   * AND the standalone wechat-mcp stdio server. When omitted, buildBootstrap
-   * creates one rooted at <stateDir>/memory/ (preserves v0.x behaviour).
-   * P1.B B2 wires main.ts to construct it once and pass it both to
-   * internal-api (so memory_* HTTP routes work) and here.
-   */
-  memoryFS?: MemoryFS
 }
 
 export interface Bootstrap {
@@ -130,26 +121,11 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     loadProjects: deps.loadProjects,
     fallback: deps.fallbackProject,
   })
-  // Claude's long-term memory — sandboxed to <stateDir>/memory/. Claude owns
-  // layout and organization; this module only enforces path safety + .md-only.
-  // Caller may inject a pre-built MemoryFS so the same instance is shared
-  // with internal-api's memory_* endpoints (RFC 03 P1.B B2).
-  const memoryFS = deps.memoryFS ?? makeMemoryFS({ rootDir: join(deps.stateDir, 'memory') })
+  // Note: MemoryFS is no longer constructed here — main.ts owns the
+  // single instance and passes it to createInternalApi (which serves the
+  // memory_* HTTP routes). The legacy in-process `wechat` MCP that used
+  // to consume it via toolDeps is gone in RFC 03 P1.B B1.
 
-  const toolDeps: ToolDeps = {
-    sendReply: deps.ilink.sendMessage,
-    sendFile: deps.ilink.sendFile,
-    editMessage: deps.ilink.editMessage,
-    broadcast: deps.ilink.broadcast,
-    sharePage: deps.ilink.sharePage,
-    resurfacePage: deps.ilink.resurfacePage,
-    setUserName: deps.ilink.setUserName,
-    projects: deps.ilink.projects,
-    voice: deps.ilink.voice,
-    companion: deps.ilink.companion,
-    memory: memoryFS,
-  }
-  const mcp = buildWechatMcpServer(toolDeps)
   const canUseTool = makeCanUseTool({
     askUser: deps.ilink.askUser,
     defaultChatId: () => deps.lastActiveChatId(),
@@ -164,10 +140,13 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
   }
 
   // RFC 03 §5 — standalone wechat-mcp stdio server. When deps.internalApi is
-  // wired, both providers receive a `wechat_ipc` MCP server spec that spawns
-  // the wechat-mcp child with token-auth env vars. P1.A keeps the legacy
-  // in-process `wechat` server alive in parallel; P1.B migrates each tool
-  // and decommissions the legacy server.
+  // wired, both providers receive a `wechat` MCP server spec that spawns
+  // the wechat-mcp child with token-auth env vars.
+  // History: from P1.A through P1.B B6 the stdio server was named
+  // `wechat_ipc` to coexist with the legacy in-process `wechat` server.
+  // After B1 the legacy server is gone and the stdio one inherits the
+  // canonical `wechat` name — keeping tool names like `mcp__wechat__reply`
+  // stable for the agent and the providers' replyToolCalled detection.
   function wechatStdioMcpSpec(): { command: string; args: string[]; env: Record<string, string> } | null {
     if (!deps.internalApi) return null
     const here = dirname(fileURLToPath(import.meta.url))
@@ -192,8 +171,7 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     const common: Options = {
       cwd: path,
       mcpServers: {
-        wechat: mcp.config,
-        ...(wechatStdio ? { wechat_ipc: { type: 'stdio' as const, ...wechatStdio } } : {}),
+        ...(wechatStdio ? { wechat: { type: 'stdio' as const, ...wechatStdio } } : {}),
       },
       // Using preset+append (instead of raw string) keeps MCP tools inline in
       // the system prompt — otherwise they're deferred behind ToolSearch,
@@ -259,7 +237,7 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
         // hangs; `never` is the only viable headless setting.
         approvalPolicy: 'never',
         sandboxMode: 'workspace-write',
-        ...(wechatStdio ? { mcpServers: { wechat_ipc: wechatStdio } } : {}),
+        ...(wechatStdio ? { mcpServers: { wechat: wechatStdio } } : {}),
       })
     : createClaudeAgentProvider({ sdkOptionsForProject })
 

@@ -25,66 +25,22 @@ import { join, dirname } from 'node:path'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
 import type { MemoryFS } from './memory/fs-api'
+import type { WechatProjectsDep, WechatVoiceDep, WechatCompanionDep } from './wechat-tool-deps'
 
 /**
- * Project registry deps (RFC 03 P1.B B3). Shape matches features/tools.ts
- * `ToolDeps['projects']`; ilink-glue.ts already exposes the same object so
- * main.ts wires the same closure into both internal-api and the legacy
- * in-process MCP. B7 removes the legacy path.
+ * Ilink-bound message-sending deps (RFC 03 P1.B B1). These call out to
+ * the WeChat client over ilink — the riskiest slice with real side
+ * effects. main.ts wires them as closures over `ilink.sendMessage` etc.
  */
-export interface InternalApiProjectsDep {
-  list(): { alias: string; path: string; current: boolean }[]
-  switchTo(alias: string): Promise<{ ok: true; path: string } | { ok: false; reason: string }>
-  add(alias: string, path: string): Promise<void>
-  remove(alias: string): Promise<void>
-}
-
-/**
- * Companion proactive-tick deps (RFC 03 P1.B B6). Mirrors features/tools.ts
- * `ToolDeps['companion']`.
- */
-export interface InternalApiCompanionDep {
-  enable(): Promise<
-    | { ok: true; state_dir: string; welcome_message: string; cost_estimate_note: string }
-    | { ok: true; already_configured: true }
-  >
-  disable(): Promise<{ ok: true; enabled: false }>
-  status(): {
-    enabled: boolean
-    timezone: string
-    default_chat_id: string | null
-    snooze_until: string | null
-  }
-  snooze(minutes: number): Promise<{ ok: true; until: string }>
-}
-
-/**
- * TTS config deps (RFC 03 P1.B B4). Subset of features/tools.ts
- * `ToolDeps['voice']` — only the two config-shaped methods used by
- * `voice_config_status` and `save_voice_config`. `replyVoice` (used by
- * the `reply_voice` tool) lives in B1 since it crosses the ilink boundary.
- */
-export interface InternalApiVoiceDep {
-  saveConfig(input: {
-    provider: 'http_tts' | 'qwen'
-    base_url?: string
-    model?: string
-    api_key?: string
-    default_voice?: string
-  }): Promise<
-    | { ok: true; tested_ms: number; provider: string; default_voice: string }
-    | { ok: false; reason: string; detail?: string }
-  >
-  configStatus():
-    | { configured: false }
-    | {
-        configured: true
-        provider: 'http_tts' | 'qwen'
-        default_voice: string
-        base_url?: string
-        model?: string
-        saved_at: string
-      }
+export interface InternalApiIlinkDep {
+  /** Reply text to a chat. Returns ilink's raw shape (msgId or error) — the route handler reshapes for the agent. */
+  sendReply(chatId: string, text: string): Promise<{ msgId: string; error?: string }>
+  /** Push a local file (absolute path) to a chat. */
+  sendFile(chatId: string, path: string): Promise<void>
+  /** Edit a previously-sent message. */
+  editMessage(chatId: string, msgId: string, text: string): Promise<void>
+  /** Broadcast text to all online users; returns success/failure counts. */
+  broadcast(text: string, accountId?: string): Promise<{ ok: number; failed: number }>
 }
 
 export interface InternalApiDeps {
@@ -99,14 +55,13 @@ export interface InternalApiDeps {
    */
   memory?: MemoryFS
   /** Project registry (RFC 03 P1.B B3). */
-  projects?: InternalApiProjectsDep
+  projects?: WechatProjectsDep
   /** Persist a wechat user's display name (RFC 03 P1.B B3). */
   setUserName?: (chatId: string, name: string) => Promise<void>
-  /** TTS config + status (RFC 03 P1.B B4). */
-  voice?: InternalApiVoiceDep
+  /** TTS config + status + replyVoice (RFC 03 P1.B B4 + B1). */
+  voice?: WechatVoiceDep
   /**
    * Publish a Markdown page to a one-time URL (RFC 03 P1.B B5).
-   * Shape matches features/tools.ts ToolDeps.sharePage.
    */
   sharePage?: (
     title: string,
@@ -115,13 +70,18 @@ export interface InternalApiDeps {
   ) => Promise<{ url: string; slug: string }>
   /**
    * Re-issue a URL for an existing page (RFC 03 P1.B B5).
-   * Shape matches features/tools.ts ToolDeps.resurfacePage.
    */
   resurfacePage?: (
     q: { slug?: string; title_fragment?: string },
   ) => Promise<{ url: string; slug: string } | null>
   /** Companion proactive-tick controls (RFC 03 P1.B B6). */
-  companion?: InternalApiCompanionDep
+  companion?: WechatCompanionDep
+  /**
+   * Ilink message-sending family (RFC 03 P1.B B1). When wired, the
+   * /v1/wechat/{reply,send_file,edit_message,broadcast} routes are
+   * served. `voice.replyVoice` covers `reply_voice` separately.
+   */
+  ilink?: InternalApiIlinkDep
   /** Optional log hook so api activity surfaces in channel.log. */
   log?: (tag: string, line: string) => void
 }
@@ -353,6 +313,83 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
       }
       try {
         const r = await deps.companion.snooze(minutes)
+        return { status: 200, body: r }
+      } catch (err) {
+        return { status: 200, body: { ok: false, error: errMsg(err) } }
+      }
+    },
+
+    // ── ilink-bound message family (RFC 03 P1.B B1) ─────────────────────
+    // The reply / reply_voice / send_file / edit_message / broadcast tools
+    // detected by both providers' replyToolCalled flag. After B1 these are
+    // exposed by the stdio `wechat` server (renamed from `wechat_ipc`),
+    // which is what claude-agent-provider's REPLY_TOOL_NAMES set and
+    // codex-agent-provider's WECHAT_MCP_SERVER='wechat' check match against.
+    'POST /v1/wechat/reply': async (_q, body) => {
+      if (!deps.ilink) return { status: 503, body: { error: 'ilink_not_wired' } }
+      const b = body as { chat_id?: unknown; text?: unknown } | null
+      if (typeof b?.chat_id !== 'string') return { status: 400, body: { error: 'chat_id_required' } }
+      if (typeof b?.text !== 'string') return { status: 400, body: { error: 'text_required' } }
+      try {
+        const r = await deps.ilink.sendReply(b.chat_id, b.text)
+        // Legacy in-process wrapper reshaped {msgId,error?} → {ok,msg_id} or
+        // {ok:false,error}. Preserve verbatim so the agent's mental model
+        // doesn't shift across this migration.
+        if (r.error) return { status: 200, body: { ok: false, error: r.error } }
+        return { status: 200, body: { ok: true, msg_id: r.msgId } }
+      } catch (err) {
+        return { status: 200, body: { ok: false, error: errMsg(err) } }
+      }
+    },
+    'POST /v1/wechat/reply_voice': async (_q, body) => {
+      if (!deps.voice) return { status: 503, body: { error: 'voice_not_wired' } }
+      const b = body as { chat_id?: unknown; text?: unknown } | null
+      if (typeof b?.chat_id !== 'string') return { status: 400, body: { error: 'chat_id_required' } }
+      if (typeof b?.text !== 'string') return { status: 400, body: { error: 'text_required' } }
+      // Legacy 500-char cap on the text — short enough for a voice
+      // message, also rejects code blocks and long URLs as spec'd.
+      if (b.text.length > 500) {
+        return { status: 200, body: { ok: false, reason: 'too_long', limit: 500 } }
+      }
+      try {
+        const r = await deps.voice.replyVoice(b.chat_id, b.text)
+        return { status: 200, body: r }
+      } catch (err) {
+        return { status: 200, body: { ok: false, reason: 'unexpected_error', detail: errMsg(err) } }
+      }
+    },
+    'POST /v1/wechat/send_file': async (_q, body) => {
+      if (!deps.ilink) return { status: 503, body: { error: 'ilink_not_wired' } }
+      const b = body as { chat_id?: unknown; path?: unknown } | null
+      if (typeof b?.chat_id !== 'string') return { status: 400, body: { error: 'chat_id_required' } }
+      if (typeof b?.path !== 'string') return { status: 400, body: { error: 'path_required' } }
+      try {
+        await deps.ilink.sendFile(b.chat_id, b.path)
+        return { status: 200, body: { ok: true } }
+      } catch (err) {
+        return { status: 200, body: { ok: false, error: errMsg(err) } }
+      }
+    },
+    'POST /v1/wechat/edit_message': async (_q, body) => {
+      if (!deps.ilink) return { status: 503, body: { error: 'ilink_not_wired' } }
+      const b = body as { chat_id?: unknown; msg_id?: unknown; text?: unknown } | null
+      if (typeof b?.chat_id !== 'string') return { status: 400, body: { error: 'chat_id_required' } }
+      if (typeof b?.msg_id !== 'string') return { status: 400, body: { error: 'msg_id_required' } }
+      if (typeof b?.text !== 'string') return { status: 400, body: { error: 'text_required' } }
+      try {
+        await deps.ilink.editMessage(b.chat_id, b.msg_id, b.text)
+        return { status: 200, body: { ok: true } }
+      } catch (err) {
+        return { status: 200, body: { ok: false, error: errMsg(err) } }
+      }
+    },
+    'POST /v1/wechat/broadcast': async (_q, body) => {
+      if (!deps.ilink) return { status: 503, body: { error: 'ilink_not_wired' } }
+      const b = body as { text?: unknown; account_id?: unknown } | null
+      if (typeof b?.text !== 'string') return { status: 400, body: { error: 'text_required' } }
+      const accountId = typeof b?.account_id === 'string' ? b.account_id : undefined
+      try {
+        const r = await deps.ilink.broadcast(b.text, accountId)
         return { status: 200, body: r }
       } catch (err) {
         return { status: 200, body: { ok: false, error: errMsg(err) } }
