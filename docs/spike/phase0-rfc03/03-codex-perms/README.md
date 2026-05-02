@@ -58,11 +58,12 @@ runtime 要确认的是：在没有 per-tool callback 的前提下，daemon ship
 ```bash
 cd docs/spike/phase0-rfc03/03-codex-perms
 bun install
-export OPENAI_API_KEY=sk-...
 bun spike.ts
 ```
 
-约 1-3 分钟（三个 trial，Trial C 可能 hang 到 90s timeout），约 $0.05-0.15。
+约 1-3 分钟（三个 trial，Trial C 可能 hang 到 90s timeout），subscription auth 用户走配额、API-key auth 约 $0.05-0.15。
+
+**Auth**：与 spike 1/2 一致——auth-agnostic。codex login / OPENAI_API_KEY / CODEX_API_KEY / `~/.codex/config.toml` 任一即可，spike 不传 `apiKey` 给 SDK。详见 [01-codex-mcp/README.md "鉴权"](../01-codex-mcp/README.md)。
 
 ## Pass 条件
 

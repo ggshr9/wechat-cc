@@ -38,6 +38,10 @@
  * Output:
  *   events.jsonl — newline-delimited JSON of every observed event
  *   summary.json — { event_types_seen, item_types_seen, undocumented_keys }
+ *
+ * Auth: auth-agnostic. SDK inherits process.env into spawned codex child;
+ * any of {`codex login`, OPENAI_API_KEY, CODEX_API_KEY, ~/.codex/config.toml}
+ * works. We do NOT pass `apiKey` to `new Codex({...})`. RFC 03 principle.
  */
 import { Codex, type ThreadEvent, type ThreadItem } from '@openai/codex-sdk'
 import { writeFileSync, appendFileSync, existsSync, unlinkSync } from 'node:fs'
@@ -84,17 +88,12 @@ function log(...args: unknown[]): void {
   console.error('[spike2]', ...args)
 }
 
-const apiKey = process.env.OPENAI_API_KEY
-if (!apiKey) {
-  log('FAIL: OPENAI_API_KEY not set — this spike cannot run without API access')
-  process.exit(2)
-}
+log('auth: deferred to codex CLI (codex login OR OPENAI_API_KEY/CODEX_API_KEY in env OR ~/.codex/config.toml)')
 
 if (existsSync(EVENTS_LOG)) unlinkSync(EVENTS_LOG)
 writeFileSync(EVENTS_LOG, '')
 
 const codex = new Codex({
-  apiKey,
   codexPathOverride: process.env.CODEX_PATH ?? CODEX_BIN,
 })
 

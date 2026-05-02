@@ -30,11 +30,20 @@ CLI 行为是黑盒，必须 runtime 验证。
 ```bash
 cd docs/spike/phase0-rfc03/01-codex-mcp
 bun install
-export OPENAI_API_KEY=sk-...   # 或 CODEX_API_KEY，spike.ts 用前者
 bun spike.ts
 ```
 
-约 10-30 秒，约 $0.01-0.05（GPT-5 默认）。
+约 10-30 秒，subscription auth 用户走配额、API-key auth 约 $0.01-0.05。
+
+### 鉴权（auth-agnostic）
+
+spike **不在乎你用哪种**。Codex SDK 透传 `process.env` 给子进程（dist/index.js:222-241），所以以下任意一种 auth 都可以：
+
+- `codex login` 已跑过 → `~/.codex/auth.json` 含 ChatGPT subscription token
+- `OPENAI_API_KEY` 或 `CODEX_API_KEY` 在 shell env
+- API key 在 `~/.codex/config.toml`
+
+spike.ts **不调用 `new Codex({ apiKey })`**——不主动覆盖你的 stored auth。如果你两种都没配，codex CLI 自己会给出 auth error，比我们 pre-check 的提示信息有用。这是 RFC 03 的设计原则，未来 `codex-agent-provider.ts` 也按这个走。
 
 ## Pass 条件
 

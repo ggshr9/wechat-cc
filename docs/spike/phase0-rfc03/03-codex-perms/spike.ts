@@ -43,6 +43,10 @@
  *   - Trial C's outcome is documented (whatever it is)
  *
  * Output: matrix.json with the observed behaviour for each trial.
+ *
+ * Auth: auth-agnostic. SDK inherits process.env into spawned codex child;
+ * any of {`codex login`, OPENAI_API_KEY, CODEX_API_KEY, ~/.codex/config.toml}
+ * works. We do NOT pass `apiKey` to `new Codex({...})`. RFC 03 principle.
  */
 import { Codex, type ThreadEvent, type ThreadItem } from '@openai/codex-sdk'
 import { writeFileSync, existsSync, unlinkSync, mkdirSync, statSync } from 'node:fs'
@@ -60,11 +64,7 @@ function log(...args: unknown[]): void {
   console.error('[spike3]', ...args)
 }
 
-const apiKey = process.env.OPENAI_API_KEY
-if (!apiKey) {
-  log('FAIL: OPENAI_API_KEY not set')
-  process.exit(2)
-}
+log('auth: deferred to codex CLI (codex login OR OPENAI_API_KEY/CODEX_API_KEY in env OR ~/.codex/config.toml)')
 
 mkdirSync(SCRATCH, { recursive: true })
 
@@ -96,7 +96,6 @@ async function runTrial(
   log('  sandboxMode:', sandboxMode, '  approvalPolicy:', approvalPolicy)
 
   const codex = new Codex({
-    apiKey,
     codexPathOverride: process.env.CODEX_PATH ?? CODEX_BIN,
   })
 

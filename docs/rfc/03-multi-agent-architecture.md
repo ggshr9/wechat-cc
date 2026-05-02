@@ -92,8 +92,11 @@ RFC 02 §4 的 "memory-first 自治" 仍然成立：两个 provider 共用 `memo
 | C4 | **切换无须重启 daemon** | `/cc` `/codex` `/both` `/chat` 在聊天里实时生效 |
 | C5 | **防递归无限调用** | delegate 工具的 depth 硬上限（默认 2） |
 | C6 | **用户决定哪个是默认** | 不偏袒任一方，按 chat 持久化用户选择；首次默认 `solo+claude` 与现状一致 |
+| C7 | **Auth-agnostic** | wechat-cc 不感知用户的 Codex 鉴权方式（订阅 vs API key）。daemon 不持有、不要求、不转发任何 OpenAI 凭证。详见 §3.6 |
 
 C3 是最容易被违反的——抽象化重构容易在单 provider 路径上加 overhead。Phase P0/P1 完成后必须做基线 benchmark：v1.2 vs P1 的 cold-start、warm-turn、resume 三个指标，差异 > 10% 视为回归。
+
+C7 是最容易被错过的——把 `apiKey` 作为配置项写进 `agent-config.json` 看似"对称"（Claude 也可以配 model），但 Codex 有订阅鉴权这个非对称特性，把 apiKey 作为字段会强制 API-key 路径、覆盖用户已 `codex login` 的状态。详见 §3.6。
 
 ---
 
@@ -208,6 +211,37 @@ export interface ProviderRegistration {
 | MCP server | `mcpServers: { name: <inline\|stdio> }` | `~/.codex/config.toml` 或 `Codex({ config: { mcp_servers: {...} } })` | 两边都用 stdio 入口 |
 | Per-tool callback | `canUseTool(tool, input)` | ❌（仅 `approval_policy` 粗粒度） | Claude 保留 permission-relay；Codex 降级到 approval_policy（见 §6 风险） |
 | 沙盒 | 进程级（OS） | `sandbox_mode: read-only / workspace-write / danger-full-access` | 各自配置，Conversation 级覆盖 |
+| 鉴权 | `claude` CLI 的 OAuth（`claude /login`）+ stored creds | (a) `codex login` → `~/.codex/auth.json` 走 ChatGPT subscription, **或** (b) `OPENAI_API_KEY`/`CODEX_API_KEY` env / `~/.codex/config.toml` 走 OpenAI API | 不感知；详见 §3.6 |
+
+### 3.6 Auth-agnostic 设计（C7 硬约束的具体形态）
+
+Codex 有两种鉴权路径：**ChatGPT subscription**（`codex login` 写 `~/.codex/auth.json`）和 **OpenAI API key**（环境变量或 config.toml）。Claude Code 也是 OAuth-stored，但形态对称——都是用户在自己 shell 里运行一次配置命令，状态在用户文件系统里，daemon 不需要也不应该参与。
+
+**Codex SDK 的具体行为**（dist/index.js:222-241 验证）：
+```js
+// 不传 apiKey → SDK 透传 process.env 给子进程 → codex CLI 自己解析 auth state
+// 传了 apiKey → SDK 写入子进程 env.CODEX_API_KEY，强制 API-key 路径、覆盖订阅 auth
+```
+
+**RFC 03 的取舍**：
+
+| 决定 | 形态 |
+|---|---|
+| `codex-agent-provider.ts` 的接口 | **不接受** `apiKey` 字段；构造 `new Codex({ codexPathOverride, config })` 不传 apiKey |
+| `agent-config.json` schema | **不增加** `openai_api_key` / `codex_subscription` 之类字段 |
+| `wechat-cc setup` wizard | **不收集** OpenAI 凭证；文案"确保 `codex login` 跑过 *或* `OPENAI_API_KEY` 在 env 即可" |
+| `wechat-cc doctor` | 升级 §10 现有的"`codex` 在 PATH"为 **"`codex` 能跑且能拉到 auth"**——一次轻量探测（如 `codex --help` 不抛 auth error），不区分订阅 vs API key |
+| Daemon 子进程 env | 透传整个 `process.env`（已是默认）；不主动注入 OPENAI/CODEX env var |
+
+**实践上意味着什么**：
+- 订阅用户：`codex login` 一次，wechat-cc daemon 直接能用 Codex
+- API-key 用户：`export OPENAI_API_KEY=sk-...` 写到 shell rc，wechat-cc daemon 直接能用
+- 用户切换 auth 方式：改自己的 shell / `~/.codex/`，**wechat-cc 配置不动**
+- daemon 日志里**不出现** API key / token / OAuth 相关信息（C7 的隐私维度）
+- 我们的 doctor 只回答"能不能用"，不回答"用的哪种"
+
+**为什么这条要写在 RFC 里**：
+看似显然，但 spike 一开始就被踩到（commit `d5d530e` 的三个 spike 都把 `OPENAI_API_KEY` 当 hard requirement，把订阅用户挡在门外）。这种"对称当 API-key 处理"的反射会一路顺着代码下来——`agent-config.ts` 加字段、setup wizard 加输入框、doctor 加 sk-* 检测——每一步看似合理，最后变成订阅用户根本用不了。明文写一次，免得在 P0 / P5 重新踩。
 
 ---
 
@@ -655,3 +689,4 @@ Claude 那侧 `cancel()` 调 `q.interrupt()`；Codex 那侧调 `thread.cancel()`
 |---|---|
 | 2026-05-02 | 初版 draft，待 review + spike 验证后转 Accepted |
 | 2026-05-02 | 用户反馈：抽象应对其他 agent 开放（"先解决 codex/claude，让他们无缝接入；其他自然也能"）。修订 §1.1 / §1.3 / §3.3 / §7 决策表 / §11 措辞；新增 Appendix D 接入指南雏形 |
+| 2026-05-02 | 用户反馈：Codex 有订阅 + API key 两种鉴权，wechat-cc 不该感知具体哪种。新增 C7 硬约束 + §3.6 Auth-agnostic 设计；§3.5 表格加"鉴权"行；spike 1/2/3 已修（不再 hard-fail OPENAI_API_KEY、不传 apiKey 给 SDK） |

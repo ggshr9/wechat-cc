@@ -56,11 +56,14 @@
 ```bash
 cd docs/spike/phase0-rfc03/02-codex-events
 bun install
-export OPENAI_API_KEY=sk-...
 bun spike.ts
 ```
 
-约 15-30 秒，约 $0.02-0.05。会做：
+约 15-30 秒，subscription auth 用户走配额、API-key auth 约 $0.02-0.05。
+
+**Auth**：与 spike 1/3 一致——auth-agnostic。codex login / OPENAI_API_KEY / CODEX_API_KEY / `~/.codex/config.toml` 任一即可，spike 不传 `apiKey` 给 SDK。详见 [01-codex-mcp/README.md "鉴权"](../01-codex-mcp/README.md)。
+
+会做：
 1. 启动新 thread
 2. 让 Codex 跑 `pwd` + `ls -la` 然后总结一句（触发 reasoning + command_execution + agent_message）
 3. 把所有 events 写到 `events.jsonl`

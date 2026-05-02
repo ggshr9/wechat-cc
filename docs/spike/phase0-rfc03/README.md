@@ -38,12 +38,32 @@ cd docs/spike/phase0-rfc03/03-codex-perms && bun install && bun spike.ts
 
 要求：
 - `bun` 1.1+（每个 spike 文件夹有自己的 `package.json` + `bun install`）
-- `OPENAI_API_KEY=sk-...` 在环境变量
-- 网络能到 OpenAI
+- **Codex 已鉴权**——任一即可（详见下文 "Auth"）
+- 网络能到 OpenAI（CLI 走 ChatGPT subscription endpoint 或 OpenAI API endpoint，看哪种 auth）
 
-总成本 ≈ $0.10-0.30，总耗时 ≈ 3-5 分钟（Trial 3-C 可能 hang 到 90s timeout）。
+API-key auth 总成本 ≈ $0.10-0.30，subscription auth 走配额；总耗时 ≈ 3-5 分钟（Trial 3-C 可能 hang 到 90s timeout）。
 
 `@openai/codex` CLI 通过 npm 依赖锁版本到 `@openai/codex@0.128.0`，每个 spike 包安装时拉本地副本（不依赖系统全局 `codex`）。
+
+### Auth（auth-agnostic 设计原则）
+
+spike **不区分** Codex 的两种鉴权方式：
+
+| 方式 | 配置位置 | 谁在用 |
+|---|---|---|
+| **ChatGPT subscription** | `~/.codex/auth.json`（`codex login` 写入） | ChatGPT Plus / Pro / Team 用户 |
+| **API key** | `OPENAI_API_KEY` / `CODEX_API_KEY` 环境变量 / `~/.codex/config.toml` | 直付 OpenAI API 的开发者 |
+
+SDK 行为（dist/index.js:222-241 验证）：
+- 不传 `apiKey` 给 `new Codex({...})` → SDK 透传整个 `process.env` 给子进程，codex CLI 自己解析 auth state
+- 传了 `apiKey` → SDK 只把它写为 `CODEX_API_KEY` 环境变量，强制走 API-key 路径，**会覆盖订阅 auth**
+
+所以三个 spike 都 **不传 apiKey**——让 codex CLI 用用户已配置好的鉴权状态，不管哪种。如果都没配，CLI 自己抛 auth error，比我们 pre-check 信息更准确。
+
+这条原则同步到 RFC 03（§3.1 L0 Runtime + §10 风险表）：
+- `codex-agent-provider.ts` **不得**把 `apiKey` 暴露成 `agent-config.json` 字段
+- `wechat-cc doctor` 应升级"`codex` 在 PATH"为"`codex` 能跑 + 有 auth"——一次轻量探测（`codex --version` 之类）
+- setup wizard 文案：用户只需保证 `codex login` 跑过 *或* `OPENAI_API_KEY` 在 env，**不要**让用户在我们这里再输一次 key
 
 ## 决策 fork（spike 跑完后）
 

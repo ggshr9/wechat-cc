@@ -18,8 +18,15 @@
  *   - The final `agent_message` mentions the SENTINEL (proving Codex saw
  *     the tool's response)
  *
- * Requires: OPENAI_API_KEY in env, codex CLI on PATH (or bundled — we
- * point the SDK at the @openai/codex npm dep we install here).
+ * Auth: this spike is auth-agnostic. The SDK transparently inherits
+ * process.env into the spawned codex child (dist/index.js:222-241), so
+ * any of the following will work:
+ *   - `codex login` previously run → ~/.codex/auth.json (ChatGPT subscription)
+ *   - OPENAI_API_KEY / CODEX_API_KEY in env
+ *   - api key in ~/.codex/config.toml
+ * We deliberately do NOT pass `apiKey` to `new Codex({...})` — that would
+ * override stored auth and lock the spike to the API-key path. RFC 03
+ * principle: wechat-cc daemon never cares which auth mode a user is on.
  */
 import { Codex, type ThreadEvent, type ThreadItem } from '@openai/codex-sdk'
 import { join, dirname } from 'node:path'
@@ -35,21 +42,18 @@ function log(...args: unknown[]): void {
   console.error('[spike1]', ...args)
 }
 
-const apiKey = process.env.OPENAI_API_KEY
-if (!apiKey) {
-  log('FAIL: OPENAI_API_KEY not set — this spike cannot run without API access')
-  log('Install instructions in docs/spike/phase0-rfc03/01-codex-mcp/README.md')
-  process.exit(2)
-}
-
 log('cwd:', process.cwd())
 log('echo MCP server path:', ECHO_SERVER)
+log('auth: deferred to codex CLI (codex login OR OPENAI_API_KEY/CODEX_API_KEY in env OR ~/.codex/config.toml)')
 
 // Path to the bundled codex CLI from @openai/codex (peer dep installed in this folder)
 const CODEX_BIN = join(HERE, 'node_modules', '@openai', 'codex', 'bin', 'codex.js')
 
+// Note: NO apiKey passed. SDK transparently inherits process.env, so codex
+// CLI uses whichever auth method the user has set up (subscription or API
+// key — we don't care). If neither is configured, the CLI fails fast with
+// its own auth error message, which is more useful than us pre-checking.
 const codex = new Codex({
-  apiKey,
   codexPathOverride: process.env.CODEX_PATH ?? CODEX_BIN,
   config: {
     // This is THE thing Spike 1 is testing: does the SDK's `--config
