@@ -28,7 +28,7 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'child_process'
-import { findOnPath } from './util.ts'
+import { findOnPath } from './src/lib/util.ts'
 import {
   existsSync,
   mkdirSync,

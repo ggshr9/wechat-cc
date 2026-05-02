@@ -12,14 +12,14 @@ import { makeCanUseTool } from '../core/permission-relay'
 import { formatInbound } from '../core/prompt-format'
 import type { IlinkAdapter } from './ilink-glue'
 import type { Options } from '@anthropic-ai/claude-agent-sdk'
-import { findOnPath } from '../../util'
+import { findOnPath } from '../lib/util'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { WechatProjectsDep, WechatVoiceDep, WechatCompanionDep } from './wechat-tool-deps'
 import { makeSessionStore } from '../core/session-store'
 import { homedir } from 'node:os'
-import { loadAgentConfig } from '../../agent-config'
+import { loadAgentConfig } from '../lib/agent-config'
 
 /**
  * Locate a working Claude Code binary. The SDK's own native-binary detection

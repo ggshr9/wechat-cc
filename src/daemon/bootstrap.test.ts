@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { buildBootstrap } from './bootstrap'
-import { saveAgentConfig } from '../../agent-config'
+import { saveAgentConfig } from '../lib/agent-config'
 
 function makeIlinkStub() {
   return {

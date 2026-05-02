@@ -2,11 +2,11 @@
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { writeFileSync } from 'node:fs'
-import { STATE_DIR } from './config'
-import { loadAgentConfig, saveAgentConfig, type AgentProviderKind } from './agent-config'
-import { analyzeDoctor, defaultDoctorDeps, printDoctor, serviceStatus, setupStatus } from './doctor'
-import { buildServicePlan, installService, startService, stopService, uninstallService } from './service-manager'
-import { compiledBinaryPath, compiledRepoRoot } from './runtime-info'
+import { STATE_DIR } from './src/lib/config'
+import { loadAgentConfig, saveAgentConfig, type AgentProviderKind } from './src/lib/agent-config'
+import { analyzeDoctor, defaultDoctorDeps, printDoctor, serviceStatus, setupStatus } from './src/cli/doctor'
+import { buildServicePlan, installService, startService, stopService, uninstallService } from './src/cli/service-manager'
+import { compiledBinaryPath, compiledRepoRoot } from './src/lib/runtime-info'
 
 // Write potentially-large JSON to a sibling file, return the small
 // envelope {ok, out_file, bytes} via stdout. Fixes the desktop sessions
@@ -386,7 +386,7 @@ async function main() {
     }
     case 'setup': {
       if (parsed.qrJson) {
-        const { requestSetupQrCode } = await import('./setup-flow.ts')
+        const { requestSetupQrCode } = await import('./src/cli/setup-flow.ts')
         console.log(JSON.stringify(await requestSetupQrCode(), null, 2))
         return
       }
@@ -396,7 +396,7 @@ async function main() {
       return
     }
     case 'setup-poll': {
-      const { pollSetupQrStatus } = await import('./setup-flow.ts')
+      const { pollSetupQrStatus } = await import('./src/cli/setup-flow.ts')
       const result = await pollSetupQrStatus({ qrcode: parsed.qrcode, baseUrl: parsed.baseUrl, stateDir: STATE_DIR })
       if (parsed.json) console.log(JSON.stringify(result, null, 2))
       else console.log(result.status)
@@ -417,7 +417,7 @@ async function main() {
       process.exit(2)
     }
     case 'status': case 'list': {
-      const { runStatus } = await import('./cli-status.ts')
+      const { runStatus } = await import('./src/cli/cli-status.ts')
       await runStatus(parsed.cmd)
       return
     }
@@ -486,7 +486,7 @@ async function main() {
       return
     }
     case 'memory-list': {
-      const { listAllMemory } = await import('./memory.ts')
+      const { listAllMemory } = await import('./src/cli/memory.ts')
       const users = listAllMemory(STATE_DIR)
       if (parsed.json) console.log(JSON.stringify(users, null, 2))
       else {
@@ -499,7 +499,7 @@ async function main() {
       return
     }
     case 'memory-read': {
-      const { readMemoryFile } = await import('./memory.ts')
+      const { readMemoryFile } = await import('./src/cli/memory.ts')
       try {
         const content = readMemoryFile(STATE_DIR, parsed.userId, parsed.path)
         if (parsed.json) console.log(JSON.stringify({ ok: true, userId: parsed.userId, path: parsed.path, content }, null, 2))
@@ -520,7 +520,7 @@ async function main() {
       return
     }
     case 'logs': {
-      const { tailLog } = await import('./logs.ts')
+      const { tailLog } = await import('./src/cli/logs.ts')
       const result = tailLog(STATE_DIR, parsed.tail)
       if (parsed.json) {
         console.log(JSON.stringify(result, null, 2))
@@ -536,7 +536,7 @@ async function main() {
       return
     }
     case 'memory-write': {
-      const { writeMemoryFile } = await import('./memory.ts')
+      const { writeMemoryFile } = await import('./src/cli/memory.ts')
       try {
         // Body comes in via base64 to dodge shell-quoting hell on multi-line
         // markdown content (Tauri sidecar IPC passes args as a list, but
@@ -759,7 +759,7 @@ async function main() {
       return
     }
     case 'daemon-kill': {
-      const { killDaemonByPid, defaultKillDeps } = await import('./daemon-kill.ts')
+      const { killDaemonByPid, defaultKillDeps } = await import('./src/cli/daemon-kill.ts')
       const result = await killDaemonByPid(defaultKillDeps(), parsed.pid)
       if (parsed.json) console.log(JSON.stringify(result, null, 2))
       else console.log(result.killed ? `killed pid ${result.pid}` : `failed: ${result.message}`)
@@ -767,7 +767,7 @@ async function main() {
       return
     }
     case 'account-remove': {
-      const { removeAccount } = await import('./account-remove.ts')
+      const { removeAccount } = await import('./src/cli/account-remove.ts')
       try {
         const result = removeAccount({ stateDir: STATE_DIR }, parsed.botId)
         if (parsed.json) {
@@ -787,7 +787,7 @@ async function main() {
       return
     }
     case 'update': {
-      const { analyzeUpdate, applyUpdate, defaultUpdateDeps } = await import('./update.ts')
+      const { analyzeUpdate, applyUpdate, defaultUpdateDeps } = await import('./src/cli/update.ts')
       // Compiled-bundle short-circuit: when the binary is shipped inside a
       // desktop .app/.exe, there is no git repo nearby. Surface this with a
       // dedicated `not_a_git_repo` reason instead of bubbling up an empty-
@@ -880,7 +880,7 @@ async function main() {
       // daemon (sendReplyOnce reads state from disk), so recipient
       // resolution + session continuity are identical whether the
       // daemon is running or not.
-      const { sendReplyOnce, defaultTerminalChatId } = await import('./send-reply.ts')
+      const { sendReplyOnce, defaultTerminalChatId } = await import('./src/cli/send-reply.ts')
       const emitFailure = (error: string): void => {
         if (parsed.json) console.log(JSON.stringify({ ok: false, error }))
         else console.error(`reply failed: ${error}`)

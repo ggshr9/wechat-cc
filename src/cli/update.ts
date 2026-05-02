@@ -1,6 +1,6 @@
 import { buildServicePlan, isServiceInstalled, startService, stopService } from './service-manager'
-import { loadAgentConfig } from './agent-config'
-import { findOnPath } from './util'
+import { loadAgentConfig } from '../lib/agent-config'
+import { findOnPath } from '../lib/util'
 import { readDaemon } from './doctor'
 import { spawnSync } from 'node:child_process'
 

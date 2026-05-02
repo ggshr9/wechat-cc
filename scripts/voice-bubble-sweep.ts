@@ -18,7 +18,7 @@ import { homedir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { Buffer } from 'node:buffer'
 import { uploadToCdn, UPLOAD_MEDIA_TYPE, parseWavHeader } from '../src/daemon/media'
-import { ilinkSendMessage, botTextMessage, type MessageItem, type CDNMedia } from '../ilink'
+import { ilinkSendMessage, botTextMessage, type MessageItem, type CDNMedia } from '../src/lib/ilink'
 
 const STATE_DIR = join(homedir(), '.claude', 'channels', 'wechat')
 const TTS_URL = 'http://127.0.0.1:8765/v1/audio/speech'

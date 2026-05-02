@@ -6,8 +6,8 @@
  * otherwise don't interact with higher-level features (voice, companion),
  * so grouping them keeps the ilink-glue composer leaner.
  */
-import { ilinkSendTyping, ilinkGetConfig, ilinkGetUpdates } from '../../../ilink'
-import { log } from '../../../log'
+import { ilinkSendTyping, ilinkGetConfig, ilinkGetUpdates } from '../../lib/ilink'
+import { log } from '../../lib/log'
 import type { IlinkContext } from './context'
 
 export interface TransportMethods {

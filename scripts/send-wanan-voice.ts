@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { Buffer } from 'node:buffer'
 import { buildMediaItemFromFile } from '../src/daemon/media'
-import { ilinkSendMessage } from '../ilink'
+import { ilinkSendMessage } from '../src/lib/ilink'
 
 const VOXCPM_URL = 'http://127.0.0.1:8765/v1/audio/speech'
 const CHAT_ID = 'o9cq800sObd3lbrHBgiItB1pooDQ@im.wechat'

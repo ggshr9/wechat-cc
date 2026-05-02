@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { ILINK_APP_ID, ILINK_BASE_URL, ILINK_BOT_TYPE } from './config'
+import { ILINK_APP_ID, ILINK_BASE_URL, ILINK_BOT_TYPE } from '../lib/config'
 
 const ILINK_CLIENT_VERSION = '131335'
 const SETUP_QR_EXPIRES_MS = 480_000

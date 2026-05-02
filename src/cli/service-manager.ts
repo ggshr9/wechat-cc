@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, platform, userInfo } from 'node:os'
 import { dirname, join, posix } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { findOnPath } from './util'
+import { findOnPath } from '../lib/util'
 
 export type ServicePlatform = 'darwin' | 'win32' | 'linux'
 export type ServiceKind = 'launchagent' | 'scheduled-task' | 'systemd-user'

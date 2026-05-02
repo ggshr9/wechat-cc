@@ -7,8 +7,8 @@
 import { readFileSync } from 'node:fs'
 import { homedir, platform } from 'node:os'
 import { join } from 'node:path'
-import { ILINK_BASE_URL, LONG_POLL_TIMEOUT_MS } from './config'
-import { ilinkGet, persistConfirmedAccount, requestSetupQrCode } from './setup-flow'
+import { ILINK_BASE_URL, LONG_POLL_TIMEOUT_MS } from './src/lib/config'
+import { ilinkGet, persistConfirmedAccount, requestSetupQrCode } from './src/cli/setup-flow'
 
 const STATE_DIR = join(homedir(), '.claude', 'channels', 'wechat')
 

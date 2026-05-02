@@ -10,7 +10,7 @@ import { mkdirSync } from 'node:fs'
 import { makeStateStore, type StateStore } from '../state-store'
 import { makeSessionStateStore, type SessionStateStore } from '../session-state'
 import { PendingPermissions } from '../pending-permissions'
-import { unknownChatIdError } from '../../../send-reply'
+import { unknownChatIdError } from '../../cli/send-reply'
 
 export interface Account {
   id: string
