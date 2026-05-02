@@ -62,6 +62,20 @@ export interface BootstrapDeps {
   fallbackProject?: () => { alias: string; path: string } | null
   dangerouslySkipPermissions?: boolean
   agentProviderKind?: 'claude' | 'codex'
+  /**
+   * When provided, the standalone wechat-mcp stdio MCP server (RFC 03 §5)
+   * is registered with both providers as `wechat_ipc`. The MCP child
+   * process gets these env vars on spawn:
+   *    WECHAT_INTERNAL_API        = baseUrl
+   *    WECHAT_INTERNAL_TOKEN_FILE = tokenFilePath
+   * Without this field, providers run with only the legacy in-process
+   * `wechat` MCP — the stdio path is purely additive in P1.A. (P1.B
+   * migrates the in-process tools and removes the legacy server.)
+   */
+  internalApi?: {
+    baseUrl: string
+    tokenFilePath: string
+  }
 }
 
 export interface Bootstrap {
@@ -139,6 +153,27 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     deps.log('BOOT', `claude binary: ${claudeBin}`)
   }
 
+  // RFC 03 §5 — standalone wechat-mcp stdio server. When deps.internalApi is
+  // wired, both providers receive a `wechat_ipc` MCP server spec that spawns
+  // the wechat-mcp child with token-auth env vars. P1.A keeps the legacy
+  // in-process `wechat` server alive in parallel; P1.B migrates each tool
+  // and decommissions the legacy server.
+  function wechatStdioMcpSpec(): { command: string; args: string[]; env: Record<string, string> } | null {
+    if (!deps.internalApi) return null
+    const here = dirname(fileURLToPath(import.meta.url))
+    // src/daemon/bootstrap.ts → ../mcp-servers/wechat/main.ts
+    const mainPath = join(here, '..', 'mcp-servers', 'wechat', 'main.ts')
+    return {
+      command: process.execPath,  // bun or node — whichever is running the daemon
+      args: [mainPath],
+      env: {
+        WECHAT_INTERNAL_API: deps.internalApi.baseUrl,
+        WECHAT_INTERNAL_TOKEN_FILE: deps.internalApi.tokenFilePath,
+      },
+    }
+  }
+  const wechatStdio = wechatStdioMcpSpec()
+
   const sdkOptionsForProject = (_alias: string, path: string): Options => {
     const cstatus = deps.ilink.companion.status()
     // Companion v2 dropped per_project_persona — Claude self-adjusts tone from
@@ -146,7 +181,10 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     const systemPrompt = buildChannelSystemPrompt(cstatus.enabled, null)
     const common: Options = {
       cwd: path,
-      mcpServers: { wechat: mcp.config },
+      mcpServers: {
+        wechat: mcp.config,
+        ...(wechatStdio ? { wechat_ipc: { type: 'stdio' as const, ...wechatStdio } } : {}),
+      },
       // Using preset+append (instead of raw string) keeps MCP tools inline in
       // the system prompt — otherwise they're deferred behind ToolSearch,
       // which adds a round-trip every time Claude wants to call `reply`
@@ -211,6 +249,7 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
         // hangs; `never` is the only viable headless setting.
         approvalPolicy: 'never',
         sandboxMode: 'workspace-write',
+        ...(wechatStdio ? { mcpServers: { wechat_ipc: wechatStdio } } : {}),
       })
     : createClaudeAgentProvider({ sdkOptionsForProject })
 

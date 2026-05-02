@@ -10,6 +10,7 @@ if (!process.env.CLAUDE_CODE_ENTRYPOINT) {
 }
 import { acquireInstanceLock, releaseInstanceLock } from './single-instance'
 import { buildBootstrap } from './bootstrap'
+import { createInternalApi } from './internal-api'
 import { routeInbound } from '../core/message-router'
 import { loadAllAccounts, makeIlinkAdapter } from './ilink-glue'
 import { startLongPollLoops, parseUpdates, type RawUpdate } from './poll-loop'
@@ -53,6 +54,18 @@ async function main() {
 
   const ilink = makeIlinkAdapter({ stateDir: STATE_DIR, accounts })
   const launchCwd = process.cwd()
+
+  // RFC 03 §5 — start the daemon's internal HTTP API before bootstrap so
+  // the wechat-mcp stdio MCP servers we register with each provider can
+  // call back. Token-authed, loopback-only.
+  const internalApi = createInternalApi({
+    stateDir: STATE_DIR,
+    daemonPid: process.pid,
+    log: (tag, line) => log(tag, line),
+  })
+  const { port: internalApiPort, tokenFilePath: internalTokenFile } = await internalApi.start()
+  log('BOOT', `internal-api listening on 127.0.0.1:${internalApiPort} (token: ${internalTokenFile})`)
+
   const { sessionManager, sessionStore, resolve, formatInbound, sdkOptionsForProject } = buildBootstrap({
     stateDir: STATE_DIR,
     ilink,
@@ -61,6 +74,10 @@ async function main() {
     log: (tag, line) => log(tag, line),
     fallbackProject: () => ({ alias: '_default', path: launchCwd }),
     dangerouslySkipPermissions: DANGEROUSLY,
+    internalApi: {
+      baseUrl: `http://127.0.0.1:${internalApiPort}`,
+      tokenFilePath: internalTokenFile,
+    },
   })
 
   // Companion v2 scheduler — simple interval+jitter tick. When enabled +
@@ -395,6 +412,11 @@ async function main() {
     await sessionManager.shutdown()
     await sessionStore.flush()
     await ilink.flush()
+    // Stop internal-api LAST: any in-flight wechat-mcp tool call from a
+    // session being shut down still needs the HTTP server to be alive.
+    // Token file is kept on disk so a fast-restart daemon can be debugged
+    // (it's overwritten on next start anyway; see internal-api.ts).
+    await internalApi.stop()
     releaseInstanceLock(PID_PATH)
     process.exit(0)
   }

@@ -6,6 +6,7 @@
       "name": "claude-channel-wechat",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.2.116",
+        "@modelcontextprotocol/sdk": "^1.29.0",
         "@openai/codex": "0.128.0",
         "@openai/codex-sdk": "0.128.0",
         "marked": "^18.0.0",

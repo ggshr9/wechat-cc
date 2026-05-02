@@ -39,7 +39,14 @@ const REPLY_TOOL_NAMES = new Set([
 const WECHAT_MCP_SERVER = 'wechat'
 
 /** Test-time injection for the Codex constructor. */
-export type CodexFactory = (opts: { codexPathOverride?: string }) => Codex
+export type CodexFactory = (opts: ConstructorParameters<typeof Codex>[0]) => Codex
+
+/** stdio MCP server spec — same shape both Claude SDK + Codex CLI accept. */
+export interface CodexMcpStdioServer {
+  command: string
+  args?: string[]
+  env?: Record<string, string>
+}
 
 export interface CodexAgentProviderOptions {
   /** Optional override for the codex CLI binary path; SDK default is the @openai/codex npm dep. */
@@ -55,6 +62,18 @@ export interface CodexAgentProviderOptions {
    * safe default for a long-running headless daemon.
    */
   approvalPolicy?: 'never' | 'on-request' | 'on-failure' | 'untrusted'
+  /**
+   * stdio MCP servers to load via SDK config flattening (RFC 03 §5.2).
+   * Passed to `new Codex({ config: { mcp_servers: <this> } })`; the SDK
+   * serialises each entry as `--config mcp_servers.<name>.<key>=<toml>`,
+   * which the codex CLI parses into its TOML mcp_servers table on
+   * startup. Spike 1 verifies the round-trip end-to-end.
+   *
+   * Auth-agnostic per RFC 03 §3.6 / C7: we do NOT pass the user's
+   * apiKey via this channel either — env on the spawned MCP child
+   * process is supplied by the caller via the `env` field.
+   */
+  mcpServers?: Record<string, CodexMcpStdioServer>
   /** Test-only: inject a mock Codex factory. Production omits this. */
   codexFactory?: CodexFactory
 }
@@ -66,6 +85,14 @@ export function createCodexAgentProvider(opts: CodexAgentProviderOptions = {}): 
     async spawn(project: AgentProject, spawnOpts?: { resumeSessionId?: string }): Promise<AgentSession> {
       const codex = factory({
         ...(opts.codexPathOverride ? { codexPathOverride: opts.codexPathOverride } : {}),
+        // Cast through `unknown` because CodexConfigValue forbids undefined
+        // and our optional fields (args?, env?) carry that variance through
+        // the index signature even when always populated. SDK serialiser
+        // (flattenConfigOverrides at dist/index.js:297) skips undefined
+        // children so this is safe at runtime.
+        ...(opts.mcpServers
+          ? { config: { mcp_servers: opts.mcpServers as unknown as Record<string, never> } }
+          : {}),
       })
       const threadOptions = {
         workingDirectory: project.path,
