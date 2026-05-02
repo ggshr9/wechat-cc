@@ -64,9 +64,15 @@ export function parseAddressing(text: string): AddressedSegment[] {
 
 /**
  * Build the user-message envelope sent to a chatroom speaker session.
- * The envelope always includes the protocol explanation (because the
- * session's system prompt is mode-agnostic) plus the inner content
- * (either the original wechat-formatted user message, or a peer relay).
+ * Includes the protocol explanation because the session's system prompt
+ * is mode-agnostic. Inner content is either the original wechat-formatted
+ * user message or a peer relay.
+ *
+ * RFC 03 P5 review #8 — bandwidth optimisation. Round 1 gets the full
+ * protocol description (~250 chars); rounds 2+ get a one-liner
+ * recap (~80 chars) since the agent already saw the full version on
+ * round 1 of THIS loop's session and SDK history retains it. Cumulative
+ * cost across a max_rounds=4 loop drops from 4×full to 1×full + 3×brief.
  */
 export function wrapChatroomTurn(args: {
   speaker: ProviderId
@@ -81,16 +87,19 @@ export function wrapChatroomTurn(args: {
 }): string {
   const speakerName = args.speaker
   const peerName = args.peer
-  // Per-turn protocol reminder. Verbose but unambiguous; the agent sees
-  // it on every chatroom turn so context-window cost is multiplied —
-  // hold the description tight.
-  const protocol =
-`你在 chatroom 模式（RFC 03 §4.4）和 ${peerName} 协作回答用户消息。
+
+  // Round-1 message gets the full protocol; subsequent turns of THE SAME
+  // session see it in their conversation history. Round-2+ envelope
+  // skips the protocol body (just the round counter + sender header).
+  const isFirstRound = args.round === 1
+  const protocol = isFirstRound
+    ? `你在 chatroom 模式（RFC 03 §4.4）和 ${peerName} 协作回答用户消息。
 - 默认 / @user 前缀 → 给用户的回复（用户看见，带 [Display] 前缀）
 - @${peerName} 前缀 → 给 ${peerName} 的话（用户也看见，但视为内部讨论；${peerName} 下一轮会接到）
 - 觉得讨论充分了，直接 @user 给最终答复 — 自然终止
 - 当前第 ${args.round}/${args.maxRounds} 轮（max ${args.maxRounds}），耗尽后强制结束
 - chatroom 模式下不要调 reply 工具，直接文本输出（reply 工具会绕开协议直发用户）`
+    : `[chatroom round ${args.round}/${args.maxRounds} — 协议同上轮，简记: @user 给用户 / @${peerName} 给 ${peerName} / 不调 reply]`
 
   const senderHeader = args.sender === 'user'
     ? '[user originated]'

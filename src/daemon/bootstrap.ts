@@ -240,17 +240,50 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     return join(HOME, '.claude', 'projects', encoded, `${sessionId}.jsonl`)
   }
   function codexSessionJsonlPaths(threadId: string): string[] {
-    // Codex's session files are sharded by date (~/.codex/sessions/YYYY/MM/DD/<id>.jsonl).
-    // We don't know which date, so we glob via existsSync + a tiny manual walk.
-    // For a P0 cheap check we just look for the unsharded fallback (top-level file)
-    // and the dateless directory; if not found we return [] and skip-resume rather
-    // than do a deep scan. False-negative resume is recoverable; false-positive resume
-    // throws on the SDK side which is louder than we want.
+    // Codex's session files are sharded by date (~/.codex/sessions/YYYY/MM/DD/<thread_id>.jsonl).
+    // RFC 03 P5 review #9 — earlier P0 implementation only checked the
+    // unsharded path (`~/.codex/sessions/<id>.jsonl`) which never matches
+    // real Codex output → resume always silently failed. Now does a
+    // bounded depth-3 walk under ~/.codex/sessions for files matching
+    // `<threadId>.jsonl` or `<threadId>.json`.
     const root = join(HOME, '.codex', 'sessions')
-    return [
+    const candidates: string[] = [
+      // Unsharded fallback first (cheapest existsSync check).
       join(root, `${threadId}.jsonl`),
       join(root, `${threadId}.json`),
     ]
+    if (!existsSync(root)) return candidates
+    try {
+      // Walk: <root>/<YYYY>/<MM>/<DD>/<id>.{jsonl,json}
+      // Bounded by Codex's known sharding scheme (year/month/day) so we
+      // don't accidentally scan unbounded user dirs.
+      const { readdirSync, statSync } = require('node:fs') as typeof import('node:fs')
+      for (const year of safeReaddir(root, readdirSync)) {
+        const yearDir = join(root, year)
+        if (!isDir(yearDir, statSync)) continue
+        for (const month of safeReaddir(yearDir, readdirSync)) {
+          const monthDir = join(yearDir, month)
+          if (!isDir(monthDir, statSync)) continue
+          for (const day of safeReaddir(monthDir, readdirSync)) {
+            const dayDir = join(monthDir, day)
+            if (!isDir(dayDir, statSync)) continue
+            candidates.push(
+              join(dayDir, `${threadId}.jsonl`),
+              join(dayDir, `${threadId}.json`),
+            )
+          }
+        }
+      }
+    } catch {
+      // permissions / EIO — fall back to unsharded candidates only.
+    }
+    return candidates
+  }
+  function safeReaddir(p: string, readdirSync: typeof import('node:fs').readdirSync): string[] {
+    try { return readdirSync(p) } catch { return [] }
+  }
+  function isDir(p: string, statSync: typeof import('node:fs').statSync): boolean {
+    try { return statSync(p).isDirectory() } catch { return false }
   }
 
   const configuredAgent = loadAgentConfig(deps.stateDir)

@@ -124,11 +124,45 @@ describe('wrapChatroomTurn', () => {
     expect(env).toContain('@codex you should check line 42')
   })
 
-  it('discourages reply tool calls in the inline protocol', () => {
+  it('discourages reply tool calls in the inline protocol (round 1)', () => {
     const env = wrapChatroomTurn({
       speaker: 'claude', peer: 'codex', round: 1, maxRounds: 4,
       sender: 'user', inner: 'x',
     })
+    expect(env).toContain('不要调 reply')
+  })
+
+  it('round 2+ uses a brief recap, not the full protocol (RFC 03 review #8 — bandwidth)', () => {
+    const round1 = wrapChatroomTurn({
+      speaker: 'claude', peer: 'codex', round: 1, maxRounds: 4,
+      sender: 'user', inner: 'x',
+    })
+    const round2 = wrapChatroomTurn({
+      speaker: 'codex', peer: 'claude', round: 2, maxRounds: 4,
+      sender: 'claude', inner: '@codex y',
+    })
+    // Round 2 envelope is meaningfully shorter than round 1 — protocol
+    // section is replaced by a one-liner recap. Asserting the *delta*
+    // rather than absolute sizes (which depend on inner content + envelope
+    // boilerplate). Round 1 carries ~250+ chars of protocol; round 2's
+    // brief recap is ~80 chars; net saving > 100 chars per turn.
+    expect(round1.length - round2.length).toBeGreaterThan(100)
+    expect(round2.length).toBeLessThan(round1.length)
+    // Brief recap still mentions the addressing convention so the agent
+    // doesn't forget mid-loop.
+    expect(round2).toContain('@user')
+    expect(round2).toContain('@claude')
+    expect(round2).toContain('round 2/4')
+    // Round 1's verbose explanation is GONE.
+    expect(round2).not.toContain('协作回答用户消息')
+  })
+
+  it('round 1 of subsequent loops (new dispatch) regets the full protocol', () => {
+    const env = wrapChatroomTurn({
+      speaker: 'codex', peer: 'claude', round: 1, maxRounds: 4,
+      sender: 'user', inner: 'second user msg',
+    })
+    expect(env).toContain('协作回答用户消息')   // full version
     expect(env).toContain('不要调 reply')
   })
 })
