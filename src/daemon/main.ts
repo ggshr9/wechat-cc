@@ -9,6 +9,7 @@ if (!process.env.CLAUDE_CODE_ENTRYPOINT) {
   process.env.CLAUDE_CODE_ENTRYPOINT = 'sdk-ts'
 }
 import { acquireInstanceLock, releaseInstanceLock } from './single-instance'
+import { openDb } from '../lib/db'
 import { buildBootstrap } from './bootstrap'
 import { createInternalApi } from './internal-api'
 import { makeMemoryFS } from './memory/fs-api'
@@ -55,7 +56,12 @@ async function main() {
     process.exit(1)
   }
 
-  const ilink = makeIlinkAdapter({ stateDir: STATE_DIR, accounts })
+  // Single SQLite connection for all daemon-owned state stores. Lives at
+  // ~/.claude/channels/wechat/wechat-cc.db. Per-store JSON/JSONL files are
+  // migrated into this db on first boot post-PR7 (each store knows its own
+  // legacy path; old files renamed to .migrated).
+  const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+  const ilink = makeIlinkAdapter({ stateDir: STATE_DIR, accounts, db })
   const launchCwd = process.cwd()
 
   // MemoryFS is shared with the internal-api's memory_* HTTP routes AND
@@ -488,6 +494,7 @@ async function main() {
     // Token file is kept on disk so a fast-restart daemon can be debugged
     // (it's overwritten on next start anyway; see internal-api.ts).
     await internalApi.stop()
+    db.close()
     releaseInstanceLock(PID_PATH)
     process.exit(0)
   }

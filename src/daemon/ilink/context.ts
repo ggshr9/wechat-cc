@@ -11,6 +11,7 @@ import { makeStateStore, type StateStore } from '../state-store'
 import { makeSessionStateStore, type SessionStateStore } from '../session-state'
 import { PendingPermissions } from '../pending-permissions'
 import { unknownChatIdError } from '../../lib/send-reply'
+import type { Db } from '../../lib/db'
 
 export interface Account {
   id: string
@@ -58,14 +59,14 @@ export interface IlinkContext {
   assertChatRoutable(chatId: string): void
 }
 
-export function makeIlinkContext(opts: { stateDir: string; accounts: Account[] }): IlinkContext {
-  const { stateDir, accounts } = opts
+export function makeIlinkContext(opts: { stateDir: string; accounts: Account[]; db: Db }): IlinkContext {
+  const { stateDir, accounts, db } = opts
   mkdirSync(stateDir, { recursive: true })
 
   const ctxStore = makeStateStore(join(stateDir, 'context_tokens.json'), { debounceMs: 500 })
   const nameStore = makeStateStore(join(stateDir, 'user_names.json'), { debounceMs: 500 })
   const acctStore = makeStateStore(join(stateDir, 'user_account_ids.json'), { debounceMs: 500 })
-  const sessionState = makeSessionStateStore(join(stateDir, 'session-state.json'), { debounceMs: 500 })
+  const sessionState = makeSessionStateStore(db, { migrateFromFile: join(stateDir, 'session-state.json') })
 
   const pending = new PendingPermissions()
   const sweepTimer = setInterval(() => { pending.sweep() }, 30_000)

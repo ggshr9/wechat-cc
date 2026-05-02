@@ -1,0 +1,86 @@
+/**
+ * SQLite connection + schema migration for the daemon's state stores.
+ *
+ * Single ~/.claude/channels/wechat/wechat-cc.db file owned by the daemon
+ * process. Each table that used to live as a JSON/JSONL file under the
+ * channel state dir is migrated here one-at-a-time across PR7 commits.
+ *
+ * Schema versioning: PRAGMA user_version. Each `migrations` entry below
+ * advances the version by one and creates / alters the table for that
+ * step. openDb() applies any missing migrations in order.
+ *
+ * Concurrency posture:
+ *   - WAL journal mode → daemon is the single writer; dashboard / CLI
+ *     read-only queries can run concurrently without blocking writes.
+ *   - foreign_keys = ON for safety even though we don't currently model
+ *     cross-table refs; cheap pragma, lets future schema use FKs.
+ *
+ * No ORM — call sites use db.prepare() / .query() with prepared
+ * statements. bun:sqlite is API-compatible enough with better-sqlite3
+ * that swapping later (if Bun ever drops the builtin) would be local.
+ */
+import { Database } from 'bun:sqlite'
+import { existsSync, mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
+
+export type Db = Database
+
+/**
+ * Each migration runs once, in order, when its index is greater than the
+ * file's PRAGMA user_version. After it runs we set user_version = index+1.
+ * NEVER reorder; NEVER edit a published migration in place — append a new
+ * one. Doing otherwise will corrupt every existing user's database.
+ */
+type Migration = (db: Database) => void
+
+const migrations: Migration[] = [
+  // v1 — session_state. PR7 commit 1.
+  (db) => {
+    db.exec(`
+      CREATE TABLE session_state (
+        bot_id TEXT PRIMARY KEY NOT NULL,
+        first_seen_expired_at TEXT NOT NULL,
+        last_reason TEXT
+      ) STRICT;
+    `)
+  },
+]
+
+export interface OpenDbOpts {
+  /**
+   * Filesystem path to the SQLite file. Use `:memory:` for tests. Parent
+   * directory is created (recursively, mode 0700) if it doesn't exist.
+   */
+  path: string
+}
+
+export function openDb(opts: OpenDbOpts): Database {
+  if (opts.path !== ':memory:') {
+    const dir = dirname(opts.path)
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 })
+  }
+  const db = new Database(opts.path, { create: true })
+  db.exec('PRAGMA journal_mode = WAL;')
+  db.exec('PRAGMA foreign_keys = ON;')
+  applyMigrations(db)
+  return db
+}
+
+function applyMigrations(db: Database): void {
+  const row = db.query('PRAGMA user_version').get() as { user_version: number } | null
+  const current = row?.user_version ?? 0
+  for (let i = current; i < migrations.length; i++) {
+    const next = migrations[i]!
+    db.transaction(() => {
+      next(db)
+      // PRAGMA user_version doesn't accept bound params; safe — value is
+      // a literal integer index from our own array, not user input.
+      db.exec(`PRAGMA user_version = ${i + 1};`)
+    })()
+  }
+}
+
+/** Test helper — opens a fresh in-memory db with all migrations applied. */
+export function openTestDb(): Database {
+  return openDb({ path: ':memory:' })
+}
