@@ -25,7 +25,7 @@ describe('parseCliArgs', () => {
   // Their parser-only behavior is covered by the `citty migrated commands`
   // describe block below; legacy parseCliArgs tests for them would fall
   // through to `{ cmd: 'help' }` and weren't testing the real entrypoint.
-  it('recognizes service/provider/help', () => {
+  it('recognizes service / help (provider moved to citty in batch 3a)', () => {
     expect(parseCliArgs(['service', 'status', '--json'])).toEqual({ cmd: 'service', action: 'status', json: true, unattended: undefined, autoStart: undefined })
     expect(parseCliArgs(['service', 'install', '--json'])).toEqual({ cmd: 'service', action: 'install', json: true, unattended: undefined, autoStart: undefined })
     expect(parseCliArgs(['service', 'start'])).toEqual({ cmd: 'service', action: 'start', json: false, unattended: undefined, autoStart: undefined })
@@ -35,12 +35,6 @@ describe('parseCliArgs', () => {
       .toMatchObject({ cmd: 'service', action: 'install', unattended: true, autoStart: true })
     expect(parseCliArgs(['service', 'install', '--auto-start', 'false']))
       .toMatchObject({ cmd: 'service', action: 'install', autoStart: false })
-    expect(parseCliArgs(['provider', 'set', 'codex', '--model', 'gpt-5.3-codex'])).toEqual({
-      cmd: 'provider-set',
-      provider: 'codex',
-      model: 'gpt-5.3-codex',
-    })
-    expect(parseCliArgs(['provider', 'show', '--json'])).toEqual({ cmd: 'provider-show', json: true })
     expect(parseCliArgs(['--help']).cmd).toBe('help')
     expect(parseCliArgs(['-h']).cmd).toBe('help')
     expect(parseCliArgs([]).cmd).toBe('help')
@@ -147,61 +141,9 @@ describe('parseCliArgs', () => {
   })
 })
 
-describe('sessions list-projects', () => {
-  it('parses --json', () => {
-    expect(parseCliArgs(['sessions', 'list-projects', '--json'])).toEqual({
-      cmd: 'sessions-list-projects', json: true,
-    })
-  })
-})
-
-describe('sessions read-jsonl', () => {
-  it('parses alias', () => {
-    expect(parseCliArgs(['sessions', 'read-jsonl', 'compass', '--json'])).toEqual({
-      cmd: 'sessions-read-jsonl', alias: 'compass', json: true,
-    })
-  })
-  it('parses --out-file path', () => {
-    // The desktop sidecar uses this to dump 8 MB+ JSON to disk instead of
-    // stdout — bun --compile binaries lose bytes on MB-sized pipe writes.
-    expect(parseCliArgs(['sessions', 'read-jsonl', 'compass', '--json', '--out-file', '/tmp/x.json'])).toEqual({
-      cmd: 'sessions-read-jsonl', alias: 'compass', json: true, outFile: '/tmp/x.json',
-    })
-  })
-})
-
-describe('sessions delete', () => {
-  it('parses alias', () => {
-    expect(parseCliArgs(['sessions', 'delete', 'compass', '--json'])).toEqual({
-      cmd: 'sessions-delete', alias: 'compass', json: true,
-    })
-  })
-})
-
-describe('sessions search', () => {
-  it('parses query with optional --limit', () => {
-    expect(parseCliArgs(['sessions', 'search', 'ilink', '--json', '--limit', '20'])).toEqual({
-      cmd: 'sessions-search', query: 'ilink', json: true, limit: 20,
-    })
-  })
-  it('limit defaults to 50', () => {
-    expect(parseCliArgs(['sessions', 'search', 'foo'])).toMatchObject({
-      cmd: 'sessions-search', query: 'foo', limit: 50,
-    })
-  })
-})
-
-describe('guard', () => {
-  it('parses status / enable / disable', () => {
-    expect(parseCliArgs(['guard', 'status', '--json'])).toEqual({ cmd: 'guard-status', json: true })
-    expect(parseCliArgs(['guard', 'enable'])).toEqual({ cmd: 'guard-enable', json: false })
-    expect(parseCliArgs(['guard', 'disable', '--json'])).toEqual({ cmd: 'guard-disable', json: true })
-  })
-  it('falls back to help on unknown subcommand', () => {
-    expect(parseCliArgs(['guard', 'who-knows'])).toEqual({ cmd: 'help' })
-    expect(parseCliArgs(['guard'])).toEqual({ cmd: 'help' })
-  })
-})
+// sessions / avatar / guard / provider parseCliArgs tests removed in PR4
+// batch 3a — these namespaces are now citty-routed; see the
+// `citty migrated commands` block below for the new test surface.
 
 describe('demo seed/unseed', () => {
   it('parses seed with --chat-id', () => {
@@ -262,17 +204,21 @@ describe('citty migrated commands', () => {
     return captured
   }
 
-  it('exposes the migrated subcommands (batch 1 + batch 2)', () => {
+  it('exposes the migrated subcommands (batch 1 + batch 2 + batch 3a)', () => {
     const subs = cittyRoot.subCommands as Record<string, unknown>
     expect(Object.keys(subs).sort()).toEqual([
+      'avatar',
       'conversations',
       'doctor',
       'events',
+      'guard',
       'install',
       'list',
       'logs',
       'milestones',
       'observations',
+      'provider',
+      'sessions',
       'setup-status',
       'status',
     ])
@@ -361,5 +307,93 @@ describe('citty migrated commands', () => {
     const r = await runWithStub(['logs'], 'logs')
     expect(r?.args.tail).toBeFalsy()
     expect(r?.args.json).toBeFalsy()
+  })
+
+  // ── PR4 batch 3a — sessions / avatar / guard / provider ─────────────
+
+  it('sessions list-projects parses --json + --out-file', async () => {
+    const r = await runWithNestedStub(
+      ['sessions', 'list-projects', '--json', '--out-file', '/tmp/x.json'],
+      ['sessions', 'list-projects'],
+    )
+    expect(r?.args.json).toBe(true)
+    expect(r?.args['out-file']).toBe('/tmp/x.json')
+  })
+
+  it('sessions read-jsonl parses alias positional + --out-file', async () => {
+    const r = await runWithNestedStub(
+      ['sessions', 'read-jsonl', 'compass', '--json', '--out-file', '/tmp/x.json'],
+      ['sessions', 'read-jsonl'],
+    )
+    expect(r?.args.alias).toBe('compass')
+    expect(r?.args.json).toBe(true)
+    expect(r?.args['out-file']).toBe('/tmp/x.json')
+  })
+
+  it('sessions delete parses alias positional', async () => {
+    const r = await runWithNestedStub(
+      ['sessions', 'delete', 'compass', '--json'],
+      ['sessions', 'delete'],
+    )
+    expect(r?.args.alias).toBe('compass')
+    expect(r?.args.json).toBe(true)
+  })
+
+  it('sessions search parses query + --limit', async () => {
+    const r = await runWithNestedStub(
+      ['sessions', 'search', 'ilink', '--limit', '20', '--json'],
+      ['sessions', 'search'],
+    )
+    expect(r?.args.query).toBe('ilink')
+    expect(r?.args.limit).toBe('20')
+    expect(r?.args.json).toBe(true)
+  })
+
+  it('avatar info parses key positional', async () => {
+    const r = await runWithNestedStub(
+      ['avatar', 'info', 'chat_x', '--json'],
+      ['avatar', 'info'],
+    )
+    expect(r?.args.key).toBe('chat_x')
+    expect(r?.args.json).toBe(true)
+  })
+
+  it('avatar set parses key + required --base64', async () => {
+    const r = await runWithNestedStub(
+      ['avatar', 'set', 'chat_x', '--base64', 'eA=='],
+      ['avatar', 'set'],
+    )
+    expect(r?.args.key).toBe('chat_x')
+    expect(r?.args.base64).toBe('eA==')
+  })
+
+  it('avatar remove parses key positional', async () => {
+    const r = await runWithNestedStub(
+      ['avatar', 'remove', 'chat_x', '--json'],
+      ['avatar', 'remove'],
+    )
+    expect(r?.args.key).toBe('chat_x')
+    expect(r?.args.json).toBe(true)
+  })
+
+  it('guard status / enable / disable parse with --json', async () => {
+    expect(await runWithNestedStub(['guard', 'status', '--json'], ['guard', 'status'])).not.toBeNull()
+    expect(await runWithNestedStub(['guard', 'enable'], ['guard', 'enable'])).not.toBeNull()
+    expect(await runWithNestedStub(['guard', 'disable', '--json'], ['guard', 'disable'])).not.toBeNull()
+  })
+
+  it('provider show parses --json', async () => {
+    const r = await runWithNestedStub(['provider', 'show', '--json'], ['provider', 'show'])
+    expect(r?.args.json).toBe(true)
+  })
+
+  it('provider set parses positional + --model + tri-state --unattended', async () => {
+    const r = await runWithNestedStub(
+      ['provider', 'set', 'codex', '--model', 'gpt-5.3-codex', '--unattended', 'true'],
+      ['provider', 'set'],
+    )
+    expect(r?.args.provider).toBe('codex')
+    expect(r?.args.model).toBe('gpt-5.3-codex')
+    expect(r?.args.unattended).toBe('true')  // string, parsed to bool inside the run handler
   })
 })
