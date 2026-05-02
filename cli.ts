@@ -30,7 +30,8 @@ function emitJson(data: unknown, outFile: string | undefined): void {
 }
 
 // CliArgs only covers commands NOT yet migrated to citty (see `cittyRoot` below).
-// Migrated subcommands (status / list / install / doctor / setup-status) are
+// Migrated subcommands (status / list / install / doctor / setup-status, plus
+// PR4 batch 2: events / observations / milestones / conversations / logs) are
 // dispatched in `main()` directly to citty before reaching parseCliArgs, so
 // keeping them in this union would be dead code.
 export type CliArgs =
@@ -45,16 +46,10 @@ export type CliArgs =
   | { cmd: 'memory-list'; json: boolean }
   | { cmd: 'memory-read'; userId: string; path: string; json: boolean }
   | { cmd: 'memory-write'; userId: string; path: string; bodyBase64: string; json: boolean }
-  | { cmd: 'events-list'; chatId: string; json: boolean; limit: number }
-  | { cmd: 'observations-list'; chatId: string; json: boolean; includeArchived: boolean }
-  | { cmd: 'observations-archive'; chatId: string; obsId: string; json: boolean }
-  | { cmd: 'milestones-list'; chatId: string; json: boolean }
   | { cmd: 'sessions-list-projects'; json: boolean; outFile?: string }
   | { cmd: 'sessions-read-jsonl'; alias: string; json: boolean; outFile?: string }
   | { cmd: 'sessions-delete'; alias: string; json: boolean }
   | { cmd: 'sessions-search'; query: string; json: boolean; limit: number; outFile?: string }
-  | { cmd: 'conversations-list'; json: boolean }
-  | { cmd: 'logs'; tail: number; json: boolean }
   | { cmd: 'reply'; chatId?: string; text?: string; json: boolean }
   | { cmd: 'update'; check: boolean; json: boolean }
   | { cmd: 'demo-seed'; chatId: string | null; json: boolean }
@@ -130,29 +125,9 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
       }
       return { cmd: 'help' }
     }
-    case 'events': {
-      if (rest[0] === 'list' && rest[1]) {
-        const limitIdx = rest.indexOf('--limit')
-        const limit = limitIdx >= 0 ? Number.parseInt(rest[limitIdx + 1] ?? '', 10) : 50
-        return { cmd: 'events-list', chatId: rest[1], json: rest.includes('--json'), limit: Number.isFinite(limit) ? limit : 50 }
-      }
-      return { cmd: 'help' }
-    }
-    case 'observations': {
-      if (rest[0] === 'list' && rest[1]) {
-        return { cmd: 'observations-list', chatId: rest[1], json: rest.includes('--json'), includeArchived: rest.includes('--include-archived') }
-      }
-      if (rest[0] === 'archive' && rest[1] && rest[2]) {
-        return { cmd: 'observations-archive', chatId: rest[1], obsId: rest[2], json: rest.includes('--json') }
-      }
-      return { cmd: 'help' }
-    }
-    case 'milestones': {
-      if (rest[0] === 'list' && rest[1]) {
-        return { cmd: 'milestones-list', chatId: rest[1], json: rest.includes('--json') }
-      }
-      return { cmd: 'help' }
-    }
+    // events / observations / milestones / conversations / logs — migrated
+    // to citty in PR4 batch 2 (see SUBCOMMANDS map below). MIGRATED_COMMANDS
+    // routes them before parseCliArgs runs, so these cases are dead.
     case 'avatar': {
       if (rest[0] === 'info' && rest[1]) {
         return { cmd: 'avatar-info', key: rest[1], json: rest.includes('--json') }
@@ -183,12 +158,6 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
         const limitIdx = rest.indexOf('--limit')
         const limit = limitIdx >= 0 ? Number.parseInt(rest[limitIdx + 1] ?? '', 10) : 50
         return { cmd: 'sessions-search', query: rest[1], json: rest.includes('--json'), limit: Number.isFinite(limit) ? limit : 50, outFile }
-      }
-      return { cmd: 'help' }
-    }
-    case 'conversations': {
-      if (rest[0] === 'list') {
-        return { cmd: 'conversations-list', json: rest.includes('--json') }
       }
       return { cmd: 'help' }
     }
@@ -226,15 +195,6 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
         return { cmd: rest[0] === 'seed' ? 'demo-seed' : 'demo-unseed', chatId, json: rest.includes('--json') }
       }
       return { cmd: 'help' }
-    }
-    case 'logs': {
-      const idx = rest.indexOf('--tail')
-      const tail = idx >= 0 ? Number.parseInt(rest[idx + 1] ?? '', 10) : 50
-      return {
-        cmd: 'logs',
-        tail: Number.isFinite(tail) ? tail : 50,
-        json: rest.includes('--json'),
-      }
     }
     case 'reply': {
       // wechat-cc reply [--to <chat_id>] [text]
@@ -433,6 +393,172 @@ const setupStatusCmd = defineCommand({
   },
 })
 
+// ── PR4 batch 2 — read-only inspection commands ─────────────────────
+//
+// Same defineCommand pattern as batch 1 (status / list / etc.) but with
+// nested subCommands for namespaces that have multiple verbs
+// (`events list`, `observations list|archive`, etc.). Citty's `--help`
+// auto-generates per-level usage so users get correct help on either
+// `wechat-cc events --help` or `wechat-cc events list --help`.
+//
+// Each leaf does the same work the legacy switch did — preserved
+// verbatim so behavior diff is zero. Only argv parsing moves.
+
+const eventsListCmd = defineCommand({
+  meta: { name: 'list', description: 'Tail Companion decisions log (push/skip/observation/milestone)' },
+  args: {
+    chatId: { type: 'positional', required: true, description: 'WeChat chat id', valueHint: 'chat-id' },
+    limit: { type: 'string', description: 'Max events to return (default 50)' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    const limitNum = args.limit ? Number.parseInt(args.limit, 10) : 50
+    const limit = Number.isFinite(limitNum) ? limitNum : 50
+    const { makeEventsStore } = await import('./src/daemon/events/store')
+    const { openDb } = await import('./src/lib/db')
+    const memoryRoot = join(STATE_DIR, 'memory')
+    const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+    const store = makeEventsStore(db, args.chatId, {
+      migrateFromFile: join(memoryRoot, args.chatId, 'events.jsonl'),
+    })
+    const list = await store.list({ limit })
+    console.log(args.json ? JSON.stringify({ ok: true, events: list }, null, 2) : list.map(e => `${e.ts} ${e.kind} ${e.trigger}`).join('\n'))
+  },
+})
+
+const eventsCmd = defineCommand({
+  meta: { name: 'events', description: 'Companion decisions log' },
+  subCommands: { list: eventsListCmd },
+})
+
+const observationsListCmd = defineCommand({
+  meta: { name: 'list', description: 'List observations (active by default; --include-archived for the archive)' },
+  args: {
+    chatId: { type: 'positional', required: true, description: 'WeChat chat id', valueHint: 'chat-id' },
+    'include-archived': { type: 'boolean', description: 'Show archived items instead of active' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    const includeArchived = Boolean(args['include-archived'])
+    const { makeObservationsStore } = await import('./src/daemon/observations/store')
+    const { openDb } = await import('./src/lib/db')
+    const memoryRoot = join(STATE_DIR, 'memory')
+    const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+    const store = makeObservationsStore(db, args.chatId, {
+      migrateFromFile: join(memoryRoot, args.chatId, 'observations.jsonl'),
+    })
+    const list = includeArchived ? await store.listArchived() : await store.listActive()
+    console.log(args.json ? JSON.stringify({ ok: true, observations: list }, null, 2) : list.map(o => `${o.ts} ${o.body}`).join('\n'))
+  },
+})
+
+const observationsArchiveCmd = defineCommand({
+  meta: { name: 'archive', description: 'Mark an observation archived (user "ignore")' },
+  args: {
+    chatId: { type: 'positional', required: true, description: 'WeChat chat id', valueHint: 'chat-id' },
+    obsId: { type: 'positional', required: true, description: 'Observation id (obs_…)', valueHint: 'obs-id' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    const { makeObservationsStore } = await import('./src/daemon/observations/store')
+    const { openDb } = await import('./src/lib/db')
+    const memoryRoot = join(STATE_DIR, 'memory')
+    const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+    const store = makeObservationsStore(db, args.chatId, {
+      migrateFromFile: join(memoryRoot, args.chatId, 'observations.jsonl'),
+    })
+    await store.archive(args.obsId)
+    console.log(args.json ? JSON.stringify({ ok: true, archived: args.obsId }, null, 2) : `archived ${args.obsId}`)
+  },
+})
+
+const observationsCmd = defineCommand({
+  meta: { name: 'observations', description: 'Companion observations (per chat)' },
+  subCommands: {
+    list: observationsListCmd,
+    archive: observationsArchiveCmd,
+  },
+})
+
+const milestonesListCmd = defineCommand({
+  meta: { name: 'list', description: 'Per-chat milestones (id-deduped)' },
+  args: {
+    chatId: { type: 'positional', required: true, description: 'WeChat chat id', valueHint: 'chat-id' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    const { makeMilestonesStore } = await import('./src/daemon/milestones/store')
+    const { openDb } = await import('./src/lib/db')
+    const memoryRoot = join(STATE_DIR, 'memory')
+    const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+    const store = makeMilestonesStore(db, args.chatId, {
+      migrateFromFile: join(memoryRoot, args.chatId, 'milestones.jsonl'),
+    })
+    const list = await store.list()
+    console.log(args.json ? JSON.stringify({ ok: true, milestones: list }, null, 2) : list.map(m => `${m.ts} ${m.body}`).join('\n'))
+  },
+})
+
+const milestonesCmd = defineCommand({
+  meta: { name: 'milestones', description: 'Per-chat milestone fires' },
+  subCommands: { list: milestonesListCmd },
+})
+
+const conversationsListCmd = defineCommand({
+  meta: { name: 'list', description: 'Read-only snapshot of conversations + user_names' },
+  args: {
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    // Read-only snapshot of conversations + user_names.json. Used by
+    // the desktop dashboard (P5.2) to display per-chat mode badges. Falls
+    // back to chat_id as user_name when no name has been captured yet.
+    const { makeConversationStore } = await import('./src/core/conversation-store')
+    const { makeStateStore } = await import('./src/daemon/state-store')
+    const { openDb } = await import('./src/lib/db')
+    const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+    const store = makeConversationStore(db, { migrateFromFile: join(STATE_DIR, 'conversations.json') })
+    const names = makeStateStore(join(STATE_DIR, 'user_names.json'), { debounceMs: 0 })
+    const conversations = Object.entries(store.all()).map(([chat_id, rec]) => ({
+      chat_id,
+      user_name: names.get(chat_id) ?? null,
+      mode: rec.mode,
+    }))
+    if (args.json) console.log(JSON.stringify({ ok: true, conversations }, null, 2))
+    else console.log(conversations.map(c => `${c.chat_id} ${c.user_name ?? ''} ${c.mode.kind}`).join('\n'))
+  },
+})
+
+const conversationsCmd = defineCommand({
+  meta: { name: 'conversations', description: 'Per-chat conversation modes (RFC 03)' },
+  subCommands: { list: conversationsListCmd },
+})
+
+const logsCmd = defineCommand({
+  meta: { name: 'logs', description: "Tail the daemon's channel.log (default --tail 50)" },
+  args: {
+    tail: { type: 'string', description: 'Number of trailing entries (default 50)' },
+    json: { type: 'boolean', description: 'JSON envelope (parsed entries)' },
+  },
+  async run({ args }) {
+    const tailNum = args.tail ? Number.parseInt(args.tail, 10) : 50
+    const tail = Number.isFinite(tailNum) ? tailNum : 50
+    const { tailLog } = await import('./src/cli/logs.ts')
+    const result = tailLog(STATE_DIR, tail)
+    if (args.json) {
+      console.log(JSON.stringify(result, null, 2))
+      return
+    }
+    if (!result.ok) {
+      console.error(`logs read failed: ${result.error}`)
+      process.exit(1)
+    }
+    // Plain-text form for terminal users — match the file's original layout
+    // so `wechat-cc logs --tail 30` looks like a `tail -n 30 channel.log`.
+    for (const e of result.entries) console.log(e.raw)
+  },
+})
+
 // Subcommands literal first → both `cittyRoot.subCommands` and
 // `MIGRATED_COMMANDS` derive from this single source of truth. Adding a new
 // citty subcommand only requires touching this object — the dispatch set
@@ -445,6 +571,12 @@ const SUBCOMMANDS = {
   install: installCmd,
   doctor: doctorCmd,
   'setup-status': setupStatusCmd,
+  // PR4 batch 2 — read-only inspection commands.
+  events: eventsCmd,
+  observations: observationsCmd,
+  milestones: milestonesCmd,
+  conversations: conversationsCmd,
+  logs: logsCmd,
 } as const
 
 export const cittyRoot = defineCommand({
@@ -592,22 +724,6 @@ async function main() {
       }
       return
     }
-    case 'logs': {
-      const { tailLog } = await import('./src/cli/logs.ts')
-      const result = tailLog(STATE_DIR, parsed.tail)
-      if (parsed.json) {
-        console.log(JSON.stringify(result, null, 2))
-        return
-      }
-      if (!result.ok) {
-        console.error(`logs read failed: ${result.error}`)
-        process.exit(1)
-      }
-      // Plain-text form for terminal users — match the file's original layout
-      // so `wechat-cc logs --tail 30` looks like a `tail -n 30 channel.log`.
-      for (const e of result.entries) console.log(e.raw)
-      return
-    }
     case 'memory-write': {
       const { writeMemoryFile } = await import('./src/cli/memory.ts')
       try {
@@ -629,54 +745,6 @@ async function main() {
         console.error(`memory write failed: ${msg}`)
         process.exit(1)
       }
-      return
-    }
-    case 'events-list': {
-      const { makeEventsStore } = await import('./src/daemon/events/store')
-      const { openDb } = await import('./src/lib/db')
-      const memoryRoot = join(STATE_DIR, 'memory')
-      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
-      const store = makeEventsStore(db, parsed.chatId, {
-        migrateFromFile: join(memoryRoot, parsed.chatId, 'events.jsonl'),
-      })
-      const list = await store.list({ limit: parsed.limit })
-      console.log(parsed.json ? JSON.stringify({ ok: true, events: list }, null, 2) : list.map(e => `${e.ts} ${e.kind} ${e.trigger}`).join('\n'))
-      return
-    }
-    case 'observations-list': {
-      const { makeObservationsStore } = await import('./src/daemon/observations/store')
-      const { openDb } = await import('./src/lib/db')
-      const memoryRoot = join(STATE_DIR, 'memory')
-      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
-      const store = makeObservationsStore(db, parsed.chatId, {
-        migrateFromFile: join(memoryRoot, parsed.chatId, 'observations.jsonl'),
-      })
-      const list = parsed.includeArchived ? await store.listArchived() : await store.listActive()
-      console.log(parsed.json ? JSON.stringify({ ok: true, observations: list }, null, 2) : list.map(o => `${o.ts} ${o.body}`).join('\n'))
-      return
-    }
-    case 'observations-archive': {
-      const { makeObservationsStore } = await import('./src/daemon/observations/store')
-      const { openDb } = await import('./src/lib/db')
-      const memoryRoot = join(STATE_DIR, 'memory')
-      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
-      const store = makeObservationsStore(db, parsed.chatId, {
-        migrateFromFile: join(memoryRoot, parsed.chatId, 'observations.jsonl'),
-      })
-      await store.archive(parsed.obsId)
-      console.log(parsed.json ? JSON.stringify({ ok: true, archived: parsed.obsId }, null, 2) : `archived ${parsed.obsId}`)
-      return
-    }
-    case 'milestones-list': {
-      const { makeMilestonesStore } = await import('./src/daemon/milestones/store')
-      const { openDb } = await import('./src/lib/db')
-      const memoryRoot = join(STATE_DIR, 'memory')
-      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
-      const store = makeMilestonesStore(db, parsed.chatId, {
-        migrateFromFile: join(memoryRoot, parsed.chatId, 'milestones.jsonl'),
-      })
-      const list = await store.list()
-      console.log(parsed.json ? JSON.stringify({ ok: true, milestones: list }, null, 2) : list.map(m => `${m.ts} ${m.body}`).join('\n'))
       return
     }
     case 'sessions-list-projects': {
@@ -772,25 +840,6 @@ async function main() {
       const hits = await searchAcrossSessions(parsed.query, { limit: parsed.limit, stateDir: STATE_DIR, db })
       if (parsed.json) emitJson({ ok: true, query: parsed.query, hits }, parsed.outFile)
       else console.log(hits.map(h => `${h.alias} · ${h.snippet}`).join('\n'))
-      return
-    }
-    case 'conversations-list': {
-      // Read-only snapshot of conversations + user_names.json. Used by
-      // the desktop dashboard (P5.2) to display per-chat mode badges. Falls
-      // back to chat_id as user_name when no name has been captured yet.
-      const { makeConversationStore } = await import('./src/core/conversation-store')
-      const { makeStateStore } = await import('./src/daemon/state-store')
-      const { openDb } = await import('./src/lib/db')
-      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
-      const store = makeConversationStore(db, { migrateFromFile: join(STATE_DIR, 'conversations.json') })
-      const names = makeStateStore(join(STATE_DIR, 'user_names.json'), { debounceMs: 0 })
-      const conversations = Object.entries(store.all()).map(([chat_id, rec]) => ({
-        chat_id,
-        user_name: names.get(chat_id) ?? null,
-        mode: rec.mode,
-      }))
-      if (parsed.json) console.log(JSON.stringify({ ok: true, conversations }, null, 2))
-      else console.log(conversations.map(c => `${c.chat_id} ${c.user_name ?? ''} ${c.mode.kind}`).join('\n'))
       return
     }
     case 'avatar-info': {

@@ -18,9 +18,12 @@ describe('parseCliArgs', () => {
       json: true,
     })
   })
-  // status / list / install / doctor / setup-status moved to citty (PR4 batch 1).
+  // The following subcommands moved to citty and no longer flow through
+  // parseCliArgs at all:
+  //   PR4 batch 1: status / list / install / doctor / setup-status
+  //   PR4 batch 2: events / observations / milestones / conversations / logs
   // Their parser-only behavior is covered by the `citty migrated commands`
-  // describe block below; these legacy parseCliArgs tests would now fall
+  // describe block below; legacy parseCliArgs tests for them would fall
   // through to `{ cmd: 'help' }` and weren't testing the real entrypoint.
   it('recognizes service/provider/help', () => {
     expect(parseCliArgs(['service', 'status', '--json'])).toEqual({ cmd: 'service', action: 'status', json: true, unattended: undefined, autoStart: undefined })
@@ -94,15 +97,6 @@ describe('parseCliArgs', () => {
     expect(parseCliArgs(['memory', 'write', 'u@x']).cmd).toBe('help')
     expect(parseCliArgs(['memory', 'write']).cmd).toBe('help')
   })
-  it('parses logs subcommand with default + explicit tail count', () => {
-    expect(parseCliArgs(['logs'])).toEqual({ cmd: 'logs', tail: 50, json: false })
-    expect(parseCliArgs(['logs', '--tail', '20'])).toEqual({ cmd: 'logs', tail: 20, json: false })
-    expect(parseCliArgs(['logs', '--tail', '100', '--json'])).toEqual({ cmd: 'logs', tail: 100, json: true })
-    expect(parseCliArgs(['logs', '--json'])).toEqual({ cmd: 'logs', tail: 50, json: true })
-  })
-  it('logs --tail with non-numeric value falls back to default 50', () => {
-    expect(parseCliArgs(['logs', '--tail', 'banana'])).toEqual({ cmd: 'logs', tail: 50, json: false })
-  })
   it('accepts --dangerously on run subcommand', () => {
     expect(parseCliArgs(['run', '--dangerously'])).toEqual({
       cmd: 'run',
@@ -153,42 +147,6 @@ describe('parseCliArgs', () => {
   })
 })
 
-describe('events list', () => {
-  it('parses chat-id with optional --json --limit', () => {
-    expect(parseCliArgs(['events', 'list', 'chat_x', '--json', '--limit', '20'])).toEqual({
-      cmd: 'events-list', chatId: 'chat_x', json: true, limit: 20,
-    })
-  })
-  it('limit defaults to 50 when omitted', () => {
-    const r = parseCliArgs(['events', 'list', 'chat_x'])
-    expect(r).toMatchObject({ cmd: 'events-list', chatId: 'chat_x', limit: 50 })
-  })
-})
-
-describe('observations list', () => {
-  it('parses chat-id and --include-archived', () => {
-    expect(parseCliArgs(['observations', 'list', 'chat_x', '--include-archived', '--json'])).toEqual({
-      cmd: 'observations-list', chatId: 'chat_x', includeArchived: true, json: true,
-    })
-  })
-})
-
-describe('observations archive', () => {
-  it('parses obs id', () => {
-    expect(parseCliArgs(['observations', 'archive', 'chat_x', 'obs_abc', '--json'])).toEqual({
-      cmd: 'observations-archive', chatId: 'chat_x', obsId: 'obs_abc', json: true,
-    })
-  })
-})
-
-describe('milestones list', () => {
-  it('parses chat-id', () => {
-    expect(parseCliArgs(['milestones', 'list', 'chat_x', '--json'])).toEqual({
-      cmd: 'milestones-list', chatId: 'chat_x', json: true,
-    })
-  })
-})
-
 describe('sessions list-projects', () => {
   it('parses --json', () => {
     expect(parseCliArgs(['sessions', 'list-projects', '--json'])).toEqual({
@@ -233,23 +191,6 @@ describe('sessions search', () => {
   })
 })
 
-describe('conversations list', () => {
-  it('parses --json', () => {
-    expect(parseCliArgs(['conversations', 'list', '--json'])).toEqual({
-      cmd: 'conversations-list', json: true,
-    })
-  })
-  it('defaults json to false without --json', () => {
-    expect(parseCliArgs(['conversations', 'list'])).toEqual({
-      cmd: 'conversations-list', json: false,
-    })
-  })
-  it('falls back to help when subcommand is unknown', () => {
-    expect(parseCliArgs(['conversations', 'bogus']).cmd).toBe('help')
-    expect(parseCliArgs(['conversations']).cmd).toBe('help')
-  })
-})
-
 describe('guard', () => {
   it('parses status / enable / disable', () => {
     expect(parseCliArgs(['guard', 'status', '--json'])).toEqual({ cmd: 'guard-status', json: true })
@@ -281,10 +222,10 @@ describe('demo seed/unseed', () => {
 })
 
 describe('citty migrated commands', () => {
-  // The first batch of citty-migrated subcommands. Asserted via a stub `run`
-  // override (citty calls subCommand.run with parsed args) so the tests
-  // verify argument parsing without invoking real handlers (which would
-  // touch ~/.claude/channels/wechat state and the doctor probe matrix).
+  // Citty-migrated subcommands. Asserted via a stub `run` override (citty
+  // calls subCommand.run with parsed args) so the tests verify argument
+  // parsing without invoking real handlers (which would touch
+  // ~/.claude/channels/wechat state and the doctor probe matrix).
   type Captured = { args: Record<string, unknown> } | null
 
   async function runWithStub(rawArgs: string[], subName: string): Promise<Captured> {
@@ -302,9 +243,39 @@ describe('citty migrated commands', () => {
     return captured
   }
 
-  it('exposes the 5 batch-1 subcommands', () => {
+  /** Stub a leaf inside a nested subcommand path (e.g. ['events', 'list']). */
+  async function runWithNestedStub(rawArgs: string[], path: [string, string]): Promise<Captured> {
+    const [parentName, leafName] = path
+    const subs = cittyRoot.subCommands as Record<string, { subCommands?: Record<string, { run?: unknown }> }>
+    const parent = subs[parentName]
+    if (!parent?.subCommands) throw new Error(`no parent subcommand ${parentName}`)
+    const original = parent.subCommands[leafName]
+    if (!original || typeof original !== 'object') throw new Error(`no leaf ${parentName}.${leafName}`)
+    let captured: Captured = null
+    const stub = { ...original, run: (ctx: { args: Record<string, unknown> }) => { captured = { args: ctx.args } } }
+    parent.subCommands[leafName] = stub
+    try {
+      await runCommand(cittyRoot, { rawArgs })
+    } finally {
+      parent.subCommands[leafName] = original
+    }
+    return captured
+  }
+
+  it('exposes the migrated subcommands (batch 1 + batch 2)', () => {
     const subs = cittyRoot.subCommands as Record<string, unknown>
-    expect(Object.keys(subs).sort()).toEqual(['doctor', 'install', 'list', 'setup-status', 'status'])
+    expect(Object.keys(subs).sort()).toEqual([
+      'conversations',
+      'doctor',
+      'events',
+      'install',
+      'list',
+      'logs',
+      'milestones',
+      'observations',
+      'setup-status',
+      'status',
+    ])
   })
 
   it('doctor accepts --json', async () => {
@@ -330,5 +301,65 @@ describe('citty migrated commands', () => {
   it('install accepts legacy --user flag (for backward arg compat)', async () => {
     const r = await runWithStub(['install', '--user'], 'install')
     expect(r?.args.user).toBe(true)
+  })
+
+  // ── PR4 batch 2 — read-only inspection commands ─────────────────────
+
+  it('events list parses chat-id positional + --json + --limit', async () => {
+    const r = await runWithNestedStub(
+      ['events', 'list', 'chat_x', '--json', '--limit', '20'],
+      ['events', 'list'],
+    )
+    expect(r?.args.chatId).toBe('chat_x')
+    expect(r?.args.json).toBe(true)
+    expect(r?.args.limit).toBe('20')
+  })
+
+  it('observations list parses chat-id + --include-archived', async () => {
+    const r = await runWithNestedStub(
+      ['observations', 'list', 'chat_x', '--include-archived'],
+      ['observations', 'list'],
+    )
+    expect(r?.args.chatId).toBe('chat_x')
+    expect(r?.args['include-archived']).toBe(true)
+  })
+
+  it('observations archive parses chat-id + obs-id', async () => {
+    const r = await runWithNestedStub(
+      ['observations', 'archive', 'chat_x', 'obs_abc', '--json'],
+      ['observations', 'archive'],
+    )
+    expect(r?.args.chatId).toBe('chat_x')
+    expect(r?.args.obsId).toBe('obs_abc')
+    expect(r?.args.json).toBe(true)
+  })
+
+  it('milestones list parses chat-id', async () => {
+    const r = await runWithNestedStub(
+      ['milestones', 'list', 'chat_x', '--json'],
+      ['milestones', 'list'],
+    )
+    expect(r?.args.chatId).toBe('chat_x')
+    expect(r?.args.json).toBe(true)
+  })
+
+  it('conversations list parses --json', async () => {
+    const r = await runWithNestedStub(
+      ['conversations', 'list', '--json'],
+      ['conversations', 'list'],
+    )
+    expect(r?.args.json).toBe(true)
+  })
+
+  it('logs accepts --tail + --json', async () => {
+    const r = await runWithStub(['logs', '--tail', '20', '--json'], 'logs')
+    expect(r?.args.tail).toBe('20')
+    expect(r?.args.json).toBe(true)
+  })
+
+  it('logs without flags uses defaults', async () => {
+    const r = await runWithStub(['logs'], 'logs')
+    expect(r?.args.tail).toBeFalsy()
+    expect(r?.args.json).toBeFalsy()
   })
 })
