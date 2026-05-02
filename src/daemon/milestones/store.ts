@@ -9,8 +9,8 @@
  * INSERT…ON CONFLICT DO NOTHING returning whether changes > 0 — atomic
  * single statement instead of read-then-write.
  */
-import { existsSync, readFileSync, renameSync } from 'node:fs'
-import type { Db } from '../../lib/db'
+import { existsSync, readFileSync } from 'node:fs'
+import { renameMigrated, type Db } from '../../lib/db'
 
 export interface MilestoneRecord {
   id: string                  // ms_<kind> — caller-supplied stable
@@ -100,5 +100,5 @@ function maybeImportLegacy(db: Db, chatId: string, file: string): void {
   db.transaction(() => {
     for (const r of records) insert.run(chatId, r.id, r.ts, r.body, r.event_id ?? null)
   })()
-  renameSync(file, `${file}.migrated`)
+  renameMigrated(file)
 }

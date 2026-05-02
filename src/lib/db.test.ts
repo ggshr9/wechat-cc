@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { openTestDb, openDb } from './db'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { openTestDb, openDb, renameMigrated } from './db'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -41,6 +41,32 @@ describe('openDb', () => {
       const mode = db.query('PRAGMA journal_mode').get() as { journal_mode: string }
       expect(mode.journal_mode.toLowerCase()).toBe('wal')
       db.close()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('renameMigrated', () => {
+  it('renames the file to <file>.migrated', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rm-'))
+    try {
+      const file = join(dir, 'legacy.json')
+      writeFileSync(file, '{}')
+      renameMigrated(file)
+      expect(existsSync(file)).toBe(false)
+      expect(existsSync(`${file}.migrated`)).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('swallows ENOENT when the file is already gone (concurrent first-boot race)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rm-'))
+    try {
+      const file = join(dir, 'legacy.json')
+      // Simulate "another process already renamed it" — file does not exist.
+      expect(() => renameMigrated(file)).not.toThrow()
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

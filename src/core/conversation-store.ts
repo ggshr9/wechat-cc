@@ -14,8 +14,8 @@
  * job, since the registry isn't always loaded when the store is read
  * (e.g. by CLI tools that just inspect state).
  */
-import { existsSync, readFileSync, renameSync } from 'node:fs'
-import type { Db } from '../lib/db'
+import { existsSync, readFileSync } from 'node:fs'
+import { renameMigrated, type Db } from '../lib/db'
 import type { Mode, PersistedConversation } from './conversation'
 
 export interface ConversationStore {
@@ -148,5 +148,5 @@ function maybeImportLegacy(db: Db, file: string): void {
       }
     })()
   }
-  renameSync(file, `${file}.migrated`)
+  renameMigrated(file)
 }

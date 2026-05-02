@@ -19,8 +19,8 @@
  * resume. Records read from the legacy JSON without a provider field
  * are migrated as `provider='claude'` (matches the v0.x default).
  */
-import { existsSync, readFileSync, renameSync } from 'node:fs'
-import type { Db } from '../lib/db'
+import { existsSync, readFileSync } from 'node:fs'
+import { renameMigrated, type Db } from '../lib/db'
 
 export type ProviderId = string  // open string per RFC 03 §3.3 (registry-driven)
 
@@ -203,5 +203,5 @@ function maybeImportLegacy(db: Db, file: string): void {
       }
     })()
   }
-  renameSync(file, `${file}.migrated`)
+  renameMigrated(file)
 }

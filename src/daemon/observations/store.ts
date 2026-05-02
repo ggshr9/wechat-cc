@@ -11,8 +11,8 @@
  * single-statement UPDATE — no more read-modify-rewrite of the whole
  * file (which used to be the only thing that could race with append()).
  */
-import { existsSync, readFileSync, renameSync } from 'node:fs'
-import type { Db } from '../../lib/db'
+import { existsSync, readFileSync } from 'node:fs'
+import { renameMigrated, type Db } from '../../lib/db'
 
 export type ObservationTone = 'concern' | 'curious' | 'proud' | 'playful' | 'quiet'
 
@@ -179,5 +179,5 @@ function maybeImportLegacy(db: Db, chatId: string, file: string): void {
       )
     }
   })()
-  renameSync(file, `${file}.migrated`)
+  renameMigrated(file)
 }

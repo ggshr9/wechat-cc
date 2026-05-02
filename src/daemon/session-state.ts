@@ -13,8 +13,8 @@
  * import because the file is gone. The .migrated suffix is kept around
  * one release so a downgrade can recover; we delete it in the next major.
  */
-import { existsSync, readFileSync, renameSync } from 'node:fs'
-import type { Db } from '../lib/db'
+import { existsSync, readFileSync } from 'node:fs'
+import { renameMigrated, type Db } from '../lib/db'
 
 export interface BotSessionState {
   status: 'expired'
@@ -122,5 +122,5 @@ function maybeImportLegacy(db: Db, file: string): void {
       }
     })()
   }
-  renameSync(file, `${file}.migrated`)
+  renameMigrated(file)
 }

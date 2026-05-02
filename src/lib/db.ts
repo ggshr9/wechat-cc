@@ -20,7 +20,7 @@
  * that swapping later (if Bun ever drops the builtin) would be local.
  */
 import { Database } from 'bun:sqlite'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, renameSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 export type Db = Database
@@ -188,4 +188,26 @@ function applyMigrations(db: Database): void {
 /** Test helper — opens a fresh in-memory db with all migrations applied. */
 export function openTestDb(): Database {
   return openDb({ path: ':memory:' })
+}
+
+/**
+ * Mark a legacy state file as imported by renaming it to `<file>.migrated`.
+ *
+ * Concurrent-first-boot safety: when daemon + CLI both boot against a
+ * pre-PR7 install, both can pass the `existsSync` gate in their store
+ * factories, both run their (idempotent) INSERT OR REPLACE/IGNORE
+ * transactions, and both reach the rename. The first wins; the second's
+ * `renameSync` would throw ENOENT and propagate as an unhelpful error
+ * out of the store constructor. Swallow ENOENT here — the file being
+ * gone IS the success state.
+ *
+ * Other errors (EACCES, ENOSPC, …) still propagate.
+ */
+export function renameMigrated(file: string): void {
+  try {
+    renameSync(file, `${file}.migrated`)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return
+    throw err
+  }
 }

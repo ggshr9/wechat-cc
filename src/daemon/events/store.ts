@@ -13,8 +13,8 @@
  * agent reasoning doesn't bloat the row. They're application-level
  * truncation; the SQLite TEXT type itself has no fixed cap.
  */
-import { existsSync, readFileSync, renameSync } from 'node:fs'
-import type { Db } from '../../lib/db'
+import { existsSync, readFileSync } from 'node:fs'
+import { renameMigrated, type Db } from '../../lib/db'
 
 export type EventKind =
   | 'cron_eval_pushed'
@@ -205,5 +205,5 @@ function maybeImportLegacy(db: Db, chatId: string, file: string): void {
       )
     }
   })()
-  renameSync(file, `${file}.migrated`)
+  renameMigrated(file)
 }

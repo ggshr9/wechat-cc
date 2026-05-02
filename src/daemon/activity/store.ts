@@ -7,8 +7,8 @@
  * <stateRoot>/<chat>/activity.jsonl). recordInbound is a single
  * INSERT…ON CONFLICT DO UPDATE — atomic per row, no read-modify-write.
  */
-import { existsSync, readFileSync, renameSync } from 'node:fs'
-import type { Db } from '../../lib/db'
+import { existsSync, readFileSync } from 'node:fs'
+import { renameMigrated, type Db } from '../../lib/db'
 
 export interface ActivityRecord {
   date: string                // YYYY-MM-DD UTC
@@ -93,5 +93,5 @@ function maybeImportLegacy(db: Db, chatId: string, file: string): void {
   db.transaction(() => {
     for (const r of records) insert.run(chatId, r.date, r.first_msg_ts, r.msg_count)
   })()
-  renameSync(file, `${file}.migrated`)
+  renameMigrated(file)
 }
