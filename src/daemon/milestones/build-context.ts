@@ -18,11 +18,13 @@ import type { DetectorContext } from './detector'
 import { makeEventsStore } from '../events/store'
 import { makeActivityStore } from '../activity/store'
 import { makeSessionStore } from '../../core/session-store'
+import type { Db } from '../../lib/db'
 import { resolveProjectJsonlPath } from '../sessions/path-resolver'
 
 export interface BuildContextDeps {
   stateDir: string
   chatId: string
+  db: Db
 }
 
 export async function buildDetectorContext(deps: BuildContextDeps): Promise<DetectorContext> {
@@ -35,7 +37,7 @@ export async function buildDetectorContext(deps: BuildContextDeps): Promise<Dete
   // anyway, so they fire eventually as work accumulates.
   let turnCount = 0
   try {
-    const sessions = makeSessionStore(join(deps.stateDir, 'sessions.json'), { debounceMs: 0 })
+    const sessions = makeSessionStore(deps.db, { migrateFromFile: join(deps.stateDir, 'sessions.json') })
     const rec = sessions.get('_default')
     if (rec) {
       const path = resolveProjectJsonlPath('_default', rec.session_id)
@@ -54,7 +56,9 @@ export async function buildDetectorContext(deps: BuildContextDeps): Promise<Dete
   // Heuristic: presence of any pushed event is enough to fire
   // ms_first_push_reply (the milestone semantics ask "did we ever push?",
   // which is the closest proxy without per-message reply tracking).
-  const events = makeEventsStore(memoryRoot, deps.chatId)
+  const events = makeEventsStore(deps.db, deps.chatId, {
+    migrateFromFile: join(memoryRoot, deps.chatId, 'events.jsonl'),
+  })
   const pushed = (await events.list()).filter(e => e.kind === 'cron_eval_pushed')
   const pushRepliedHistory = pushed.map(e => e.id)
 
@@ -62,7 +66,9 @@ export async function buildDetectorContext(deps: BuildContextDeps): Promise<Dete
   // to []; v0.4.1 wires it. The detector's has7DayStreak helper is now
   // fed real data — streak milestone fires when 7 consecutive UTC days
   // each have at least 1 inbound message.
-  const activity = makeActivityStore(memoryRoot, deps.chatId)
+  const activity = makeActivityStore(deps.db, deps.chatId, {
+    migrateFromFile: join(memoryRoot, deps.chatId, 'activity.jsonl'),
+  })
   const recent = await activity.recentDays(7)
   const daysWithMessage = recent.map(r => r.date)
 

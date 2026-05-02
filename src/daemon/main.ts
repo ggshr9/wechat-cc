@@ -9,6 +9,7 @@ if (!process.env.CLAUDE_CODE_ENTRYPOINT) {
   process.env.CLAUDE_CODE_ENTRYPOINT = 'sdk-ts'
 }
 import { acquireInstanceLock, releaseInstanceLock } from './single-instance'
+import { openDb } from '../lib/db'
 import { buildBootstrap } from './bootstrap'
 import { createInternalApi } from './internal-api'
 import { makeMemoryFS } from './memory/fs-api'
@@ -55,7 +56,12 @@ async function main() {
     process.exit(1)
   }
 
-  const ilink = makeIlinkAdapter({ stateDir: STATE_DIR, accounts })
+  // Single SQLite connection for all daemon-owned state stores. Lives at
+  // ~/.claude/channels/wechat/wechat-cc.db. Per-store JSON/JSONL files are
+  // migrated into this db on first boot post-PR7 (each store knows its own
+  // legacy path; old files renamed to .migrated).
+  const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+  const ilink = makeIlinkAdapter({ stateDir: STATE_DIR, accounts, db })
   const launchCwd = process.cwd()
 
   // MemoryFS is shared with the internal-api's memory_* HTTP routes AND
@@ -70,8 +76,8 @@ async function main() {
   // mode). Daemon-owned construction here ensures both consumers see
   // the same in-memory state without polling the file.
   const conversationStore = makeConversationStore(
-    join(STATE_DIR, 'conversations.json'),
-    { debounceMs: 500 },
+    db,
+    { migrateFromFile: join(STATE_DIR, 'conversations.json') },
   )
 
   // RFC 03 §5 — start the daemon's internal HTTP API before bootstrap so
@@ -121,6 +127,7 @@ async function main() {
 
   const { sessionManager, sessionStore, registry, coordinator, resolve, formatInbound, sdkOptionsForProject, defaultProviderId, dispatchDelegate } = buildBootstrap({
     stateDir: STATE_DIR,
+    db,
     ilink,
     loadProjects: ilink.loadProjects,
     lastActiveChatId: ilink.lastActiveChatId,
@@ -214,8 +221,12 @@ async function main() {
       return true
     }
     const memoryRoot = join(STATE_DIR, 'memory')
-    const events = makeEventsStore(memoryRoot, chatId)
-    const observations = makeObservationsStore(memoryRoot, chatId)
+    const events = makeEventsStore(db, chatId, {
+      migrateFromFile: join(memoryRoot, chatId, 'events.jsonl'),
+    })
+    const observations = makeObservationsStore(db, chatId, {
+      migrateFromFile: join(memoryRoot, chatId, 'observations.jsonl'),
+    })
     const agent = makeIntrospectAgent({
       chatId,
       events,
@@ -301,7 +312,10 @@ async function main() {
   async function maybeWriteWelcomeObservation(chatId: string): Promise<void> {
     try {
       const { makeObservationsStore } = await import('./observations/store.ts')
-      const obs = makeObservationsStore(join(STATE_DIR, 'memory'), chatId)
+      const memoryRoot = join(STATE_DIR, 'memory')
+      const obs = makeObservationsStore(db, chatId, {
+        migrateFromFile: join(memoryRoot, chatId, 'observations.jsonl'),
+      })
       const existing = await obs.listActive()
       const archived = await obs.listArchived()
       if (existing.length === 0 && archived.length === 0) {
@@ -322,7 +336,10 @@ async function main() {
   async function recordActivity(chatId: string, when: Date): Promise<void> {
     try {
       const { makeActivityStore } = await import('./activity/store.ts')
-      const store = makeActivityStore(join(STATE_DIR, 'memory'), chatId)
+      const memoryRoot = join(STATE_DIR, 'memory')
+      const store = makeActivityStore(db, chatId, {
+        migrateFromFile: join(memoryRoot, chatId, 'activity.jsonl'),
+      })
       await store.recordInbound(when)
     } catch (err) {
       log('ACTIVITY', `record failed for ${chatId}: ${err instanceof Error ? err.message : err}`)
@@ -335,10 +352,14 @@ async function main() {
   // idempotent. Errors are logged, never propagated to the caller.
   async function fireMilestonesFor(chatId: string): Promise<void> {
     try {
-      const ctx = await buildDetectorContext({ stateDir: STATE_DIR, chatId })
+      const ctx = await buildDetectorContext({ stateDir: STATE_DIR, chatId, db })
       const memRoot = join(STATE_DIR, 'memory')
-      const milestones = makeMilestonesStore(memRoot, chatId)
-      const events = makeEventsStore(memRoot, chatId)
+      const milestones = makeMilestonesStore(db, chatId, {
+        migrateFromFile: join(memRoot, chatId, 'milestones.jsonl'),
+      })
+      const events = makeEventsStore(db, chatId, {
+        migrateFromFile: join(memRoot, chatId, 'events.jsonl'),
+      })
       const fired = await detectMilestones(milestones, ctx)
       for (const id of fired) {
         await events.append({
@@ -488,6 +509,7 @@ async function main() {
     // Token file is kept on disk so a fast-restart daemon can be debugged
     // (it's overwritten on next start anyway; see internal-api.ts).
     await internalApi.stop()
+    db.close()
     releaseInstanceLock(PID_PATH)
     process.exit(0)
   }

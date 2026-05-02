@@ -3,22 +3,28 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { searchAcrossSessions } from './searcher'
+import { openTestDb, type Db } from '../../lib/db'
 
 describe('searchAcrossSessions', () => {
   let stateDir: string
+  let db: Db
   beforeEach(() => {
     stateDir = mkdtempSync(join(tmpdir(), 'searcher-'))
+    db = openTestDb()
   })
-  afterEach(() => rmSync(stateDir, { recursive: true, force: true }))
+  afterEach(() => {
+    db.close()
+    rmSync(stateDir, { recursive: true, force: true })
+  })
 
   it('returns empty for empty query', async () => {
-    expect(await searchAcrossSessions('', { stateDir })).toEqual([])
-    expect(await searchAcrossSessions('   ', { stateDir })).toEqual([])
+    expect(await searchAcrossSessions('', { stateDir, db })).toEqual([])
+    expect(await searchAcrossSessions('   ', { stateDir, db })).toEqual([])
   })
 
   it('returns empty when sessions.json has no aliases', async () => {
     writeFileSync(join(stateDir, 'sessions.json'), JSON.stringify({ version: 1, sessions: {} }))
-    expect(await searchAcrossSessions('anything', { stateDir })).toEqual([])
+    expect(await searchAcrossSessions('anything', { stateDir, db })).toEqual([])
   })
 
   it('returns empty when alias maps to a missing jsonl', async () => {
@@ -26,7 +32,7 @@ describe('searchAcrossSessions', () => {
       version: 1,
       sessions: { compass: { session_id: 's_nonexistent', last_used_at: '2026-01-01T00:00:00Z' } },
     }))
-    expect(await searchAcrossSessions('foo', { stateDir })).toEqual([])
+    expect(await searchAcrossSessions('foo', { stateDir, db })).toEqual([])
   })
 
   // Set up a fake $HOME so the path resolver finds our test jsonl.
@@ -56,7 +62,7 @@ describe('searchAcrossSessions', () => {
         }))
       },
       async (home) => {
-        const hits = await searchAcrossSessions('我是谁', { stateDir, home })
+        const hits = await searchAcrossSessions('我是谁', { stateDir, home, db })
         expect(hits).toHaveLength(1)
         expect(hits[0]!.alias).toBe('_default')
         expect(hits[0]!.turn).toBeTruthy()
@@ -76,7 +82,7 @@ describe('searchAcrossSessions', () => {
         }))
       },
       async (home) => {
-        const hits = await searchAcrossSessions('plain', { stateDir, home })
+        const hits = await searchAcrossSessions('plain', { stateDir, home, db })
         expect(hits).toHaveLength(1)
         expect(hits[0]!.session_has_reply_tool).toBe(false)
       },
@@ -95,7 +101,7 @@ describe('searchAcrossSessions', () => {
         }))
       },
       async (home) => {
-        const hits = await searchAcrossSessions('needle', { stateDir, home })
+        const hits = await searchAcrossSessions('needle', { stateDir, home, db })
         expect(hits).toHaveLength(1)
         expect(hits[0]!.turn).toBeNull()
       },

@@ -32,6 +32,7 @@ import { makeIlinkContext, type Account } from './ilink/context'
 import { makeVoice } from './ilink/voice'
 import { makeCompanion } from './ilink/companion'
 import { makeTransport } from './ilink/transport'
+import type { Db } from '../lib/db'
 
 export type { Account } from './ilink/context'
 
@@ -86,7 +87,7 @@ export async function loadAllAccounts(stateDir: string): Promise<Account[]> {
   return out
 }
 
-export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[] }): IlinkAdapter {
+export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[]; db: Db }): IlinkAdapter {
   const ctx = makeIlinkContext(opts)
   const { accounts, ctxStore, nameStore, acctStore, sessionState, pending, sweepTimer, projectsFile, resolveAccount, assertChatRoutable } = ctx
 

@@ -36,6 +36,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { WechatProjectsDep, WechatVoiceDep, WechatCompanionDep } from '../wechat-tool-deps'
 import { makeSessionStore } from '../../core/session-store'
+import type { Db } from '../../lib/db'
 import { homedir } from 'node:os'
 import { loadAgentConfig } from '../../lib/agent-config'
 import { wechatStdioMcpSpec, delegateStdioMcpSpec, type McpStdioSpec } from './mcp-specs'
@@ -110,6 +111,12 @@ export interface BootstrapDeps {
    * but means main.ts's internal-api can't see mode flips.
    */
   conversationStore?: ConversationStore
+  /**
+   * Daemon-owned SQLite connection (PR7). buildBootstrap doesn't open
+   * its own — main.ts does and threads it in so all stores share one
+   * file + one process-wide writer.
+   */
+  db: Db
 }
 
 export interface Bootstrap {
@@ -205,7 +212,7 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
   // Each provider stores its session/thread jsonl in a different place; we
   // probe the right one before trying to resume (avoids hard error if the
   // SDK rotated or user cleared history). See ./session-paths.ts.
-  const sessionStore = makeSessionStore(join(deps.stateDir, 'sessions.json'), { debounceMs: 500 })
+  const sessionStore = makeSessionStore(deps.db, { migrateFromFile: join(deps.stateDir, 'sessions.json') })
   const HOME = homedir()
 
   const configuredAgent = loadAgentConfig(deps.stateDir)
@@ -277,8 +284,8 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
   // to look up modes for reply-prefixing in P3 parallel mode) sees
   // the same flips. When absent, we own one rooted at <stateDir>.
   const conversationStore = deps.conversationStore ?? makeConversationStore(
-    join(deps.stateDir, 'conversations.json'),
-    { debounceMs: 500 },
+    deps.db,
+    { migrateFromFile: join(deps.stateDir, 'conversations.json') },
   )
 
   const coordinator = createConversationCoordinator({

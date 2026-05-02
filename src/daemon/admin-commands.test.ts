@@ -4,11 +4,13 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { makeAdminCommands, type AdminCommandsDeps } from './admin-commands'
 import { makeSessionStateStore } from './session-state'
+import { openTestDb, type Db } from '../lib/db'
 import type { InboundMsg } from '../core/prompt-format'
 import packageJson from '../../package.json'
 
 describe('admin-commands', () => {
   let stateDir: string
+  let db: Db
   let sessionState: ReturnType<typeof makeSessionStateStore>
   let sendMessage: ReturnType<typeof vi.fn>
   let stopAccount: ReturnType<typeof vi.fn>
@@ -19,7 +21,8 @@ describe('admin-commands', () => {
 
   beforeEach(() => {
     stateDir = mkdtempSync(join(tmpdir(), 'admin-cmd-'))
-    sessionState = makeSessionStateStore(join(stateDir, 'session-state.json'), { debounceMs: 0 })
+    db = openTestDb()
+    sessionState = makeSessionStateStore(db)
     sendMessage = vi.fn().mockResolvedValue({ msgId: 'm1' })
     stopAccount = vi.fn()
     running = vi.fn(() => ['bot-active-1', 'bot-active-2'])
@@ -31,7 +34,10 @@ describe('admin-commands', () => {
       checked: ['hearth'],
     })
   })
-  afterEach(() => { rmSync(stateDir, { recursive: true, force: true }) })
+  afterEach(() => {
+    db.close()
+    rmSync(stateDir, { recursive: true, force: true })
+  })
 
   function make() {
     return makeAdminCommands({

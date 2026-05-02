@@ -1,13 +1,20 @@
 /**
  * Per-bot session state tracker.
  *
- * Persists at ~/.claude/channels/wechat/session-state.json — survives daemon
- * restart so an expired bot stays flagged even if we don't immediately get
- * around to cleaning it up. Read by the admin /health command (pull-based);
- * no proactive push on expiry (decision 2026-04-24).
+ * Backed by the daemon's SQLite db (PR7 — moved off
+ * ~/.claude/channels/wechat/session-state.json). State survives daemon
+ * restart so an expired bot stays flagged even if we don't immediately
+ * get around to cleaning it up. Read by the admin /health command
+ * (pull-based); no proactive push on expiry (decision 2026-04-24).
+ *
+ * Migration: when constructed with a `migrateFromFile` opt and the legacy
+ * JSON file exists, rows are inserted (REPLACE-on-conflict) and the file
+ * is renamed to `<file>.migrated`. Idempotent: subsequent boots skip the
+ * import because the file is gone. The .migrated suffix is kept around
+ * one release so a downgrade can recover; we delete it in the next major.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { renameMigrated, type Db } from '../lib/db'
 
 export interface BotSessionState {
   status: 'expired'
@@ -30,90 +37,90 @@ export interface SessionStateStore {
   listExpired(): ExpiredBot[]
   /** Remove a bot's entry (e.g. after admin cleanup or a successful re-scan). */
   clear(botId: string): void
-  /** Flush pending writes (for graceful shutdown). */
+  /** No-op for SQLite-backed stores; retained so callers using the JSON-era API still compile. */
   flush(): Promise<void>
 }
 
-interface StoredShape {
-  version: 1
-  bots: Record<string, BotSessionState>
+export interface SessionStateOpts {
+  /**
+   * Path to the legacy session-state.json. When set + the file exists,
+   * its contents are imported into the SQLite table on construction and
+   * the file is renamed to `<path>.migrated`.
+   */
+  migrateFromFile?: string
 }
 
-export function makeSessionStateStore(
-  filePath: string,
-  opts: { debounceMs: number },
-): SessionStateStore {
-  let data: StoredShape = { version: 1, bots: {} }
-  let dirty = false
-  let timer: ReturnType<typeof setTimeout> | null = null
+interface LegacyShape {
+  version?: 1
+  bots?: Record<string, BotSessionState>
+}
 
-  if (existsSync(filePath)) {
-    try {
-      const raw = readFileSync(filePath, 'utf8')
-      const parsed = JSON.parse(raw) as Partial<StoredShape>
-      if (parsed && typeof parsed === 'object' && parsed.bots && typeof parsed.bots === 'object') {
-        data = { version: 1, bots: parsed.bots as Record<string, BotSessionState> }
-      }
-    } catch { /* corrupt — start empty */ }
-  }
+export function makeSessionStateStore(db: Db, opts: SessionStateOpts = {}): SessionStateStore {
+  if (opts.migrateFromFile) maybeImportLegacy(db, opts.migrateFromFile)
 
-  async function writeNow(): Promise<void> {
-    if (!dirty) return
-    const dir = dirname(filePath)
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 })
-    const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`
-    writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 })
-    renameSync(tmp, filePath)
-    dirty = false
-  }
-
-  function markDirty(): void {
-    dirty = true
-    if (timer) clearTimeout(timer)
-    timer = setTimeout(() => { timer = null; void writeNow() }, opts.debounceMs)
-  }
+  const stmtIsExpired = db.query<{ first_seen_expired_at: string }, [string]>(
+    'SELECT first_seen_expired_at FROM session_state WHERE bot_id = ?',
+  )
+  const stmtInsert = db.query<unknown, [string, string, string | null]>(
+    'INSERT OR IGNORE INTO session_state(bot_id, first_seen_expired_at, last_reason) VALUES (?, ?, ?)',
+  )
+  const stmtList = db.query<{ bot_id: string; first_seen_expired_at: string; last_reason: string | null }, []>(
+    'SELECT bot_id, first_seen_expired_at, last_reason FROM session_state ORDER BY first_seen_expired_at ASC',
+  )
+  const stmtDelete = db.query<unknown, [string]>('DELETE FROM session_state WHERE bot_id = ?')
 
   return {
     isExpired(botId) {
-      return data.bots[botId]?.status === 'expired'
+      return stmtIsExpired.get(botId) !== null
     },
 
     markExpired(botId, reason) {
-      if (data.bots[botId]?.status === 'expired') return false
-      data.bots[botId] = {
-        status: 'expired',
-        first_seen_expired_at: new Date().toISOString(),
-        ...(reason ? { last_reason: reason } : {}),
-      }
-      markDirty()
-      return true
+      const ts = new Date().toISOString()
+      const result = stmtInsert.run(botId, ts, reason ?? null)
+      // changes === 1 → row inserted (transition); 0 → row already existed (idempotent).
+      return (result.changes ?? 0) > 0
     },
 
     listExpired() {
-      const out: ExpiredBot[] = []
-      for (const [id, state] of Object.entries(data.bots)) {
-        if (state.status === 'expired') {
-          out.push({
-            id,
-            first_seen_expired_at: state.first_seen_expired_at,
-            ...(state.last_reason ? { last_reason: state.last_reason } : {}),
-          })
-        }
-      }
-      // sort by first_seen_expired_at ascending (oldest first)
-      out.sort((a, b) => a.first_seen_expired_at.localeCompare(b.first_seen_expired_at))
-      return out
+      const rows = stmtList.all()
+      return rows.map(r => ({
+        id: r.bot_id,
+        first_seen_expired_at: r.first_seen_expired_at,
+        ...(r.last_reason !== null ? { last_reason: r.last_reason } : {}),
+      }))
     },
 
     clear(botId) {
-      if (!(botId in data.bots)) return
-      delete data.bots[botId]
-      markDirty()
+      stmtDelete.run(botId)
     },
 
-    async flush() {
-      if (timer) { clearTimeout(timer); timer = null }
-      await writeNow()
-    },
+    async flush() { /* SQLite writes are immediate */ },
   }
+}
+
+function maybeImportLegacy(db: Db, file: string): void {
+  if (!existsSync(file)) return
+  let parsed: LegacyShape | null = null
+  try {
+    parsed = JSON.parse(readFileSync(file, 'utf8')) as LegacyShape
+  } catch {
+    // Corrupt JSON — preserve the original on disk for forensic debugging
+    // by NOT renaming. Returning here means we'll re-attempt import on
+    // next boot, which is harmless if the file remains corrupt.
+    return
+  }
+  const bots = parsed?.bots
+  if (bots && typeof bots === 'object') {
+    const insert = db.prepare(
+      'INSERT OR REPLACE INTO session_state(bot_id, first_seen_expired_at, last_reason) VALUES (?, ?, ?)',
+    )
+    db.transaction(() => {
+      for (const [id, state] of Object.entries(bots)) {
+        if (state?.status === 'expired' && typeof state.first_seen_expired_at === 'string') {
+          insert.run(id, state.first_seen_expired_at, state.last_reason ?? null)
+        }
+      }
+    })()
+  }
+  renameMigrated(file)
 }

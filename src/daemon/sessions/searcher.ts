@@ -12,6 +12,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { makeSessionStore } from '../../core/session-store'
+import type { Db } from '../../lib/db'
 import { resolveProjectJsonlPath } from './path-resolver'
 
 export interface SearchHit {
@@ -30,12 +31,12 @@ const REPLY_TOOL_MARKER = '"mcp__wechat__reply"'
 
 export async function searchAcrossSessions(
   query: string,
-  opts: { limit?: number; stateDir: string; home?: string },
+  opts: { limit?: number; stateDir: string; home?: string; db: Db },
 ): Promise<SearchHit[]> {
   const limit = opts.limit ?? 50
   if (!query || query.trim().length === 0) return []
 
-  const store = makeSessionStore(join(opts.stateDir, 'sessions.json'), { debounceMs: 0 })
+  const store = makeSessionStore(opts.db, { migrateFromFile: join(opts.stateDir, 'sessions.json') })
   const all = store.all()
   const hits: SearchHit[] = []
   const needle = query.toLowerCase()

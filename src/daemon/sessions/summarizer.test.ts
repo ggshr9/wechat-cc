@@ -3,24 +3,24 @@ import { needsRefresh, formatSummaryRequest } from './summarizer'
 
 describe('summarizer.needsRefresh', () => {
   it('returns true when no summary exists', () => {
-    expect(needsRefresh({ session_id: 's', last_used_at: new Date().toISOString() })).toBe(true)
+    expect(needsRefresh({ session_id: 's', last_used_at: new Date().toISOString(), provider: 'claude' })).toBe(true)
   })
 
   it('returns true when summary older than ttlDays', () => {
     const oldTs = new Date(Date.now() - 8 * 86400_000).toISOString()
     const fresh = new Date().toISOString()
-    expect(needsRefresh({ session_id: 's', last_used_at: fresh, summary: 'x', summary_updated_at: oldTs }, 7)).toBe(true)
+    expect(needsRefresh({ session_id: 's', last_used_at: fresh, provider: 'claude', summary: 'x', summary_updated_at: oldTs }, 7)).toBe(true)
   })
 
   it('returns false when summary fresh', () => {
     const fresh = new Date().toISOString()
-    expect(needsRefresh({ session_id: 's', last_used_at: fresh, summary: 'x', summary_updated_at: fresh }, 7)).toBe(false)
+    expect(needsRefresh({ session_id: 's', last_used_at: fresh, provider: 'claude', summary: 'x', summary_updated_at: fresh }, 7)).toBe(false)
   })
 
   it('returns true when last_used_at is newer than summary_updated_at', () => {
     const old = new Date(Date.now() - 2 * 86400_000).toISOString()
     const recent = new Date().toISOString()
-    expect(needsRefresh({ session_id: 's', last_used_at: recent, summary: 'x', summary_updated_at: old }, 7)).toBe(true)
+    expect(needsRefresh({ session_id: 's', last_used_at: recent, provider: 'claude', summary: 'x', summary_updated_at: old }, 7)).toBe(true)
   })
 })
 

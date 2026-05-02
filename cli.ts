@@ -633,39 +633,57 @@ async function main() {
     }
     case 'events-list': {
       const { makeEventsStore } = await import('./src/daemon/events/store')
+      const { openDb } = await import('./src/lib/db')
       const memoryRoot = join(STATE_DIR, 'memory')
-      const store = makeEventsStore(memoryRoot, parsed.chatId)
+      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+      const store = makeEventsStore(db, parsed.chatId, {
+        migrateFromFile: join(memoryRoot, parsed.chatId, 'events.jsonl'),
+      })
       const list = await store.list({ limit: parsed.limit })
       console.log(parsed.json ? JSON.stringify({ ok: true, events: list }, null, 2) : list.map(e => `${e.ts} ${e.kind} ${e.trigger}`).join('\n'))
       return
     }
     case 'observations-list': {
       const { makeObservationsStore } = await import('./src/daemon/observations/store')
+      const { openDb } = await import('./src/lib/db')
       const memoryRoot = join(STATE_DIR, 'memory')
-      const store = makeObservationsStore(memoryRoot, parsed.chatId)
+      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+      const store = makeObservationsStore(db, parsed.chatId, {
+        migrateFromFile: join(memoryRoot, parsed.chatId, 'observations.jsonl'),
+      })
       const list = parsed.includeArchived ? await store.listArchived() : await store.listActive()
       console.log(parsed.json ? JSON.stringify({ ok: true, observations: list }, null, 2) : list.map(o => `${o.ts} ${o.body}`).join('\n'))
       return
     }
     case 'observations-archive': {
       const { makeObservationsStore } = await import('./src/daemon/observations/store')
+      const { openDb } = await import('./src/lib/db')
       const memoryRoot = join(STATE_DIR, 'memory')
-      const store = makeObservationsStore(memoryRoot, parsed.chatId)
+      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+      const store = makeObservationsStore(db, parsed.chatId, {
+        migrateFromFile: join(memoryRoot, parsed.chatId, 'observations.jsonl'),
+      })
       await store.archive(parsed.obsId)
       console.log(parsed.json ? JSON.stringify({ ok: true, archived: parsed.obsId }, null, 2) : `archived ${parsed.obsId}`)
       return
     }
     case 'milestones-list': {
       const { makeMilestonesStore } = await import('./src/daemon/milestones/store')
+      const { openDb } = await import('./src/lib/db')
       const memoryRoot = join(STATE_DIR, 'memory')
-      const store = makeMilestonesStore(memoryRoot, parsed.chatId)
+      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+      const store = makeMilestonesStore(db, parsed.chatId, {
+        migrateFromFile: join(memoryRoot, parsed.chatId, 'milestones.jsonl'),
+      })
       const list = await store.list()
       console.log(parsed.json ? JSON.stringify({ ok: true, milestones: list }, null, 2) : list.map(m => `${m.ts} ${m.body}`).join('\n'))
       return
     }
     case 'sessions-list-projects': {
       const { makeSessionStore } = await import('./src/core/session-store')
-      const store = makeSessionStore(join(STATE_DIR, 'sessions.json'), { debounceMs: 500 })
+      const { openDb } = await import('./src/lib/db')
+      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+      const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
       const all = store.all()
       const projects = Object.entries(all).map(([alias, rec]) => ({
         alias,
@@ -693,6 +711,7 @@ async function main() {
             const { query } = await import('@anthropic-ai/claude-agent-sdk')
             await triggerStaleSummaryRefresh({
               stateDir: STATE_DIR,
+              db,
               resolveChatId: () => resolveIntrospectChatId(STATE_DIR),
               sdkEval: async (prompt) => {
                 let text = ''
@@ -715,7 +734,9 @@ async function main() {
     }
     case 'sessions-read-jsonl': {
       const { makeSessionStore } = await import('./src/core/session-store')
-      const store = makeSessionStore(join(STATE_DIR, 'sessions.json'), { debounceMs: 0 })
+      const { openDb } = await import('./src/lib/db')
+      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+      const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
       const rec = store.get(parsed.alias)
       if (!rec) {
         console.log(parsed.json ? JSON.stringify({ ok: false, error: 'no such alias' }, null, 2) : 'no such alias')
@@ -736,7 +757,9 @@ async function main() {
     }
     case 'sessions-delete': {
       const { makeSessionStore } = await import('./src/core/session-store')
-      const store = makeSessionStore(join(STATE_DIR, 'sessions.json'), { debounceMs: 0 })
+      const { openDb } = await import('./src/lib/db')
+      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+      const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
       store.delete(parsed.alias)
       await store.flush()
       console.log(parsed.json ? JSON.stringify({ ok: true, deleted: parsed.alias }, null, 2) : `deleted ${parsed.alias}`)
@@ -744,18 +767,22 @@ async function main() {
     }
     case 'sessions-search': {
       const { searchAcrossSessions } = await import('./src/daemon/sessions/searcher')
-      const hits = await searchAcrossSessions(parsed.query, { limit: parsed.limit, stateDir: STATE_DIR })
+      const { openDb } = await import('./src/lib/db')
+      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+      const hits = await searchAcrossSessions(parsed.query, { limit: parsed.limit, stateDir: STATE_DIR, db })
       if (parsed.json) emitJson({ ok: true, query: parsed.query, hits }, parsed.outFile)
       else console.log(hits.map(h => `${h.alias} · ${h.snippet}`).join('\n'))
       return
     }
     case 'conversations-list': {
-      // Read-only snapshot of conversations.json + user_names.json. Used by
+      // Read-only snapshot of conversations + user_names.json. Used by
       // the desktop dashboard (P5.2) to display per-chat mode badges. Falls
       // back to chat_id as user_name when no name has been captured yet.
       const { makeConversationStore } = await import('./src/core/conversation-store')
       const { makeStateStore } = await import('./src/daemon/state-store')
-      const store = makeConversationStore(join(STATE_DIR, 'conversations.json'), { debounceMs: 0 })
+      const { openDb } = await import('./src/lib/db')
+      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+      const store = makeConversationStore(db, { migrateFromFile: join(STATE_DIR, 'conversations.json') })
       const names = makeStateStore(join(STATE_DIR, 'user_names.json'), { debounceMs: 0 })
       const conversations = Object.entries(store.all()).map(([chat_id, rec]) => ({
         chat_id,
@@ -943,8 +970,10 @@ async function main() {
         process.exit(1)
       }
       const { seedDemo, unseedDemo } = await import('./src/daemon/demo/seed')
+      const { openDb } = await import('./src/lib/db')
+      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
       const fn = parsed.cmd === 'demo-seed' ? seedDemo : unseedDemo
-      const result = await fn({ stateDir: STATE_DIR, chatId })
+      const result = await fn({ stateDir: STATE_DIR, chatId, db })
       console.log(parsed.json ? JSON.stringify({ ok: true, ...result }, null, 2) : JSON.stringify(result))
       return
     }

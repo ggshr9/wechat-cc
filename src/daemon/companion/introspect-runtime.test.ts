@@ -5,22 +5,30 @@ import { join } from 'node:path'
 import { makeIntrospectAgent, resolveIntrospectChatId } from './introspect-runtime'
 import { makeEventsStore } from '../events/store'
 import { makeObservationsStore } from '../observations/store'
+import { openTestDb, type Db } from '../../lib/db'
 
-function makeStores(stateDir: string, chatId: string) {
+function makeStores(stateDir: string, chatId: string, db: Db) {
   const memoryRoot = join(stateDir, 'memory')
   return {
-    events: makeEventsStore(memoryRoot, chatId),
-    observations: makeObservationsStore(memoryRoot, chatId),
+    events: makeEventsStore(db, chatId),
+    observations: makeObservationsStore(db, chatId),
   }
 }
 
 describe('makeIntrospectAgent (real SDK)', () => {
   let dir: string
-  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'intro-rt-')) })
-  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+  let db: Db
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'intro-rt-'))
+    db = openTestDb()
+  })
+  afterEach(() => {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  })
 
   it('builds context, calls injected sdkEval, parses response', async () => {
-    const { events, observations } = makeStores(dir, 'chat_x')
+    const { events, observations } = makeStores(dir, 'chat_x', db)
     const sdkEval = vi.fn(async (_prompt: string) =>
       JSON.stringify({ write: true, body: '观察一条', tone: 'curious', reasoning: 'r' })
     )
@@ -36,7 +44,7 @@ describe('makeIntrospectAgent (real SDK)', () => {
   })
 
   it('returns write=false on SDK error (does not throw)', async () => {
-    const { events, observations } = makeStores(dir, 'chat_x')
+    const { events, observations } = makeStores(dir, 'chat_x', db)
     const sdkEval = vi.fn(async () => { throw new Error('timeout') })
     const agent = makeIntrospectAgent({
       chatId: 'chat_x', events, observations,
@@ -51,7 +59,7 @@ describe('makeIntrospectAgent (real SDK)', () => {
   })
 
   it('returns write=false on malformed SDK output (parse failure)', async () => {
-    const { events, observations } = makeStores(dir, 'chat_x')
+    const { events, observations } = makeStores(dir, 'chat_x', db)
     const sdkEval = vi.fn(async () => 'not json at all')
     const agent = makeIntrospectAgent({
       chatId: 'chat_x', events, observations,
@@ -65,7 +73,7 @@ describe('makeIntrospectAgent (real SDK)', () => {
   })
 
   it('forwards SDK output verbatim when valid JSON', async () => {
-    const { events, observations } = makeStores(dir, 'chat_x')
+    const { events, observations } = makeStores(dir, 'chat_x', db)
     const sdkEval = vi.fn(async () =>
       '```json\n{"write":false,"reasoning":"nothing new"}\n```'
     )

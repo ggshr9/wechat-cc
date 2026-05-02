@@ -227,14 +227,20 @@ describe('SessionManager', () => {
   })
 
   describe('session resume', () => {
+    type MockRec = { session_id: string; last_used_at: string; provider: string }
+    // Test helper: SessionStore.provider is required as of PR7.8 — accept
+    // partial seeds without provider here and default to 'claude' so the
+    // existing tests stay terse. Real callers always pass provider.
     function makeMockStore(initial: Record<string, { session_id: string; last_used_at: string; provider?: string }> = {}) {
-      const data: Record<string, { session_id: string; last_used_at: string; provider?: string }> = { ...initial }
+      const data: Record<string, MockRec> = {}
+      for (const [k, v] of Object.entries(initial)) {
+        data[k] = { ...v, provider: v.provider ?? 'claude' }
+      }
       return {
-        get: (alias: string, expectedProvider?: string) => {
+        get: (alias: string, expectedProvider?: string): MockRec | null => {
           const rec = data[alias]
           if (!rec) return null
-          const recProv = rec.provider ?? 'claude'
-          if (expectedProvider && recProv !== expectedProvider) return null
+          if (expectedProvider && rec.provider !== expectedProvider) return null
           return rec
         },
         set: vi.fn((alias: string, sid: string, provider: string) => {
