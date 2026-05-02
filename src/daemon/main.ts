@@ -12,6 +12,8 @@ import { acquireInstanceLock, releaseInstanceLock } from './single-instance'
 import { buildBootstrap } from './bootstrap'
 import { createInternalApi } from './internal-api'
 import { makeMemoryFS } from './memory/fs-api'
+import { makeConversationStore } from '../core/conversation-store'
+import { providerDisplayName } from './provider-display-names'
 import { makeModeCommands } from './mode-commands'
 import { loadAllAccounts, makeIlinkAdapter } from './ilink-glue'
 import { startLongPollLoops, parseUpdates, type RawUpdate } from './poll-loop'
@@ -61,6 +63,17 @@ async function main() {
   // here so both paths see the same files.
   const memoryFS = makeMemoryFS({ rootDir: join(STATE_DIR, 'memory') })
 
+  // Per-chat conversation mode store (RFC 03 P2 + P3). Single instance
+  // shared between bootstrap (where the coordinator reads/writes mode)
+  // and internal-api (where the reply route looks up mode to decide
+  // whether to prefix outgoing text with [Claude] / [Codex] in parallel
+  // mode). Daemon-owned construction here ensures both consumers see
+  // the same in-memory state without polling the file.
+  const conversationStore = makeConversationStore(
+    join(STATE_DIR, 'conversations.json'),
+    { debounceMs: 500 },
+  )
+
   // RFC 03 §5 — start the daemon's internal HTTP API before bootstrap so
   // the wechat-mcp stdio MCP servers we register with each provider can
   // call back. Token-authed, loopback-only.
@@ -92,12 +105,21 @@ async function main() {
       editMessage: (chatId, msgId, text) => ilink.editMessage(chatId, msgId, text),
       broadcast: (text, accountId) => ilink.broadcast(text, accountId),
     },
+    // RFC 03 P3 — mode-aware reply prefix. internal-api consults the
+    // conversationStore at every /v1/wechat/reply call; if the chat is
+    // in parallel/chatroom mode, prefixes the outgoing text with the
+    // sender's display name. In solo mode the participant_tag is
+    // ignored and text passes through unchanged.
+    prefix: {
+      conversationStore,
+      providerDisplayName,
+    },
     log: (tag, line) => log(tag, line),
   })
   const { port: internalApiPort, tokenFilePath: internalTokenFile } = await internalApi.start()
   log('BOOT', `internal-api listening on 127.0.0.1:${internalApiPort} (token: ${internalTokenFile})`)
 
-  const { sessionManager, sessionStore, conversationStore, registry, coordinator, resolve, formatInbound, sdkOptionsForProject, defaultProviderId } = buildBootstrap({
+  const { sessionManager, sessionStore, registry, coordinator, resolve, formatInbound, sdkOptionsForProject, defaultProviderId } = buildBootstrap({
     stateDir: STATE_DIR,
     ilink,
     loadProjects: ilink.loadProjects,
@@ -109,6 +131,7 @@ async function main() {
       baseUrl: `http://127.0.0.1:${internalApiPort}`,
       tokenFilePath: internalTokenFile,
     },
+    conversationStore,
   })
 
   // Companion v2 scheduler — simple interval+jitter tick. When enabled +

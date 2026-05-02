@@ -31,7 +31,7 @@ export interface ConversationCoordinatorDeps {
   resolveProject(chatId: string): { alias: string; path: string } | null
   manager: Pick<SessionManager, 'acquire'>
   conversationStore: Pick<ConversationStore, 'get' | 'set'>
-  registry: Pick<ProviderRegistry, 'has' | 'list'>
+  registry: Pick<ProviderRegistry, 'has' | 'list' | 'get'>
   /**
    * Default provider id for chats with no explicit Mode set. Mirrors
    * the daemon's agent-config.provider — i.e. on a fresh install
@@ -39,6 +39,13 @@ export interface ConversationCoordinatorDeps {
    * setup time, until they say `/cc` or `/codex` to override per-chat.
    */
   defaultProviderId: ProviderId
+  /**
+   * Provider ids to fan-out to in `parallel` mode (RFC 03 P3). Defaults
+   * to `['claude', 'codex']` — the two shipped providers. P3 mode is
+   * implicit-2-way; if either id isn't registered the parallel-mode
+   * setMode validation rejects up front.
+   */
+  parallelProviders?: ProviderId[]
   format: (msg: InboundMsg) => string
   sendAssistantText?: (chatId: string, text: string) => Promise<void>
   log: (tag: string, line: string) => void
@@ -68,6 +75,8 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     return persisted?.mode ?? defaultMode()
   }
 
+  const parallelProviders: ProviderId[] = deps.parallelProviders ?? ['claude', 'codex']
+
   function validateMode(mode: Mode): void {
     // Reject unknown providers up front so the caller (mode-commands or
     // a programmatic setter) gets a clear error instead of a downstream
@@ -80,6 +89,13 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     if (mode.kind === 'primary_tool') {
       if (!deps.registry.has(mode.primary)) {
         throw new Error(`unknown primary provider: ${mode.primary}`)
+      }
+    }
+    if (mode.kind === 'parallel' || mode.kind === 'chatroom') {
+      // Both modes need every parallel-set provider registered.
+      const missing = parallelProviders.filter(p => !deps.registry.has(p))
+      if (missing.length > 0) {
+        throw new Error(`mode '${mode.kind}' requires providers ${parallelProviders.join(', ')}; missing: ${missing.join(', ')}`)
       }
     }
   }
@@ -108,6 +124,45 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     }
   }
 
+  /**
+   * RFC 03 §4.3 parallel mode: fan out the same inbound to every
+   * registered parallel provider concurrently. Both handles dispatch
+   * independently; if one throws the other's reply still goes through
+   * (Promise.allSettled). When a provider DID call its reply tool the
+   * prefix is added at the internal-api layer (using participant_tag).
+   * When a provider DIDN'T call reply but emitted assistant text, the
+   * fallback path here adds the prefix in front of each chunk.
+   */
+  async function dispatchParallel(
+    msg: InboundMsg,
+    proj: { alias: string; path: string },
+  ): Promise<void> {
+    deps.log('COORDINATOR', `parallel chat=${msg.chatId} → project=${proj.alias} providers=${parallelProviders.join(',')}`)
+    const handles = await Promise.all(
+      parallelProviders.map(p => deps.manager.acquire(proj.alias, proj.path, p)),
+    )
+    const text = deps.format(msg)
+    const settled = await Promise.allSettled(handles.map(h => h.dispatch(text)))
+
+    for (let i = 0; i < settled.length; i++) {
+      const r = settled[i]!
+      const providerId = parallelProviders[i]!
+      if (r.status === 'rejected') {
+        deps.log('COORDINATOR_PARALLEL', `provider=${providerId} threw: ${r.reason instanceof Error ? r.reason.message : r.reason}`)
+        continue
+      }
+      const { assistantText, replyToolCalled } = r.value
+      if (replyToolCalled || assistantText.length === 0) continue
+      // Provider didn't call reply tool — fall back to forwarding raw
+      // assistant text, prefixed so the user can tell who said what.
+      const dn = deps.registry.get(providerId)?.opts.displayName ?? providerId
+      deps.log('FALLBACK_REPLY', `chat=${msg.chatId} provider=${providerId} chunks=${assistantText.length} (parallel)`)
+      for (const t of assistantText) {
+        await deps.sendAssistantText?.(msg.chatId, `[${dn}] ${t}`)
+      }
+    }
+  }
+
   return {
     getMode,
     setMode(chatId, mode) {
@@ -133,8 +188,18 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
           }
           return dispatchSolo(msg, proj, mode.provider)
         }
+        case 'parallel': {
+          const missing = parallelProviders.filter(p => !deps.registry.has(p))
+          if (missing.length > 0) {
+            // One of the parallel providers vanished post-persist.
+            // Degrade to solo+default rather than partial-parallel, which
+            // would silently change semantics ("both" → "one").
+            deps.log('COORDINATOR', `chat=${msg.chatId} parallel mode missing providers (${missing.join(', ')}); falling back to solo+${deps.defaultProviderId}`)
+            return dispatchSolo(msg, proj, deps.defaultProviderId)
+          }
+          return dispatchParallel(msg, proj)
+        }
         case 'primary_tool':
-        case 'parallel':
         case 'chatroom':
           throw new ModeNotImplementedError(mode.kind)
       }

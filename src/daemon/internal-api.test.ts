@@ -1160,6 +1160,143 @@ describe('internal-api', () => {
       expect(broadcast).toHaveBeenCalledWith('hi', undefined)
     })
 
+    // ── reply prefixing in parallel/chatroom modes (RFC 03 P3) ─────────
+
+    describe('reply prefixing (RFC 03 P3)', () => {
+      function startWithPrefix(opts: {
+        mode: { kind: 'solo' | 'parallel' | 'chatroom' | 'primary_tool'; provider?: string; primary?: string } | null
+        sendReply: (chatId: string, text: string) => Promise<{ msgId: string; error?: string }>
+      }): Promise<{ port: number; token: string }> {
+        const conversationStore = {
+          get: (chatId: string) => opts.mode ? { mode: opts.mode as never } : null,
+        }
+        api = createInternalApi({
+          stateDir, daemonPid: 1,
+          ilink: {
+            sendReply: opts.sendReply,
+            sendFile: async () => {},
+            editMessage: async () => {},
+            broadcast: async () => ({ ok: 0, failed: 0 }),
+          },
+          prefix: {
+            conversationStore,
+            providerDisplayName: (id) => id === 'claude' ? 'Claude' : id === 'codex' ? 'Codex' : id,
+          },
+        })
+        return api.start().then(({ port, tokenFilePath }) => ({
+          port, token: readFileSync(tokenFilePath, 'utf8').trim(),
+        }))
+      }
+
+      it('prefixes [Claude] in parallel mode when participant_tag=claude', async () => {
+        const sentText: string[] = []
+        const sendReply = async (_chatId: string, text: string) => { sentText.push(text); return { msgId: 'm' } }
+        const { port, token } = await startWithPrefix({
+          mode: { kind: 'parallel' }, sendReply,
+        })
+        await fetch(`http://127.0.0.1:${port}/v1/wechat/reply`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ chat_id: 'c', text: 'hello', participant_tag: 'claude' }),
+        })
+        expect(sentText).toEqual(['[Claude] hello'])
+      })
+
+      it('prefixes [Codex] when participant_tag=codex', async () => {
+        const sentText: string[] = []
+        const sendReply = async (_chatId: string, text: string) => { sentText.push(text); return { msgId: 'm' } }
+        const { port, token } = await startWithPrefix({
+          mode: { kind: 'parallel' }, sendReply,
+        })
+        await fetch(`http://127.0.0.1:${port}/v1/wechat/reply`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ chat_id: 'c', text: 'codex says hi', participant_tag: 'codex' }),
+        })
+        expect(sentText).toEqual(['[Codex] codex says hi'])
+      })
+
+      it('passes text through UNPREFIXED in solo mode (no behaviour change for existing users)', async () => {
+        const sentText: string[] = []
+        const sendReply = async (_chatId: string, text: string) => { sentText.push(text); return { msgId: 'm' } }
+        const { port, token } = await startWithPrefix({
+          mode: { kind: 'solo', provider: 'claude' }, sendReply,
+        })
+        await fetch(`http://127.0.0.1:${port}/v1/wechat/reply`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ chat_id: 'c', text: 'hi', participant_tag: 'claude' }),
+        })
+        // No prefix even though participant_tag was supplied — solo doesn't disambiguate.
+        expect(sentText).toEqual(['hi'])
+      })
+
+      it('passes text through UNPREFIXED when no mode persisted (defaults to solo)', async () => {
+        const sentText: string[] = []
+        const sendReply = async (_chatId: string, text: string) => { sentText.push(text); return { msgId: 'm' } }
+        const { port, token } = await startWithPrefix({ mode: null, sendReply })
+        await fetch(`http://127.0.0.1:${port}/v1/wechat/reply`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ chat_id: 'c', text: 'hi', participant_tag: 'claude' }),
+        })
+        expect(sentText).toEqual(['hi'])
+      })
+
+      it('passes text through UNPREFIXED when participant_tag absent (legacy clients)', async () => {
+        const sentText: string[] = []
+        const sendReply = async (_chatId: string, text: string) => { sentText.push(text); return { msgId: 'm' } }
+        const { port, token } = await startWithPrefix({
+          mode: { kind: 'parallel' }, sendReply,
+        })
+        await fetch(`http://127.0.0.1:${port}/v1/wechat/reply`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ chat_id: 'c', text: 'hi' }),
+        })
+        // tag missing → no prefix even though mode is parallel
+        expect(sentText).toEqual(['hi'])
+      })
+
+      it('prefixes in chatroom mode too (P5 will use the same plumbing)', async () => {
+        const sentText: string[] = []
+        const sendReply = async (_chatId: string, text: string) => { sentText.push(text); return { msgId: 'm' } }
+        const { port, token } = await startWithPrefix({
+          mode: { kind: 'chatroom' }, sendReply,
+        })
+        await fetch(`http://127.0.0.1:${port}/v1/wechat/reply`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ chat_id: 'c', text: 'speaks', participant_tag: 'claude' }),
+        })
+        expect(sentText).toEqual(['[Claude] speaks'])
+      })
+
+      it('falls back to id when providerDisplayName returns custom names (e.g. tests)', async () => {
+        const sentText: string[] = []
+        const sendReply = async (_chatId: string, text: string) => { sentText.push(text); return { msgId: 'm' } }
+        const conversationStore = {
+          get: () => ({ mode: { kind: 'parallel' as const } }),
+        }
+        api = createInternalApi({
+          stateDir, daemonPid: 1,
+          ilink: { sendReply, sendFile: async () => {}, editMessage: async () => {}, broadcast: async () => ({ ok: 0, failed: 0 }) },
+          prefix: {
+            conversationStore,
+            providerDisplayName: (id) => id,  // identity — no friendly name
+          },
+        })
+        const { port, tokenFilePath } = await api.start()
+        const token = readFileSync(tokenFilePath, 'utf8').trim()
+        await fetch(`http://127.0.0.1:${port}/v1/wechat/reply`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ chat_id: 'c', text: 'hi', participant_tag: 'gemini-experimental' }),
+        })
+        expect(sentText).toEqual(['[gemini-experimental] hi'])
+      })
+    })
+
     it('returns 503 when ilink dep not wired', async () => {
       api = createInternalApi({ stateDir, daemonPid: 1 })
       const { port, tokenFilePath } = await api.start()

@@ -26,6 +26,22 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
 import type { MemoryFS } from './memory/fs-api'
 import type { WechatProjectsDep, WechatVoiceDep, WechatCompanionDep } from './wechat-tool-deps'
+import type { ConversationStore } from '../core/conversation-store'
+import type { ProviderId } from '../core/conversation'
+
+/**
+ * RFC 03 P3: when conversation mode is parallel (or chatroom), the
+ * `reply` route prefixes outgoing text with `[Display]` so the user
+ * can tell which agent said what. The wechat-mcp child sends its own
+ * provider id as `participant_tag` in the request body; the route looks
+ * up the chat's persisted mode + the registered provider's display
+ * name and decides whether to prefix.
+ */
+export interface InternalApiPrefixDeps {
+  conversationStore: Pick<ConversationStore, 'get'>
+  /** Resolves a provider id (the participant_tag) to the human-readable name. */
+  providerDisplayName: (id: ProviderId) => string
+}
 
 /**
  * Ilink-bound message-sending deps (RFC 03 P1.B B1). These call out to
@@ -82,6 +98,13 @@ export interface InternalApiDeps {
    * served. `voice.replyVoice` covers `reply_voice` separately.
    */
   ilink?: InternalApiIlinkDep
+  /**
+   * Optional mode-aware reply prefixing (RFC 03 P3). When wired, the
+   * `reply` route consults `conversationStore` for the chat's mode and
+   * prefixes `[Display]` in parallel + chatroom modes. Without this,
+   * tags supplied by clients are silently ignored (legacy solo behaviour).
+   */
+  prefix?: InternalApiPrefixDeps
   /** Optional log hook so api activity surfaces in channel.log. */
   log?: (tag: string, line: string) => void
 }
@@ -327,11 +350,16 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
     // codex-agent-provider's WECHAT_MCP_SERVER='wechat' check match against.
     'POST /v1/wechat/reply': async (_q, body) => {
       if (!deps.ilink) return { status: 503, body: { error: 'ilink_not_wired' } }
-      const b = body as { chat_id?: unknown; text?: unknown } | null
+      const b = body as { chat_id?: unknown; text?: unknown; participant_tag?: unknown } | null
       if (typeof b?.chat_id !== 'string') return { status: 400, body: { error: 'chat_id_required' } }
       if (typeof b?.text !== 'string') return { status: 400, body: { error: 'text_required' } }
+      // RFC 03 P3 — mode-aware prefixing. Only applies when the chat is
+      // in a multi-participant mode AND the caller supplied its tag.
+      // Solo mode (and absent prefix deps) → text passes through unchanged.
+      const tag = typeof b.participant_tag === 'string' ? b.participant_tag : undefined
+      const prefixed = maybePrefix(b.chat_id, b.text, tag)
       try {
-        const r = await deps.ilink.sendReply(b.chat_id, b.text)
+        const r = await deps.ilink.sendReply(b.chat_id, prefixed)
         // Legacy in-process wrapper reshaped {msgId,error?} → {ok,msg_id} or
         // {ok:false,error}. Preserve verbatim so the agent's mental model
         // doesn't shift across this migration.
@@ -437,6 +465,20 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
 
   function errMsg(err: unknown): string {
     return err instanceof Error ? err.message : String(err)
+  }
+
+  /**
+   * Prefix `[Display]` to outgoing reply text when the chat is in a
+   * multi-participant mode (parallel, chatroom). Returns the text
+   * unchanged in solo mode or when prefix deps aren't wired.
+   */
+  function maybePrefix(chatId: string, text: string, tag: string | undefined): string {
+    if (!tag || !deps.prefix) return text
+    const mode = deps.prefix.conversationStore.get(chatId)?.mode
+    if (!mode) return text
+    if (mode.kind !== 'parallel' && mode.kind !== 'chatroom') return text
+    const dn = deps.prefix.providerDisplayName(tag)
+    return `[${dn}] ${text}`
   }
 
   async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {

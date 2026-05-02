@@ -4,6 +4,7 @@ import { createCodexAgentProvider } from '../core/codex-agent-provider'
 import { createProviderRegistry, type ProviderRegistry } from '../core/provider-registry'
 import { createConversationCoordinator, type ConversationCoordinator } from '../core/conversation-coordinator'
 import { makeConversationStore, type ConversationStore } from '../core/conversation-store'
+import { providerDisplayName as defaultProviderDisplayName } from './provider-display-names'
 import type { ProviderId } from '../core/conversation'
 import { makeResolver } from '../core/project-resolver'
 import { makeCanUseTool } from '../core/permission-relay'
@@ -79,6 +80,13 @@ export interface BootstrapDeps {
     baseUrl: string
     tokenFilePath: string
   }
+  /**
+   * Caller may inject a pre-built ConversationStore so the same instance
+   * is shared with internal-api's reply-prefix lookup (RFC 03 P3). When
+   * omitted, buildBootstrap creates its own — preserves test-time isolation
+   * but means main.ts's internal-api can't see mode flips.
+   */
+  conversationStore?: ConversationStore
 }
 
 export interface Bootstrap {
@@ -157,7 +165,12 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
   // After B1 the legacy server is gone and the stdio one inherits the
   // canonical `wechat` name — keeping tool names like `mcp__wechat__reply`
   // stable for the agent and the providers' replyToolCalled detection.
-  function wechatStdioMcpSpec(): { command: string; args: string[]; env: Record<string, string> } | null {
+  //
+  // The optional `participantTag` (RFC 03 P3) is the providerId baked into
+  // the child's env so the stdio reply tool can identify which agent
+  // generated each reply. internal-api uses this to prefix `[Claude]` /
+  // `[Codex]` in parallel + chatroom modes.
+  function wechatStdioMcpSpec(participantTag?: ProviderId): { command: string; args: string[]; env: Record<string, string> } | null {
     if (!deps.internalApi) return null
     const here = dirname(fileURLToPath(import.meta.url))
     // src/daemon/bootstrap.ts → ../mcp-servers/wechat/main.ts
@@ -168,10 +181,12 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
       env: {
         WECHAT_INTERNAL_API: deps.internalApi.baseUrl,
         WECHAT_INTERNAL_TOKEN_FILE: deps.internalApi.tokenFilePath,
+        ...(participantTag ? { WECHAT_PARTICIPANT_TAG: participantTag } : {}),
       },
     }
   }
-  const wechatStdio = wechatStdioMcpSpec()
+  const wechatStdioForClaude = wechatStdioMcpSpec('claude')
+  const wechatStdioForCodex = wechatStdioMcpSpec('codex')
 
   const sdkOptionsForProject = (_alias: string, path: string): Options => {
     const cstatus = deps.ilink.companion.status()
@@ -181,7 +196,7 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     const common: Options = {
       cwd: path,
       mcpServers: {
-        ...(wechatStdio ? { wechat: { type: 'stdio' as const, ...wechatStdio } } : {}),
+        ...(wechatStdioForClaude ? { wechat: { type: 'stdio' as const, ...wechatStdioForClaude } } : {}),
       },
       // Using preset+append (instead of raw string) keeps MCP tools inline in
       // the system prompt — otherwise they're deferred behind ToolSearch,
@@ -256,7 +271,7 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
       // hangs; `never` is the only viable headless setting.
       approvalPolicy: 'never',
       sandboxMode: 'workspace-write',
-      ...(wechatStdio ? { mcpServers: { wechat: wechatStdio } } : {}),
+      ...(wechatStdioForCodex ? { mcpServers: { wechat: wechatStdioForCodex } } : {}),
     }),
     {
       displayName: 'Codex',
@@ -275,7 +290,10 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
   // Per-chat conversation mode (RFC 03 P2). Default for new chats =
   // `solo` with the daemon-configured provider. `/cc` `/codex` `/solo`
   // commands flip individual chats; persisted in conversations.json.
-  const conversationStore = makeConversationStore(
+  // Caller may inject a shared instance so internal-api (which needs
+  // to look up modes for reply-prefixing in P3 parallel mode) sees
+  // the same flips. When absent, we own one rooted at <stateDir>.
+  const conversationStore = deps.conversationStore ?? makeConversationStore(
     join(deps.stateDir, 'conversations.json'),
     { debounceMs: 500 },
   )

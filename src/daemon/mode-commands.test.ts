@@ -98,15 +98,54 @@ describe('makeModeCommands', () => {
     expect(text).toContain('默认: codex')      // default
   })
 
-  it('/both /chat and /cc + codex announce "not yet implemented"', async () => {
-    const { cmds, set, sentMessages } = setup()
+  it('/both switches to parallel mode (RFC 03 P3)', async () => {
+    const { cmds, set, sentMessages } = setup({ registered: ['claude', 'codex'] })
+    const consumed = await cmds.handle(inbound('/both'))
+    expect(consumed).toBe(true)
+    expect(set).toHaveBeenCalledWith('chat-1', { kind: 'parallel' })
+    expect(sentMessages[0]?.[1]).toContain('并行模式开启')
+    expect(sentMessages[0]?.[1]).toContain('[Claude]')
+    expect(sentMessages[0]?.[1]).toContain('[Codex]')
+  })
+
+  it('/both surfaces validation error when one provider missing', async () => {
+    // Mock setMode to throw — simulates coordinator's validateMode rejecting
+    const sentMessages: Array<[string, string]> = []
+    const sendMessage = vi.fn(async (chatId: string, text: string) => {
+      sentMessages.push([chatId, text]); return { msgId: 'm' }
+    })
+    const cmds = makeModeCommands({
+      coordinator: {
+        getMode: () => ({ kind: 'solo', provider: 'claude' }),
+        setMode: () => { throw new Error("mode 'parallel' requires providers claude, codex; missing: codex") },
+      },
+      registry: {
+        has: (id: string) => id === 'claude',
+        get: () => ({ provider: {} as never, opts: { displayName: 'Claude', canResume: () => true } }),
+        list: () => ['claude'],
+      },
+      defaultProviderId: 'claude',
+      sendMessage: sendMessage as unknown as Parameters<typeof makeModeCommands>[0]['sendMessage'],
+      log: () => {},
+    })
     await cmds.handle(inbound('/both'))
+    expect(sentMessages[0]?.[1]).toContain('启用失败')
+    expect(sentMessages[0]?.[1]).toContain('missing: codex')
+  })
+
+  it('/chat and /cc + codex still placeholder ("not yet implemented")', async () => {
+    const { cmds, set, sentMessages } = setup()
     await cmds.handle(inbound('/chat'))
     await cmds.handle(inbound('/cc + codex'))
     expect(set).not.toHaveBeenCalled()
-    expect(sentMessages[0]?.[1]).toContain('P3')
-    expect(sentMessages[1]?.[1]).toContain('P5')
-    expect(sentMessages[2]?.[1]).toContain('P4')
+    expect(sentMessages[0]?.[1]).toContain('P5')
+    expect(sentMessages[1]?.[1]).toContain('P4')
+  })
+
+  it('/mode lists /both as available', async () => {
+    const { cmds, sentMessages } = setup()
+    await cmds.handle(inbound('/mode'))
+    expect(sentMessages[0]?.[1]).toContain('/both')
   })
 
   it('returns false for unrecognised slash words like /health (lets admin-commands handle)', async () => {

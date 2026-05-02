@@ -333,6 +333,12 @@ server.registerTool(
 // set and codex-agent-provider's WECHAT_MCP_SERVER='wechat' check expect.
 // Legacy 中文 descriptions kept verbatim so the system prompt stays accurate.
 
+// RFC 03 P3: when daemon spawns this MCP child it sets WECHAT_PARTICIPANT_TAG
+// to the providerId (e.g. 'claude' / 'codex'). The reply tool forwards
+// the tag in its body so internal-api can prefix `[Claude]` / `[Codex]`
+// in parallel + chatroom modes. In solo mode the tag is ignored.
+const PARTICIPANT_TAG = process.env.WECHAT_PARTICIPANT_TAG
+
 server.registerTool(
   'reply',
   {
@@ -342,7 +348,10 @@ server.registerTool(
   },
   async ({ chat_id, text }) => {
     try {
-      const r = await client.request<unknown>('POST', '/v1/wechat/reply', { chat_id, text })
+      const r = await client.request<unknown>('POST', '/v1/wechat/reply', {
+        chat_id, text,
+        ...(PARTICIPANT_TAG ? { participant_tag: PARTICIPANT_TAG } : {}),
+      })
       return { content: [{ type: 'text', text: JSON.stringify(r) }] }
     } catch (err) {
       return passthroughErrorResult(err, 'reply')

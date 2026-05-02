@@ -119,18 +119,27 @@ export function makeModeCommands(deps: ModeCommandsDeps): ModeCommands {
           `已注册 provider: ${deps.registry.list().join(', ')}`,
           `默认: ${deps.defaultProviderId}`,
           '',
-          '可用命令: /cc /codex /solo /mode',
-          '即将支持 (P3-P5): /both /chat /cc + codex /codex + cc',
+          '可用命令: /cc /codex /both /solo /mode',
+          '即将支持 (P4-P5): /chat /cc + codex /codex + cc',
         ]
         await reply(msg.chatId, lines.join('\n'))
         return true
       }
 
-      // /both, /chat — reserved for P3/P5
+      // /both — parallel mode (RFC 03 P3 — both shipped providers reply concurrently)
       if (slashWord.toLowerCase() === 'both' && tail === '') {
-        await reply(msg.chatId, '🚧 并行模式 (/both) 在 P3 才上线，当前版本未实现。')
+        try {
+          deps.coordinator.setMode(msg.chatId, { kind: 'parallel' })
+        } catch (err) {
+          await reply(msg.chatId, `❌ /both 启用失败: ${err instanceof Error ? err.message : String(err)}`)
+          return true
+        }
+        await reply(msg.chatId, '✅ 并行模式开启。下条消息开始 Claude 和 Codex 同时回复（每条会带 [Claude] / [Codex] 前缀）。')
+        deps.log('MODE_CMD', `chat=${msg.chatId} → parallel`)
         return true
       }
+
+      // /chat — chatroom (P5 reserved)
       if (slashWord.toLowerCase() === 'chat' && tail === '') {
         await reply(msg.chatId, '🚧 聊天室模式 (/chat) 在 P5 才上线，当前版本未实现。')
         return true
