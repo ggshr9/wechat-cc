@@ -51,4 +51,6 @@ jobs:
         run: bun build log-viewer.ts --target=node --outfile=dist/log-viewer.js
 
       - name: Run tests
-        run: npx vitest run
+        # `bun run test` invokes `bun --bun vitest run` per package.json
+        # (PR7 — vitest needs Bun's runtime to resolve `bun:sqlite`).
+        run: bun run test
