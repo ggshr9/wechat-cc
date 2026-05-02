@@ -19,6 +19,7 @@ import type { ConversationStore } from './conversation-store'
 import type { ProviderRegistry } from './provider-registry'
 import type { Mode, ProviderId } from './conversation'
 import type { InboundMsg } from './prompt-format'
+import { parseAddressing, wrapChatroomTurn, maxRoundsSuffix } from './chatroom-protocol'
 
 export class ModeNotImplementedError extends Error {
   constructor(public readonly modeKind: Mode['kind']) {
@@ -43,9 +44,17 @@ export interface ConversationCoordinatorDeps {
    * Provider ids to fan-out to in `parallel` mode (RFC 03 P3). Defaults
    * to `['claude', 'codex']` — the two shipped providers. P3 mode is
    * implicit-2-way; if either id isn't registered the parallel-mode
-   * setMode validation rejects up front.
+   * setMode validation rejects up front. Also reused as the chatroom
+   * participant set in P5.
    */
   parallelProviders?: ProviderId[]
+  /**
+   * Maximum inter-agent rounds for chatroom mode (RFC 03 §4.4). Default 4.
+   * Counts each speaker turn after the initial user turn. When hit, the
+   * loop forces termination and any remaining text gets the
+   * maxRoundsSuffix appended for the user.
+   */
+  chatroomMaxRounds?: number
   format: (msg: InboundMsg) => string
   sendAssistantText?: (chatId: string, text: string) => Promise<void>
   log: (tag: string, line: string) => void
@@ -76,6 +85,11 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
   }
 
   const parallelProviders: ProviderId[] = deps.parallelProviders ?? ['claude', 'codex']
+  const chatroomMaxRounds = deps.chatroomMaxRounds ?? 4
+  // Per-chat in-memory state for chatroom: who spoke last, used as the
+  // initial speaker for the next round. Volatile across daemon restart
+  // (small cost: first chatroom turn after restart goes to default).
+  const lastChatroomSpeaker = new Map<string, ProviderId>()
 
   function validateMode(mode: Mode): void {
     // Reject unknown providers up front so the caller (mode-commands or
@@ -129,6 +143,130 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     for (const t of assistantTexts) {
       await deps.sendAssistantText?.(msg.chatId, t)
     }
+  }
+
+  /**
+   * RFC 03 §4.4 chatroom mode: two agents take turns; routing is by
+   * @-tag in their assistant text. Loop terminates naturally when no
+   * one @'s the peer (pending queue empties) or hits MAX_ROUNDS.
+   *
+   * Sequence per turn:
+   *   1. Pop the next pending {from, text}.
+   *   2. Wrap with chatroom envelope (round counter + protocol reminder).
+   *   3. Dispatch to the speaker's session. SDK conversation history
+   *      accumulates as usual — fine because the envelope makes each
+   *      turn's role clear.
+   *   4. Parse assistantText for @-tag segments:
+   *        - addressee=null or 'user' → forward to user (prefixed)
+   *        - addressee=peer → enqueue for peer's next turn
+   *        - addressee=anything else → treat as user (unknown peer
+   *          shouldn't silently disappear)
+   *   5. If reply tool was called (agent ignored the "don't use reply"
+   *      hint), text already went out via internal-api. We still parse
+   *      assistantText for routing (separate channel).
+   *   6. Switch speaker, increment rounds, repeat.
+   *
+   * Speaker rotation: starts with last-addressed (from previous turn or
+   * previous chat session); falls back to parallelProviders[0]. Updated
+   * each round to the current peer (i.e. flip-flop between the two).
+   */
+  async function dispatchChatroom(
+    msg: InboundMsg,
+    proj: { alias: string; path: string },
+  ): Promise<void> {
+    if (parallelProviders.length !== 2) {
+      throw new Error(`chatroom mode requires exactly 2 parallel providers; got ${parallelProviders.length}`)
+    }
+    const [providerA, providerB] = parallelProviders as [ProviderId, ProviderId]
+    const peerOf = (p: ProviderId): ProviderId => p === providerA ? providerB : providerA
+
+    // Pick first speaker: last-spoke for this chat (from a previous
+    // chatroom session) or default to providerA.
+    let speaker = lastChatroomSpeaker.get(msg.chatId) ?? providerA
+    let peer = peerOf(speaker)
+
+    interface PendingTurn { from: 'user' | ProviderId; text: string }
+    const pending: PendingTurn[] = [{ from: 'user', text: deps.format(msg) }]
+    let round = 0
+
+    deps.log('COORDINATOR', `chatroom chat=${msg.chatId} → start speaker=${speaker} peer=${peer} max=${chatroomMaxRounds}`)
+
+    while (pending.length > 0) {
+      round += 1
+      const forced = round >= chatroomMaxRounds
+      const turn = pending.shift()!
+      const wrapped = wrapChatroomTurn({
+        speaker, peer, round, maxRounds: chatroomMaxRounds,
+        sender: turn.from,
+        inner: turn.text,
+      })
+
+      let result: { assistantText: string[]; replyToolCalled: boolean }
+      try {
+        const handle = await deps.manager.acquire(proj.alias, proj.path, speaker)
+        result = await handle.dispatch(wrapped)
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err)
+        deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} threw: ${reason}`)
+        // Surface to user so they know something went wrong, then end loop.
+        const dn = deps.registry.get(speaker)?.opts.displayName ?? speaker
+        await deps.sendAssistantText?.(msg.chatId, `[${dn}] (chatroom error: ${reason})`)
+        break
+      }
+
+      // Track last-spoke for next chat session's initial speaker.
+      lastChatroomSpeaker.set(msg.chatId, speaker)
+
+      // Parse all assistantText output for @-tag routing. Note: if
+      // replyToolCalled was true, that text already went to user via
+      // internal-api (with prefix). We still parse assistantText
+      // independently — it's the routing channel.
+      const allText = result.assistantText.join('\n').trim()
+      const segments = allText.length > 0 ? parseAddressing(allText) : []
+
+      const dn = deps.registry.get(speaker)?.opts.displayName ?? speaker
+      for (const seg of segments) {
+        const target = seg.addressee
+        if (target === peer) {
+          // Inter-agent — enqueue for peer's next turn (unless we've
+          // hit the round cap, in which case route to user instead so
+          // the would-be relay isn't lost). Only the would-be-relay
+          // segment gets the max_rounds suffix; co-emitted @user
+          // segments below stay clean (they're naturally user-facing).
+          if (forced) {
+            await deps.sendAssistantText?.(msg.chatId, `[${dn}] @${peer} ${seg.body}${maxRoundsSuffix()}`)
+          } else {
+            pending.push({ from: speaker, text: `@${peer} ${seg.body}` })
+          }
+        } else {
+          // user-facing (null, 'user', or unknown peer treated as user) — no suffix.
+          await deps.sendAssistantText?.(msg.chatId, `[${dn}] ${seg.body}`)
+        }
+      }
+
+      // If the speaker emitted nothing, log once and move on. The peer
+      // gets nothing to react to → loop will terminate next iteration.
+      if (segments.length === 0) {
+        deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} produced no assistant text (replyToolCalled=${result.replyToolCalled})`)
+      }
+
+      if (forced) {
+        // Cap reached: drop any queued relays (defensive — we shouldn't
+        // have enqueued any since the for-loop above routes to user when
+        // forced) and log so it's grep-able from channel.log.
+        const dropped = pending.length
+        pending.length = 0
+        deps.log('COORDINATOR_CHATROOM', `chat=${msg.chatId} max_rounds reached on round ${round}${dropped > 0 ? `; dropped ${dropped} queued relay(s)` : ''}`)
+      }
+
+      // Flip speaker for next iteration (only if we have more pending).
+      if (pending.length > 0) {
+        speaker = peer
+        peer = peerOf(speaker)
+      }
+    }
+
+    deps.log('COORDINATOR', `chatroom chat=${msg.chatId} → done after ${round} round(s)`)
   }
 
   /**
@@ -219,8 +357,15 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
           }
           return dispatchSolo(msg, proj, mode.primary)
         }
-        case 'chatroom':
-          throw new ModeNotImplementedError(mode.kind)
+        case 'chatroom': {
+          // RFC 03 P5 — two agents take turns via @-tag routing.
+          const missing = parallelProviders.filter(p => !deps.registry.has(p))
+          if (missing.length > 0) {
+            deps.log('COORDINATOR', `chat=${msg.chatId} chatroom mode missing providers (${missing.join(', ')}); falling back to solo+${deps.defaultProviderId}`)
+            return dispatchSolo(msg, proj, deps.defaultProviderId)
+          }
+          return dispatchChatroom(msg, proj)
+        }
       }
     },
   }

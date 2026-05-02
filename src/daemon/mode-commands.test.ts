@@ -133,11 +133,62 @@ describe('makeModeCommands', () => {
     expect(sentMessages[0]?.[1]).toContain('missing: codex')
   })
 
-  it('/chat still placeholder ("not yet implemented")', async () => {
-    const { cmds, set, sentMessages } = setup()
+  // ── /chat — chatroom mode (RFC 03 P5) ─────────────────────────────────
+
+  it('/chat switches to chatroom mode', async () => {
+    const { cmds, set, sentMessages } = setup({ registered: ['claude', 'codex'] })
+    const consumed = await cmds.handle(inbound('/chat'))
+    expect(consumed).toBe(true)
+    expect(set).toHaveBeenCalledWith('chat-1', { kind: 'chatroom' })
+    expect(sentMessages[0]?.[1]).toContain('聊天室模式开启')
+    expect(sentMessages[0]?.[1]).toContain('@user')
+    expect(sentMessages[0]?.[1]).toContain('@codex')
+    expect(sentMessages[0]?.[1]).toContain('/stop')
+  })
+
+  it('/chat surfaces validation error when one provider missing', async () => {
+    const sentMessages: Array<[string, string]> = []
+    const sendMessage = vi.fn(async (chatId: string, text: string) => {
+      sentMessages.push([chatId, text]); return { msgId: 'm' }
+    })
+    const cmds = makeModeCommands({
+      coordinator: {
+        getMode: () => ({ kind: 'solo', provider: 'claude' }),
+        setMode: () => { throw new Error("mode 'chatroom' requires providers claude, codex; missing: codex") },
+      },
+      registry: {
+        has: (id: string) => id === 'claude',
+        get: () => ({ provider: {} as never, opts: { displayName: 'Claude', canResume: () => true } }),
+        list: () => ['claude'],
+      },
+      defaultProviderId: 'claude',
+      sendMessage: sendMessage as unknown as Parameters<typeof makeModeCommands>[0]['sendMessage'],
+      log: () => {},
+    })
     await cmds.handle(inbound('/chat'))
-    expect(set).not.toHaveBeenCalled()
-    expect(sentMessages[0]?.[1]).toContain('P5')
+    expect(sentMessages[0]?.[1]).toContain('启用失败')
+    expect(sentMessages[0]?.[1]).toContain('missing: codex')
+  })
+
+  // ── /stop — exit any mode, revert to default ──────────────────────────
+
+  it('/stop reverts to default solo (alias for /solo)', async () => {
+    const { cmds, set, sentMessages } = setup({
+      defaultProviderId: 'codex',
+      initialMode: { kind: 'chatroom' },
+    })
+    const consumed = await cmds.handle(inbound('/stop'))
+    expect(consumed).toBe(true)
+    expect(set).toHaveBeenCalledWith('chat-1', { kind: 'solo', provider: 'codex' })
+    expect(sentMessages[0]?.[1]).toContain('已退出当前模式')
+    expect(sentMessages[0]?.[1]).toContain('Codex')
+  })
+
+  it('/mode lists /chat and /stop as available now', async () => {
+    const { cmds, sentMessages } = setup()
+    await cmds.handle(inbound('/mode'))
+    expect(sentMessages[0]?.[1]).toContain('/chat')
+    expect(sentMessages[0]?.[1]).toContain('/stop')
   })
 
   it('/mode lists /both and /cc + codex as available', async () => {

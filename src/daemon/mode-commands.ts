@@ -142,8 +142,7 @@ export function makeModeCommands(deps: ModeCommandsDeps): ModeCommands {
           `已注册 provider: ${deps.registry.list().join(', ')}`,
           `默认: ${deps.defaultProviderId}`,
           '',
-          '可用命令: /cc /codex /both /cc + codex /codex + cc /solo /mode',
-          '即将支持 (P5): /chat',
+          '可用命令: /cc /codex /both /chat /cc + codex /codex + cc /solo /stop /mode',
         ]
         await reply(msg.chatId, lines.join('\n'))
         return true
@@ -162,9 +161,31 @@ export function makeModeCommands(deps: ModeCommandsDeps): ModeCommands {
         return true
       }
 
-      // /chat — chatroom (P5 reserved)
+      // /chat — chatroom mode (RFC 03 P5: two agents take turns via @-tag routing)
       if (slashWord.toLowerCase() === 'chat' && tail === '') {
-        await reply(msg.chatId, '🚧 聊天室模式 (/chat) 在 P5 才上线，当前版本未实现。')
+        try {
+          deps.coordinator.setMode(msg.chatId, { kind: 'chatroom' })
+        } catch (err) {
+          await reply(msg.chatId, `❌ /chat 启用失败: ${err instanceof Error ? err.message : String(err)}`)
+          return true
+        }
+        await reply(
+          msg.chatId,
+          '✅ 聊天室模式开启。Claude 和 Codex 会在你的下一条消息后轮流讨论（最多 4 轮内部 round），用 @ 路由（@user 给你，@codex / @claude 给对方）。每条回复都带 [Claude] / [Codex] 前缀。/stop 退出。',
+        )
+        deps.log('MODE_CMD', `chat=${msg.chatId} → chatroom`)
+        return true
+      }
+
+      // /stop — exit chatroom (or any non-default mode), revert to default solo.
+      // Alias for /solo. Doesn't preempt an in-flight chatroom loop;
+      // applies to next inbound. (RFC 03 §4.4 noted /stop is the
+      // user-facing escape hatch even if it's just a /solo synonym.)
+      if (slashWord.toLowerCase() === 'stop' && tail === '') {
+        deps.coordinator.setMode(msg.chatId, { kind: 'solo', provider: deps.defaultProviderId })
+        const dn = deps.registry.get(deps.defaultProviderId)?.opts.displayName ?? deps.defaultProviderId
+        await reply(msg.chatId, `✅ 已退出当前模式，恢复默认 (solo · ${dn})。`)
+        deps.log('MODE_CMD', `chat=${msg.chatId} → /stop reset to default`)
         return true
       }
 
