@@ -7,7 +7,7 @@
  */
 import { join } from 'node:path'
 import { mkdirSync, writeFileSync, unlinkSync } from 'node:fs'
-import type { ToolDeps } from '../../features/tools'
+import type { WechatVoiceDep } from '../wechat-tool-deps'
 import { buildMediaItemFromFile } from '../media'
 import { ilinkSendMessage } from '../../../ilink'
 import { log } from '../../../log'
@@ -29,7 +29,7 @@ function providerFromConfig(cfg: VoiceConfig): TTSProvider {
   return makeQwenProvider({ apiKey: cfg.api_key })
 }
 
-export function makeVoice(ctx: IlinkContext): ToolDeps['voice'] {
+export function makeVoice(ctx: IlinkContext): WechatVoiceDep {
   const { stateDir, ctxStore, resolveAccount, assertChatRoutable } = ctx
 
   return {

@@ -11,7 +11,7 @@
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { InboundMsg } from '../core/prompt-format'
-import type { ToolDeps } from '../features/tools'
+import type { WechatProjectsDep, WechatVoiceDep, WechatCompanionDep } from './wechat-tool-deps'
 import { parsePermissionReply } from './pending-permissions'
 import { buildMediaItemFromFile, assertSendable } from './media'
 import { ilinkSendMessage } from '../../ilink'
@@ -44,9 +44,9 @@ export interface IlinkAdapter {
   resurfacePage(q: { slug?: string; title_fragment?: string }): Promise<{ url: string; slug: string } | null>
   setUserName(chatId: string, name: string): Promise<void>
   resolveUserName(chatId: string): string | undefined
-  projects: ToolDeps['projects']
-  voice: ToolDeps['voice']
-  companion: ToolDeps['companion']
+  projects: WechatProjectsDep
+  voice: WechatVoiceDep
+  companion: WechatCompanionDep
   askUser(chatId: string, prompt: string, hash: string, timeoutMs: number): Promise<'allow' | 'deny' | 'timeout'>
   loadProjects(): { projects: Record<string, { path: string; last_active: number }>; current: string | null }
   lastActiveChatId(): string | null

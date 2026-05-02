@@ -192,6 +192,58 @@ export function accountRows(items, userNames = {}, expiredBots = [], now = Date.
   })
 }
 
+// Map a Mode discriminated-union (RFC 03) to a short user-facing badge.
+// label   — Chinese display text (matches /chat、/both、/cc 用语)
+// detail  — secondary line (e.g. "claude" for solo, "codex+cc" for chatroom)
+// tone    — CSS class hint: "solo" | "parallel" | "primary" | "chatroom"
+//
+// Defensive against partial/legacy shapes — older conversations.json
+// entries written before P2 may have mode={kind:'solo'} without a
+// provider field. Falls back to "—".
+export function modeBadge(mode) {
+  if (!mode || typeof mode !== "object") return { label: "—", detail: "", tone: "solo" }
+  if (mode.kind === "solo") {
+    return { label: "Solo", detail: mode.provider || "—", tone: "solo" }
+  }
+  if (mode.kind === "parallel") {
+    const peers = Array.isArray(mode.providers) && mode.providers.length > 0 ? mode.providers.join(" + ") : "—"
+    return { label: "Parallel", detail: peers, tone: "parallel" }
+  }
+  if (mode.kind === "primary_tool") {
+    const primary = mode.primary || "—"
+    const secondary = mode.secondary || "—"
+    return { label: "Primary", detail: `${primary} (tool: ${secondary})`, tone: "primary" }
+  }
+  if (mode.kind === "chatroom") {
+    const a = mode.providers?.[0] || "—"
+    const b = mode.providers?.[1] || "—"
+    return { label: "Chatroom", detail: `${a} ↔ ${b}`, tone: "chatroom" }
+  }
+  return { label: mode.kind || "—", detail: "", tone: "solo" }
+}
+
+// View-model for the dashboard's per-chat mode table.
+// items — output of `wechat-cc conversations list --json`'s `conversations`
+// userNames — same map the accounts table uses (keyed by chatId here, since
+//   conversations.json is keyed by chat_id and user_names.json is also
+//   keyed by the chat_id-bearing wechat user). The CLI already joins, so
+//   we pass through `user_name` straight.
+// Returns an array sorted by `tone` then chat_id (deterministic for tests).
+export function conversationRows(items) {
+  if (!Array.isArray(items)) return []
+  return items.map(it => {
+    const badge = modeBadge(it.mode)
+    return {
+      chatId: it.chat_id,
+      name: it.user_name || it.chat_id,
+      badge,
+    }
+  }).sort((a, b) => {
+    if (a.badge.tone !== b.badge.tone) return a.badge.tone.localeCompare(b.badge.tone)
+    return a.chatId.localeCompare(b.chatId)
+  })
+}
+
 export function formatRelativeTime(iso, now = Date.now()) {
   const t = Date.parse(iso)
   if (!Number.isFinite(t)) return ""

@@ -1,0 +1,14 @@
+{
+  "name": "spike-rfc03-02-codex-events",
+  "version": "0.0.1",
+  "description": "RFC 03 Phase 0 Spike 2: empirically map Codex SDK runStreamed event schema against typed declarations",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "run": "bun spike.ts"
+  },
+  "dependencies": {
+    "@openai/codex": "0.128.0",
+    "@openai/codex-sdk": "0.128.0"
+  }
+}
