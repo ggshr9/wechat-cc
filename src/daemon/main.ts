@@ -76,8 +76,8 @@ async function main() {
   // mode). Daemon-owned construction here ensures both consumers see
   // the same in-memory state without polling the file.
   const conversationStore = makeConversationStore(
-    join(STATE_DIR, 'conversations.json'),
-    { debounceMs: 500 },
+    db,
+    { migrateFromFile: join(STATE_DIR, 'conversations.json') },
   )
 
   // RFC 03 §5 — start the daemon's internal HTTP API before bootstrap so

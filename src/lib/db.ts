@@ -61,6 +61,22 @@ const migrations: Migration[] = [
       CREATE INDEX sessions_alias_last_used ON sessions(alias, last_used_at DESC);
     `)
   },
+  // v3 — conversations (chatId → Mode). PR7 commit 3.
+  // Mode is normalized into separate columns so future queries (e.g.
+  // "all chats currently using codex") don't need JSON1 extension.
+  // Only `solo` mode uses mode_provider; only `primary_tool` uses
+  // mode_primary; `parallel` / `chatroom` use neither.
+  (db) => {
+    db.exec(`
+      CREATE TABLE conversations (
+        chat_id TEXT PRIMARY KEY NOT NULL,
+        mode_kind TEXT NOT NULL CHECK (mode_kind IN ('solo', 'primary_tool', 'parallel', 'chatroom')),
+        mode_provider TEXT,
+        mode_primary TEXT,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+    `)
+  },
 ]
 
 export interface OpenDbOpts {

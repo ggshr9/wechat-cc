@@ -686,12 +686,14 @@ async function main() {
       return
     }
     case 'conversations-list': {
-      // Read-only snapshot of conversations.json + user_names.json. Used by
+      // Read-only snapshot of conversations + user_names.json. Used by
       // the desktop dashboard (P5.2) to display per-chat mode badges. Falls
       // back to chat_id as user_name when no name has been captured yet.
       const { makeConversationStore } = await import('./src/core/conversation-store')
       const { makeStateStore } = await import('./src/daemon/state-store')
-      const store = makeConversationStore(join(STATE_DIR, 'conversations.json'), { debounceMs: 0 })
+      const { openDb } = await import('./src/lib/db')
+      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+      const store = makeConversationStore(db, { migrateFromFile: join(STATE_DIR, 'conversations.json') })
       const names = makeStateStore(join(STATE_DIR, 'user_names.json'), { debounceMs: 0 })
       const conversations = Object.entries(store.all()).map(([chat_id, rec]) => ({
         chat_id,

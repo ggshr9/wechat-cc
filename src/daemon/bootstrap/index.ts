@@ -284,8 +284,8 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
   // to look up modes for reply-prefixing in P3 parallel mode) sees
   // the same flips. When absent, we own one rooted at <stateDir>.
   const conversationStore = deps.conversationStore ?? makeConversationStore(
-    join(deps.stateDir, 'conversations.json'),
-    { debounceMs: 500 },
+    deps.db,
+    { migrateFromFile: join(deps.stateDir, 'conversations.json') },
   )
 
   const coordinator = createConversationCoordinator({
