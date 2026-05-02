@@ -77,10 +77,6 @@ export interface BuiltWechatMcp {
     send_file: (args: { chat_id: string; path: string }) => Promise<unknown>
     broadcast: (args: { text: string; account_id?: string }) => Promise<unknown>
     reply_voice: (args: { chat_id: string; text: string }) => Promise<unknown>
-    companion_enable: (args: Record<string, never>) => Promise<unknown>
-    companion_disable: (args: Record<string, never>) => Promise<unknown>
-    companion_status: (args: Record<string, never>) => Promise<unknown>
-    companion_snooze: (args: { minutes: number }) => Promise<unknown>
   }
 }
 
@@ -164,37 +160,8 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
   // server in P1.B B4. reply_voice (also voice-related) stays here until
   // B1 because it crosses ilink to actually send a message.
 
-  const companionEnableDef = tool(
-    'companion_enable',
-    '开启 Companion 主动推送（定时 tick）。第一次调用会创建 config.json 并返回欢迎消息。幂等。',
-    {},
-    async () => okText(JSON.stringify(await deps.companion.enable())),
-  )
-  handlers.companion_enable = async (a) => (await companionEnableDef.handler(a, undefined)) as unknown
-
-  const companionDisableDef = tool(
-    'companion_disable',
-    '关闭 Companion 主动推送。下一次 scheduler tick 不再触发。',
-    {},
-    async () => okText(JSON.stringify(await deps.companion.disable())),
-  )
-  handlers.companion_disable = async (a) => (await companionDisableDef.handler(a, undefined)) as unknown
-
-  const companionStatusDef = tool(
-    'companion_status',
-    '查询 Companion 状态：是否开启、时区、默认 chat_id、snooze 截止时间。人格 / 触发器等历史详情请从 memory/ 读。',
-    {},
-    async () => okText(JSON.stringify(deps.companion.status())),
-  )
-  handlers.companion_status = async (a) => (await companionStatusDef.handler(a, undefined)) as unknown
-
-  const companionSnoozeDef = tool(
-    'companion_snooze',
-    '暂停所有主动推送若干分钟。用户说 "别烦我"/"停"/"snooze N 小时"/"shut up" 等时调用。',
-    { minutes: z.number().int().min(1).max(24 * 60) },
-    async ({ minutes }) => okText(JSON.stringify(await deps.companion.snooze(minutes))),
-  )
-  handlers.companion_snooze = async (a) => (await companionSnoozeDef.handler(a as any, undefined)) as unknown
+  // companion_enable / companion_disable / companion_status /
+  // companion_snooze moved to wechat-mcp stdio server in P1.B B6.
 
   // memory_read / memory_write / memory_list moved to the standalone
   // wechat-mcp stdio server in P1.B B2 (commit history). See
@@ -208,7 +175,6 @@ export function buildWechatMcpServer(deps: ToolDeps): BuiltWechatMcp {
     tools: [
       replyDef, editDef, sendFileDef, broadcastDef,
       replyVoiceDef,
-      companionEnableDef, companionDisableDef, companionStatusDef, companionSnoozeDef,
     ],
   })
 

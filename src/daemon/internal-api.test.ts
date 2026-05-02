@@ -778,4 +778,180 @@ describe('internal-api', () => {
       expect(await resp.json()).toEqual({ error: 'resurface_page_not_wired' })
     })
   })
+
+  // ─── companion routes (RFC 03 P1.B B6) ────────────────────────────────
+
+  describe('companion routes', () => {
+    interface MockCompanion {
+      enable: () => Promise<
+        | { ok: true; state_dir: string; welcome_message: string; cost_estimate_note: string }
+        | { ok: true; already_configured: true }
+      >
+      disable: () => Promise<{ ok: true; enabled: false }>
+      status: () => {
+        enabled: boolean
+        timezone: string
+        default_chat_id: string | null
+        snooze_until: string | null
+      }
+      snooze: (minutes: number) => Promise<{ ok: true; until: string }>
+    }
+
+    function startWithCompanion(companion: MockCompanion): Promise<{ port: number; token: string }> {
+      api = createInternalApi({ stateDir, daemonPid: 1, companion })
+      return api.start().then(({ port, tokenFilePath }) => ({
+        port, token: readFileSync(tokenFilePath, 'utf8').trim(),
+      }))
+    }
+
+    it('GET /v1/companion/status passes through status() result', async () => {
+      const { port, token } = await startWithCompanion({
+        enable: async () => ({ ok: true, state_dir: '/x', welcome_message: 'w', cost_estimate_note: 'c' }),
+        disable: async () => ({ ok: true, enabled: false }),
+        status: () => ({ enabled: true, timezone: 'Asia/Shanghai', default_chat_id: 'c1', snooze_until: null }),
+        snooze: async () => ({ ok: true, until: '2026-04-22T00:00:00Z' }),
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/companion/status`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      expect(resp.status).toBe(200)
+      expect(await resp.json()).toEqual({
+        enabled: true, timezone: 'Asia/Shanghai', default_chat_id: 'c1', snooze_until: null,
+      })
+    })
+
+    it('POST /v1/companion/enable returns first-time welcome shape', async () => {
+      const enable = vi.fn(async () => ({
+        ok: true as const,
+        state_dir: '/state',
+        welcome_message: '开启完成',
+        cost_estimate_note: '~$0.02/tick',
+      }))
+      const { port, token } = await startWithCompanion({
+        enable, disable: async () => ({ ok: true, enabled: false }),
+        status: () => ({ enabled: false, timezone: 'UTC', default_chat_id: null, snooze_until: null }),
+        snooze: async () => ({ ok: true, until: '' }),
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/companion/enable`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: '{}',
+      })
+      expect(resp.status).toBe(200)
+      const body = await resp.json() as { ok: boolean; welcome_message?: string }
+      expect(body.ok).toBe(true)
+      expect(body.welcome_message).toBe('开启完成')
+      expect(enable).toHaveBeenCalled()
+    })
+
+    it('POST /v1/companion/enable surfaces already_configured shape on second call', async () => {
+      const { port, token } = await startWithCompanion({
+        enable: async () => ({ ok: true, already_configured: true }),
+        disable: async () => ({ ok: true, enabled: false }),
+        status: () => ({ enabled: true, timezone: 'UTC', default_chat_id: null, snooze_until: null }),
+        snooze: async () => ({ ok: true, until: '' }),
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/companion/enable`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: '{}',
+      })
+      expect(await resp.json()).toEqual({ ok: true, already_configured: true })
+    })
+
+    it('POST /v1/companion/disable returns ok:true,enabled:false', async () => {
+      const disable = vi.fn(async () => ({ ok: true as const, enabled: false as const }))
+      const { port, token } = await startWithCompanion({
+        enable: async () => ({ ok: true, state_dir: '', welcome_message: '', cost_estimate_note: '' }),
+        disable,
+        status: () => ({ enabled: true, timezone: 'UTC', default_chat_id: null, snooze_until: null }),
+        snooze: async () => ({ ok: true, until: '' }),
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/companion/disable`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: '{}',
+      })
+      expect(resp.status).toBe(200)
+      expect(await resp.json()).toEqual({ ok: true, enabled: false })
+      expect(disable).toHaveBeenCalled()
+    })
+
+    it('POST /v1/companion/snooze forwards minutes', async () => {
+      const snooze = vi.fn(async (m: number) => ({
+        ok: true as const,
+        until: new Date(Date.now() + m * 60_000).toISOString(),
+      }))
+      const { port, token } = await startWithCompanion({
+        enable: async () => ({ ok: true, state_dir: '', welcome_message: '', cost_estimate_note: '' }),
+        disable: async () => ({ ok: true, enabled: false }),
+        status: () => ({ enabled: true, timezone: 'UTC', default_chat_id: null, snooze_until: null }),
+        snooze,
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/companion/snooze`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ minutes: 90 }),
+      })
+      expect(resp.status).toBe(200)
+      const body = await resp.json() as { ok: boolean; until: string }
+      expect(body.ok).toBe(true)
+      expect(typeof body.until).toBe('string')
+      expect(snooze).toHaveBeenCalledWith(90)
+    })
+
+    it('POST /v1/companion/snooze rejects out-of-range / non-int minutes (400)', async () => {
+      const { port, token } = await startWithCompanion({
+        enable: async () => ({ ok: true, state_dir: '', welcome_message: '', cost_estimate_note: '' }),
+        disable: async () => ({ ok: true, enabled: false }),
+        status: () => ({ enabled: true, timezone: 'UTC', default_chat_id: null, snooze_until: null }),
+        snooze: async () => ({ ok: true, until: '' }),
+      })
+      const cases = [
+        { minutes: 0 },          // below min
+        { minutes: 24 * 60 + 1 }, // above max
+        { minutes: 1.5 },         // non-int
+        { minutes: 'sixty' },     // wrong type
+        {},                       // missing
+      ]
+      for (const body of cases) {
+        const resp = await fetch(`http://127.0.0.1:${port}/v1/companion/snooze`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+        expect(resp.status).toBe(400)
+        expect(await resp.json()).toMatchObject({ error: 'minutes_must_be_int_1_to_1440' })
+      }
+    })
+
+    it('catches enable() throw and returns ok:false', async () => {
+      const { port, token } = await startWithCompanion({
+        enable: async () => { throw new Error('config write failed') },
+        disable: async () => ({ ok: true, enabled: false }),
+        status: () => ({ enabled: false, timezone: 'UTC', default_chat_id: null, snooze_until: null }),
+        snooze: async () => ({ ok: true, until: '' }),
+      })
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/companion/enable`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: '{}',
+      })
+      expect(resp.status).toBe(200)
+      const body = await resp.json() as { ok: boolean; error?: string }
+      expect(body.ok).toBe(false)
+      expect(body.error).toContain('config write failed')
+    })
+
+    it('returns 503 when companion dep not wired', async () => {
+      api = createInternalApi({ stateDir, daemonPid: 1 })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/companion/status`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      expect(resp.status).toBe(503)
+      expect(await resp.json()).toEqual({ error: 'companion_not_wired' })
+    })
+  })
 })

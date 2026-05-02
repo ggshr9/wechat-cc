@@ -76,6 +76,12 @@ async function main() {
     },
     sharePage: (title, content, opts) => ilink.sharePage(title, content, opts),
     resurfacePage: (q) => ilink.resurfacePage(q),
+    companion: {
+      enable: () => ilink.companion.enable(),
+      disable: () => ilink.companion.disable(),
+      status: () => ilink.companion.status(),
+      snooze: (minutes) => ilink.companion.snooze(minutes),
+    },
     log: (tag, line) => log(tag, line),
   })
   const { port: internalApiPort, tokenFilePath: internalTokenFile } = await internalApi.start()

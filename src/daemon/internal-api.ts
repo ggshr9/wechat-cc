@@ -40,6 +40,25 @@ export interface InternalApiProjectsDep {
 }
 
 /**
+ * Companion proactive-tick deps (RFC 03 P1.B B6). Mirrors features/tools.ts
+ * `ToolDeps['companion']`.
+ */
+export interface InternalApiCompanionDep {
+  enable(): Promise<
+    | { ok: true; state_dir: string; welcome_message: string; cost_estimate_note: string }
+    | { ok: true; already_configured: true }
+  >
+  disable(): Promise<{ ok: true; enabled: false }>
+  status(): {
+    enabled: boolean
+    timezone: string
+    default_chat_id: string | null
+    snooze_until: string | null
+  }
+  snooze(minutes: number): Promise<{ ok: true; until: string }>
+}
+
+/**
  * TTS config deps (RFC 03 P1.B B4). Subset of features/tools.ts
  * `ToolDeps['voice']` — only the two config-shaped methods used by
  * `voice_config_status` and `save_voice_config`. `replyVoice` (used by
@@ -101,6 +120,8 @@ export interface InternalApiDeps {
   resurfacePage?: (
     q: { slug?: string; title_fragment?: string },
   ) => Promise<{ url: string; slug: string } | null>
+  /** Companion proactive-tick controls (RFC 03 P1.B B6). */
+  companion?: InternalApiCompanionDep
   /** Optional log hook so api activity surfaces in channel.log. */
   log?: (tag: string, line: string) => void
 }
@@ -301,6 +322,43 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
       // configStatus is sync, never throws — direct return.
       return { status: 200, body: deps.voice.configStatus() }
     },
+    // ── companion proactive tick (RFC 03 P1.B B6) ───────────────────────
+    'GET /v1/companion/status': () => {
+      if (!deps.companion) return { status: 503, body: { error: 'companion_not_wired' } }
+      return { status: 200, body: deps.companion.status() }
+    },
+    'POST /v1/companion/enable': async () => {
+      if (!deps.companion) return { status: 503, body: { error: 'companion_not_wired' } }
+      try {
+        const r = await deps.companion.enable()
+        return { status: 200, body: r }
+      } catch (err) {
+        return { status: 200, body: { ok: false, error: errMsg(err) } }
+      }
+    },
+    'POST /v1/companion/disable': async () => {
+      if (!deps.companion) return { status: 503, body: { error: 'companion_not_wired' } }
+      try {
+        const r = await deps.companion.disable()
+        return { status: 200, body: r }
+      } catch (err) {
+        return { status: 200, body: { ok: false, error: errMsg(err) } }
+      }
+    },
+    'POST /v1/companion/snooze': async (_q, body) => {
+      if (!deps.companion) return { status: 503, body: { error: 'companion_not_wired' } }
+      const minutes = (body as { minutes?: unknown } | null)?.minutes
+      if (typeof minutes !== 'number' || !Number.isInteger(minutes) || minutes < 1 || minutes > 24 * 60) {
+        return { status: 400, body: { error: 'minutes_must_be_int_1_to_1440' } }
+      }
+      try {
+        const r = await deps.companion.snooze(minutes)
+        return { status: 200, body: r }
+      } catch (err) {
+        return { status: 200, body: { ok: false, error: errMsg(err) } }
+      }
+    },
+
     'POST /v1/voice/save_config': async (_q, body) => {
       if (!deps.voice) return { status: 503, body: { error: 'voice_not_wired' } }
       const b = body as {

@@ -95,55 +95,8 @@ describe('buildWechatMcpServer', () => {
   // save_voice_config / voice_config_status tests moved to
   // internal-api.test.ts + integration.test.ts in P1.B B4.
 
-  it('companion_enable returns welcome message on first enable', async () => {
-    const deps = makeDeps()
-    const { handlers } = buildWechatMcpServer(deps)
-    const out = await handlers.companion_enable({})
-    expect(deps.companion.enable).toHaveBeenCalled()
-    expect(extractText(out)).toContain('开启完成')
-  })
-
-  it('companion_disable flips enabled=false', async () => {
-    const deps = makeDeps()
-    const { handlers } = buildWechatMcpServer(deps)
-    const out = await handlers.companion_disable({})
-    expect(deps.companion.disable).toHaveBeenCalled()
-    const parsed = JSON.parse(extractText(out))
-    expect(parsed.enabled).toBe(false)
-  })
-
-  it('companion_status returns consolidated status as JSON', async () => {
-    const deps = makeDeps({
-      companion: {
-        enable: vi.fn(),
-        disable: vi.fn(),
-        status: () => ({
-          enabled: true,
-          timezone: 'Asia/Shanghai',
-          per_project_persona: { P: 'assistant' },
-          personas_available: [{ name: 'assistant', display_name: '小助手' }],
-          triggers: [{ id: 't', project: 'P', schedule: '* * * * *', personas: [], next_fire_at: '2026-04-22T10:00Z' }],
-          snooze_until: null,
-          pushes_last_24h: 2,
-          runs_last_24h: 10,
-        }),
-        snooze: vi.fn(),
-      },
-    } as any)
-    const { handlers } = buildWechatMcpServer(deps)
-    const out = await handlers.companion_status({})
-    const parsed = JSON.parse(extractText(out))
-    expect(parsed.enabled).toBe(true)
-    expect(parsed.triggers).toHaveLength(1)
-    expect(parsed.pushes_last_24h).toBe(2)
-  })
-
-  it('companion_snooze delegates minutes to deps', async () => {
-    const deps = makeDeps()
-    const { handlers } = buildWechatMcpServer(deps)
-    await handlers.companion_snooze({ minutes: 60 })
-    expect(deps.companion.snooze).toHaveBeenCalledWith(60)
-  })
+  // companion_* tests moved to internal-api.test.ts + integration.test.ts
+  // when these tools were extracted to wechat-mcp stdio in P1.B B6.
 
   // memory_read / memory_write / memory_list tests moved to:
   //   - src/daemon/internal-api.test.ts          (route handlers)

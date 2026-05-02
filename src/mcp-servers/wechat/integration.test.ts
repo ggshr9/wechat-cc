@@ -304,6 +304,76 @@ describe('wechat-mcp stdio integration', () => {
     })
   })
 
+  // ── B6: companion proactive-tick controls end-to-end ──────────────────
+
+  it('companion enable → snooze → status round-trips through stdio + HTTP', async () => {
+    const memory = makeMemoryFS({ rootDir: join(stateDir, 'memory') })
+    let enabled = false
+    let snoozeUntil: string | null = null
+    const companion = {
+      enable: async () => {
+        const wasEnabled = enabled
+        enabled = true
+        return wasEnabled
+          ? { ok: true as const, already_configured: true as const }
+          : { ok: true as const, state_dir: '/state', welcome_message: '开启完成', cost_estimate_note: '~$0.02/tick' }
+      },
+      disable: async () => { enabled = false; return { ok: true as const, enabled: false as const } },
+      status: () => ({
+        enabled, timezone: 'Asia/Shanghai',
+        default_chat_id: enabled ? 'c1' : null,
+        snooze_until: snoozeUntil,
+      }),
+      snooze: async (minutes: number) => {
+        snoozeUntil = new Date(Date.parse('2026-04-22T00:00:00Z') + minutes * 60_000).toISOString()
+        return { ok: true as const, until: snoozeUntil }
+      },
+    }
+    api = createInternalApi({ stateDir, daemonPid: 7777, memory, companion })
+    const { port, tokenFilePath } = await api.start()
+    const transport = new StdioClientTransport({
+      command: RUNTIME, args: [WECHAT_MCP_MAIN],
+      env: {
+        ...process.env as Record<string, string>,
+        WECHAT_INTERNAL_API: `http://127.0.0.1:${port}`,
+        WECHAT_INTERNAL_TOKEN_FILE: tokenFilePath,
+      },
+      stderr: 'pipe',
+    })
+    const c = new Client({ name: 'integration-companion', version: '0.0.1' }, { capabilities: {} })
+    await c.connect(transport)
+    client = c
+
+    // First enable: welcome_message
+    const enable1 = await c.callTool({ name: 'companion_enable', arguments: {} })
+    const enable1Body = JSON.parse(((enable1.content as Array<{ text?: string }>)[0]?.text)!) as Record<string, unknown>
+    expect(enable1Body.welcome_message).toBe('开启完成')
+
+    // Second enable: already_configured
+    const enable2 = await c.callTool({ name: 'companion_enable', arguments: {} })
+    expect(JSON.parse(((enable2.content as Array<{ text?: string }>)[0]?.text)!)).toEqual({
+      ok: true, already_configured: true,
+    })
+
+    // Snooze 60min
+    const snooze = await c.callTool({ name: 'companion_snooze', arguments: { minutes: 60 } })
+    const snoozeBody = JSON.parse(((snooze.content as Array<{ text?: string }>)[0]?.text)!) as { ok: boolean; until: string }
+    expect(snoozeBody.ok).toBe(true)
+    expect(snoozeBody.until).toBe('2026-04-22T01:00:00.000Z')
+
+    // Status reflects both
+    const status = await c.callTool({ name: 'companion_status', arguments: {} })
+    const statusBody = JSON.parse(((status.content as Array<{ text?: string }>)[0]?.text)!) as Record<string, unknown>
+    expect(statusBody.enabled).toBe(true)
+    expect(statusBody.snooze_until).toBe('2026-04-22T01:00:00.000Z')
+
+    // Disable
+    const disable = await c.callTool({ name: 'companion_disable', arguments: {} })
+    expect(JSON.parse(((disable.content as Array<{ text?: string }>)[0]?.text)!)).toEqual({
+      ok: true, enabled: false,
+    })
+  })
+
   it('save_voice_config → voice_config_status round-trips through stdio + HTTP', async () => {
     const memory = makeMemoryFS({ rootDir: join(stateDir, 'memory') })
     let stored: { provider: 'http_tts'; default_voice: string; base_url: string; model: string; saved_at: string } | null = null

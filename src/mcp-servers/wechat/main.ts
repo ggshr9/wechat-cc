@@ -325,6 +325,76 @@ server.registerTool(
   },
 )
 
+// ─── companion proactive tick (RFC 03 P1.B B6) ───────────────────────────
+
+server.registerTool(
+  'companion_enable',
+  {
+    title: 'Enable Companion proactive ticks',
+    description: '开启 Companion 主动推送（定时 tick）。第一次调用会创建 config.json 并返回欢迎消息。幂等。',
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const r = await client.request<unknown>('POST', '/v1/companion/enable')
+      return { content: [{ type: 'text', text: JSON.stringify(r) }] }
+    } catch (err) {
+      return passthroughErrorResult(err, 'companion_enable')
+    }
+  },
+)
+
+server.registerTool(
+  'companion_disable',
+  {
+    title: 'Disable Companion proactive ticks',
+    description: '关闭 Companion 主动推送。下一次 scheduler tick 不再触发。',
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const r = await client.request<unknown>('POST', '/v1/companion/disable')
+      return { content: [{ type: 'text', text: JSON.stringify(r) }] }
+    } catch (err) {
+      return passthroughErrorResult(err, 'companion_disable')
+    }
+  },
+)
+
+server.registerTool(
+  'companion_status',
+  {
+    title: 'Companion status',
+    description: '查询 Companion 状态：是否开启、时区、默认 chat_id、snooze 截止时间。人格 / 触发器等历史详情请从 memory/ 读。',
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const r = await client.request<unknown>('GET', '/v1/companion/status')
+      return { content: [{ type: 'text', text: JSON.stringify(r) }] }
+    } catch (err) {
+      return passthroughErrorResult(err, 'companion_status')
+    }
+  },
+)
+
+server.registerTool(
+  'companion_snooze',
+  {
+    title: 'Snooze proactive pushes',
+    description: '暂停所有主动推送若干分钟。用户说 "别烦我"/"停"/"snooze N 小时"/"shut up" 等时调用。',
+    inputSchema: { minutes: z.number().int().min(1).max(24 * 60) },
+  },
+  async ({ minutes }) => {
+    try {
+      const r = await client.request<unknown>('POST', '/v1/companion/snooze', { minutes })
+      return { content: [{ type: 'text', text: JSON.stringify(r) }] }
+    } catch (err) {
+      return passthroughErrorResult(err, 'companion_snooze')
+    }
+  },
+)
+
 function passthroughErrorResult(err: unknown, tool: string): { content: Array<{ type: 'text'; text: string }> } {
   // Surface transport-layer failures as `{error: "..."}` JSON in a text
   // block. Keeps the legacy "tool never throws" promise that the
