@@ -28,6 +28,7 @@ import type { MemoryFS } from './memory/fs-api'
 import type { WechatProjectsDep, WechatVoiceDep, WechatCompanionDep } from './wechat-tool-deps'
 import type { ConversationStore } from '../core/conversation-store'
 import type { ProviderId } from '../core/conversation'
+import { modeRequiresParticipantPrefix } from '../core/conversation'
 
 /**
  * RFC 03 P3: when conversation mode is parallel (or chatroom), the
@@ -58,8 +59,12 @@ export interface InternalApiDelegateDep {
    * Run a one-shot consultation against `peer` and return the assistant
    * text. The implementation owns provider construction + thread
    * spawn + close. ok=false should surface a user-readable reason.
+   *
+   * `cwd` (RFC 03 review #10): when present, peer is spawned with this
+   * working directory so it can Read/Bash project files. Otherwise the
+   * peer runs in a daemon-default scratch dir with no project access.
    */
-  dispatchOneShot(peer: ProviderId, prompt: string): Promise<
+  dispatchOneShot(peer: ProviderId, prompt: string, cwd?: string): Promise<
     | { ok: true; response: string; num_turns?: number; duration_ms?: number }
     | { ok: false; reason: string }
   >
@@ -453,12 +458,32 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
     'POST /v1/delegate': async (_q, body) => {
       const d = lateDelegate
       if (!d) return { status: 503, body: { error: 'delegate_not_wired' } }
-      const b = body as { peer?: unknown; prompt?: unknown; context_summary?: unknown } | null
+      const b = body as { peer?: unknown; prompt?: unknown; context_summary?: unknown; cwd?: unknown; depth?: unknown } | null
       if (typeof b?.peer !== 'string') return { status: 400, body: { error: 'peer_required' } }
       if (typeof b?.prompt !== 'string') return { status: 400, body: { error: 'prompt_required' } }
+      if (b.cwd !== undefined && typeof b.cwd !== 'string') return { status: 400, body: { error: 'cwd_must_be_string' } }
+      // Light absolute-path check — block path traversal-ish inputs from a
+      // misbehaving agent. dispatchOneShot's spawn won't enforce this, so
+      // we do at the boundary.
+      if (typeof b.cwd === 'string' && !b.cwd.startsWith('/')) {
+        return { status: 400, body: { error: 'cwd_must_be_absolute' } }
+      }
       const known = d.knownPeers()
       if (!known.includes(b.peer)) {
         return { status: 400, body: { error: 'unknown_peer', allowed: known } }
+      }
+      // RFC 03 P5 review #7 — defense in depth against recursion. The
+      // bare delegate provider has no delegate-mcp loaded, so the peer
+      // CAN'T call this route through normal paths — recursion is
+      // structurally prevented. But a curious peer that read the token
+      // file + posted directly could still attempt nesting; reject any
+      // depth > 0 server-side as a backstop. (delegate-mcp client always
+      // sends depth=0 from a regular session env; peers don't have the
+      // env so they'd have to fabricate.)
+      const depth = typeof b.depth === 'number' ? b.depth : 0
+      if (depth > 0) {
+        deps.log?.('DELEGATE', `nested-call rejected: peer=${b.peer} depth=${depth}`)
+        return { status: 403, body: { ok: false, reason: 'nested_delegate_rejected', depth } }
       }
       // Compose the actual prompt that the peer sees. The peer is
       // bare-bones (no conversation history, no wechat tools), so the
@@ -467,8 +492,9 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
         ? `${b.prompt}\n\nContext from the calling agent:\n${b.context_summary}`
         : b.prompt
       const started = Date.now()
+      const cwdArg = typeof b.cwd === 'string' ? b.cwd : undefined
       try {
-        const r = await d.dispatchOneShot(b.peer, fullPrompt)
+        const r = await d.dispatchOneShot(b.peer, fullPrompt, cwdArg)
         if (r.ok) {
           deps.log?.('DELEGATE', `peer=${b.peer} ok response_chars=${r.response.length} ms=${Date.now() - started}`)
         } else {
@@ -538,15 +564,20 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
   }
 
   /**
-   * Prefix `[Display]` to outgoing reply text when the chat is in a
-   * multi-participant mode (parallel, chatroom). Returns the text
-   * unchanged in solo mode or when prefix deps aren't wired.
+   * Prefix `[Display]` to outgoing reply text when the chat's mode
+   * requires participant disambiguation. Returns the text unchanged
+   * otherwise (solo / primary_tool / unknown chat / no prefix deps wired).
+   *
+   * RFC 03 review #5 fix: defers the "is this a multi-participant mode?"
+   * decision to `modeRequiresParticipantPrefix` in src/core/conversation.ts
+   * so internal-api stops switching on mode.kind directly. Adding a new
+   * multi-participant mode requires updating exactly that one helper.
    */
   function maybePrefix(chatId: string, text: string, tag: string | undefined): string {
     if (!tag || !deps.prefix) return text
     const mode = deps.prefix.conversationStore.get(chatId)?.mode
     if (!mode) return text
-    if (mode.kind !== 'parallel' && mode.kind !== 'chatroom') return text
+    if (!modeRequiresParticipantPrefix(mode)) return text
     const dn = deps.prefix.providerDisplayName(tag)
     return `[${dn}] ${text}`
   }

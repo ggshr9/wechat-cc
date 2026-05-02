@@ -1330,7 +1330,8 @@ describe('internal-api', () => {
         const body = await resp.json() as { ok: boolean; response: string }
         expect(body.ok).toBe(true)
         expect(body.response).toContain('from codex')
-        expect(dispatchOneShot).toHaveBeenCalledWith('codex', 'review this code')
+        // Third arg (cwd) is undefined when not supplied — RFC 03 review #10.
+        expect(dispatchOneShot).toHaveBeenCalledWith('codex', 'review this code', undefined)
       })
 
       it('appends context_summary to prompt when supplied', async () => {
@@ -1413,6 +1414,58 @@ describe('internal-api', () => {
         })
         expect(resp.status).toBe(200)
         expect(await resp.json()).toEqual({ ok: false, reason: 'codex CLI not authenticated' })
+      })
+
+      it('rejects nested delegate calls (depth > 0) — RFC 03 review #7 defense', async () => {
+        api = createInternalApi({ stateDir, daemonPid: 1 })
+        const { port, tokenFilePath } = await api.start()
+        const dispatchOneShot = vi.fn(async () => ({ ok: true as const, response: 'should not be called', duration_ms: 0 }))
+        api.setDelegate({ dispatchOneShot, knownPeers: () => ['claude', 'codex'] })
+        const token = readFileSync(tokenFilePath, 'utf8').trim()
+        const resp = await fetch(`http://127.0.0.1:${port}/v1/delegate`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ peer: 'codex', prompt: 'recurse', depth: 1 }),
+        })
+        expect(resp.status).toBe(403)
+        const body = await resp.json() as { ok: boolean; reason: string; depth: number }
+        expect(body.ok).toBe(false)
+        expect(body.reason).toBe('nested_delegate_rejected')
+        expect(body.depth).toBe(1)
+        expect(dispatchOneShot).not.toHaveBeenCalled()
+      })
+
+      it('forwards optional cwd to dispatchOneShot — RFC 03 review #10', async () => {
+        api = createInternalApi({ stateDir, daemonPid: 1 })
+        const { port, tokenFilePath } = await api.start()
+        const dispatchOneShot = vi.fn(async (_peer: string, _prompt: string, _cwd?: string) => ({
+          ok: true as const, response: 'ok', duration_ms: 0,
+        }))
+        api.setDelegate({ dispatchOneShot, knownPeers: () => ['claude', 'codex'] })
+        const token = readFileSync(tokenFilePath, 'utf8').trim()
+        await fetch(`http://127.0.0.1:${port}/v1/delegate`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ peer: 'codex', prompt: 'p', cwd: '/abs/project' }),
+        })
+        expect(dispatchOneShot).toHaveBeenCalledWith('codex', 'p', '/abs/project')
+      })
+
+      it('rejects non-absolute cwd as 400 — RFC 03 review #10 path safety', async () => {
+        api = createInternalApi({ stateDir, daemonPid: 1 })
+        const { port, tokenFilePath } = await api.start()
+        api.setDelegate({
+          dispatchOneShot: async () => ({ ok: true, response: 'x', duration_ms: 0 }),
+          knownPeers: () => ['claude', 'codex'],
+        })
+        const token = readFileSync(tokenFilePath, 'utf8').trim()
+        const resp = await fetch(`http://127.0.0.1:${port}/v1/delegate`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ peer: 'codex', prompt: 'p', cwd: 'relative/path' }),
+        })
+        expect(resp.status).toBe(400)
+        expect(await resp.json()).toMatchObject({ error: 'cwd_must_be_absolute' })
       })
 
       it('catches dispatchOneShot throw and returns ok:false', async () => {

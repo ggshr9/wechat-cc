@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { makeConversationStore } from './conversation-store'
+import { modeRequiresParticipantPrefix } from './conversation'
 
 describe('ConversationStore', () => {
   let dir: string
@@ -86,5 +87,19 @@ describe('ConversationStore', () => {
     }))
     const s = makeConversationStore(file, { debounceMs: 0 })
     expect(s.get('chat-x')?.mode).toEqual({ kind: 'solo', provider: 'codex' })
+  })
+})
+
+describe('modeRequiresParticipantPrefix (RFC 03 review #5)', () => {
+  it('returns true for parallel + chatroom (multi-participant modes)', () => {
+    expect(modeRequiresParticipantPrefix({ kind: 'parallel' })).toBe(true)
+    expect(modeRequiresParticipantPrefix({ kind: 'chatroom' })).toBe(true)
+  })
+
+  it('returns false for solo + primary_tool (single-visible-speaker modes)', () => {
+    expect(modeRequiresParticipantPrefix({ kind: 'solo', provider: 'claude' })).toBe(false)
+    expect(modeRequiresParticipantPrefix({ kind: 'solo', provider: 'codex' })).toBe(false)
+    expect(modeRequiresParticipantPrefix({ kind: 'primary_tool', primary: 'claude' })).toBe(false)
+    expect(modeRequiresParticipantPrefix({ kind: 'primary_tool', primary: 'codex' })).toBe(false)
   })
 })

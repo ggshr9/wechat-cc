@@ -106,8 +106,9 @@ export interface Bootstrap {
   /**
    * RFC 03 P4 — one-shot delegate dispatcher. main.ts wires this into
    * internal-api via setDelegate() right after buildBootstrap returns.
+   * Optional `cwd` per RFC 03 review #10.
    */
-  dispatchDelegate: (peer: ProviderId, prompt: string) => Promise<
+  dispatchDelegate: (peer: ProviderId, prompt: string, cwd?: string) => Promise<
     | { ok: true; response: string; num_turns?: number; duration_ms?: number }
     | { ok: false; reason: string }
   >
@@ -386,14 +387,15 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
    * dispatches once, closes. Cold-start cost (~3-5s) per call is
    * accepted as the price of "consult the peer cleanly."
    *
-   * Cwd: launches in deps.stateDir (a stable location with no
-   * project-specific files). Pragmatic compromise — peer doesn't get
-   * project file access, which is consistent with "ask question, not
-   * do work" framing.
+   * `cwd` (RFC 03 review #10): when caller passes one, peer can Read /
+   * Bash files there (e.g. the calling agent's project). Otherwise
+   * peer runs in deps.stateDir (a stable location with no project
+   * files), preserving the "ask, don't do" framing.
    */
   async function dispatchDelegate(
     peer: ProviderId,
     prompt: string,
+    cwd?: string,
   ): Promise<{ ok: true; response: string; num_turns?: number; duration_ms?: number } | { ok: false; reason: string }> {
     const provider = peer === 'claude' ? delegateClaude
                    : peer === 'codex' ? delegateCodex
@@ -402,7 +404,7 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     const started = Date.now()
     let session: Awaited<ReturnType<typeof provider.spawn>> | null = null
     try {
-      session = await provider.spawn({ alias: '_delegate', path: deps.stateDir })
+      session = await provider.spawn({ alias: '_delegate', path: cwd ?? deps.stateDir })
       const result = await session.dispatch(prompt)
       const response = result.assistantText.join('\n').trim()
       return { ok: true, response, duration_ms: Date.now() - started }

@@ -66,3 +66,17 @@ export interface Participant {
 export interface PersistedConversation {
   mode: Mode
 }
+
+/**
+ * Returns true iff the given mode allows / requires multi-participant
+ * disambiguation (i.e. user-facing replies should be prefixed with
+ * `[Display]` to identify which agent spoke). RFC 03 review #5: this
+ * is the single source of truth so internal-api and any future caller
+ * doesn't need to switch on mode.kind itself — adding a new
+ * multi-participant mode (e.g. N-way chatroom) updates ONE function.
+ */
+export function modeRequiresParticipantPrefix(mode: Mode): boolean {
+  // solo / primary_tool — single visible speaker per turn → no prefix.
+  // parallel / chatroom — multiple speakers visible per inbound → prefix.
+  return mode.kind === 'parallel' || mode.kind === 'chatroom'
+}

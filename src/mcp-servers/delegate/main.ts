@@ -73,12 +73,18 @@ server.registerTool(
     inputSchema: {
       prompt: z.string().describe(`The question or task to send to ${peerDisplay}. Self-contained — include any context the peer needs since it sees no conversation history.`),
       context_summary: z.string().optional().describe('Optional: a 1-3 sentence summary of the surrounding context if the prompt alone is ambiguous.'),
+      cwd: z.string().optional().describe(`Optional absolute path: if you want ${peerDisplay} to be able to Read/Bash/etc. files from a specific directory (e.g. the project the user is asking about), pass it here. Otherwise the peer runs in a sandboxed scratch dir with no project file access — RFC 03 P5 review #10.`),
     },
   },
-  async ({ prompt, context_summary }) => {
+  async ({ prompt, context_summary, cwd }) => {
     try {
+      // RFC 03 P5 review #7 — depth = 0 from regular sessions. The
+      // daemon /v1/delegate handler rejects any depth > 0 as a defense-
+      // in-depth backstop; bare delegate peers don't have this MCP
+      // loaded so they can't naturally produce a non-zero depth, but
+      // the explicit field documents intent.
       const resp = await client.request<{ ok: boolean; response?: string; reason?: string }>(
-        'POST', '/v1/delegate', { peer, prompt, context_summary },
+        'POST', '/v1/delegate', { peer, prompt, context_summary, cwd, depth: 0 },
       )
       // Pass through the daemon's structured response so the agent can
       // distinguish success / failure cleanly.
