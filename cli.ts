@@ -30,36 +30,25 @@ function emitJson(data: unknown, outFile: string | undefined): void {
 }
 
 // CliArgs only covers commands NOT yet migrated to citty (see `cittyRoot` below).
-// Migrated subcommands (status / list / install / doctor / setup-status, plus
-// PR4 batch 2: events / observations / milestones / conversations / logs) are
-// dispatched in `main()` directly to citty before reaching parseCliArgs, so
-// keeping them in this union would be dead code.
+// Migrated subcommands are dispatched in `main()` directly to citty before
+// reaching parseCliArgs, so keeping them in this union would be dead code:
+//   PR4 batch 1: status / list / install / doctor / setup-status
+//   PR4 batch 2: events / observations / milestones / conversations / logs
+//   PR4 batch 3a: sessions / avatar / guard / provider
 export type CliArgs =
   | { cmd: 'run'; dangerouslySkipPermissions: boolean }
   | { cmd: 'setup'; qrJson?: boolean }
   | { cmd: 'setup-poll'; qrcode: string; baseUrl?: string; json: boolean }
   | { cmd: 'service'; action: 'status' | 'install' | 'start' | 'stop' | 'uninstall'; json: boolean; unattended?: boolean; autoStart?: boolean }
-  | { cmd: 'provider-set'; provider: AgentProviderKind; model?: string; unattended?: boolean }
-  | { cmd: 'provider-show'; json: boolean }
   | { cmd: 'account-remove'; botId: string; json: boolean }
   | { cmd: 'daemon-kill'; pid: number; json: boolean }
   | { cmd: 'memory-list'; json: boolean }
   | { cmd: 'memory-read'; userId: string; path: string; json: boolean }
   | { cmd: 'memory-write'; userId: string; path: string; bodyBase64: string; json: boolean }
-  | { cmd: 'sessions-list-projects'; json: boolean; outFile?: string }
-  | { cmd: 'sessions-read-jsonl'; alias: string; json: boolean; outFile?: string }
-  | { cmd: 'sessions-delete'; alias: string; json: boolean }
-  | { cmd: 'sessions-search'; query: string; json: boolean; limit: number; outFile?: string }
   | { cmd: 'reply'; chatId?: string; text?: string; json: boolean }
   | { cmd: 'update'; check: boolean; json: boolean }
   | { cmd: 'demo-seed'; chatId: string | null; json: boolean }
   | { cmd: 'demo-unseed'; chatId: string | null; json: boolean }
-  | { cmd: 'avatar-info'; key: string; json: boolean }
-  | { cmd: 'avatar-set'; key: string; base64: string; json: boolean }
-  | { cmd: 'avatar-remove'; key: string; json: boolean }
-  | { cmd: 'guard-status'; json: boolean }
-  | { cmd: 'guard-enable'; json: boolean }
-  | { cmd: 'guard-disable'; json: boolean }
   | { cmd: 'help' }
 
 export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void }): CliArgs {
@@ -128,65 +117,15 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
     // events / observations / milestones / conversations / logs — migrated
     // to citty in PR4 batch 2 (see SUBCOMMANDS map below). MIGRATED_COMMANDS
     // routes them before parseCliArgs runs, so these cases are dead.
-    case 'avatar': {
-      if (rest[0] === 'info' && rest[1]) {
-        return { cmd: 'avatar-info', key: rest[1], json: rest.includes('--json') }
-      }
-      if (rest[0] === 'set' && rest[1]) {
-        const idx = rest.indexOf('--base64')
-        if (idx < 0 || !rest[idx + 1]) return { cmd: 'help' }
-        return { cmd: 'avatar-set', key: rest[1], base64: rest[idx + 1]!, json: rest.includes('--json') }
-      }
-      if (rest[0] === 'remove' && rest[1]) {
-        return { cmd: 'avatar-remove', key: rest[1], json: rest.includes('--json') }
-      }
-      return { cmd: 'help' }
-    }
-    case 'sessions': {
-      const outFileIdx = rest.indexOf('--out-file')
-      const outFile = outFileIdx >= 0 ? rest[outFileIdx + 1] : undefined
-      if (rest[0] === 'list-projects') {
-        return { cmd: 'sessions-list-projects', json: rest.includes('--json'), outFile }
-      }
-      if (rest[0] === 'read-jsonl' && rest[1]) {
-        return { cmd: 'sessions-read-jsonl', alias: rest[1], json: rest.includes('--json'), outFile }
-      }
-      if (rest[0] === 'delete' && rest[1]) {
-        return { cmd: 'sessions-delete', alias: rest[1], json: rest.includes('--json') }
-      }
-      if (rest[0] === 'search' && rest[1]) {
-        const limitIdx = rest.indexOf('--limit')
-        const limit = limitIdx >= 0 ? Number.parseInt(rest[limitIdx + 1] ?? '', 10) : 50
-        return { cmd: 'sessions-search', query: rest[1], json: rest.includes('--json'), limit: Number.isFinite(limit) ? limit : 50, outFile }
-      }
-      return { cmd: 'help' }
-    }
-    case 'provider': {
-      if (rest[0] === 'show') return { cmd: 'provider-show', json: rest.includes('--json') }
-      if (rest[0] === 'set' && (rest[1] === 'claude' || rest[1] === 'codex')) {
-        const modelIdx = rest.indexOf('--model')
-        const model = modelIdx >= 0 ? rest[modelIdx + 1] : undefined
-        const unattended = parseBoolFlag(rest, '--unattended')
-        const base: { cmd: 'provider-set'; provider: AgentProviderKind; model?: string; unattended?: boolean } = { cmd: 'provider-set', provider: rest[1] }
-        if (model) base.model = model
-        if (unattended !== undefined) base.unattended = unattended
-        return base
-      }
-      return { cmd: 'help' }
-    }
+    // sessions / avatar / guard / provider — migrated to citty in PR4 batch 3a.
+    // MIGRATED_COMMANDS routes them before parseCliArgs runs, so these cases
+    // would be dead.
     case 'update': {
       return {
         cmd: 'update',
         check: rest.includes('--check'),
         json: rest.includes('--json'),
       }
-    }
-    case 'guard': {
-      const json = rest.includes('--json')
-      if (rest[0] === 'status') return { cmd: 'guard-status', json }
-      if (rest[0] === 'enable')  return { cmd: 'guard-enable', json }
-      if (rest[0] === 'disable') return { cmd: 'guard-disable', json }
-      return { cmd: 'help' }
     }
     case 'demo': {
       if (rest[0] === 'seed' || rest[0] === 'unseed') {
@@ -559,6 +498,342 @@ const logsCmd = defineCommand({
   },
 })
 
+// ── PR4 batch 3a — small-namespace state inspection / config commands ─
+//
+// 4 namespaces, 12 leaves total. All bounded: read-only or
+// single-store / single-config-file writes. No daemon restart, no
+// ilink, no contextToken. Same defineCommand pattern as batch 2.
+
+const sessionsListProjectsCmd = defineCommand({
+  meta: { name: 'list-projects', description: 'Project sessions with cached summaries' },
+  args: {
+    json: { type: 'boolean', description: 'JSON envelope' },
+    'out-file': { type: 'string', description: 'Write JSON to a sibling file (avoids pipe buffer truncation in compiled binaries)' },
+  },
+  async run({ args }) {
+    const outFile = args['out-file']
+    const { makeSessionStore } = await import('./src/core/session-store')
+    const { openDb } = await import('./src/lib/db')
+    const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+    const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
+    const all = store.all()
+    const projects = Object.entries(all).map(([alias, rec]) => ({
+      alias,
+      session_id: rec.session_id,
+      last_used_at: rec.last_used_at,
+      summary: rec.summary ?? null,
+      summary_updated_at: rec.summary_updated_at ?? null,
+    }))
+    if (args.json) emitJson({ ok: true, projects }, outFile)
+    else console.log(projects.map(p => `${p.alias} ${p.last_used_at}`).join('\n'))
+
+    // Fire-and-forget: refresh stale summaries in the background. The current
+    // request returns immediately with whatever's cached; next list call will
+    // pick up the fresh summaries. WECHAT_CC_DISABLE_SUMMARIZER=1 skips for
+    // CI/e2e where SDK calls are undesirable.
+    if (process.env.WECHAT_CC_DISABLE_SUMMARIZER !== '1') {
+      void (async () => {
+        try {
+          const { triggerStaleSummaryRefresh } = await import('./src/daemon/sessions/summarizer-runtime')
+          // resolveIntrospectChatId is named for its first caller (introspect)
+          // but it's actually a generic "default chat" resolver that reads
+          // companion config. Reusing it here avoids extracting yet another
+          // helper for what is, today, the same v0.4.x single-chat lookup.
+          const { resolveIntrospectChatId } = await import('./src/daemon/companion/introspect-runtime')
+          const { query } = await import('@anthropic-ai/claude-agent-sdk')
+          await triggerStaleSummaryRefresh({
+            stateDir: STATE_DIR,
+            db,
+            resolveChatId: () => resolveIntrospectChatId(STATE_DIR),
+            sdkEval: async (prompt) => {
+              let text = ''
+              const q = query({ prompt, options: { model: 'claude-haiku-4-5', maxTurns: 1 } })
+              for await (const raw of q as AsyncGenerator<import('@anthropic-ai/claude-agent-sdk').SDKMessage>) {
+                const msg = raw as unknown as { type: string; message?: { content?: unknown } }
+                if (msg.type === 'assistant' && Array.isArray(msg.message?.content)) {
+                  for (const part of msg.message.content as Array<{ type?: string; text?: string }>) {
+                    if (part.type === 'text' && typeof part.text === 'string') text += part.text
+                  }
+                }
+              }
+              return text
+            },
+          })
+        } catch { /* swallow — summary is non-critical */ }
+      })()
+    }
+  },
+})
+
+const sessionsReadJsonlCmd = defineCommand({
+  meta: { name: 'read-jsonl', description: "Read all turns from the alias's session jsonl" },
+  args: {
+    alias: { type: 'positional', required: true, description: 'Session alias', valueHint: 'alias' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+    'out-file': { type: 'string', description: 'Write JSON to a sibling file (avoids pipe buffer truncation in compiled binaries)' },
+  },
+  async run({ args }) {
+    const outFile = args['out-file']
+    const { makeSessionStore } = await import('./src/core/session-store')
+    const { openDb } = await import('./src/lib/db')
+    const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+    const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
+    const rec = store.get(args.alias)
+    if (!rec) {
+      console.log(args.json ? JSON.stringify({ ok: false, error: 'no such alias' }, null, 2) : 'no such alias')
+      return
+    }
+    const { resolveProjectJsonlPath } = await import('./src/daemon/sessions/path-resolver')
+    const path = resolveProjectJsonlPath(args.alias, rec.session_id)
+    const { existsSync, readFileSync } = await import('node:fs')
+    if (!existsSync(path)) {
+      console.log(args.json ? JSON.stringify({ ok: false, error: 'jsonl missing' }, null, 2) : 'jsonl missing')
+      return
+    }
+    const lines = readFileSync(path, 'utf8').split('\n').filter(l => l.length > 0)
+    const turns = lines.map(l => { try { return JSON.parse(l) } catch { return null } }).filter(t => t !== null)
+    if (args.json) emitJson({ ok: true, alias: args.alias, session_id: rec.session_id, turns }, outFile)
+    else console.log(`${turns.length} turns`)
+  },
+})
+
+const sessionsDeleteCmd = defineCommand({
+  meta: { name: 'delete', description: 'Remove the sessions table entry (jsonl on disk untouched)' },
+  args: {
+    alias: { type: 'positional', required: true, description: 'Session alias', valueHint: 'alias' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    const { makeSessionStore } = await import('./src/core/session-store')
+    const { openDb } = await import('./src/lib/db')
+    const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+    const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
+    store.delete(args.alias)
+    await store.flush()
+    console.log(args.json ? JSON.stringify({ ok: true, deleted: args.alias }, null, 2) : `deleted ${args.alias}`)
+  },
+})
+
+const sessionsSearchCmd = defineCommand({
+  meta: { name: 'search', description: 'Naive case-insensitive substring search across all session jsonls' },
+  args: {
+    query: { type: 'positional', required: true, description: 'Search query', valueHint: 'query' },
+    limit: { type: 'string', description: 'Max hits (default 50)' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+    'out-file': { type: 'string', description: 'Write JSON to a sibling file' },
+  },
+  async run({ args }) {
+    const limitNum = args.limit ? Number.parseInt(args.limit, 10) : 50
+    const limit = Number.isFinite(limitNum) ? limitNum : 50
+    const outFile = args['out-file']
+    const { searchAcrossSessions } = await import('./src/daemon/sessions/searcher')
+    const { openDb } = await import('./src/lib/db')
+    const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+    const hits = await searchAcrossSessions(args.query, { limit, stateDir: STATE_DIR, db })
+    if (args.json) emitJson({ ok: true, query: args.query, hits }, outFile)
+    else console.log(hits.map(h => `${h.alias} · ${h.snippet}`).join('\n'))
+  },
+})
+
+const sessionsCmd = defineCommand({
+  meta: { name: 'sessions', description: 'Per-project session inspection (resume-id store + jsonl readers)' },
+  subCommands: {
+    'list-projects': sessionsListProjectsCmd,
+    'read-jsonl': sessionsReadJsonlCmd,
+    delete: sessionsDeleteCmd,
+    search: sessionsSearchCmd,
+  },
+})
+
+const avatarInfoCmd = defineCommand({
+  meta: { name: 'info', description: "Show stored avatar metadata for a key (chat / bot / user)" },
+  args: {
+    key: { type: 'positional', required: true, description: 'Avatar key', valueHint: 'key' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    const { avatarInfo } = await import('./src/daemon/avatar/store')
+    const info = avatarInfo(STATE_DIR, args.key)
+    if (args.json) console.log(JSON.stringify({ ok: true, ...info }))
+    else console.log(`${args.key}: ${info.exists ? info.path : '(no avatar)'}`)
+  },
+})
+
+const avatarSetCmd = defineCommand({
+  meta: { name: 'set', description: 'Set avatar from base64 (PNG/JPG)' },
+  args: {
+    key: { type: 'positional', required: true, description: 'Avatar key', valueHint: 'key' },
+    base64: { type: 'string', required: true, description: 'Base64-encoded image bytes' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    const { setAvatar } = await import('./src/daemon/avatar/store')
+    try {
+      const result = setAvatar(STATE_DIR, args.key, args.base64)
+      if (args.json) console.log(JSON.stringify(result))
+      else console.log(`set ${args.key} → ${result.path}`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+      else console.error(`avatar set failed: ${msg}`)
+      process.exit(1)
+    }
+  },
+})
+
+const avatarRemoveCmd = defineCommand({
+  meta: { name: 'remove', description: 'Remove stored avatar for a key' },
+  args: {
+    key: { type: 'positional', required: true, description: 'Avatar key', valueHint: 'key' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    const { removeAvatar } = await import('./src/daemon/avatar/store')
+    const result = removeAvatar(STATE_DIR, args.key)
+    if (args.json) console.log(JSON.stringify(result))
+    else console.log(`removed ${args.key}`)
+  },
+})
+
+const avatarCmd = defineCommand({
+  meta: { name: 'avatar', description: 'Avatar metadata + binary set/remove (per chat / bot / user key)' },
+  subCommands: {
+    info: avatarInfoCmd,
+    set: avatarSetCmd,
+    remove: avatarRemoveCmd,
+  },
+})
+
+const guardStatusCmd = defineCommand({
+  meta: { name: 'status', description: "Live one-shot probe — current external IP + reachability" },
+  args: {
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    // Live one-shot probe (independent of any running daemon's
+    // scheduler). Useful for both the dashboard status row and
+    // operator debugging — `wechat-cc guard status --json` from
+    // any terminal returns the current external IP + reachability.
+    const { loadGuardConfig } = await import('./src/daemon/guard/store')
+    const { fetchPublicIp, probeReachable } = await import('./src/daemon/guard/probe')
+    const cfg = loadGuardConfig(STATE_DIR)
+    const ipRes = await fetchPublicIp({ url: cfg.ipify_url })
+    const probeRes = await probeReachable(cfg.probe_url)
+    const out = {
+      enabled: cfg.enabled,
+      ip: ipRes.ip,
+      reachable: probeRes.reachable,
+      probe_url: cfg.probe_url,
+      ip_error: ipRes.error ?? null,
+      probe_error: probeRes.error ?? null,
+      probe_ms: probeRes.ms,
+    }
+    if (args.json) console.log(JSON.stringify(out, null, 2))
+    else {
+      console.log(`enabled: ${out.enabled}`)
+      console.log(`ip:      ${out.ip ?? '?'}${out.ip_error ? ` (${out.ip_error})` : ''}`)
+      console.log(`probe:   ${out.reachable ? 'reachable' : 'UNREACHABLE'} (${cfg.probe_url})${out.probe_error ? ` — ${out.probe_error}` : ''}`)
+    }
+  },
+})
+
+async function setGuardEnabled(enabled: boolean, json: boolean): Promise<void> {
+  const { loadGuardConfig, saveGuardConfig } = await import('./src/daemon/guard/store')
+  const cfg = loadGuardConfig(STATE_DIR)
+  cfg.enabled = enabled
+  saveGuardConfig(STATE_DIR, cfg)
+  if (json) console.log(JSON.stringify({ ok: true, enabled: cfg.enabled }))
+  else console.log(`guard: ${cfg.enabled ? 'enabled' : 'disabled'}`)
+}
+
+const guardEnableCmd = defineCommand({
+  meta: { name: 'enable', description: 'Enable network-guard scheduler (next daemon start)' },
+  args: { json: { type: 'boolean', description: 'JSON envelope' } },
+  async run({ args }) { await setGuardEnabled(true, Boolean(args.json)) },
+})
+
+const guardDisableCmd = defineCommand({
+  meta: { name: 'disable', description: 'Disable network-guard scheduler' },
+  args: { json: { type: 'boolean', description: 'JSON envelope' } },
+  async run({ args }) { await setGuardEnabled(false, Boolean(args.json)) },
+})
+
+const guardCmd = defineCommand({
+  meta: { name: 'guard', description: 'Network-guard config + live probe' },
+  subCommands: {
+    status: guardStatusCmd,
+    enable: guardEnableCmd,
+    disable: guardDisableCmd,
+  },
+})
+
+const providerShowCmd = defineCommand({
+  meta: { name: 'show', description: 'Show selected agent provider' },
+  args: { json: { type: 'boolean', description: 'JSON envelope' } },
+  run({ args }) {
+    const config = loadAgentConfig(STATE_DIR)
+    if (args.json) console.log(JSON.stringify(config, null, 2))
+    else console.log(`provider: ${config.provider}${config.model ? ` (${config.model})` : ''} unattended=${config.dangerouslySkipPermissions}`)
+  },
+})
+
+const providerSetCmd = defineCommand({
+  meta: { name: 'set', description: 'Switch agent provider (claude|codex), optionally with --model + --unattended' },
+  args: {
+    provider: { type: 'positional', required: true, description: 'claude | codex', valueHint: 'claude|codex' },
+    model: { type: 'string', description: 'Override default model' },
+    // String, not boolean: matches the legacy parseBoolFlag tri-state semantics
+    // (true / false / undefined). Citty's boolean type can't represent
+    // "absent" vs "explicit false", and provider-set treats omitting
+    // --unattended as "don't change the existing dangerouslySkipPermissions
+    // setting" — distinct from an explicit `--unattended false`.
+    unattended: { type: 'string', description: 'true | false | yes | no | on | off (omit to leave unchanged)', valueHint: 'true|false' },
+  },
+  run({ args }) {
+    if (args.provider !== 'claude' && args.provider !== 'codex') {
+      console.error(`provider must be 'claude' or 'codex' (got: ${args.provider})`)
+      process.exit(2)
+    }
+    const provider = args.provider as AgentProviderKind
+    const unattended = parseBoolValue(args.unattended)
+    const existing = loadAgentConfig(STATE_DIR)
+    const next = {
+      ...existing,
+      provider,
+      ...(args.model !== undefined ? { model: args.model } : {}),
+      ...(unattended !== undefined ? { dangerouslySkipPermissions: unattended } : {}),
+    }
+    // When switching provider, drop a stale model from the previous provider
+    // unless the caller explicitly set one.
+    if (existing.provider !== provider && args.model === undefined) {
+      delete (next as Partial<typeof next>).model
+    }
+    saveAgentConfig(STATE_DIR, next)
+    console.log(`provider set: ${next.provider}${next.model ? ` (${next.model})` : ''} unattended=${next.dangerouslySkipPermissions}`)
+  },
+})
+
+const providerCmd = defineCommand({
+  meta: { name: 'provider', description: 'Agent provider config (claude / codex)' },
+  subCommands: {
+    show: providerShowCmd,
+    set: providerSetCmd,
+  },
+})
+
+/**
+ * Tri-state boolean parser for citty string args that need to mirror the
+ * legacy parseBoolFlag semantics: true / false / undefined. Used by
+ * `provider set --unattended` (and reusable for any future flag where
+ * "absent" is a distinct meaning from "explicit false").
+ */
+function parseBoolValue(value: string | undefined): boolean | undefined {
+  if (value === undefined) return undefined
+  if (value === 'true' || value === '1' || value === 'yes' || value === 'on') return true
+  if (value === 'false' || value === '0' || value === 'no' || value === 'off') return false
+  return undefined
+}
+
 // Subcommands literal first → both `cittyRoot.subCommands` and
 // `MIGRATED_COMMANDS` derive from this single source of truth. Adding a new
 // citty subcommand only requires touching this object — the dispatch set
@@ -577,6 +852,11 @@ const SUBCOMMANDS = {
   milestones: milestonesCmd,
   conversations: conversationsCmd,
   logs: logsCmd,
+  // PR4 batch 3a — sessions / avatar / guard / provider namespaces.
+  sessions: sessionsCmd,
+  avatar: avatarCmd,
+  guard: guardCmd,
+  provider: providerCmd,
 } as const
 
 export const cittyRoot = defineCommand({
@@ -747,166 +1027,6 @@ async function main() {
       }
       return
     }
-    case 'sessions-list-projects': {
-      const { makeSessionStore } = await import('./src/core/session-store')
-      const { openDb } = await import('./src/lib/db')
-      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
-      const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
-      const all = store.all()
-      const projects = Object.entries(all).map(([alias, rec]) => ({
-        alias,
-        session_id: rec.session_id,
-        last_used_at: rec.last_used_at,
-        summary: rec.summary ?? null,
-        summary_updated_at: rec.summary_updated_at ?? null,
-      }))
-      if (parsed.json) emitJson({ ok: true, projects }, parsed.outFile)
-      else console.log(projects.map(p => `${p.alias} ${p.last_used_at}`).join('\n'))
-
-      // Fire-and-forget: refresh stale summaries in the background. The current
-      // request returns immediately with whatever's cached; next list call will
-      // pick up the fresh summaries. WECHAT_CC_DISABLE_SUMMARIZER=1 skips for
-      // CI/e2e where SDK calls are undesirable.
-      if (process.env.WECHAT_CC_DISABLE_SUMMARIZER !== '1') {
-        void (async () => {
-          try {
-            const { triggerStaleSummaryRefresh } = await import('./src/daemon/sessions/summarizer-runtime')
-            // resolveIntrospectChatId is named for its first caller (introspect)
-            // but it's actually a generic "default chat" resolver that reads
-            // companion config. Reusing it here avoids extracting yet another
-            // helper for what is, today, the same v0.4.x single-chat lookup.
-            const { resolveIntrospectChatId } = await import('./src/daemon/companion/introspect-runtime')
-            const { query } = await import('@anthropic-ai/claude-agent-sdk')
-            await triggerStaleSummaryRefresh({
-              stateDir: STATE_DIR,
-              db,
-              resolveChatId: () => resolveIntrospectChatId(STATE_DIR),
-              sdkEval: async (prompt) => {
-                let text = ''
-                const q = query({ prompt, options: { model: 'claude-haiku-4-5', maxTurns: 1 } })
-                for await (const raw of q as AsyncGenerator<import('@anthropic-ai/claude-agent-sdk').SDKMessage>) {
-                  const msg = raw as unknown as { type: string; message?: { content?: unknown } }
-                  if (msg.type === 'assistant' && Array.isArray(msg.message?.content)) {
-                    for (const part of msg.message.content as Array<{ type?: string; text?: string }>) {
-                      if (part.type === 'text' && typeof part.text === 'string') text += part.text
-                    }
-                  }
-                }
-                return text
-              },
-            })
-          } catch { /* swallow — summary is non-critical */ }
-        })()
-      }
-      return
-    }
-    case 'sessions-read-jsonl': {
-      const { makeSessionStore } = await import('./src/core/session-store')
-      const { openDb } = await import('./src/lib/db')
-      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
-      const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
-      const rec = store.get(parsed.alias)
-      if (!rec) {
-        console.log(parsed.json ? JSON.stringify({ ok: false, error: 'no such alias' }, null, 2) : 'no such alias')
-        return
-      }
-      const { resolveProjectJsonlPath } = await import('./src/daemon/sessions/path-resolver')
-      const path = resolveProjectJsonlPath(parsed.alias, rec.session_id)
-      const { existsSync, readFileSync } = await import('node:fs')
-      if (!existsSync(path)) {
-        console.log(parsed.json ? JSON.stringify({ ok: false, error: 'jsonl missing' }, null, 2) : 'jsonl missing')
-        return
-      }
-      const lines = readFileSync(path, 'utf8').split('\n').filter(l => l.length > 0)
-      const turns = lines.map(l => { try { return JSON.parse(l) } catch { return null } }).filter(t => t !== null)
-      if (parsed.json) emitJson({ ok: true, alias: parsed.alias, session_id: rec.session_id, turns }, parsed.outFile)
-      else console.log(`${turns.length} turns`)
-      return
-    }
-    case 'sessions-delete': {
-      const { makeSessionStore } = await import('./src/core/session-store')
-      const { openDb } = await import('./src/lib/db')
-      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
-      const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
-      store.delete(parsed.alias)
-      await store.flush()
-      console.log(parsed.json ? JSON.stringify({ ok: true, deleted: parsed.alias }, null, 2) : `deleted ${parsed.alias}`)
-      return
-    }
-    case 'sessions-search': {
-      const { searchAcrossSessions } = await import('./src/daemon/sessions/searcher')
-      const { openDb } = await import('./src/lib/db')
-      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
-      const hits = await searchAcrossSessions(parsed.query, { limit: parsed.limit, stateDir: STATE_DIR, db })
-      if (parsed.json) emitJson({ ok: true, query: parsed.query, hits }, parsed.outFile)
-      else console.log(hits.map(h => `${h.alias} · ${h.snippet}`).join('\n'))
-      return
-    }
-    case 'avatar-info': {
-      const { avatarInfo } = await import('./src/daemon/avatar/store')
-      const info = avatarInfo(STATE_DIR, parsed.key)
-      if (parsed.json) console.log(JSON.stringify({ ok: true, ...info }))
-      else console.log(`${parsed.key}: ${info.exists ? info.path : '(no avatar)'}`)
-      return
-    }
-    case 'avatar-set': {
-      const { setAvatar } = await import('./src/daemon/avatar/store')
-      try {
-        const result = setAvatar(STATE_DIR, parsed.key, parsed.base64)
-        if (parsed.json) console.log(JSON.stringify(result))
-        else console.log(`set ${parsed.key} → ${result.path}`)
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        if (parsed.json) console.log(JSON.stringify({ ok: false, error: msg }))
-        else console.error(`avatar set failed: ${msg}`)
-        process.exit(1)
-      }
-      return
-    }
-    case 'avatar-remove': {
-      const { removeAvatar } = await import('./src/daemon/avatar/store')
-      const result = removeAvatar(STATE_DIR, parsed.key)
-      if (parsed.json) console.log(JSON.stringify(result))
-      else console.log(`removed ${parsed.key}`)
-      return
-    }
-    case 'guard-status': {
-      // Live one-shot probe (independent of any running daemon's
-      // scheduler). Useful for both the dashboard status row and
-      // operator debugging — `wechat-cc guard status --json` from
-      // any terminal returns the current external IP + reachability.
-      const { loadGuardConfig } = await import('./src/daemon/guard/store')
-      const { fetchPublicIp, probeReachable } = await import('./src/daemon/guard/probe')
-      const cfg = loadGuardConfig(STATE_DIR)
-      const ipRes = await fetchPublicIp({ url: cfg.ipify_url })
-      const probeRes = await probeReachable(cfg.probe_url)
-      const out = {
-        enabled: cfg.enabled,
-        ip: ipRes.ip,
-        reachable: probeRes.reachable,
-        probe_url: cfg.probe_url,
-        ip_error: ipRes.error ?? null,
-        probe_error: probeRes.error ?? null,
-        probe_ms: probeRes.ms,
-      }
-      if (parsed.json) console.log(JSON.stringify(out, null, 2))
-      else {
-        console.log(`enabled: ${out.enabled}`)
-        console.log(`ip:      ${out.ip ?? '?'}${out.ip_error ? ` (${out.ip_error})` : ''}`)
-        console.log(`probe:   ${out.reachable ? 'reachable' : 'UNREACHABLE'} (${cfg.probe_url})${out.probe_error ? ` — ${out.probe_error}` : ''}`)
-      }
-      return
-    }
-    case 'guard-enable':
-    case 'guard-disable': {
-      const { loadGuardConfig, saveGuardConfig } = await import('./src/daemon/guard/store')
-      const cfg = loadGuardConfig(STATE_DIR)
-      cfg.enabled = parsed.cmd === 'guard-enable'
-      saveGuardConfig(STATE_DIR, cfg)
-      if (parsed.json) console.log(JSON.stringify({ ok: true, enabled: cfg.enabled }))
-      else console.log(`guard: ${cfg.enabled ? 'enabled' : 'disabled'}`)
-      return
-    }
     case 'daemon-kill': {
       const { killDaemonByPid, defaultKillDeps } = await import('./src/cli/daemon-kill.ts')
       const result = await killDaemonByPid(defaultKillDeps(), parsed.pid)
@@ -983,29 +1103,6 @@ async function main() {
         const lockNote = result.lockfileChanged ? ', deps reinstalled' : ''
         console.log(`updated: ${result.fromCommit} → ${result.toCommit}${lockNote}, daemon=${result.daemonAction} (${result.elapsedMs}ms)`)
       }
-      return
-    }
-    case 'provider-show': {
-      const config = loadAgentConfig(STATE_DIR)
-      if (parsed.json) console.log(JSON.stringify(config, null, 2))
-      else console.log(`provider: ${config.provider}${config.model ? ` (${config.model})` : ''} unattended=${config.dangerouslySkipPermissions}`)
-      return
-    }
-    case 'provider-set': {
-      const existing = loadAgentConfig(STATE_DIR)
-      const next = {
-        ...existing,
-        provider: parsed.provider,
-        ...(parsed.model !== undefined ? { model: parsed.model } : {}),
-        ...(parsed.unattended !== undefined ? { dangerouslySkipPermissions: parsed.unattended } : {}),
-      }
-      // When switching provider, drop a stale model from the previous provider
-      // unless the caller explicitly set one.
-      if (existing.provider !== parsed.provider && parsed.model === undefined) {
-        delete (next as Partial<typeof next>).model
-      }
-      saveAgentConfig(STATE_DIR, next)
-      console.log(`provider set: ${next.provider}${next.model ? ` (${next.model})` : ''} unattended=${next.dangerouslySkipPermissions}`)
       return
     }
     case 'demo-seed':
