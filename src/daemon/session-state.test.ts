@@ -34,7 +34,7 @@ describe('SessionStateStore', () => {
     s.markExpired('bot-b', 'reason-b')
     const list = s.listExpired()
     expect(list.map(e => e.id)).toEqual(['bot-a', 'bot-b'])
-    expect(list[0].last_reason).toBe('reason-a')
+    expect(list[0]!.last_reason).toBe('reason-a')
   })
 
   it('clear removes entry', () => {
@@ -51,7 +51,7 @@ describe('SessionStateStore', () => {
     await s1.flush()
     const s2 = makeSessionStateStore(file, { debounceMs: 0 })
     expect(s2.isExpired('bot-a')).toBe(true)
-    expect(s2.listExpired()[0].last_reason).toBe('boom')
+    expect(s2.listExpired()[0]!.last_reason).toBe('boom')
   })
 
   it('survives corrupt JSON', () => {

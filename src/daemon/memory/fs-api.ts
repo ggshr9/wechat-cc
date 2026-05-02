@@ -117,8 +117,8 @@ export function makeMemoryFS(opts: MemoryFSOptions): MemoryFS {
       const stack: string[] = [full]
       while (stack.length > 0) {
         const dir = stack.pop()!
-        let entries: ReturnType<typeof readdirSync>
-        try { entries = readdirSync(dir, { withFileTypes: true }) } catch { continue }
+        let entries: import('node:fs').Dirent[]
+        try { entries = readdirSync(dir, { withFileTypes: true, encoding: 'utf8' }) } catch { continue }
         for (const entry of entries) {
           // Skip hidden entries and tmp files from interrupted atomic writes
           if (entry.name.startsWith('.') || entry.name.includes('.tmp-')) continue

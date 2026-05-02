@@ -17,7 +17,7 @@ describe('events store', () => {
     const all = await store.list()
     expect(all).toHaveLength(1)
     expect(all[0]).toMatchObject({ id, kind: 'cron_eval_skipped', trigger: 'hourly', reasoning: 'user is focused' })
-    expect(all[0].ts).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    expect(all[0]!.ts).toMatch(/^\d{4}-\d{2}-\d{2}T/)
   })
 
   it('appends multiple events in order', async () => {
@@ -26,8 +26,8 @@ describe('events store', () => {
     await store.append({ kind: 'observation_written', trigger: 't2', reasoning: 'r2', observation_id: 'obs_1' })
     const all = await store.list()
     expect(all).toHaveLength(2)
-    expect(all[0].trigger).toBe('t1')
-    expect(all[1].trigger).toBe('t2')
+    expect(all[0]!.trigger).toBe('t1')
+    expect(all[1]!.trigger).toBe('t2')
   })
 
   it('list({ limit, since }) filters', async () => {
@@ -75,8 +75,8 @@ describe('events store', () => {
     const long = 'x'.repeat(2000)
     await store.append({ kind: 'cron_eval_pushed', trigger: 't', reasoning: 'r', push_text: long })
     const [rec] = await store.list()
-    expect(rec.push_text!.length).toBeLessThanOrEqual(1025) // 1024 + ellipsis
-    expect(rec.push_text!.endsWith('…')).toBe(true)
+    expect(rec!.push_text!.length).toBeLessThanOrEqual(1025) // 1024 + ellipsis
+    expect(rec!.push_text!.endsWith('…')).toBe(true)
   })
 
   it('accepts cron_eval_failed events with reasoning', async () => {
@@ -84,7 +84,7 @@ describe('events store', () => {
     await store.append({ kind: 'cron_eval_failed', trigger: 'introspect', reasoning: 'SDK timeout after 30s' })
     const all = await store.list()
     expect(all).toHaveLength(1)
-    expect(all[0].kind).toBe('cron_eval_failed')
-    expect(all[0].reasoning).toContain('SDK timeout')
+    expect(all[0]!.kind).toBe('cron_eval_failed')
+    expect(all[0]!.reasoning).toContain('SDK timeout')
   })
 })

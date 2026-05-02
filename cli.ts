@@ -131,7 +131,7 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
       if (rest[0] === 'write' && rest[1] && rest[2]) {
         const idx = rest.indexOf('--body-base64')
         if (idx < 0 || !rest[idx + 1]) return { cmd: 'help' }
-        return { cmd: 'memory-write', userId: rest[1], path: rest[2], bodyBase64: rest[idx + 1], json: rest.includes('--json') }
+        return { cmd: 'memory-write', userId: rest[1], path: rest[2], bodyBase64: rest[idx + 1]!, json: rest.includes('--json') }
       }
       return { cmd: 'help' }
     }
@@ -165,7 +165,7 @@ export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void
       if (rest[0] === 'set' && rest[1]) {
         const idx = rest.indexOf('--base64')
         if (idx < 0 || !rest[idx + 1]) return { cmd: 'help' }
-        return { cmd: 'avatar-set', key: rest[1], base64: rest[idx + 1], json: rest.includes('--json') }
+        return { cmd: 'avatar-set', key: rest[1], base64: rest[idx + 1]!, json: rest.includes('--json') }
       }
       if (rest[0] === 'remove' && rest[1]) {
         return { cmd: 'avatar-remove', key: rest[1], json: rest.includes('--json') }
@@ -704,7 +704,7 @@ async function main() {
       const { setAvatar } = await import('./src/daemon/avatar/store')
       try {
         const result = setAvatar(STATE_DIR, parsed.key, parsed.base64)
-        if (parsed.json) console.log(JSON.stringify({ ok: true, ...result }))
+        if (parsed.json) console.log(JSON.stringify(result))
         else console.log(`set ${parsed.key} → ${result.path}`)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
@@ -717,7 +717,7 @@ async function main() {
     case 'avatar-remove': {
       const { removeAvatar } = await import('./src/daemon/avatar/store')
       const result = removeAvatar(STATE_DIR, parsed.key)
-      if (parsed.json) console.log(JSON.stringify({ ok: true, ...result }))
+      if (parsed.json) console.log(JSON.stringify(result))
       else console.log(`removed ${parsed.key}`)
       return
     }

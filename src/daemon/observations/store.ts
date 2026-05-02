@@ -121,7 +121,8 @@ export function makeObservationsStore(stateRoot: string, chatId: string, opts: O
       const all = await readAll()
       const idx = all.findIndex(r => r.id === id)
       if (idx < 0) return
-      all[idx] = { ...all[idx], archived: true, archived_at: new Date().toISOString() }
+      const existing = all[idx]!
+      all[idx] = { ...existing, archived: true, archived_at: new Date().toISOString() }
       await rewriteAll(all)
     },
   }

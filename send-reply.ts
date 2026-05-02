@@ -94,7 +94,7 @@ export async function sendReplyOnce(
   const persistedAccountId = userAccountIds[chatId]
   const account =
     accounts.find(a => a.id === persistedAccountId)
-    ?? accounts[0] // last-resort fallback to first account
+    ?? accounts[0]! // last-resort fallback to first account; non-empty checked above
 
   const ctxToken = contextTokens[chatId]
 

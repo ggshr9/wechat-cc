@@ -25,10 +25,10 @@ describe('notify-startup', () => {
       )
       expect(result).toEqual({ notified: true, recipients: ['owner-wxid'], sinceLastMs: null })
       expect(sent).toHaveLength(1)
-      expect(sent[0].chatId).toBe('owner-wxid')
-      expect(sent[0].text).toMatch(/已启动/)
-      expect(sent[0].text).toMatch(/pid=42/)
-      expect(sent[0].text).toMatch(/✅ unattended/)
+      expect(sent[0]!.chatId).toBe('owner-wxid')
+      expect(sent[0]!.text).toMatch(/已启动/)
+      expect(sent[0]!.text).toMatch(/pid=42/)
+      expect(sent[0]!.text).toMatch(/✅ unattended/)
     } finally {
       rmSync(stateDir, { recursive: true, force: true })
     }
@@ -83,9 +83,9 @@ describe('notify-startup', () => {
         { pid: 2, accounts: 1, dangerously: false }
       )
       expect(result.notified).toBe(true)
-      expect(sent[0].text).toMatch(/已重启/)
-      expect(sent[0].text).toMatch(/3.0 小时前/)
-      expect(sent[0].text).toMatch(/⚠️ strict/)
+      expect(sent[0]!.text).toMatch(/已重启/)
+      expect(sent[0]!.text).toMatch(/3.0 小时前/)
+      expect(sent[0]!.text).toMatch(/⚠️ strict/)
     } finally {
       rmSync(stateDir, { recursive: true, force: true })
     }

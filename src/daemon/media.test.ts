@@ -138,7 +138,7 @@ describe('materializeAttachments', () => {
     globalThis.fetch = vi.fn(async () => ({
       ok: true,
       arrayBuffer: async () => cipher.buffer.slice(cipher.byteOffset, cipher.byteOffset + cipher.byteLength),
-    }) as any)
+    })) as unknown as typeof fetch
 
     const msg = makeMsg([{
       kind: 'image',
@@ -147,16 +147,16 @@ describe('materializeAttachments', () => {
     }])
     await materializeAttachments(msg, inbox)
 
-    expect(msg.attachments![0].path).not.toBe(PENDING_CDN_REF)
-    expect(msg.attachments![0].path).toContain(inbox)
-    expect(msg.attachments![0].path).toMatch(/image-\d+\.jpg$/)
-    expect(msg.attachments![0].caption).toBeUndefined()
-    expect(readFileSync(msg.attachments![0].path).equals(plain)).toBe(true)
+    expect(msg.attachments![0]!.path).not.toBe(PENDING_CDN_REF)
+    expect(msg.attachments![0]!.path).toContain(inbox)
+    expect(msg.attachments![0]!.path).toMatch(/image-\d+\.jpg$/)
+    expect(msg.attachments![0]!.caption).toBeUndefined()
+    expect(readFileSync(msg.attachments![0]!.path).equals(plain)).toBe(true)
   })
 
   it('keeps pending placeholder when CDN download fails', async () => {
     const inbox = mkdtempSync(join(tmpdir(), 'wcc-mat-'))
-    globalThis.fetch = vi.fn(async () => ({ ok: false, status: 500, statusText: 'oops' }) as any)
+    globalThis.fetch = vi.fn(async () => ({ ok: false, status: 500, statusText: 'oops' })) as unknown as typeof fetch
     const captured: string[] = []
 
     const msg = makeMsg([{
@@ -166,7 +166,7 @@ describe('materializeAttachments', () => {
     }])
     await materializeAttachments(msg, inbox, (_t, l) => captured.push(l))
 
-    expect(msg.attachments![0].path).toBe(PENDING_CDN_REF)
+    expect(msg.attachments![0]!.path).toBe(PENDING_CDN_REF)
     expect(captured.some(l => /download failed/.test(l))).toBe(true)
   })
 
@@ -178,7 +178,7 @@ describe('materializeAttachments', () => {
     globalThis.fetch = vi.fn(async () => ({
       ok: true,
       arrayBuffer: async () => cipher.buffer.slice(cipher.byteOffset, cipher.byteOffset + cipher.byteLength),
-    }) as any)
+    })) as unknown as typeof fetch
 
     const msg = makeMsg([{
       kind: 'file',
@@ -190,14 +190,14 @@ describe('materializeAttachments', () => {
     }])
     await materializeAttachments(msg, inbox)
 
-    expect(msg.attachments![0].path).toMatch(/\d+-report\.csv$/)
-    expect(readFileSync(msg.attachments![0].path).toString('utf8')).toBe('hello.csv content')
+    expect(msg.attachments![0]!.path).toMatch(/\d+-report\.csv$/)
+    expect(readFileSync(msg.attachments![0]!.path).toString('utf8')).toBe('hello.csv content')
   })
 
   it('skips already-materialized attachments and ones with no CDN ref', async () => {
     const inbox = mkdtempSync(join(tmpdir(), 'wcc-mat-'))
     const fetchSpy = vi.fn()
-    globalThis.fetch = fetchSpy as any
+    globalThis.fetch = fetchSpy as unknown as typeof fetch
 
     const msg = makeMsg([
       { kind: 'image', path: '/already/here.jpg' },
@@ -205,8 +205,8 @@ describe('materializeAttachments', () => {
     ])
     await materializeAttachments(msg, inbox)
 
-    expect(msg.attachments![0].path).toBe('/already/here.jpg')
-    expect(msg.attachments![1].path).toBe(PENDING_CDN_REF)
+    expect(msg.attachments![0]!.path).toBe('/already/here.jpg')
+    expect(msg.attachments![1]!.path).toBe(PENDING_CDN_REF)
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 

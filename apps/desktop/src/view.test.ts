@@ -353,7 +353,7 @@ describe('conversationRows', () => {
       { chat_id: 'c3', user_name: null,  mode: { kind: 'solo', provider: 'claude' } },
     ])
     // Sort by tone (chatroom < solo) then chat_id ascending.
-    expect(rows.map(r => r.chatId)).toEqual(['c1', 'c2', 'c3'])
+    expect(rows.map((r: { chatId: string }) => r.chatId)).toEqual(['c1', 'c2', 'c3'])
     // Falls back to chat_id when user_name is null.
     expect(rows[2]).toMatchObject({ chatId: 'c3', name: 'c3' })
     expect(rows[0].badge.tone).toBe('chatroom')

@@ -24,10 +24,13 @@ const STATE_DIR = join(homedir(), '.claude', 'channels', 'wechat')
 const TTS_URL = 'http://127.0.0.1:8765/v1/audio/speech'
 const SAMPLE_TEXT = '(年轻女性，温柔甜美)语音气泡测试'
 
-const chat_id = process.argv[2] ??
-  Object.keys(JSON.parse(readFileSync(join(STATE_DIR, 'user_account_ids.json'), 'utf8')))[0]
-const account_id = process.argv[3] ??
-  (JSON.parse(readFileSync(join(STATE_DIR, 'user_account_ids.json'), 'utf8')) as Record<string, string>)[chat_id]
+const userAccountIds = JSON.parse(readFileSync(join(STATE_DIR, 'user_account_ids.json'), 'utf8')) as Record<string, string>
+const chat_id_raw = process.argv[2] ?? Object.keys(userAccountIds)[0]
+if (!chat_id_raw) throw new Error('no chat_id (pass as argv[2] or seed user_account_ids.json)')
+const chat_id: string = chat_id_raw
+const account_id_raw = process.argv[3] ?? userAccountIds[chat_id]
+if (!account_id_raw) throw new Error(`no account_id for chat ${chat_id}`)
+const account_id: string = account_id_raw
 
 const acctDir = join(STATE_DIR, 'accounts', account_id)
 const account = JSON.parse(readFileSync(join(acctDir, 'account.json'), 'utf8')) as { baseUrl: string }

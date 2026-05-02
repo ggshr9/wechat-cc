@@ -29,6 +29,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Typecheck
+        run: bun run typecheck
+
       - name: Build cli.ts
         run: bun build cli.ts --target=node --outfile=dist/cli.js
 

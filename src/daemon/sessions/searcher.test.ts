@@ -58,10 +58,10 @@ describe('searchAcrossSessions', () => {
       async (home) => {
         const hits = await searchAcrossSessions('我是谁', { stateDir, home })
         expect(hits).toHaveLength(1)
-        expect(hits[0].alias).toBe('_default')
-        expect(hits[0].turn).toBeTruthy()
-        expect((hits[0].turn as any).type).toBe('user')
-        expect(hits[0].session_has_reply_tool).toBe(true)
+        expect(hits[0]!.alias).toBe('_default')
+        expect(hits[0]!.turn).toBeTruthy()
+        expect((hits[0]!.turn as any).type).toBe('user')
+        expect(hits[0]!.session_has_reply_tool).toBe(true)
       },
     )
   })
@@ -78,7 +78,7 @@ describe('searchAcrossSessions', () => {
       async (home) => {
         const hits = await searchAcrossSessions('plain', { stateDir, home })
         expect(hits).toHaveLength(1)
-        expect(hits[0].session_has_reply_tool).toBe(false)
+        expect(hits[0]!.session_has_reply_tool).toBe(false)
       },
     )
   })
@@ -97,7 +97,7 @@ describe('searchAcrossSessions', () => {
       async (home) => {
         const hits = await searchAcrossSessions('needle', { stateDir, home })
         expect(hits).toHaveLength(1)
-        expect(hits[0].turn).toBeNull()
+        expect(hits[0]!.turn).toBeNull()
       },
     )
   })

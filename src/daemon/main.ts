@@ -368,7 +368,7 @@ async function main() {
   const onboarding = makeOnboardingHandler({
     isKnownUser: (userId) => ilink.resolveUserName(userId) !== undefined,
     setUserName: (chatId, name) => ilink.setUserName(chatId, name),
-    sendMessage: (chatId, text) => ilink.sendMessage(chatId, text),
+    sendMessage: async (chatId, text) => { await ilink.sendMessage(chatId, text) },
     log: (tag, line) => log(tag, line),
   })
 

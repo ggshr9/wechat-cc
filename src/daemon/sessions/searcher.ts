@@ -47,7 +47,7 @@ export async function searchAcrossSessions(
     const sessionHasReplyTool = lines.some(l => l.includes(REPLY_TOOL_MARKER))
 
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]
+      const line = lines[i]!
       const lower = line.toLowerCase()
       const idx = lower.indexOf(needle)
       if (idx < 0) continue
