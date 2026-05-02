@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { parseCliArgs } from './cli'
+import { runCommand } from 'citty'
+import { parseCliArgs, cittyRoot } from './cli'
 
 describe('parseCliArgs', () => {
   beforeEach(() => vi.restoreAllMocks())
@@ -17,18 +18,11 @@ describe('parseCliArgs', () => {
       json: true,
     })
   })
-  it('recognizes install subcommand with --user', () => {
-    expect(parseCliArgs(['install', '--user'])).toEqual({ cmd: 'install', userScope: true })
-  })
-  it('recognizes install subcommand without --user', () => {
-    expect(parseCliArgs(['install'])).toEqual({ cmd: 'install', userScope: false })
-  })
-  it('recognizes status/list/help', () => {
-    expect(parseCliArgs(['status']).cmd).toBe('status')
-    expect(parseCliArgs(['list']).cmd).toBe('list')
-    expect(parseCliArgs(['doctor']).cmd).toBe('doctor')
-    expect(parseCliArgs(['doctor', '--json'])).toEqual({ cmd: 'doctor', json: true })
-    expect(parseCliArgs(['setup-status', '--json'])).toEqual({ cmd: 'setup-status', json: true })
+  // status / list / install / doctor / setup-status moved to citty (PR4 batch 1).
+  // Their parser-only behavior is covered by the `citty migrated commands`
+  // describe block below; these legacy parseCliArgs tests would now fall
+  // through to `{ cmd: 'help' }` and weren't testing the real entrypoint.
+  it('recognizes service/provider/help', () => {
     expect(parseCliArgs(['service', 'status', '--json'])).toEqual({ cmd: 'service', action: 'status', json: true, unattended: undefined, autoStart: undefined })
     expect(parseCliArgs(['service', 'install', '--json'])).toEqual({ cmd: 'service', action: 'install', json: true, unattended: undefined, autoStart: undefined })
     expect(parseCliArgs(['service', 'start'])).toEqual({ cmd: 'service', action: 'start', json: false, unattended: undefined, autoStart: undefined })
@@ -283,5 +277,58 @@ describe('demo seed/unseed', () => {
     expect(parseCliArgs(['demo', 'unseed', '--json'])).toEqual({
       cmd: 'demo-unseed', chatId: null, json: true,
     })
+  })
+})
+
+describe('citty migrated commands', () => {
+  // The first batch of citty-migrated subcommands. Asserted via a stub `run`
+  // override (citty calls subCommand.run with parsed args) so the tests
+  // verify argument parsing without invoking real handlers (which would
+  // touch ~/.claude/channels/wechat state and the doctor probe matrix).
+  type Captured = { args: Record<string, unknown> } | null
+
+  async function runWithStub(rawArgs: string[], subName: string): Promise<Captured> {
+    const subs = cittyRoot.subCommands as Record<string, { run?: unknown }>
+    const original = subs[subName]
+    if (!original || typeof original !== 'object') throw new Error(`no subcommand ${subName}`)
+    let captured: Captured = null
+    const stub = { ...original, run: (ctx: { args: Record<string, unknown> }) => { captured = { args: ctx.args } } }
+    subs[subName] = stub
+    try {
+      await runCommand(cittyRoot, { rawArgs })
+    } finally {
+      subs[subName] = original
+    }
+    return captured
+  }
+
+  it('exposes the 5 batch-1 subcommands', () => {
+    const subs = cittyRoot.subCommands as Record<string, unknown>
+    expect(Object.keys(subs).sort()).toEqual(['doctor', 'install', 'list', 'setup-status', 'status'])
+  })
+
+  it('doctor accepts --json', async () => {
+    const r = await runWithStub(['doctor', '--json'], 'doctor')
+    expect(r?.args.json).toBe(true)
+  })
+
+  it('doctor without --json defaults to false-y', async () => {
+    const r = await runWithStub(['doctor'], 'doctor')
+    expect(r?.args.json).toBeFalsy()
+  })
+
+  it('setup-status accepts --json', async () => {
+    const r = await runWithStub(['setup-status', '--json'], 'setup-status')
+    expect(r?.args.json).toBe(true)
+  })
+
+  it('status / list parse with no extra args', async () => {
+    expect(await runWithStub(['status'], 'status')).not.toBeNull()
+    expect(await runWithStub(['list'], 'list')).not.toBeNull()
+  })
+
+  it('install accepts legacy --user flag (for backward arg compat)', async () => {
+    const r = await runWithStub(['install', '--user'], 'install')
+    expect(r?.args.user).toBe(true)
   })
 })
