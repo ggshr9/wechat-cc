@@ -10,8 +10,6 @@
  *   - Onboarding ("here's what observations look like once Claude has
  *     been paying attention")
  */
-import { existsSync } from 'node:fs'
-import { readFile, writeFile, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { makeEventsStore } from '../events/store'
 import { makeObservationsStore } from '../observations/store'
@@ -34,7 +32,9 @@ export async function seedDemo(deps: SeedDeps): Promise<{ observations: number; 
   const ms = makeMilestonesStore(deps.db, deps.chatId, {
     migrateFromFile: join(memoryRoot, deps.chatId, 'milestones.jsonl'),
   })
-  const ev = makeEventsStore(memoryRoot, deps.chatId)
+  const ev = makeEventsStore(deps.db, deps.chatId, {
+    migrateFromFile: join(memoryRoot, deps.chatId, 'events.jsonl'),
+  })
   const t = now()
 
   const isoAgo = (ms_ago: number) => new Date(t - ms_ago).toISOString()
@@ -62,47 +62,19 @@ export async function seedDemo(deps: SeedDeps): Promise<{ observations: number; 
 }
 
 export async function unseedDemo(deps: { stateDir: string; chatId: string; db: Db }): Promise<{ removed: number }> {
-  const memoryRoot = join(deps.stateDir, 'memory')
-  const chatDir = join(memoryRoot, deps.chatId)
   let removed = 0
 
-  // Per-store-migration sweep. Each store moves to SQLite incrementally
-  // (PR7.5+); when a store is migrated, its legacy file is renamed to
-  // .migrated and demo rows live in the db. When still file-based, the
-  // jsonl scrubber below catches them. The two paths are union — we hit
-  // both so unseed works mid-migration too.
-
-  // SQLite-backed: milestones (PR7.5), observations (PR7.6).
-  const delMs = deps.db.prepare("DELETE FROM milestones WHERE chat_id = ? AND id LIKE 'ms_demo_%'")
-  removed += (delMs.run(deps.chatId).changes ?? 0) as number
+  // All three demo-touched stores are SQLite-backed as of PR7.7. Demo
+  // rows live exclusively in the db; legacy jsonl files (if any) were
+  // either renamed to .migrated by the first store construction OR
+  // never existed (fresh install).
   const delObs = deps.db.prepare("DELETE FROM observations WHERE chat_id = ? AND id LIKE 'obs_demo_%'")
-  removed += (delObs.run(deps.chatId).changes ?? 0) as number
+  const delMs = deps.db.prepare("DELETE FROM milestones WHERE chat_id = ? AND id LIKE 'ms_demo_%'")
+  const delEv = deps.db.prepare("DELETE FROM events WHERE chat_id = ? AND id LIKE 'evt_demo_%'")
 
-  for (const fname of ['observations.jsonl', 'milestones.jsonl', 'events.jsonl']) {
-    const path = join(chatDir, fname)
-    if (!existsSync(path)) continue
-    const raw = await readFile(path, 'utf8')
-    const lines = raw.split('\n').filter(l => l.length > 0)
-    const kept: string[] = []
-    for (const line of lines) {
-      try {
-        const rec = JSON.parse(line) as { id?: string; observation_id?: string; milestone_id?: string }
-        const id = rec.id || ''
-        // Demo records start with obs_demo_, ms_demo_, evt_demo_, OR for events
-        // we identify by observation_id/milestone_id pointing at a demo entity.
-        const isDemo = id.startsWith('obs_demo_') || id.startsWith('ms_demo_') || id.startsWith('evt_demo_')
-          || (typeof rec.observation_id === 'string' && rec.observation_id.startsWith('obs_demo_'))
-          || (typeof rec.milestone_id === 'string' && rec.milestone_id.startsWith('ms_demo_'))
-        if (isDemo) { removed++; continue }
-        kept.push(line)
-      } catch {
-        kept.push(line)  // keep malformed lines (don't claim to "remove" them)
-      }
-    }
-    if (kept.length === lines.length) continue  // nothing changed
-    const tmp = `${path}.tmp-${process.pid}-${Date.now()}`
-    await writeFile(tmp, kept.join('\n') + (kept.length ? '\n' : ''), { mode: 0o600 })
-    await rename(tmp, path)
-  }
+  removed += (delObs.run(deps.chatId).changes ?? 0) as number
+  removed += (delMs.run(deps.chatId).changes ?? 0) as number
+  removed += (delEv.run(deps.chatId).changes ?? 0) as number
+
   return { removed }
 }

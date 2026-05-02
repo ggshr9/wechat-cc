@@ -560,8 +560,12 @@ async function main() {
     }
     case 'events-list': {
       const { makeEventsStore } = await import('./src/daemon/events/store')
+      const { openDb } = await import('./src/lib/db')
       const memoryRoot = join(STATE_DIR, 'memory')
-      const store = makeEventsStore(memoryRoot, parsed.chatId)
+      const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+      const store = makeEventsStore(db, parsed.chatId, {
+        migrateFromFile: join(memoryRoot, parsed.chatId, 'events.jsonl'),
+      })
       const list = await store.list({ limit: parsed.limit })
       console.log(parsed.json ? JSON.stringify({ ok: true, events: list }, null, 2) : list.map(e => `${e.ts} ${e.kind} ${e.trigger}`).join('\n'))
       return

@@ -27,7 +27,7 @@ describe('introspect tick', () => {
   })
 
   it('writes an observation when agent decides to', async () => {
-    const events = makeEventsStore(dir, 'chat_x')
+    const events = makeEventsStore(db, 'chat_x')
     const observations = makeObservationsStore(db, 'chat_x')
     const agent = makeFakeAgent({ write: true, body: 'you mentioned compass 12 times', tone: 'curious', reasoning: 'pattern detected' })
     const deps: IntrospectDeps = { events, observations, agent, chatId: 'chat_x', log: vi.fn() }
@@ -44,7 +44,7 @@ describe('introspect tick', () => {
   })
 
   it('skips writing when agent decides not to', async () => {
-    const events = makeEventsStore(dir, 'chat_x')
+    const events = makeEventsStore(db, 'chat_x')
     const observations = makeObservationsStore(db, 'chat_x')
     const agent = makeFakeAgent({ write: false, reasoning: 'nothing new since last week' })
     const deps: IntrospectDeps = { events, observations, agent, chatId: 'chat_x', log: vi.fn() }
@@ -59,7 +59,7 @@ describe('introspect tick', () => {
   })
 
   it('agent failure is swallowed and logged (does not throw)', async () => {
-    const events = makeEventsStore(dir, 'chat_x')
+    const events = makeEventsStore(db, 'chat_x')
     const observations = makeObservationsStore(db, 'chat_x')
     const agent = { runIntrospect: vi.fn(async () => { throw new Error('SDK timeout') }) }
     const log = vi.fn()
@@ -74,7 +74,7 @@ describe('introspect tick', () => {
   })
 
   it('routes SDK error reasoning to cron_eval_failed', async () => {
-    const events = makeEventsStore(dir, 'chat_x')
+    const events = makeEventsStore(db, 'chat_x')
     const observations = makeObservationsStore(db, 'chat_x')
     const agent = { runIntrospect: vi.fn(async () => ({ write: false, reasoning: 'SDK error: timeout after 30s' })) }
     const deps: IntrospectDeps = { events, observations, agent, chatId: 'chat_x', log: vi.fn() }
@@ -85,7 +85,7 @@ describe('introspect tick', () => {
   })
 
   it('routes parse failure reasoning to cron_eval_failed', async () => {
-    const events = makeEventsStore(dir, 'chat_x')
+    const events = makeEventsStore(db, 'chat_x')
     const observations = makeObservationsStore(db, 'chat_x')
     const agent = { runIntrospect: vi.fn(async () => ({ write: false, reasoning: 'parse failed; raw[:120]=garbage' })) }
     const deps: IntrospectDeps = { events, observations, agent, chatId: 'chat_x', log: vi.fn() }
@@ -96,7 +96,7 @@ describe('introspect tick', () => {
   })
 
   it('still routes legitimate skip reasoning to cron_eval_skipped', async () => {
-    const events = makeEventsStore(dir, 'chat_x')
+    const events = makeEventsStore(db, 'chat_x')
     const observations = makeObservationsStore(db, 'chat_x')
     const agent = { runIntrospect: vi.fn(async () => ({ write: false, reasoning: 'nothing new since last week' })) }
     const deps: IntrospectDeps = { events, observations, agent, chatId: 'chat_x', log: vi.fn() }

@@ -26,7 +26,7 @@ describe('seedDemo + unseedDemo', () => {
     const memoryRoot = join(stateDir, 'memory')
     expect((await makeObservationsStore(db, 'chat_x').listActive())).toHaveLength(3)
     expect((await makeMilestonesStore(db, 'chat_x').list())).toHaveLength(1)
-    expect((await makeEventsStore(memoryRoot, 'chat_x').list())).toHaveLength(5)
+    expect((await makeEventsStore(db, 'chat_x').list())).toHaveLength(5)
   })
 
   it('unseed removes seeded entries by stable id prefix + back-pointer', async () => {
@@ -38,7 +38,7 @@ describe('seedDemo + unseedDemo', () => {
     const memoryRoot = join(stateDir, 'memory')
     expect((await makeObservationsStore(db, 'chat_x').listActive())).toHaveLength(1)  // only real one survives
     expect((await makeMilestonesStore(db, 'chat_x').list())).toHaveLength(0)
-    expect((await makeEventsStore(memoryRoot, 'chat_x').list())).toHaveLength(0)  // all events were demo
+    expect((await makeEventsStore(db, 'chat_x').list())).toHaveLength(0)  // all events were demo
   })
 
   it('unseed is idempotent (no-op on empty/already-clean state)', async () => {

@@ -36,7 +36,7 @@ describe('buildDetectorContext', () => {
   })
 
   it('builds pushRepliedHistory from events.jsonl', async () => {
-    const events = makeEventsStore(join(stateDir, 'memory'), 'chat_x')
+    const events = makeEventsStore(db, 'chat_x')
     await events.append({ kind: 'cron_eval_pushed', trigger: 'daily', reasoning: 'r', push_text: 'hi' })
     await events.append({ kind: 'cron_eval_skipped', trigger: 'daily', reasoning: 'r' })
     const ctx = await buildDetectorContext({ stateDir, chatId: 'chat_x', db })

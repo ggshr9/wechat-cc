@@ -10,7 +10,7 @@ import { openTestDb, type Db } from '../../lib/db'
 function makeStores(stateDir: string, chatId: string, db: Db) {
   const memoryRoot = join(stateDir, 'memory')
   return {
-    events: makeEventsStore(memoryRoot, chatId),
+    events: makeEventsStore(db, chatId),
     observations: makeObservationsStore(db, chatId),
   }
 }

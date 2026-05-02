@@ -221,7 +221,9 @@ async function main() {
       return true
     }
     const memoryRoot = join(STATE_DIR, 'memory')
-    const events = makeEventsStore(memoryRoot, chatId)
+    const events = makeEventsStore(db, chatId, {
+      migrateFromFile: join(memoryRoot, chatId, 'events.jsonl'),
+    })
     const observations = makeObservationsStore(db, chatId, {
       migrateFromFile: join(memoryRoot, chatId, 'observations.jsonl'),
     })
@@ -355,7 +357,9 @@ async function main() {
       const milestones = makeMilestonesStore(db, chatId, {
         migrateFromFile: join(memRoot, chatId, 'milestones.jsonl'),
       })
-      const events = makeEventsStore(memRoot, chatId)
+      const events = makeEventsStore(db, chatId, {
+        migrateFromFile: join(memRoot, chatId, 'events.jsonl'),
+      })
       const fired = await detectMilestones(milestones, ctx)
       for (const id of fired) {
         await events.append({

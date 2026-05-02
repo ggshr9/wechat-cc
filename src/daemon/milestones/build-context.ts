@@ -56,7 +56,9 @@ export async function buildDetectorContext(deps: BuildContextDeps): Promise<Dete
   // Heuristic: presence of any pushed event is enough to fire
   // ms_first_push_reply (the milestone semantics ask "did we ever push?",
   // which is the closest proxy without per-message reply tracking).
-  const events = makeEventsStore(memoryRoot, deps.chatId)
+  const events = makeEventsStore(deps.db, deps.chatId, {
+    migrateFromFile: join(memoryRoot, deps.chatId, 'events.jsonl'),
+  })
   const pushed = (await events.list()).filter(e => e.kind === 'cron_eval_pushed')
   const pushRepliedHistory = pushed.map(e => e.id)
 
