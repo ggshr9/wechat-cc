@@ -12,7 +12,7 @@ import { acquireInstanceLock, releaseInstanceLock } from './single-instance'
 import { buildBootstrap } from './bootstrap'
 import { createInternalApi } from './internal-api'
 import { makeMemoryFS } from './memory/fs-api'
-import { routeInbound } from '../core/message-router'
+import { makeModeCommands } from './mode-commands'
 import { loadAllAccounts, makeIlinkAdapter } from './ilink-glue'
 import { startLongPollLoops, parseUpdates, type RawUpdate } from './poll-loop'
 import { materializeAttachments, cleanupOldInbox } from './media'
@@ -97,7 +97,7 @@ async function main() {
   const { port: internalApiPort, tokenFilePath: internalTokenFile } = await internalApi.start()
   log('BOOT', `internal-api listening on 127.0.0.1:${internalApiPort} (token: ${internalTokenFile})`)
 
-  const { sessionManager, sessionStore, resolve, formatInbound, sdkOptionsForProject } = buildBootstrap({
+  const { sessionManager, sessionStore, conversationStore, registry, coordinator, resolve, formatInbound, sdkOptionsForProject, defaultProviderId } = buildBootstrap({
     stateDir: STATE_DIR,
     ilink,
     loadProjects: ilink.loadProjects,
@@ -140,7 +140,11 @@ async function main() {
       const proj = currentAlias
         ? { alias: currentAlias, path: snapshot.projects[currentAlias]!.path }
         : { alias: '_default', path: launchCwd }
-      const handle = await sessionManager.acquire(proj.alias, proj.path)
+      // Companion ticks use the daemon-default provider. RFC 03 P2 left
+      // companion proactive pushes provider-agnostic for now; later we
+      // could honour per-chat mode (look up cfg.default_chat_id's mode)
+      // but that requires conversation-store access here.
+      const handle = await sessionManager.acquire(proj.alias, proj.path, defaultProviderId)
       const tickText =
         `<companion_tick ts="${new Date().toISOString()}" default_chat_id="${cfg.default_chat_id}" />\n` +
         `定时唤醒。先 memory_list + memory_read 你觉得相关的文件。` +
@@ -351,6 +355,17 @@ async function main() {
     startedAt: startedAtIso,
   })
 
+  // Per-chat conversation mode commands (RFC 03 P2). Runs in the inbound
+  // handler chain right after admin commands; intercepts /cc /codex
+  // /solo /mode /both /chat before the coordinator dispatches.
+  const modeCommands = makeModeCommands({
+    coordinator,
+    registry,
+    defaultProviderId,
+    sendMessage: (chatId, text) => ilink.sendMessage(chatId, text),
+    log: (tag, line) => log(tag, line),
+  })
+
   pollHandle = startLongPollLoops({
     accounts,
     ilink: {
@@ -384,6 +399,11 @@ async function main() {
       // run before onboarding so an admin can use /health on the first
       // message without being held up by the nickname prompt.
       if (await adminCommands.handle(msg)) return
+      // Per-chat mode commands (RFC 03 P2): /cc /codex /solo /mode /both /chat.
+      // These flip the conversation's provider/mode and never reach the agent.
+      // Run after admin (so /health takes precedence) but before onboarding so
+      // a user can re-mode without retyping their nickname.
+      if (await modeCommands.handle(msg)) return
       // First-time onboarding for unknown users — capture nickname before
       // anything reaches Claude.
       if (await onboarding.handle(msg)) return
@@ -405,26 +425,13 @@ async function main() {
         await ilink.sendMessage(msg.chatId, `🛑 出口 IP ${guardState.ip} → 网络探测失败。VPN 掉了？修好再发。`)
         return
       }
-      // Download CDN refs to inbox/ before Claude sees the message.
+      // Download CDN refs to inbox/ before the agent sees the message.
       await materializeAttachments(msg, INBOX_DIR, (tag, line) => log(tag, line))
-      await routeInbound({
-        resolveProject: resolve,
-        manager: sessionManager,
-        format: formatInbound,
-        // Fallback path: forward Claude's raw assistant text ONLY when
-        // it didn't call any reply-family MCP tool this turn. The
-        // duplicate-message worry (raw text + "已回复 2。") only arises
-        // when Claude calls reply AND speaks plain text; the router
-        // skips the fallback entirely in that case. The forgetful-Claude
-        // case (e.g. analyzes an image with Read but never calls reply)
-        // used to silently strand the user with no WeChat reply — now
-        // they get the description verbatim, prefixed [⚠ fallback] so
-        // we can spot the SDK pattern in the daemon log.
-        sendAssistantText: async (chatId, text) => {
-          await ilink.sendMessage(chatId, text)
-        },
-        log: (tag, line) => log(tag, line),
-      }, msg)
+      // Mode-aware dispatch (RFC 03 P2). Coordinator looks up the chat's
+      // persisted mode, acquires the right (provider, alias) session, and
+      // dispatches; carries the same reply-tool-fallback semantics that
+      // the legacy routeInbound had.
+      await coordinator.dispatch(msg)
       // Fire-and-forget milestone detection + welcome observation after
       // successful routing. Non-blocking so an unrelated failure can never
       // delay the next inbound or impact reply latency.
@@ -442,6 +449,7 @@ async function main() {
     await pollHandle.stop()
     await sessionManager.shutdown()
     await sessionStore.flush()
+    await conversationStore.flush()
     await ilink.flush()
     // Stop internal-api LAST: any in-flight wechat-mcp tool call from a
     // session being shut down still needs the HTTP server to be alive.

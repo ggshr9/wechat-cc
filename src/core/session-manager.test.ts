@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { SessionManager } from './session-manager'
 import { createClaudeAgentProvider } from './claude-agent-provider'
+import { createProviderRegistry, type ProviderRegistry } from './provider-registry'
+import type { AgentProvider } from './agent-provider'
 import type { Options, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 
 // Module-level spy injected via vi.mock so SessionManager uses our fake query()
@@ -27,8 +29,28 @@ beforeEach(() => {
   fakeQuery.mockImplementation(() => makeFakeQuery())
 })
 
-function claudeProvider(sdkOptionsForProject: (alias: string, path: string) => Options) {
-  return createClaudeAgentProvider({ sdkOptionsForProject })
+/**
+ * Build a registry with a single `claude` provider. Most tests use this
+ * shorthand because they pre-date P2's multi-provider model and only
+ * need to assert single-provider behaviour. The newer per-acquire
+ * providerId argument is exercised explicitly in the dedicated test.
+ */
+function singleClaudeRegistry(
+  sdkOptionsForProject: (alias: string, path: string) => Options,
+  canResume: (cwd: string, sessionId: string) => boolean = () => true,
+): ProviderRegistry {
+  const r = createProviderRegistry()
+  r.register('claude', createClaudeAgentProvider({ sdkOptionsForProject }), {
+    displayName: 'Claude',
+    canResume,
+  })
+  return r
+}
+
+function registryWithProvider(provider: AgentProvider, canResume: (cwd: string, sessionId: string) => boolean = () => true): ProviderRegistry {
+  const r = createProviderRegistry()
+  r.register('claude', provider, { displayName: 'Claude', canResume })
+  return r
 }
 
 function firstQueryArgs(): any {
@@ -40,7 +62,7 @@ describe('SessionManager', () => {
     const dispatched: string[] = []
     const close = vi.fn()
     const spawn = vi.fn(async () => ({
-      dispatch: async (text: string) => { dispatched.push(text) },
+      dispatch: async (text: string) => { dispatched.push(text); return { assistantText: [], replyToolCalled: false } },
       close,
       onAssistantText: () => () => {},
       onResult: () => () => {},
@@ -49,10 +71,10 @@ describe('SessionManager', () => {
     const mgr = new SessionManager({
       maxConcurrent: 4,
       idleEvictMs: 60_000,
-      provider: { spawn },
-    } as any)
+      registry: registryWithProvider({ spawn } as unknown as AgentProvider),
+    })
 
-    const h = await mgr.acquire('codex-proj', '/repo')
+    const h = await mgr.acquire('codex-proj', '/repo', 'claude')
     await h.dispatch('hello codex')
 
     expect(spawn).toHaveBeenCalledWith({ alias: 'codex-proj', path: '/repo' })
@@ -65,7 +87,7 @@ describe('SessionManager', () => {
     const mgr = new SessionManager({
       maxConcurrent: 4,
       idleEvictMs: 60_000,
-      provider: claudeProvider(() => ({ cwd: '/tmp/x' } as Options)),
+      registry: singleClaudeRegistry(() => ({ cwd: '/tmp/x' } as Options)),
     })
     expect(fakeQuery).not.toHaveBeenCalled()
     expect(mgr.list()).toEqual([])
@@ -76,42 +98,38 @@ describe('SessionManager', () => {
     const mgr = new SessionManager({
       maxConcurrent: 4,
       idleEvictMs: 60_000,
-      provider: claudeProvider((_alias, path) => ({ cwd: path } as Options)),
+      registry: singleClaudeRegistry((_alias, path) => ({ cwd: path } as Options)),
     })
-    const a = await mgr.acquire('proj-a', '/home/nate/proj-a')
+    const a = await mgr.acquire('proj-a', '/home/nate/proj-a', 'claude')
     expect(fakeQuery).toHaveBeenCalledTimes(1)
-    const a2 = await mgr.acquire('proj-a', '/home/nate/proj-a')
+    const a2 = await mgr.acquire('proj-a', '/home/nate/proj-a', 'claude')
     expect(a).toBe(a2)
     expect(fakeQuery).toHaveBeenCalledTimes(1)
     await mgr.shutdown()
   })
 
-  it('dedupes concurrent acquires on same alias (no double-spawn)', async () => {
-    // Two callers race on the same alias before the first spawn completes.
-    // Without in-flight Promise dedup, both miss the cache and both fork a
-    // Claude subprocess — the first one ends up orphaned. Reproduces the
-    // companion-tick / inbound-message race on alias `_default`.
+  it('dedupes concurrent acquires on same (provider, alias) (no double-spawn)', async () => {
     let spawnCount = 0
     const provider = {
       async spawn(_proj: any) {
         spawnCount++
         await new Promise(r => setTimeout(r, 30))
         return {
-          dispatch: async () => ({ assistantText: [] }),
+          dispatch: async () => ({ assistantText: [], replyToolCalled: false }),
           close: async () => {},
           onAssistantText: () => () => {},
           onResult: () => () => {},
         }
       },
-    }
+    } as unknown as AgentProvider
     const mgr = new SessionManager({
       maxConcurrent: 4,
       idleEvictMs: 60_000,
-      provider,
-    } as any)
+      registry: registryWithProvider(provider),
+    })
     const [h1, h2] = await Promise.all([
-      mgr.acquire('shared', '/p'),
-      mgr.acquire('shared', '/p'),
+      mgr.acquire('shared', '/p', 'claude'),
+      mgr.acquire('shared', '/p', 'claude'),
     ])
     expect(spawnCount).toBe(1)
     expect(h1).toBe(h2)
@@ -135,16 +153,9 @@ describe('SessionManager', () => {
     const mgr = new SessionManager({
       maxConcurrent: 4,
       idleEvictMs: 60_000,
-      provider: claudeProvider(() => ({ cwd: '/tmp/x' } as Options)),
+      registry: singleClaudeRegistry(() => ({ cwd: '/tmp/x' } as Options)),
     })
-    const h = await mgr.acquire('a', '/tmp/x')
-    // Fire-and-forget: dispatch now awaits the SDK's `result` event before
-    // resolving (so message-router can forward the assistant text to ilink),
-    // but the fake query never yields one. The assertion target — that user
-    // messages get pushed into the prompt iterable — doesn't depend on
-    // resolution. shutdown() will resolve the dangling promises with empty
-    // assistantText, so we can attach .catch handlers to silence the unused-
-    // promise warning without losing visibility into spurious rejections.
+    const h = await mgr.acquire('a', '/tmp/x', 'claude')
     const p1 = h.dispatch('first').catch(() => undefined)
     const p2 = h.dispatch('second').catch(() => undefined)
     await new Promise(r => setTimeout(r, 10))
@@ -157,15 +168,14 @@ describe('SessionManager', () => {
     const mgr = new SessionManager({
       maxConcurrent: 2,
       idleEvictMs: 60_000,
-      provider: claudeProvider(() => ({ cwd: '/tmp/x' } as Options)),
+      registry: singleClaudeRegistry(() => ({ cwd: '/tmp/x' } as Options)),
     })
-    await mgr.acquire('a', '/a')
-    await mgr.acquire('b', '/b')
-    // force b more recent than a
+    await mgr.acquire('a', '/a', 'claude')
+    await mgr.acquire('b', '/b', 'claude')
     await new Promise(r => setTimeout(r, 2))
-    const handleA = await mgr.acquire('a', '/a')  // re-touches a
+    const handleA = await mgr.acquire('a', '/a', 'claude')
     expect(handleA.alias).toBe('a')
-    await mgr.acquire('c', '/c')  // should evict b (LRU), keep a
+    await mgr.acquire('c', '/c', 'claude')
     const aliases = mgr.list().map(s => s.alias).sort()
     expect(aliases).toEqual(['a', 'c'])
     await mgr.shutdown()
@@ -176,13 +186,43 @@ describe('SessionManager', () => {
     const mgr = new SessionManager({
       maxConcurrent: 10,
       idleEvictMs: 1000,
-      provider: claudeProvider(() => ({ cwd: '/tmp/x' } as Options)),
+      registry: singleClaudeRegistry(() => ({ cwd: '/tmp/x' } as Options)),
     })
-    await mgr.acquire('a', '/a')
+    await mgr.acquire('a', '/a', 'claude')
     vi.advanceTimersByTime(2000)
     await mgr.sweepIdle()
     expect(mgr.list()).toEqual([])
     vi.useRealTimers()
+    await mgr.shutdown()
+  })
+
+  it('keeps independent sessions for the same alias under different providers (P2 multi-provider)', async () => {
+    let claudeSpawn = 0
+    let codexSpawn = 0
+    const claude = { async spawn() { claudeSpawn++; return mockSession() } } as unknown as AgentProvider
+    const codex = { async spawn() { codexSpawn++; return mockSession() } } as unknown as AgentProvider
+    const r = createProviderRegistry()
+    r.register('claude', claude, { displayName: 'Claude', canResume: () => true })
+    r.register('codex', codex, { displayName: 'Codex', canResume: () => true })
+    const mgr = new SessionManager({ maxConcurrent: 4, idleEvictMs: 60_000, registry: r })
+
+    const a = await mgr.acquire('compass', '/p', 'claude')
+    const b = await mgr.acquire('compass', '/p', 'codex')
+    expect(a).not.toBe(b)
+    expect(a.providerId).toBe('claude')
+    expect(b.providerId).toBe('codex')
+    expect(claudeSpawn).toBe(1)
+    expect(codexSpawn).toBe(1)
+    expect(mgr.list()).toHaveLength(2)
+    await mgr.shutdown()
+  })
+
+  it('throws on acquire with unknown providerId', async () => {
+    const mgr = new SessionManager({
+      maxConcurrent: 4, idleEvictMs: 60_000,
+      registry: singleClaudeRegistry(() => ({ cwd: '/' } as Options)),
+    })
+    await expect(mgr.acquire('a', '/p', 'gemini')).rejects.toThrow(/unknown provider: gemini/)
     await mgr.shutdown()
   })
 
@@ -207,7 +247,7 @@ describe('SessionManager', () => {
       }
     }
 
-    it('passes resume when store has recent record and jsonl exists', async () => {
+    it('passes resume when store has recent record and canResume passes', async () => {
       const store = makeMockStore({
         compass: { session_id: 'sid-abc', last_used_at: new Date().toISOString() },
       })
@@ -215,11 +255,10 @@ describe('SessionManager', () => {
       const mgr = new SessionManager({
         maxConcurrent: 4,
         idleEvictMs: 60_000,
-        provider: claudeProvider((_alias, path) => ({ cwd: path } as Options)),
+        registry: singleClaudeRegistry((_alias, path) => ({ cwd: path } as Options), canResume),
         sessionStore: store,
-        canResume,
       })
-      await mgr.acquire('compass', '/p')
+      await mgr.acquire('compass', '/p', 'claude')
       expect(fakeQuery).toHaveBeenCalledOnce()
       const args = firstQueryArgs()
       expect(args.options.resume).toBe('sid-abc')
@@ -235,11 +274,11 @@ describe('SessionManager', () => {
       const mgr = new SessionManager({
         maxConcurrent: 4,
         idleEvictMs: 60_000,
-        provider: claudeProvider((_alias, path) => ({ cwd: path } as Options)),
+        registry: singleClaudeRegistry((_alias, path) => ({ cwd: path } as Options)),
         sessionStore: store,
         resumeTTLMs: 7 * 24 * 60 * 60_000,
       })
-      await mgr.acquire('compass', '/p')
+      await mgr.acquire('compass', '/p', 'claude')
       const args = firstQueryArgs()
       expect(args.options.resume).toBeUndefined()
       expect(store.delete).toHaveBeenCalledWith('compass')
@@ -254,11 +293,10 @@ describe('SessionManager', () => {
       const mgr = new SessionManager({
         maxConcurrent: 4,
         idleEvictMs: 60_000,
-        provider: claudeProvider((_alias, path) => ({ cwd: path } as Options)),
+        registry: singleClaudeRegistry((_alias, path) => ({ cwd: path } as Options), canResume),
         sessionStore: store,
-        canResume,
       })
-      await mgr.acquire('compass', '/p')
+      await mgr.acquire('compass', '/p', 'claude')
       const args = firstQueryArgs()
       expect(args.options.resume).toBeUndefined()
       expect(store.delete).toHaveBeenCalledWith('compass')
@@ -281,10 +319,10 @@ describe('SessionManager', () => {
       const mgr = new SessionManager({
         maxConcurrent: 4,
         idleEvictMs: 60_000,
-        provider: claudeProvider(() => ({ cwd: '/p' } as Options)),
+        registry: singleClaudeRegistry(() => ({ cwd: '/p' } as Options)),
         sessionStore: store,
       })
-      await mgr.acquire('compass', '/p')
+      await mgr.acquire('compass', '/p', 'claude')
       await new Promise(r => setTimeout(r, 10))
       expect(store.set).toHaveBeenCalledWith('compass', 'sid-new', 'claude')
       await mgr.shutdown()
@@ -294,13 +332,22 @@ describe('SessionManager', () => {
       const mgr = new SessionManager({
         maxConcurrent: 4,
         idleEvictMs: 60_000,
-        provider: claudeProvider((_alias, path) => ({ cwd: path } as Options)),
+        registry: singleClaudeRegistry((_alias, path) => ({ cwd: path } as Options)),
         // sessionStore omitted
       })
-      await mgr.acquire('proj', '/p')
+      await mgr.acquire('proj', '/p', 'claude')
       const args = firstQueryArgs()
       expect(args.options.resume).toBeUndefined()
       await mgr.shutdown()
     })
   })
 })
+
+function mockSession() {
+  return {
+    dispatch: async () => ({ assistantText: [], replyToolCalled: false }),
+    close: async () => {},
+    onAssistantText: () => () => {},
+    onResult: () => () => {},
+  }
+}

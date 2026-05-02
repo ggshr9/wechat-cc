@@ -1,6 +1,10 @@
 import { SessionManager } from '../core/session-manager'
 import { createClaudeAgentProvider } from '../core/claude-agent-provider'
 import { createCodexAgentProvider } from '../core/codex-agent-provider'
+import { createProviderRegistry, type ProviderRegistry } from '../core/provider-registry'
+import { createConversationCoordinator, type ConversationCoordinator } from '../core/conversation-coordinator'
+import { makeConversationStore, type ConversationStore } from '../core/conversation-store'
+import type { ProviderId } from '../core/conversation'
 import { makeResolver } from '../core/project-resolver'
 import { makeCanUseTool } from '../core/permission-relay'
 import { formatInbound } from '../core/prompt-format'
@@ -80,10 +84,16 @@ export interface BootstrapDeps {
 export interface Bootstrap {
   sessionManager: SessionManager
   sessionStore: import('../core/session-store').SessionStore
+  conversationStore: ConversationStore
+  registry: ProviderRegistry
+  coordinator: ConversationCoordinator
   resolve: (chatId: string) => { alias: string; path: string } | null
   formatInbound: typeof formatInbound
   sdkOptionsForProject: (alias: string, path: string) => Options
-  agentProviderKind: 'claude' | 'codex'
+  /** Daemon-default provider id — what new chats get until user runs `/cc` or `/codex`. */
+  defaultProviderId: ProviderId
+  /** Backward-compat alias for defaultProviderId. Pre-P2 callers expected this name. */
+  agentProviderKind: ProviderId
 }
 
 function buildChannelSystemPrompt(companionEnabled: boolean, _currentPersona: string | null): string {
@@ -214,49 +224,89 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
   }
 
   const configuredAgent = loadAgentConfig(deps.stateDir)
-  const agentProviderKind = deps.agentProviderKind
+  const defaultProviderId: ProviderId = deps.agentProviderKind
     ?? (process.env.WECHAT_AGENT_PROVIDER === 'codex' ? 'codex' : configuredAgent.provider)
 
-  function canResumeSession(cwd: string, sessionId: string): boolean {
-    if (agentProviderKind === 'codex') {
-      return codexSessionJsonlPaths(sessionId).some(p => existsSync(p))
-    }
-    return existsSync(claudeSessionJsonlPath(cwd, sessionId))
-  }
-
+  // RFC 03 P2 — register BOTH providers up front, regardless of which one
+  // is the current default. Per-chat /cc and /codex slash commands flip
+  // chats independently; the registry is the source of truth for what's
+  // dispatchable. Construction is cheap (no subprocess until first
+  // acquire), so we don't gate codex behind any "is the binary installed"
+  // check — that's reported by `wechat-cc doctor` separately.
   // RFC 03 §3.6 / C7 — auth-agnostic. We do NOT pass `apiKey` to the codex
-  // provider. The user's `codex login` (subscription) or OPENAI_API_KEY
-  // env var are honored transparently by the SDK.
-  const agentProvider = agentProviderKind === 'codex'
-    ? createCodexAgentProvider({
-        ...(process.env.CODEX_MODEL || configuredAgent.model
-          ? { model: process.env.CODEX_MODEL ?? configuredAgent.model }
-          : {}),
-        // RFC 03 §10 risk: daemon mode safe defaults — no user in the loop
-        // for individual tool approvals. Spike 3 confirms `on-request` likely
-        // hangs; `never` is the only viable headless setting.
-        approvalPolicy: 'never',
-        sandboxMode: 'workspace-write',
-        ...(wechatStdio ? { mcpServers: { wechat: wechatStdio } } : {}),
-      })
-    : createClaudeAgentProvider({ sdkOptionsForProject })
+  // provider; the user's `codex login` or OPENAI_API_KEY env are honored
+  // transparently by the SDK.
+  const registry = createProviderRegistry()
+  registry.register(
+    'claude',
+    createClaudeAgentProvider({ sdkOptionsForProject }),
+    {
+      displayName: 'Claude',
+      canResume: (cwd, sid) => existsSync(claudeSessionJsonlPath(cwd, sid)),
+    },
+  )
+  registry.register(
+    'codex',
+    createCodexAgentProvider({
+      ...(process.env.CODEX_MODEL || configuredAgent.model
+        ? { model: process.env.CODEX_MODEL ?? configuredAgent.model }
+        : {}),
+      // RFC 03 §10 risk: daemon mode safe defaults — no user in the loop
+      // for individual tool approvals. Spike 3 confirms `on-request` likely
+      // hangs; `never` is the only viable headless setting.
+      approvalPolicy: 'never',
+      sandboxMode: 'workspace-write',
+      ...(wechatStdio ? { mcpServers: { wechat: wechatStdio } } : {}),
+    }),
+    {
+      displayName: 'Codex',
+      canResume: (_cwd, sid) => codexSessionJsonlPaths(sid).some(p => existsSync(p)),
+    },
+  )
 
   const sessionManager = new SessionManager({
     maxConcurrent: 6,
     idleEvictMs: 30 * 60_000,
-    provider: agentProvider,
-    providerId: agentProviderKind,
+    registry,
     sessionStore,
-    canResume: canResumeSession,
     resumeTTLMs: 7 * 24 * 60 * 60_000,
+  })
+
+  // Per-chat conversation mode (RFC 03 P2). Default for new chats =
+  // `solo` with the daemon-configured provider. `/cc` `/codex` `/solo`
+  // commands flip individual chats; persisted in conversations.json.
+  const conversationStore = makeConversationStore(
+    join(deps.stateDir, 'conversations.json'),
+    { debounceMs: 500 },
+  )
+
+  const coordinator = createConversationCoordinator({
+    resolveProject: resolve,
+    manager: sessionManager,
+    conversationStore,
+    registry,
+    defaultProviderId,
+    format: formatInbound,
+    // sendAssistantText fallback path: same fall-through the legacy
+    // routeInbound used to take when the agent didn't call a reply tool.
+    // main.ts injects a real ilink.sendMessage closure; bootstrap.ts only
+    // wires the structural piece.
+    sendAssistantText: deps.ilink.sendMessage
+      ? async (chatId, text) => { await deps.ilink.sendMessage(chatId, text) }
+      : undefined,
+    log: deps.log,
   })
 
   return {
     sessionManager,
     sessionStore,
+    conversationStore,
+    registry,
+    coordinator,
     resolve,
     formatInbound,
     sdkOptionsForProject,
-    agentProviderKind,
+    defaultProviderId,
+    agentProviderKind: defaultProviderId,
   }
 }
