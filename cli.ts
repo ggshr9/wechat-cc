@@ -29,100 +29,11 @@ function emitJson(data: unknown, outFile: string | undefined): void {
   console.log(JSON.stringify({ ok: true, out_file: outFile, bytes: body.length }))
 }
 
-// CliArgs only covers commands NOT yet migrated to citty (see `cittyRoot` below).
-// Migrated subcommands are dispatched in `main()` directly to citty before
-// reaching parseCliArgs, so keeping them in this union would be dead code:
-//   PR4 batch 1: status / list / install / doctor / setup-status
-//   PR4 batch 2: events / observations / milestones / conversations / logs
-//   PR4 batch 3a: sessions / avatar / guard / provider
-//   PR4 batch 3b: memory / account / daemon / demo
-export type CliArgs =
-  | { cmd: 'run'; dangerouslySkipPermissions: boolean }
-  | { cmd: 'setup'; qrJson?: boolean }
-  | { cmd: 'setup-poll'; qrcode: string; baseUrl?: string; json: boolean }
-  | { cmd: 'service'; action: 'status' | 'install' | 'start' | 'stop' | 'uninstall'; json: boolean; unattended?: boolean; autoStart?: boolean }
-  | { cmd: 'reply'; chatId?: string; text?: string; json: boolean }
-  | { cmd: 'update'; check: boolean; json: boolean }
-  | { cmd: 'help' }
-
-export function parseCliArgs(argv: string[], opts?: { warn?: (m: string) => void }): CliArgs {
-  const warn = opts?.warn ?? ((m: string) => console.warn(m))
-  const [cmd, ...rest] = argv
-  if (!cmd || cmd === '--help' || cmd === '-h' || cmd === 'help') return { cmd: 'help' }
-  switch (cmd) {
-    case 'run': {
-      let dangerouslySkipPermissions = false
-      for (const a of rest) {
-        if (a === '--dangerously') {
-          dangerouslySkipPermissions = true
-        } else if (a === '--fresh' || a === '--continue' || a === '--channels' || a.startsWith('--mcp-config')) {
-          warn(`[wechat-cc] legacy flag ignored: ${a} (v1.0+ daemon doesn't spawn claude directly)`)
-        }
-      }
-      return { cmd: 'run', dangerouslySkipPermissions }
-    }
-    case 'setup': return rest.includes('--qr-json') ? { cmd: 'setup', qrJson: true } : { cmd: 'setup' }
-    case 'setup-poll': {
-      const qrcodeIdx = rest.indexOf('--qrcode')
-      const qrcode = qrcodeIdx >= 0 ? rest[qrcodeIdx + 1] : undefined
-      if (!qrcode) return { cmd: 'help' }
-      const baseUrlIdx = rest.indexOf('--base-url')
-      const baseUrl = baseUrlIdx >= 0 ? rest[baseUrlIdx + 1] : undefined
-      return baseUrl
-        ? { cmd: 'setup-poll', qrcode, baseUrl, json: rest.includes('--json') }
-        : { cmd: 'setup-poll', qrcode, json: rest.includes('--json') }
-    }
-    case 'service': {
-      if (rest[0] === 'status' || rest[0] === 'install' || rest[0] === 'start' || rest[0] === 'stop' || rest[0] === 'uninstall') {
-        return {
-          cmd: 'service', action: rest[0], json: rest.includes('--json'),
-          unattended: parseBoolFlag(rest, '--unattended'),
-          autoStart: parseBoolFlag(rest, '--auto-start'),
-        }
-      }
-      return { cmd: 'help' }
-    }
-    // events / observations / milestones / conversations / logs — migrated
-    // to citty in PR4 batch 2 (see SUBCOMMANDS map below). MIGRATED_COMMANDS
-    // routes them before parseCliArgs runs, so these cases are dead.
-    // sessions / avatar / guard / provider — migrated to citty in PR4 batch 3a.
-    // memory / account / daemon / demo — migrated to citty in PR4 batch 3b.
-    case 'update': {
-      return {
-        cmd: 'update',
-        check: rest.includes('--check'),
-        json: rest.includes('--json'),
-      }
-    }
-    case 'reply': {
-      // wechat-cc reply [--to <chat_id>] [text]
-      // text omitted → read from stdin (handled by the dispatch case below).
-      const json = rest.includes('--json')
-      const toIdx = rest.indexOf('--to')
-      const chatId = toIdx >= 0 ? rest[toIdx + 1] : undefined
-      const positional = rest.filter((arg, i) =>
-        arg !== '--json' && arg !== '--to' && (toIdx < 0 || i !== toIdx + 1),
-      )
-      const text = positional.length > 0 ? positional.join(' ') : undefined
-      const out: { cmd: 'reply'; chatId?: string; text?: string; json: boolean } = { cmd: 'reply', json }
-      if (chatId) out.chatId = chatId
-      if (text !== undefined) out.text = text
-      return out
-    }
-    default: return { cmd: 'help' }
-  }
-}
-
-function parseBoolFlag(args: string[], name: string): boolean | undefined {
-  const idx = args.indexOf(name)
-  if (idx < 0) return undefined
-  const value = args[idx + 1]
-  if (value === 'true' || value === '1' || value === 'yes' || value === 'on') return true
-  if (value === 'false' || value === '0' || value === 'no' || value === 'off') return false
-  // Bare flag (no value following) means true.
-  if (value === undefined || value.startsWith('--')) return true
-  return undefined
-}
+// PR4 batch 3c: parseCliArgs + CliArgs union deleted. All subcommands now
+// flow through citty (see `cittyRoot` below). The previous gate
+// `MIGRATED_COMMANDS.has(first)` is gone — citty handles unknown commands
+// by printing its auto-generated usage. Bare `wechat-cc` / `--help` /
+// `-h` / `help` is intercepted in main() and renders HELP_TEXT.
 
 const HELP_TEXT = `wechat-cc — WeChat bridge for Claude Code (Agent SDK daemon)
 
@@ -989,6 +900,290 @@ const demoCmd = defineCommand({
   },
 })
 
+// ── PR4 batch 3c — heavy entry points ────────────────────────────────
+//
+// 6 commands, the rest of the legacy switch. After this batch the
+// parseCliArgs function + CliArgs union can be deleted entirely; only
+// the help fall-through remains, and that's served by citty's
+// auto-generated root help.
+//
+// Notable shapes:
+//   - `run` mutates process.argv before main.ts import (legacy --dangerously
+//     dance preserved verbatim).
+//   - `setup` either drives an interactive QR scan (imports setup.ts which
+//     never returns) or returns a one-shot JSON envelope under --qr-json.
+//   - `setup-poll --qrcode` is required.
+//   - `service` keeps a positional action (status/install/start/stop/uninstall)
+//     because all five share ~95% of the same setup; nesting into 5
+//     subCommands would mean shared-helper-with-5-args. Tri-state
+//     --unattended / --auto-start use parseBoolValue.
+//   - `reply` has multi-word positional text — citty's positionals are
+//     1-slot, so we declare none and read args._ (RawArgs._ — the
+//     unconsumed positionals citty hands through). Stdin path preserved.
+//   - `update --check` flips between probe + apply modes; same body
+//     branches as the legacy case.
+
+const runCmd = defineCommand({
+  meta: { name: 'run', description: 'Start the daemon (foreground). --dangerously skips permission prompts.' },
+  args: {
+    dangerously: { type: 'boolean', description: 'Skip permission prompts (matches claude --dangerously-skip-permissions)' },
+    // Legacy v0.x flags. Kept declared so citty doesn't reject them; warned
+    // in run() to nudge users toward the new daemon model. Without these
+    // declarations, `wechat-cc run --fresh` would error on parse.
+    fresh: { type: 'boolean', description: 'Legacy v0.x flag (ignored)' },
+    continue: { type: 'boolean', description: 'Legacy v0.x flag (ignored)' },
+    channels: { type: 'boolean', description: 'Legacy v0.x flag (ignored)' },
+    'mcp-config': { type: 'string', description: 'Legacy v0.x flag (ignored)' },
+  },
+  async run({ args }) {
+    if (args.fresh) console.warn(`[wechat-cc] legacy flag ignored: --fresh (v1.0+ daemon doesn't spawn claude directly)`)
+    if (args.continue) console.warn(`[wechat-cc] legacy flag ignored: --continue (v1.0+ daemon doesn't spawn claude directly)`)
+    if (args.channels) console.warn(`[wechat-cc] legacy flag ignored: --channels (v1.0+ daemon doesn't spawn claude directly)`)
+    if (args['mcp-config']) console.warn(`[wechat-cc] legacy flag ignored: --mcp-config (v1.0+ daemon doesn't spawn claude directly)`)
+    // Run the daemon in-process by importing main.ts (its module top-level
+    // invokes main()). This used to spawn `bun src/daemon/main.ts`, but that
+    // doesn't work in `bun build --compile`d binaries where the source tree
+    // isn't on disk anymore — and the compiled sidecar shipped inside the
+    // desktop bundle is the single source of truth for both CLI and daemon.
+    if (args.dangerously && !process.argv.includes('--dangerously')) {
+      process.argv.push('--dangerously')
+    }
+    await import('./src/daemon/main.ts')
+    // main() is started by main.ts's top-level; it never resolves under
+    // normal operation (long poll loops keep the event loop alive). Block
+    // here so cli.ts's main() doesn't return and trigger process exit.
+    await new Promise(() => {})
+  },
+})
+
+const setupCmd = defineCommand({
+  meta: { name: 'setup', description: 'Scan QR + bind a WeChat bot' },
+  args: {
+    'qr-json': { type: 'boolean', description: 'Emit JSON envelope (one-shot QR fetch) instead of starting an interactive scan' },
+  },
+  async run({ args }) {
+    if (args['qr-json']) {
+      const { requestSetupQrCode } = await import('./src/cli/setup-flow.ts')
+      console.log(JSON.stringify(await requestSetupQrCode(), null, 2))
+      return
+    }
+    // Same rationale as `run`: import setup.ts directly so the compiled
+    // sidecar can drive the QR flow from inside Tauri-spawned shells too.
+    await import('./setup.ts')
+  },
+})
+
+const setupPollCmd = defineCommand({
+  meta: { name: 'setup-poll', description: 'Poll a setup-status QR code (paired with `setup --qr-json`)' },
+  args: {
+    qrcode: { type: 'string', required: true, description: 'QR token returned from `setup --qr-json`' },
+    'base-url': { type: 'string', description: 'Override ilink base URL (defaults to setup-flow internal default)' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    const { pollSetupQrStatus } = await import('./src/cli/setup-flow.ts')
+    const result = await pollSetupQrStatus({
+      qrcode: args.qrcode,
+      ...(args['base-url'] !== undefined ? { baseUrl: args['base-url'] } : {}),
+      stateDir: STATE_DIR,
+    })
+    if (args.json) console.log(JSON.stringify(result, null, 2))
+    else console.log(result.status)
+  },
+})
+
+const serviceCmd = defineCommand({
+  meta: {
+    name: 'service',
+    description: 'Daemon service management — register / start / stop / uninstall a launchd / systemd / ScheduledTask entry',
+  },
+  args: {
+    action: {
+      type: 'positional',
+      required: true,
+      description: 'status | install | start | stop | uninstall',
+      valueHint: 'status|install|start|stop|uninstall',
+    },
+    json: { type: 'boolean', description: 'JSON envelope' },
+    // Tri-state strings (parseBoolValue inside run): true / false / undefined.
+    // Citty's boolean type can't distinguish "absent" from "explicit false",
+    // and service install treats omission as "leave existing config alone".
+    unattended: { type: 'string', description: 'true | false | yes | no | on | off — persist into agent-config (omit to leave unchanged)' },
+    'auto-start': { type: 'string', description: 'true | false | yes | no | on | off — register for boot/login auto-start' },
+  },
+  async run({ args }) {
+    const validActions = ['status', 'install', 'start', 'stop', 'uninstall'] as const
+    type ServiceAction = typeof validActions[number]
+    const action = args.action as ServiceAction
+    if (!validActions.includes(action)) {
+      console.error(`service action must be one of ${validActions.join(' | ')} (got: ${args.action})`)
+      process.exit(2)
+    }
+    const unattended = parseBoolValue(args.unattended)
+    const autoStart = parseBoolValue(args['auto-start'])
+    // If the caller passed --unattended or --auto-start, persist them into
+    // agent-config first so it's the source of truth (re-installs from the
+    // GUI re-pick the same values).
+    if (unattended !== undefined || autoStart !== undefined) {
+      const existing = loadAgentConfig(STATE_DIR)
+      saveAgentConfig(STATE_DIR, {
+        ...existing,
+        ...(unattended !== undefined ? { dangerouslySkipPermissions: unattended } : {}),
+        ...(autoStart !== undefined ? { autoStart } : {}),
+      })
+    }
+    const config = loadAgentConfig(STATE_DIR)
+    // Compiled-bundle mode: launch the daemon via the same self-contained
+    // binary (no external bun + cli.ts source). Source mode: legacy
+    // `bunPath cli.ts run` ExecStart. compiledBinaryPath/compiledRepoRoot
+    // both return non-null only in compiled mode — see runtime-info.ts.
+    const binaryPath = compiledBinaryPath() ?? undefined
+    const planCwd = compiledRepoRoot() ?? dirname(fileURLToPath(import.meta.url))
+    const plan = buildServicePlan({
+      cwd: planCwd,
+      dangerouslySkipPermissions: config.dangerouslySkipPermissions,
+      autoStart: config.autoStart,
+      ...(binaryPath ? { binaryPath } : {}),
+    })
+    const json = Boolean(args.json)
+    if (action === 'status') {
+      const status = serviceStatus(defaultDoctorDeps())
+      if (json) console.log(JSON.stringify({ ...status, plan, agentConfig: config }, null, 2))
+      else console.log(`service: ${status.state}${status.installed ? ' [installed]' : ''}${status.pid ? ` pid=${status.pid}` : ''}`)
+      return
+    }
+    // WECHAT_CC_DRY_RUN=1 makes install/uninstall/start/stop a no-op (still
+    // returns the plan in JSON). Used by the apps/desktop e2e shim so tests
+    // exercise real cli.ts without touching ~/Library/LaunchAgents/launchd.
+    const dryRun = process.env.WECHAT_CC_DRY_RUN === '1'
+    const sideOpts = { dryRun }
+    if (action === 'install') {
+      // Idempotent: best-effort tear down any previous install so we can
+      // re-write the plist (e.g. unattended toggle changed). Swallow errors
+      // — a partial/stale state (plist missing, launchd doesn't have it)
+      // would otherwise block the fresh install.
+      try { uninstallService(plan, sideOpts) } catch { /* tolerate */ }
+      installService(plan, sideOpts)
+    } else if (action === 'start') startService(plan, sideOpts)
+    else if (action === 'stop') stopService(plan, sideOpts)
+    else if (action === 'uninstall') uninstallService(plan, sideOpts)
+    const out = { ok: true, action, plan, agentConfig: config, dryRun }
+    if (json) console.log(JSON.stringify(out, null, 2))
+    else console.log(`service ${action}: ok${dryRun ? ' (dry-run)' : ''}`)
+  },
+})
+
+const replyCmd = defineCommand({
+  meta: {
+    name: 'reply',
+    description: 'Send a text reply via WeChat (CLI fallback for the MCP `reply` tool — same on-disk state as the running daemon)',
+  },
+  args: {
+    to: { type: 'string', description: 'Target chat id (omit → most-recently-active chat)' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    // text comes from positional args (citty surfaces unconsumed positionals
+    // via RawArgs._). Joining with ' ' matches the legacy parser, which
+    // accumulated all non-flag tokens. Empty → fall through to stdin.
+    const positional = (args._ ?? []) as string[]
+    const inlineText = positional.length > 0 ? positional.join(' ') : undefined
+    // CLI fallback for the MCP `reply` tool — same code path as the
+    // daemon (sendReplyOnce reads state from disk), so recipient
+    // resolution + session continuity are identical whether the
+    // daemon is running or not.
+    const { sendReplyOnce, defaultTerminalChatId } = await import('./src/lib/send-reply.ts')
+    const json = Boolean(args.json)
+    const emitFailure = (error: string): void => {
+      if (json) console.log(JSON.stringify({ ok: false, error }))
+      else console.error(`reply failed: ${error}`)
+      process.exit(1)
+    }
+    const chatId = args.to ?? defaultTerminalChatId() ?? undefined
+    if (!chatId) {
+      emitFailure('no chat resolved — pass --to <chat_id> or send a WeChat message first so the daemon records one')
+      return
+    }
+    const text = inlineText ?? (await readStdin()).trim()
+    if (!text) {
+      emitFailure('no text — pass it as an argument or pipe it on stdin')
+      return
+    }
+    const result = await sendReplyOnce(chatId, text)
+    if (!result.ok) {
+      emitFailure(result.error)
+      return
+    }
+    if (json) {
+      console.log(JSON.stringify({ ok: true, chat_id: chatId, chunks: result.chunks, account: result.account }))
+    } else {
+      console.log(`Sent: ${result.chunks} chunk(s) via account ${result.account} → ${chatId}`)
+    }
+  },
+})
+
+const updateCmd = defineCommand({
+  meta: {
+    name: 'update',
+    description: 'Pull latest + reinstall deps + restart service. --check probes only (no side effects).',
+  },
+  args: {
+    check: { type: 'boolean', description: 'Probe only — no side effects' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    const check = Boolean(args.check)
+    const json = Boolean(args.json)
+    const { analyzeUpdate, applyUpdate, defaultUpdateDeps } = await import('./src/cli/update.ts')
+    // Compiled-bundle short-circuit: when the binary is shipped inside a
+    // desktop .app/.exe, there is no git repo nearby. Surface this with a
+    // dedicated `not_a_git_repo` reason instead of bubbling up an empty-
+    // stderr fetch_failed (which the GUI couldn't tell from a real outage).
+    const { existsSync } = await import('node:fs')
+    const here = dirname(fileURLToPath(import.meta.url))
+    const repoRoot = compiledRepoRoot() ?? here
+    const hasGitRepo = existsSync(join(repoRoot, '.git'))
+    if (!hasGitRepo) {
+      const synthetic = {
+        ok: false as const,
+        mode: check ? ('check' as const) : ('apply' as const),
+        reason: 'not_a_git_repo' as const,
+        message: 'no git repo at this binary\'s location; in-place updates are not available for desktop bundles (download a newer version from GitHub Releases instead)',
+        details: { repoRoot },
+      }
+      if (json) console.log(JSON.stringify(synthetic, null, 2))
+      else console.error(`update: not_a_git_repo — ${synthetic.message}`)
+      if (!json) process.exit(1)
+      return
+    }
+    const deps = defaultUpdateDeps(repoRoot, STATE_DIR)
+    if (check) {
+      const probe = analyzeUpdate(deps)
+      if (json) {
+        console.log(JSON.stringify(probe, null, 2))
+      } else if (!probe.ok) {
+        console.error(`update check: ${probe.reason} — ${probe.message}`)
+        process.exit(1)
+      } else {
+        console.log(probe.updateAvailable
+          ? `update available: ${probe.currentCommit} → ${probe.latestCommit} (${probe.behind} commits${probe.lockfileWillChange ? ', lockfile changes' : ''})`
+          : `up to date (${probe.currentCommit})`)
+      }
+      return
+    }
+    const result = await applyUpdate(deps)
+    if (json) {
+      console.log(JSON.stringify(result, null, 2))
+    } else if (!result.ok) {
+      console.error(`update failed: ${result.reason} — ${result.message}`)
+      process.exit(1)
+    } else {
+      const lockNote = result.lockfileChanged ? ', deps reinstalled' : ''
+      console.log(`updated: ${result.fromCommit} → ${result.toCommit}${lockNote}, daemon=${result.daemonAction} (${result.elapsedMs}ms)`)
+    }
+  },
+})
+
 // Subcommands literal first → both `cittyRoot.subCommands` and
 // `MIGRATED_COMMANDS` derive from this single source of truth. Adding a new
 // citty subcommand only requires touching this object — the dispatch set
@@ -1017,6 +1212,14 @@ const SUBCOMMANDS = {
   account: accountCmd,
   daemon: daemonCmd,
   demo: demoCmd,
+  // PR4 batch 3c — heavy entry points. Completes the migration; legacy
+  // parseCliArgs + CliArgs union are deleted in this commit.
+  run: runCmd,
+  setup: setupCmd,
+  'setup-poll': setupPollCmd,
+  service: serviceCmd,
+  reply: replyCmd,
+  update: updateCmd,
 } as const
 
 export const cittyRoot = defineCommand({
@@ -1027,197 +1230,24 @@ export const cittyRoot = defineCommand({
   subCommands: SUBCOMMANDS,
 })
 
-const MIGRATED_COMMANDS = new Set<string>(Object.keys(SUBCOMMANDS))
 
 async function main() {
   const argv = process.argv.slice(2)
   const first = argv[0]
-  // Route migrated subcommands through citty before falling through to the
-  // legacy parseCliArgs switch. `--help` / `-h` / `help` still hit legacy
-  // (which prints HELP_TEXT covering migrated + legacy commands together);
-  // `wechat-cc status --help` etc. hit citty's auto-generated subcommand help.
-  if (first && MIGRATED_COMMANDS.has(first)) {
-    // runMain (vs runCommand) gives us auto `--help` / `-h` handling per
-    // subcommand and prints citty's auto-generated usage on errors.
-    await runMain(cittyRoot, { rawArgs: argv })
+  // Bare `wechat-cc` / `--help` / `-h` / `help` → top-level long-form help.
+  // citty's auto-generated root help just lists subcommands; HELP_TEXT
+  // carries the back-story (RFC pointers, deprecation notes, --dangerously
+  // semantics) that we don't want to lose.
+  //
+  // `wechat-cc <subcommand> --help` still hits citty per-subcommand help
+  // because runMain consumes it before any of our run() handlers fire.
+  if (!first || first === '--help' || first === '-h' || first === 'help') {
+    console.log(HELP_TEXT)
     return
   }
-  const parsed = parseCliArgs(argv)
-  const here = dirname(fileURLToPath(import.meta.url))
-  switch (parsed.cmd) {
-    case 'run': {
-      // Run the daemon in-process by importing main.ts (its module top-level
-      // invokes main()). This used to spawn `bun src/daemon/main.ts`, but that
-      // doesn't work in `bun build --compile`d binaries where the source tree
-      // isn't on disk anymore — and the compiled sidecar shipped inside the
-      // desktop bundle is the single source of truth for both CLI and daemon.
-      if (parsed.dangerouslySkipPermissions && !process.argv.includes('--dangerously')) {
-        process.argv.push('--dangerously')
-      }
-      await import('./src/daemon/main.ts')
-      // main() is started by main.ts's top-level; it never resolves under
-      // normal operation (long poll loops keep the event loop alive). Block
-      // here so cli.ts's main() doesn't return and trigger process exit.
-      await new Promise(() => {})
-      return
-    }
-    case 'setup': {
-      if (parsed.qrJson) {
-        const { requestSetupQrCode } = await import('./src/cli/setup-flow.ts')
-        console.log(JSON.stringify(await requestSetupQrCode(), null, 2))
-        return
-      }
-      // Same rationale as `run`: import setup.ts directly so the compiled
-      // sidecar can drive the QR flow from inside Tauri-spawned shells too.
-      await import('./setup.ts')
-      return
-    }
-    case 'setup-poll': {
-      const { pollSetupQrStatus } = await import('./src/cli/setup-flow.ts')
-      const result = await pollSetupQrStatus({ qrcode: parsed.qrcode, baseUrl: parsed.baseUrl, stateDir: STATE_DIR })
-      if (parsed.json) console.log(JSON.stringify(result, null, 2))
-      else console.log(result.status)
-      return
-    }
-    case 'service': {
-      // If the caller passed --unattended or --auto-start, persist them into
-      // agent-config first so it's the source of truth (re-installs from the
-      // GUI re-pick the same values).
-      if (parsed.unattended !== undefined || parsed.autoStart !== undefined) {
-        const existing = loadAgentConfig(STATE_DIR)
-        saveAgentConfig(STATE_DIR, {
-          ...existing,
-          ...(parsed.unattended !== undefined ? { dangerouslySkipPermissions: parsed.unattended } : {}),
-          ...(parsed.autoStart !== undefined ? { autoStart: parsed.autoStart } : {}),
-        })
-      }
-      const config = loadAgentConfig(STATE_DIR)
-      // Compiled-bundle mode: launch the daemon via the same self-contained
-      // binary (no external bun + cli.ts source). Source mode: legacy
-      // `bunPath cli.ts run` ExecStart. compiledBinaryPath/compiledRepoRoot
-      // both return non-null only in compiled mode — see runtime-info.ts.
-      const binaryPath = compiledBinaryPath() ?? undefined
-      const planCwd = compiledRepoRoot() ?? here
-      const plan = buildServicePlan({
-        cwd: planCwd,
-        dangerouslySkipPermissions: config.dangerouslySkipPermissions,
-        autoStart: config.autoStart,
-        ...(binaryPath ? { binaryPath } : {}),
-      })
-      if (parsed.action === 'status') {
-        const status = serviceStatus(defaultDoctorDeps())
-        if (parsed.json) console.log(JSON.stringify({ ...status, plan, agentConfig: config }, null, 2))
-        else console.log(`service: ${status.state}${status.installed ? ' [installed]' : ''}${status.pid ? ` pid=${status.pid}` : ''}`)
-        return
-      }
-      // WECHAT_CC_DRY_RUN=1 makes install/uninstall/start/stop a no-op (still
-      // returns the plan in JSON). Used by the apps/desktop e2e shim so tests
-      // exercise real cli.ts without touching ~/Library/LaunchAgents/launchd.
-      const dryRun = process.env.WECHAT_CC_DRY_RUN === '1'
-      const sideOpts = { dryRun }
-      if (parsed.action === 'install') {
-        // Idempotent: best-effort tear down any previous install so we can
-        // re-write the plist (e.g. unattended toggle changed). Swallow errors
-        // — a partial/stale state (plist missing, launchd doesn't have it)
-        // would otherwise block the fresh install.
-        try { uninstallService(plan, sideOpts) } catch { /* tolerate */ }
-        installService(plan, sideOpts)
-      } else if (parsed.action === 'start') startService(plan, sideOpts)
-      else if (parsed.action === 'stop') stopService(plan, sideOpts)
-      else if (parsed.action === 'uninstall') uninstallService(plan, sideOpts)
-      const out = { ok: true, action: parsed.action, plan, agentConfig: config, dryRun }
-      if (parsed.json) console.log(JSON.stringify(out, null, 2))
-      else console.log(`service ${parsed.action}: ok${dryRun ? ' (dry-run)' : ''}`)
-      return
-    }
-    case 'update': {
-      const { analyzeUpdate, applyUpdate, defaultUpdateDeps } = await import('./src/cli/update.ts')
-      // Compiled-bundle short-circuit: when the binary is shipped inside a
-      // desktop .app/.exe, there is no git repo nearby. Surface this with a
-      // dedicated `not_a_git_repo` reason instead of bubbling up an empty-
-      // stderr fetch_failed (which the GUI couldn't tell from a real outage).
-      const { existsSync } = await import('node:fs')
-      const { join } = await import('node:path')
-      const repoRoot = compiledRepoRoot() ?? here
-      const hasGitRepo = existsSync(join(repoRoot, '.git'))
-      if (!hasGitRepo) {
-        const synthetic = {
-          ok: false as const,
-          mode: parsed.check ? ('check' as const) : ('apply' as const),
-          reason: 'not_a_git_repo' as const,
-          message: 'no git repo at this binary\'s location; in-place updates are not available for desktop bundles (download a newer version from GitHub Releases instead)',
-          details: { repoRoot },
-        }
-        if (parsed.json) console.log(JSON.stringify(synthetic, null, 2))
-        else console.error(`update: not_a_git_repo — ${synthetic.message}`)
-        if (!parsed.json) process.exit(1)
-        return
-      }
-      const deps = defaultUpdateDeps(repoRoot, STATE_DIR)
-      if (parsed.check) {
-        const probe = analyzeUpdate(deps)
-        if (parsed.json) {
-          console.log(JSON.stringify(probe, null, 2))
-        } else if (!probe.ok) {
-          console.error(`update check: ${probe.reason} — ${probe.message}`)
-          process.exit(1)
-        } else {
-          console.log(probe.updateAvailable
-            ? `update available: ${probe.currentCommit} → ${probe.latestCommit} (${probe.behind} commits${probe.lockfileWillChange ? ', lockfile changes' : ''})`
-            : `up to date (${probe.currentCommit})`)
-        }
-        return
-      }
-      const result = await applyUpdate(deps)
-      if (parsed.json) {
-        console.log(JSON.stringify(result, null, 2))
-      } else if (!result.ok) {
-        console.error(`update failed: ${result.reason} — ${result.message}`)
-        process.exit(1)
-      } else {
-        const lockNote = result.lockfileChanged ? ', deps reinstalled' : ''
-        console.log(`updated: ${result.fromCommit} → ${result.toCommit}${lockNote}, daemon=${result.daemonAction} (${result.elapsedMs}ms)`)
-      }
-      return
-    }
-    case 'reply': {
-      // CLI fallback for the MCP `reply` tool — same code path as the
-      // daemon (sendReplyOnce reads state from disk), so recipient
-      // resolution + session continuity are identical whether the
-      // daemon is running or not.
-      const { sendReplyOnce, defaultTerminalChatId } = await import('./src/lib/send-reply.ts')
-      const emitFailure = (error: string): void => {
-        if (parsed.json) console.log(JSON.stringify({ ok: false, error }))
-        else console.error(`reply failed: ${error}`)
-        process.exit(1)
-      }
-      const chatId = parsed.chatId ?? defaultTerminalChatId() ?? undefined
-      if (!chatId) {
-        emitFailure('no chat resolved — pass --to <chat_id> or send a WeChat message first so the daemon records one')
-        return
-      }
-      const text = parsed.text ?? (await readStdin()).trim()
-      if (!text) {
-        emitFailure('no text — pass it as an argument or pipe it on stdin')
-        return
-      }
-      const result = await sendReplyOnce(chatId, text)
-      if (!result.ok) {
-        emitFailure(result.error)
-        return
-      }
-      if (parsed.json) {
-        console.log(JSON.stringify({ ok: true, chat_id: chatId, chunks: result.chunks, account: result.account }))
-      } else {
-        console.log(`Sent: ${result.chunks} chunk(s) via account ${result.account} → ${chatId}`)
-      }
-      return
-    }
-    case 'help': {
-      console.log(HELP_TEXT)
-      return
-    }
-  }
+  // runMain (vs runCommand) gives us auto `--help` / `-h` handling per
+  // subcommand and prints citty's auto-generated usage on unknown commands.
+  await runMain(cittyRoot, { rawArgs: argv })
 }
 
 /** Read stdin to EOF. Returns '' immediately if stdin is a TTY. */
