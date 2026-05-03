@@ -38,6 +38,12 @@ export interface WireMainOpts {
    */
   accounts: IlinkAccount[]
   boot: Bootstrap
+  /**
+   * `--dangerously` flag passed for symmetry with main.ts logging only.
+   * Permission-mode wiring (bypassPermissions vs canUseTool) lives entirely
+   * inside `boot.sessionManager`'s session config — wireMain does not
+   * re-thread the flag into any closure here.
+   */
   dangerously: boolean
   log: (tag: string, line: string, fields?: Record<string, unknown>) => void
 }
@@ -149,6 +155,8 @@ export function wireMain(opts: WireMainOpts): WiredDeps {
     const agent = makeIntrospectAgent({
       chatId, events, observations,
       memorySnapshot: () => buildMemorySnapshot(stateDir, chatId),
+      // Matches legacy main.ts v0.4.1 — recentInboundForChat() also returned [].
+      // Per-chat inbound history surfacing is left for v0.5 (spec §6 footnote).
       recentInboundMessages: () => Promise.resolve([] as string[]),
       sdkEval: isolatedSdkEval,
     })
