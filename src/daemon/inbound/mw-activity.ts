@@ -9,7 +9,9 @@ export function makeMwActivity(deps: ActivityMwDeps): Middleware {
   return async (ctx, next) => {
     await next()
     if (ctx.consumedBy) return
-    const when = new Date(ctx.msg.createTimeMs ?? ctx.receivedAtMs)
+    // poll-loop normalises a missing ilink timestamp to 0; treat 0 as "missing"
+    // and fall back to receivedAtMs (matches legacy main.ts `createTimeMs || Date.now()`).
+    const when = new Date(ctx.msg.createTimeMs || ctx.receivedAtMs)
     deps.recordInbound(ctx.msg.chatId, when).catch(err =>
       deps.log('ACTIVITY', `record failed for ${ctx.msg.chatId}: ${err instanceof Error ? err.message : err}`),
     )

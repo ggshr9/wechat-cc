@@ -17,10 +17,10 @@ describe('mwActivity', () => {
     expect(recordInbound).toHaveBeenCalledWith('c1', new Date(1000))
   })
 
-  it('uses receivedAtMs when createTimeMs is absent', async () => {
+  it('uses receivedAtMs when createTimeMs is 0 (poll-loop normalises missing ts to 0)', async () => {
     const recordInbound = vi.fn(async () => {})
     const mw = makeMwActivity({ recordInbound, log: () => {} })
-    await mw(mkCtx({ msg: { chatId: 'c1' } as InboundCtx['msg'] }), async () => {})
+    await mw(mkCtx({ msg: { chatId: 'c1', createTimeMs: 0 } as InboundCtx['msg'] }), async () => {})
     expect(recordInbound).toHaveBeenCalledWith('c1', new Date(5000))
   })
 
