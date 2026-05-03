@@ -1,21 +1,30 @@
 import type { CanUseTool, PermissionResult } from '@anthropic-ai/claude-agent-sdk'
+import type { Mode, ProviderId } from './conversation'
+import { lookup, type PermissionMode } from './capability-matrix'
 
 export interface PermissionRelayDeps {
   askUser: (chatId: string, prompt: string, hash: string, timeoutMs: number) => Promise<'allow' | 'deny' | 'timeout'>
   defaultChatId: () => string | null
   log: (tag: string, line: string) => void
+  mode: Mode['kind']
+  provider: ProviderId
+  permissionMode: PermissionMode
 }
 
 const DEFAULT_TIMEOUT_MS = 10 * 60_000
 
 export function makeCanUseTool(deps: PermissionRelayDeps): CanUseTool {
   return async (toolName, input, opts) => {
+    const cap = lookup(deps.mode, deps.provider, deps.permissionMode)
+    if (cap.askUser === 'never') {
+      return { behavior: 'allow' } satisfies PermissionResult
+    }
     const chatId = deps.defaultChatId()
     if (!chatId) {
       deps.log('PERMISSION', `no default chat — auto-deny ${toolName}`)
       return { behavior: 'deny', message: 'No user session to request permission from' } satisfies PermissionResult
     }
-    const hash = shortHash(opts.toolUseID)
+    const hash = shortHash(opts.toolUseID ?? '')
     const prompt = opts.title ?? `Claude wants to run ${toolName} ${compactInput(input)}`
     const answer = await deps.askUser(chatId, prompt, hash, DEFAULT_TIMEOUT_MS)
     if (answer === 'allow') return { behavior: 'allow' } satisfies PermissionResult

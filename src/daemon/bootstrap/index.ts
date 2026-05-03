@@ -157,6 +157,9 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     askUser: deps.ilink.askUser,
     defaultChatId: () => deps.lastActiveChatId(),
     log: deps.log,
+    mode: 'solo',
+    provider: 'claude',
+    permissionMode: 'strict',
   })
 
   const claudeBin = resolveClaudeBinary()
