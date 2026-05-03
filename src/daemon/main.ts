@@ -119,6 +119,7 @@ async function main() {
     prefix: {
       conversationStore,
       providerDisplayName,
+      permissionMode: DANGEROUSLY ? 'dangerously' as const : 'strict' as const,
     },
     log: (tag, line) => log(tag, line),
   })

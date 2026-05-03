@@ -10,6 +10,7 @@ import type { MemoryFS } from '../memory/fs-api'
 import type { WechatProjectsDep, WechatVoiceDep, WechatCompanionDep } from '../wechat-tool-deps'
 import type { ConversationStore } from '../../core/conversation-store'
 import type { ProviderId } from '../../core/conversation'
+import type { PermissionMode } from '../../core/capability-matrix'
 
 /**
  * RFC 03 P3: when conversation mode is parallel (or chatroom), the
@@ -23,6 +24,12 @@ export interface InternalApiPrefixDeps {
   conversationStore: Pick<ConversationStore, 'get'>
   /** Resolves a provider id (the participant_tag) to the human-readable name. */
   providerDisplayName: (id: ProviderId) => string
+  /**
+   * Permission mode — 'strict' or 'dangerously'. Passed to capability-matrix
+   * lookup() so that replyPrefix decision is matrix-driven rather than
+   * a hardcoded mode.kind switch.
+   */
+  permissionMode: PermissionMode
 }
 
 /**

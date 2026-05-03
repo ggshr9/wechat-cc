@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createConversationCoordinator } from './conversation-coordinator'
 import { createProviderRegistry } from './provider-registry'
+import * as capabilityMatrix from './capability-matrix'
 import type { AgentProvider } from './agent-provider'
 import type { Mode } from './conversation'
 import type { InboundMsg } from './prompt-format'
@@ -41,6 +42,7 @@ describe('ConversationCoordinator', () => {
       registry,
       defaultProviderId: 'claude',
       format: () => 'x',
+      permissionMode: 'strict',
       log: () => {},
     })
     expect(c.getMode('chat-1')).toEqual({ kind: 'solo', provider: 'claude' })
@@ -59,6 +61,7 @@ describe('ConversationCoordinator', () => {
       registry,
       defaultProviderId: 'claude',
       format: () => 'x',
+      permissionMode: 'strict',
       log: () => {},
     })
     expect(c.getMode('chat-1')).toEqual({ kind: 'solo', provider: 'codex' })
@@ -74,6 +77,7 @@ describe('ConversationCoordinator', () => {
       registry,
       defaultProviderId: 'claude',
       format: () => 'x',
+      permissionMode: 'strict',
       log: () => {},
     })
     expect(() => c.setMode('chat-1', { kind: 'solo', provider: 'mystery' }))
@@ -92,6 +96,7 @@ describe('ConversationCoordinator', () => {
       registry,
       defaultProviderId: 'claude',
       format: () => 'x',
+      permissionMode: 'strict',
       log: () => {},
     })
     c.setMode('chat-1', { kind: 'solo', provider: 'codex' })
@@ -110,6 +115,7 @@ describe('ConversationCoordinator', () => {
       registry,
       defaultProviderId: 'claude',
       format: () => 'x',
+      permissionMode: 'strict',
       log,
     })
     await c.dispatch(inbound('chat-1', 'hi'))
@@ -138,6 +144,7 @@ describe('ConversationCoordinator', () => {
       registry,
       defaultProviderId: 'claude',
       format: (m) => `[fmt]${m.text}`,
+      permissionMode: 'strict',
       log: () => {},
     })
     await c.dispatch(inbound('chat-1', 'hi codex'))
@@ -165,6 +172,7 @@ describe('ConversationCoordinator', () => {
       registry,
       defaultProviderId: 'claude',
       format: () => 'x',
+      permissionMode: 'strict',
       log,
     })
     await c.dispatch(inbound('chat-1', 'hi'))
@@ -191,6 +199,7 @@ describe('ConversationCoordinator', () => {
       defaultProviderId: 'claude',
       format: () => 'x',
       sendAssistantText,
+      permissionMode: 'strict',
       log: () => {},
     })
     await c.dispatch(inbound('chat-1', 'hi'))
@@ -216,6 +225,7 @@ describe('ConversationCoordinator', () => {
       defaultProviderId: 'claude',
       format: () => 'x',
       sendAssistantText,
+      permissionMode: 'strict',
       log: () => {},
     })
     await c.dispatch(inbound('chat-1', 'hi'))
@@ -225,6 +235,33 @@ describe('ConversationCoordinator', () => {
   })
 
   // chatroom is now implemented in P5 — see "chatroom mode (P5)" describe block below.
+
+  it('dispatch calls assertSupported for the effective provider before acquiring session', async () => {
+    // Spy on assertSupported — verify it's called with correct (mode, provider, permissionMode)
+    const spy = vi.spyOn(capabilityMatrix, 'assertSupported')
+    const acquire = vi.fn(async (_alias: string, _path: string, _providerId: string) => ({
+      alias: 'a', path: '/p', providerId: 'claude', lastUsedAt: 0,
+      dispatch: async () => ({ assistantText: [], replyToolCalled: false }),
+      close: async () => {},
+      onAssistantText: () => () => {},
+      onResult: () => () => {},
+    }))
+    const registry = createProviderRegistry()
+    registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
+    const c = createConversationCoordinator({
+      resolveProject: () => ({ alias: 'a', path: '/p' }),
+      manager: { acquire },
+      conversationStore: makeMockStore(),
+      registry,
+      defaultProviderId: 'claude',
+      format: () => 'x',
+      permissionMode: 'strict',
+      log: () => {},
+    })
+    await c.dispatch(inbound('chat-1', 'hi'))
+    expect(spy).toHaveBeenCalledWith('solo', 'claude', 'strict')
+    spy.mockRestore()
+  })
 
   // ─── primary_tool mode (RFC 03 P4) ──────────────────────────────────
 
@@ -251,6 +288,7 @@ describe('ConversationCoordinator', () => {
         registry,
         defaultProviderId: 'claude',
         format: () => 'x',
+        permissionMode: 'strict',
         log,
       })
       return { c, acquire, dispatchMock, log, store }
@@ -291,6 +329,7 @@ describe('ConversationCoordinator', () => {
         registry,
         defaultProviderId: 'claude',
         format: () => 'x',
+        permissionMode: 'strict',
         log,
       })
       await c.dispatch(inbound('chat-1', 'hi'))
@@ -310,6 +349,7 @@ describe('ConversationCoordinator', () => {
         registry,
         defaultProviderId: 'claude',
         format: () => 'x',
+        permissionMode: 'strict',
         log: () => {},
       })
       expect(() => c.setMode('chat-1', { kind: 'primary_tool', primary: 'claude' }))
@@ -356,6 +396,7 @@ describe('ConversationCoordinator', () => {
         defaultProviderId: 'claude',
         format: (m) => m.text,
         sendAssistantText,
+        permissionMode: 'strict',
         log: () => {},
       })
       return { c, acquire, sendAssistantText, dispatchCalls }
@@ -427,6 +468,7 @@ describe('ConversationCoordinator', () => {
         registry,
         defaultProviderId: 'claude',
         format: () => 'x',
+        permissionMode: 'strict',
         log,
       })
       await c.dispatch(inbound('chat-1', 'hi'))
@@ -448,6 +490,7 @@ describe('ConversationCoordinator', () => {
         registry,
         defaultProviderId: 'claude',
         format: () => 'x',
+        permissionMode: 'strict',
         log: () => {},
       })
       expect(() => c.setMode('chat-1', { kind: 'parallel' }))
@@ -477,6 +520,7 @@ describe('ConversationCoordinator', () => {
         parallelProviders: ['alice', 'bob'],
         format: () => 'x',
         sendAssistantText,
+        permissionMode: 'strict',
         log: () => {},
       })
       await c.dispatch(inbound('chat-1', 'hi'))
@@ -524,6 +568,7 @@ describe('ConversationCoordinator', () => {
         defaultProviderId: 'claude',
         format: (m) => `<wechat>${m.text}</wechat>`,
         sendAssistantText,
+        permissionMode: 'strict',
         log,
         ...(opts.maxRounds !== undefined ? { chatroomMaxRounds: opts.maxRounds } : {}),
       })
@@ -694,6 +739,7 @@ describe('ConversationCoordinator', () => {
         registry,
         defaultProviderId: 'claude',
         format: () => 'x',
+        permissionMode: 'strict',
         log,
       })
       await c.dispatch(inbound('chat-1', 'hi'))
@@ -721,6 +767,7 @@ describe('ConversationCoordinator', () => {
         defaultProviderId: 'claude',
         format: () => 'x',
         sendAssistantText,
+        permissionMode: 'strict',
         log: () => {},
       })
       await c.dispatch(inbound('chat-1', 'hi'))
@@ -823,6 +870,7 @@ describe('ConversationCoordinator', () => {
         defaultProviderId: 'claude',
         format: () => 'x',
         sendAssistantText,
+        permissionMode: 'strict',
         log: () => {},
       })
       coordinatorRef = c
@@ -870,6 +918,7 @@ describe('ConversationCoordinator', () => {
         registry,
         defaultProviderId: 'claude',
         format: () => 'x',
+        permissionMode: 'strict',
         log: () => {},
       })
       expect(() => c.setMode('chat-1', { kind: 'chatroom' }))

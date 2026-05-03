@@ -9,7 +9,7 @@
  * so blame survives the split.
  */
 import { errMsg, type InternalApiDeps, type InternalApiDelegateDep, type RouteTable } from './types'
-import { modeRequiresParticipantPrefix } from '../../core/conversation'
+import { lookup } from '../../core/capability-matrix'
 
 export interface MakeRoutesContext {
   deps: InternalApiDeps
@@ -386,17 +386,41 @@ export function makeRoutes({ deps, getDelegate, maybePrefix }: MakeRoutesContext
 }
 
 /**
- * RFC 03 review #5 fix: defers the "is this a multi-participant mode?"
- * decision to `modeRequiresParticipantPrefix` in src/core/conversation.ts
- * so internal-api stops switching on mode.kind directly. Adding a new
- * multi-participant mode requires updating exactly that one helper.
+ * RFC 03 review #5 fix: defers the "should this reply be prefixed?"
+ * decision to the capability matrix via `lookup().replyPrefix` so
+ * internal-api stops switching on mode.kind directly. The matrix is now
+ * the single source of truth — adding a new mode or permissionMode
+ * requires only a new matrix row, not a code change here.
+ *
+ * replyPrefix semantics:
+ *   'always'           — prefix [DisplayName] (parallel / chatroom)
+ *   'never'            — no prefix (solo)
+ *   'on-fallback-only' — no prefix at this call site (primary_tool; the
+ *                        fallback path in coordinator.ts handles its own label)
+ *
+ * Unknown provider fallback: if the participant_tag references a provider
+ * not yet in the capability matrix (e.g. a future 'gemini' provider before
+ * a matrix row is added), the lookup throws. In that case we fall back to
+ * the mode's structural semantics: parallel and chatroom always prefix,
+ * other modes never do. This preserves correctness while allowing future
+ * providers to work before their matrix rows are defined.
  */
 export function makeMaybePrefix(deps: InternalApiDeps): (chatId: string, text: string, tag: string | undefined) => string {
   return function maybePrefix(chatId, text, tag) {
     if (!tag || !deps.prefix) return text
     const mode = deps.prefix.conversationStore.get(chatId)?.mode
     if (!mode) return text
-    if (!modeRequiresParticipantPrefix(mode)) return text
+    const permissionMode = deps.prefix.permissionMode
+    // Look up the capability row for this (mode × provider-tag × permissionMode).
+    let replyPrefix: 'always' | 'never' | 'on-fallback-only'
+    try {
+      replyPrefix = lookup(mode.kind, tag, permissionMode).replyPrefix
+    } catch {
+      // Unknown provider-tag (not yet in the matrix) — fall back to structural
+      // mode semantics: multi-participant modes prefix, single-voice modes don't.
+      replyPrefix = (mode.kind === 'parallel' || mode.kind === 'chatroom') ? 'always' : 'never'
+    }
+    if (replyPrefix !== 'always') return text
     const dn = deps.prefix.providerDisplayName(tag)
     return `[${dn}] ${text}`
   }

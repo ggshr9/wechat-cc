@@ -27,6 +27,7 @@ import { buildSystemPrompt } from '../../core/prompt-builder'
 import type { ProviderId } from '../../core/conversation'
 import { makeResolver } from '../../core/project-resolver'
 import { makeCanUseTool } from '../../core/permission-relay'
+import { lookup, type PermissionMode } from '../../core/capability-matrix'
 import { formatInbound } from '../../core/prompt-format'
 import type { IlinkAdapter } from '../ilink-glue'
 import type { Options } from '@anthropic-ai/claude-agent-sdk'
@@ -153,13 +154,15 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     fallback: deps.fallbackProject,
   })
 
+  const permissionMode: PermissionMode = deps.dangerouslySkipPermissions ? 'dangerously' : 'strict'
+
   const canUseTool = makeCanUseTool({
     askUser: deps.ilink.askUser,
     defaultChatId: () => deps.lastActiveChatId(),
     log: deps.log,
     mode: 'solo',
     provider: 'claude',
-    permissionMode: 'strict',
+    permissionMode,
   })
 
   const claudeBin = resolveClaudeBinary()
@@ -249,7 +252,8 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
       // RFC 03 §10 risk: daemon mode safe defaults — no user in the loop
       // for individual tool approvals. Spike 3 confirms `on-request` likely
       // hangs; `never` is the only viable headless setting.
-      approvalPolicy: 'never',
+      // Use the capability matrix as the single source of truth for the policy.
+      approvalPolicy: lookup('solo', 'codex', permissionMode).approvalPolicy ?? 'never',
       sandboxMode: 'workspace-write',
       // RFC 03 P5 review #4: Codex SDK has no system prompt slot, so we
       // inject the channel rules into the first user message of each
@@ -298,6 +302,7 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     registry,
     defaultProviderId,
     format: formatInbound,
+    permissionMode,
     // sendAssistantText fallback path: same fall-through the legacy
     // routeInbound used to take when the agent didn't call a reply tool.
     // main.ts injects a real ilink.sendMessage closure; bootstrap.ts only

@@ -1187,6 +1187,7 @@ describe('internal-api', () => {
           prefix: {
             conversationStore,
             providerDisplayName: (id) => id === 'claude' ? 'Claude' : id === 'codex' ? 'Codex' : id,
+            permissionMode: 'strict' as const,
           },
         })
         return api.start().then(({ port, tokenFilePath }) => ({
@@ -1290,6 +1291,7 @@ describe('internal-api', () => {
           prefix: {
             conversationStore,
             providerDisplayName: (id) => id,  // identity — no friendly name
+            permissionMode: 'strict' as const,
           },
         })
         const { port, tokenFilePath } = await api.start()
@@ -1300,6 +1302,24 @@ describe('internal-api', () => {
           body: JSON.stringify({ chat_id: 'c', text: 'hi', participant_tag: 'gemini-experimental' }),
         })
         expect(sentText).toEqual(['[gemini-experimental] hi'])
+      })
+
+      it('prefix decision goes through capability-matrix lookup (parallel mode → [Claude] prefix)', async () => {
+        // Verify that the matrix-driven lookup is exercised: in parallel mode
+        // the matrix returns replyPrefix='always' for known providers, so the
+        // reply text arrives prefixed.
+        const sentText: string[] = []
+        const sendReply = async (_chatId: string, text: string) => { sentText.push(text); return { msgId: 'm' } }
+        const { port, token } = await startWithPrefix({
+          mode: { kind: 'parallel' }, sendReply,
+        })
+        await fetch(`http://127.0.0.1:${port}/v1/wechat/reply`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ chat_id: 'c', text: 'matrix-check', participant_tag: 'claude' }),
+        })
+        // matrix row: parallel × claude × strict → replyPrefix='always' → prefixed
+        expect(sentText).toEqual(['[Claude] matrix-check'])
       })
     })
 

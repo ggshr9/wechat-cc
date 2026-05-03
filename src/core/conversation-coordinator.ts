@@ -20,6 +20,7 @@ import type { ProviderRegistry } from './provider-registry'
 import type { Mode, ProviderId } from './conversation'
 import type { InboundMsg } from './prompt-format'
 import { parseAddressing, wrapChatroomTurn, maxRoundsSuffix } from './chatroom-protocol'
+import { assertSupported, UnsupportedCombinationError, type PermissionMode } from './capability-matrix'
 
 export class ModeNotImplementedError extends Error {
   constructor(public readonly modeKind: Mode['kind']) {
@@ -55,6 +56,13 @@ export interface ConversationCoordinatorDeps {
    * maxRoundsSuffix appended for the user.
    */
   chatroomMaxRounds?: number
+  /**
+   * Permission mode — 'strict' (default, per-tool relay) or 'dangerously'
+   * (bypass all permission prompts). Computed once at bootstrap from
+   * `dangerouslySkipPermissions`. Threaded into assertSupported() at
+   * dispatch entry and used by capability-matrix to gate combinations.
+   */
+  permissionMode: PermissionMode
   format: (msg: InboundMsg) => string
   sendAssistantText?: (chatId: string, text: string) => Promise<void>
   /**
@@ -405,6 +413,27 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
         return
       }
       const mode = getMode(msg.chatId)
+
+      // Capability-matrix guard: reject forbidden (mode × provider × permissionMode)
+      // combinations before any session is acquired. All current rows have
+      // forbidden=false so this is a forward-looking safety net — it will fire
+      // when a row is explicitly marked forbidden in a future policy tightening.
+      // Unknown providers (not in the matrix) are silently passed through —
+      // the coordinator's own fallback logic handles unregistered providers.
+      const providersInUse: ProviderId[] =
+        mode.kind === 'solo' ? [mode.provider] :
+        mode.kind === 'primary_tool' ? [mode.primary] :
+        parallelProviders
+      for (const p of providersInUse) {
+        try {
+          assertSupported(mode.kind, p, deps.permissionMode)
+        } catch (err) {
+          // Re-throw only explicit policy violations (forbidden=true rows).
+          // Let unknown-provider errors pass — they're handled downstream
+          // by the mode-specific fallback paths in the switch below.
+          if (err instanceof UnsupportedCombinationError) throw err
+        }
+      }
 
       switch (mode.kind) {
         case 'solo': {
