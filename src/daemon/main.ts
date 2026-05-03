@@ -19,7 +19,7 @@ import { registerSessions } from './sessions-lifecycle'
 import { registerIlink } from './ilink-lifecycle'
 import { buildInboundPipeline } from './inbound/build'
 import { runStartupSweeps } from './startup-sweeps'
-import { wireMain } from './main-wiring'
+import { wireMain } from './wiring'
 const STATE_DIR = join(homedir(), '.claude', 'channels', 'wechat')
 const PID_PATH = join(STATE_DIR, 'server.pid')
 const DANGEROUSLY = process.argv.includes('--dangerously')
