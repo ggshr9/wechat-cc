@@ -7,9 +7,10 @@ export interface GuardLifecycle extends Lifecycle {
 
 export function registerGuard(deps: SchedulerDeps): GuardLifecycle {
   const handle = startGuardScheduler(deps)
+  let stopped = false
   return {
     name: 'guard',
-    stop: () => handle.stop(),
+    stop: async () => { if (!stopped) { stopped = true; await handle.stop() } },
     current: () => handle.current(),
   }
 }
