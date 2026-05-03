@@ -16,6 +16,7 @@ import { makeMilestonesStore } from './milestones/store'
 import { makeEventsStore } from './events/store'
 import { makeActivityStore } from './activity/store'
 import { makeObservationsStore } from './observations/store'
+import { parseUpdates } from './poll-loop'
 import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { InboundPipelineDeps } from './inbound/build'
 import type { CompanionPushDeps, CompanionIntrospectDeps } from './companion/lifecycle'
@@ -270,7 +271,7 @@ export function wireMain(opts: WireMainOpts): WiredDeps {
         getUpdates: (id, base, tok, sb) =>
           ilink.getUpdatesForLoop(id, base, tok, sb ?? '') as ReturnType<PollingDeps['ilink']['getUpdates']>,
       },
-      parse: (raws) => raws as never,  // parseUpdates re-exported from poll-loop
+      parse: parseUpdates,
       resolveUserName: (cid) => ilink.resolveUserName(cid),
       log,
     },
