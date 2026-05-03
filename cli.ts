@@ -224,9 +224,9 @@ const eventsListCmd = defineCommand({
     const limitNum = args.limit ? Number.parseInt(args.limit, 10) : 50
     const limit = Number.isFinite(limitNum) ? limitNum : 50
     const { makeEventsStore } = await import('./src/daemon/events/store')
-    const { openDb } = await import('./src/lib/db')
+    const { openWechatDb } = await import('./src/lib/db')
     const memoryRoot = join(STATE_DIR, 'memory')
-    const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+    const db = openWechatDb(STATE_DIR)
     const store = makeEventsStore(db, args.chatId, {
       migrateFromFile: join(memoryRoot, args.chatId, 'events.jsonl'),
     })
@@ -250,9 +250,9 @@ const observationsListCmd = defineCommand({
   async run({ args }) {
     const includeArchived = Boolean(args['include-archived'])
     const { makeObservationsStore } = await import('./src/daemon/observations/store')
-    const { openDb } = await import('./src/lib/db')
+    const { openWechatDb } = await import('./src/lib/db')
     const memoryRoot = join(STATE_DIR, 'memory')
-    const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+    const db = openWechatDb(STATE_DIR)
     const store = makeObservationsStore(db, args.chatId, {
       migrateFromFile: join(memoryRoot, args.chatId, 'observations.jsonl'),
     })
@@ -270,9 +270,9 @@ const observationsArchiveCmd = defineCommand({
   },
   async run({ args }) {
     const { makeObservationsStore } = await import('./src/daemon/observations/store')
-    const { openDb } = await import('./src/lib/db')
+    const { openWechatDb } = await import('./src/lib/db')
     const memoryRoot = join(STATE_DIR, 'memory')
-    const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+    const db = openWechatDb(STATE_DIR)
     const store = makeObservationsStore(db, args.chatId, {
       migrateFromFile: join(memoryRoot, args.chatId, 'observations.jsonl'),
     })
@@ -297,9 +297,9 @@ const milestonesListCmd = defineCommand({
   },
   async run({ args }) {
     const { makeMilestonesStore } = await import('./src/daemon/milestones/store')
-    const { openDb } = await import('./src/lib/db')
+    const { openWechatDb } = await import('./src/lib/db')
     const memoryRoot = join(STATE_DIR, 'memory')
-    const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+    const db = openWechatDb(STATE_DIR)
     const store = makeMilestonesStore(db, args.chatId, {
       migrateFromFile: join(memoryRoot, args.chatId, 'milestones.jsonl'),
     })
@@ -324,8 +324,8 @@ const conversationsListCmd = defineCommand({
     // back to chat_id as user_name when no name has been captured yet.
     const { makeConversationStore } = await import('./src/core/conversation-store')
     const { makeStateStore } = await import('./src/daemon/state-store')
-    const { openDb } = await import('./src/lib/db')
-    const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+    const { openWechatDb } = await import('./src/lib/db')
+    const db = openWechatDb(STATE_DIR)
     const store = makeConversationStore(db, { migrateFromFile: join(STATE_DIR, 'conversations.json') })
     const names = makeStateStore(join(STATE_DIR, 'user_names.json'), { debounceMs: 0 })
     const conversations = Object.entries(store.all()).map(([chat_id, rec]) => ({
@@ -383,8 +383,8 @@ const sessionsListProjectsCmd = defineCommand({
   async run({ args }) {
     const outFile = args['out-file']
     const { makeSessionStore } = await import('./src/core/session-store')
-    const { openDb } = await import('./src/lib/db')
-    const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+    const { openWechatDb } = await import('./src/lib/db')
+    const db = openWechatDb(STATE_DIR)
     const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
     const all = store.all()
     const projects = Object.entries(all).map(([alias, rec]) => ({
@@ -445,8 +445,8 @@ const sessionsReadJsonlCmd = defineCommand({
   async run({ args }) {
     const outFile = args['out-file']
     const { makeSessionStore } = await import('./src/core/session-store')
-    const { openDb } = await import('./src/lib/db')
-    const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+    const { openWechatDb } = await import('./src/lib/db')
+    const db = openWechatDb(STATE_DIR)
     const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
     const rec = store.get(args.alias)
     if (!rec) {
@@ -475,8 +475,8 @@ const sessionsDeleteCmd = defineCommand({
   },
   async run({ args }) {
     const { makeSessionStore } = await import('./src/core/session-store')
-    const { openDb } = await import('./src/lib/db')
-    const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+    const { openWechatDb } = await import('./src/lib/db')
+    const db = openWechatDb(STATE_DIR)
     const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
     store.delete(args.alias)
     await store.flush()
@@ -497,8 +497,8 @@ const sessionsSearchCmd = defineCommand({
     const limit = Number.isFinite(limitNum) ? limitNum : 50
     const outFile = args['out-file']
     const { searchAcrossSessions } = await import('./src/daemon/sessions/searcher')
-    const { openDb } = await import('./src/lib/db')
-    const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+    const { openWechatDb } = await import('./src/lib/db')
+    const db = openWechatDb(STATE_DIR)
     const hits = await searchAcrossSessions(args.query, { limit, stateDir: STATE_DIR, db })
     if (args.json) emitJson({ ok: true, query: args.query, hits }, outFile)
     else console.log(hits.map(h => `${h.alias} · ${h.snippet}`).join('\n'))
@@ -867,8 +867,8 @@ async function runDemo(verb: 'seed' | 'unseed', chatIdArg: string | undefined, j
     process.exit(1)
   }
   const { seedDemo, unseedDemo } = await import('./src/daemon/demo/seed')
-  const { openDb } = await import('./src/lib/db')
-  const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
+  const { openWechatDb } = await import('./src/lib/db')
+  const db = openWechatDb(STATE_DIR)
   const fn = verb === 'seed' ? seedDemo : unseedDemo
   const result = await fn({ stateDir: STATE_DIR, chatId, db })
   console.log(json ? JSON.stringify({ ok: true, ...result }, null, 2) : JSON.stringify(result))
