@@ -1,5 +1,6 @@
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { randomBytes } from 'node:crypto'
 import type { Lifecycle } from '../lib/lifecycle'
 import { startLongPollLoops, parseUpdates, type RawUpdate } from './poll-loop'
 import { loadAllAccounts, type IlinkAccount } from './ilink-glue'
@@ -43,7 +44,9 @@ export function registerPolling(deps: PollingDeps): PollingLifecycle {
     resolveUserName: deps.resolveUserName,
     log: deps.log,
     onInbound: async (msg) => {
-      const requestId = Math.random().toString(16).slice(2, 10)
+      // CSPRNG-backed 8-char hex; Math.random().toString(16).slice(2,10) can
+      // return shorter strings for round-binary outputs (0.5 → "0.8" → "8").
+      const requestId = randomBytes(4).toString('hex')
       await deps.runPipeline({
         msg,
         receivedAtMs: Date.now(),
