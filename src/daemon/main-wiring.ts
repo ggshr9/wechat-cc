@@ -164,17 +164,13 @@ export function wireMain(opts: WireMainOpts): WiredDeps {
     await saveCompanionConfig(stateDir, { ...loadCompanionConfig(stateDir), last_introspect_at: new Date().toISOString() })
   }
 
-  // Build pipelineDeps
-  const adminHandler = {
-    handle: (msg: Parameters<ReturnType<typeof makeAdminCommands>['handle']>[0]) =>
-      adminCommandsHandler.handle(msg),
-  }
+  // Build pipelineDeps. pollHandle is ref-indirected: pollingRef.current is
+  // null at construction time; main.ts populates it after registerPolling().
+  // Closures fire after startup so by the time anyone calls /health the ref
+  // is live.
   const adminCommandsHandler = makeAdminCommands({
     stateDir, isAdmin,
     sessionState: ilink.sessionState,
-    // Ref-indirected: pollingRef.current is null at construction time; main.ts
-    // populates it after registerPolling(). Closures fire after startup so by
-    // the time anyone calls /health the ref is live.
     pollHandle: {
       stopAccount: (id) => pollingRef.current?.stopAccount(id) ?? Promise.resolve(),
       running: () => pollingRef.current?.running() ?? [],
@@ -185,10 +181,6 @@ export function wireMain(opts: WireMainOpts): WiredDeps {
     log,
     startedAt: STARTED_AT_ISO,
   })
-
-  // Silence unused variable warning — adminHandler is declared for symmetry
-  // with legacy main.ts structure; pipelineDeps wires adminCommandsHandler directly.
-  void adminHandler
 
   const modeHandler = makeModeCommands({
     coordinator: boot.coordinator,

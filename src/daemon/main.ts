@@ -86,7 +86,10 @@ async function main() {
     process.on('SIGUSR1', () => pollingLc.reconcile().catch(err =>
       log('RECONCILE', `SIGUSR1 reconcile failed: ${err instanceof Error ? err.message : String(err)}`),
     ))
-    log('DAEMON', `started pid=${process.pid} accounts=${accounts.length} mode=${DANGEROUSLY ? 'dangerouslySkipPermissions' : 'strict'}`)
+    const modeStr = DANGEROUSLY
+      ? 'mode=dangerouslySkipPermissions=true (no WeChat permission prompts will fire)'
+      : 'mode=strict (Phase 1 permission relay active)'
+    log('DAEMON', `started pid=${process.pid} accounts=${accounts.length} ${modeStr}`)
     if (DANGEROUSLY) log('DAEMON', 'warning: Claude will still confirm destructive ops via natural-language reply, but no permission prompts will appear.')
   } catch (err) {
     log('DAEMON', `startup failed mid-init: ${err instanceof Error ? err.message : String(err)}`)
