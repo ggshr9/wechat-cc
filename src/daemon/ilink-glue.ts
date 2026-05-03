@@ -35,6 +35,8 @@ import { makeTransport } from './ilink/transport'
 import type { Db } from '../lib/db'
 
 export type { Account } from './ilink/context'
+/** Alias for Account — used in polling-lifecycle public API. */
+export type IlinkAccount = import('./ilink/context').Account
 
 export interface IlinkAdapter {
   sendMessage(chatId: string, text: string): Promise<{ msgId: string; error?: string }>
