@@ -11,14 +11,10 @@ import { materializeAttachments } from './media'
 import { loadCompanionConfig, saveCompanionConfig } from './companion/config'
 import { loadGuardConfig } from './guard/store'
 import { buildMemorySnapshot } from './memory/snapshot'
-import { buildDetectorContext } from './milestones/build-context'
-import { detectMilestones } from './milestones/detector'
-import { makeMilestonesStore } from './milestones/store'
 import { makeEventsStore } from './events/store'
-import { makeActivityStore } from './activity/store'
 import { makeObservationsStore } from './observations/store'
 import { parseUpdates } from './poll-loop'
-import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
+import { makeFireMilestonesFor, makeRecordInbound, makeMaybeWriteWelcomeObservation, makeIsolatedSdkEval } from './wiring/side-effects'
 import type { InboundPipelineDeps } from './inbound/build'
 import type { CompanionPushDeps, CompanionIntrospectDeps } from './companion/lifecycle'
 import type { SchedulerDeps } from './guard/scheduler'   // NOTE: not GuardSchedulerDeps
@@ -80,50 +76,11 @@ export function wireMain(opts: WireMainOpts): WiredDeps {
   const pollingRef = new Ref<PollingLifecycle>('polling')
   const guardRef = new Ref<GuardLifecycle>('guard')
 
-  // Closures over per-chat side effects (formerly inline in main.ts)
-  async function fireMilestonesFor(chatId: string): Promise<void> {
-    const ctx = await buildDetectorContext({ stateDir, chatId, db })
-    const memRoot = join(stateDir, 'memory')
-    const milestones = makeMilestonesStore(db, chatId, { migrateFromFile: join(memRoot, chatId, 'milestones.jsonl') })
-    const events = makeEventsStore(db, chatId, { migrateFromFile: join(memRoot, chatId, 'events.jsonl') })
-    const fired = await detectMilestones(milestones, ctx)
-    for (const id of fired) {
-      await events.append({ kind: 'milestone', trigger: 'detector', reasoning: `milestone ${id} fired`, milestone_id: id })
-    }
-  }
-
-  async function recordInbound(chatId: string, when: Date): Promise<void> {
-    const memRoot = join(stateDir, 'memory')
-    const store = makeActivityStore(db, chatId, { migrateFromFile: join(memRoot, chatId, 'activity.jsonl') })
-    await store.recordInbound(when)
-  }
-
-  async function maybeWriteWelcomeObservation(chatId: string): Promise<void> {
-    const memRoot = join(stateDir, 'memory')
-    const obs = makeObservationsStore(db, chatId, { migrateFromFile: join(memRoot, chatId, 'observations.jsonl') })
-    const existing = await obs.listActive()
-    const archived = await obs.listArchived()
-    if (existing.length === 0 && archived.length === 0) {
-      await obs.append({
-        body: '嗨，我是 Claude。我会慢慢理解你，把观察写在这里——你可以随时来翻、纠正、忽略。',
-        tone: 'playful',
-      })
-    }
-  }
-
-  async function isolatedSdkEval(prompt: string): Promise<string> {
-    const q = query({ prompt, options: { model: 'claude-haiku-4-5', maxTurns: 1 } })
-    let text = ''
-    for await (const raw of q as AsyncGenerator<SDKMessage>) {
-      const msg = raw as unknown as { type: string; message?: { content?: unknown } }
-      if (msg.type === 'assistant' && Array.isArray(msg.message?.content)) {
-        for (const part of msg.message.content as Array<{ type?: string; text?: string }>) {
-          if (part.type === 'text' && typeof part.text === 'string') text += part.text
-        }
-      }
-    }
-    return text
-  }
+  // Side-effect closure factories (extracted to wiring/side-effects.ts)
+  const fireMilestonesFor = makeFireMilestonesFor({ stateDir, db })
+  const recordInbound = makeRecordInbound({ stateDir, db })
+  const maybeWriteWelcomeObservation = makeMaybeWriteWelcomeObservation({ stateDir, db })
+  const isolatedSdkEval = makeIsolatedSdkEval()
 
   const inboxDir = join(stateDir, 'inbox')
   const launchCwd = process.cwd()
