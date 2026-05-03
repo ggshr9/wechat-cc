@@ -1,3 +1,22 @@
+/**
+ * Capability matrix — single source of truth for the runtime semantics of
+ * every (mode × provider × permissionMode) combination.
+ *
+ * Consumed by:
+ *   - core/conversation-coordinator.ts  → assertSupported() at dispatch entry
+ *   - core/permission-relay.ts          → lookup().askUser to gate per-tool prompts
+ *   - core/codex-agent-provider.ts +    → lookup().approvalPolicy at provider build
+ *     daemon/bootstrap/index.ts
+ *   - daemon/internal-api/routes.ts     → lookup().replyPrefix for [Display] prefixing
+ *
+ * Module-load assertion: importing this module runs `assertMatrixComplete()`
+ * at the bottom of the file. If the table is malformed (missing combination,
+ * wrong row count) the import THROWS, refusing daemon boot. This is intentional
+ * — it's better to fail at startup than route a wrong combination at runtime.
+ *
+ * Adding a provider: see the comment inside `assertMatrixComplete` — you
+ * must edit BOTH the providers array there AND add 8 new rows to MATRIX.
+ */
 // src/core/capability-matrix.ts
 
 import type { Mode, ProviderId } from './conversation'
@@ -140,6 +159,14 @@ export function assertSupported(
 
 function assertMatrixComplete(): void {
   const modes: Mode['kind'][] = ['solo', 'parallel', 'primary_tool', 'chatroom']
+  // IMPORTANT: This list is the canonical source of truth for "which providers
+  // have a capability row." ProviderId is an open `string` type, so TS cannot
+  // auto-detect missing rows for newly-registered providers. When you add a
+  // provider to provider-registry.ts (e.g. 'cursor', 'gemini'), you MUST:
+  //   1. Add it to this array, AND
+  //   2. Add 4 new rows to CAPABILITY_MATRIX (one per mode) × 2 (per perm) = 8 rows.
+  // Failure to update both will cause `lookup(...)` to throw at first use of the
+  // new combination instead of refusing daemon boot.
   const providers: ProviderId[] = ['claude', 'codex']
   const perms: PermissionMode[] = ['strict', 'dangerously']
   const expected = modes.length * providers.length * perms.length
