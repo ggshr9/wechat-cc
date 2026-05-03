@@ -66,3 +66,49 @@ export class LifecycleSet {
     }
   }
 }
+
+/**
+ * 延迟绑定容器 — 解决"循环构造依赖"。
+ *
+ * 典型场景：admin command handler 需要持有 polling lifecycle 的引用
+ * 来调 stopAccount/running，但 polling lifecycle 自己又需要先把 pipeline
+ * （内含 admin handler 闭包）当 onInbound 才能 register。
+ *
+ * 用法：
+ *   const ref = new Ref<PollingLifecycle>('polling')
+ *   const handler = makeAdmin({ pollHandle: { running: () => ref.current?.running() ?? [] } })
+ *   const lc = registerPolling({ ..., runPipeline })
+ *   wireRef(ref, lc)
+ */
+export class Ref<T> {
+  private _current: T | null = null
+  constructor(public readonly name: string) {}
+
+  get current(): T | null { return this._current }
+
+  set(value: T): void {
+    if (this._current !== null) {
+      throw new Error(`Ref<${this.name}>: already set; cannot reassign`)
+    }
+    this._current = value
+  }
+
+  /**
+   * Returns T (not T | null). Throws if accessed before set.
+   * For closures that *promise* the ref will be wired by call time.
+   */
+  deref(reason: string = ''): T {
+    if (this._current === null) {
+      throw new Error(`Ref<${this.name}>: accessed before set${reason ? ` (${reason})` : ''}`)
+    }
+    return this._current
+  }
+}
+
+/**
+ * One-shot set + assert. main.ts calls:
+ *   wireRef(wired.refs.polling, pollingLc)
+ */
+export function wireRef<T>(ref: Ref<T>, value: T): void {
+  ref.set(value)
+}

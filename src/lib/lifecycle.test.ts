@@ -96,3 +96,51 @@ describe('LifecycleSet', () => {
     }
   })
 })
+
+import { Ref, wireRef } from './lifecycle'
+
+describe('Ref<T>', () => {
+  it('current is null by default', () => {
+    const ref = new Ref<string>('test')
+    expect(ref.current).toBeNull()
+    expect(ref.name).toBe('test')
+  })
+
+  it('set assigns value the first time', () => {
+    const ref = new Ref<string>('test')
+    ref.set('hello')
+    expect(ref.current).toBe('hello')
+  })
+
+  it('set throws on second assignment', () => {
+    const ref = new Ref<string>('polling')
+    ref.set('a')
+    expect(() => ref.set('b')).toThrow(/Ref<polling>: already set/)
+  })
+
+  it('deref throws when ref is unset', () => {
+    const ref = new Ref<string>('guard')
+    expect(() => ref.deref('admin /health needs polling alive'))
+      .toThrow(/Ref<guard>: accessed before set \(admin/)
+  })
+
+  it('deref returns value when ref is set', () => {
+    const ref = new Ref<string>('test')
+    ref.set('hello')
+    expect(ref.deref()).toBe('hello')
+  })
+})
+
+describe('wireRef', () => {
+  it('is equivalent to ref.set', () => {
+    const ref = new Ref<string>('test')
+    wireRef(ref, 'value')
+    expect(ref.current).toBe('value')
+  })
+
+  it('throws on double wireRef (delegates to Ref.set)', () => {
+    const ref = new Ref<string>('test')
+    wireRef(ref, 'first')
+    expect(() => wireRef(ref, 'second')).toThrow(/already set/)
+  })
+})
