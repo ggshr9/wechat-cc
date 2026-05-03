@@ -21,7 +21,7 @@
  */
 import { Database } from 'bun:sqlite'
 import { existsSync, mkdirSync, renameSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 
 export type Db = Database
 
@@ -144,6 +144,38 @@ const migrations: Migration[] = [
       CREATE INDEX events_chat_ts ON events(chat_id, ts DESC);
     `)
   },
+  // v8 — tighten events.kind with a CHECK constraint mirroring the
+  // closed EventKind TS union in src/daemon/events/store.ts. Posture-
+  // aligned with conversations.mode_kind (which has had its CHECK since
+  // v3). SQLite's ALTER TABLE can't add a CHECK on an existing column,
+  // so we recreate the table; rows preserved via INSERT…SELECT, and the
+  // events_chat_ts index has to be re-created (DROP TABLE drops it too).
+  // If any pre-existing row has a kind outside the union, the CHECK will
+  // fail this migration — that's the desired outcome (loud failure beats
+  // silent drift; the store-side type only narrowed *new* writes).
+  (db) => {
+    db.exec(`
+      CREATE TABLE events_new (
+        id TEXT PRIMARY KEY NOT NULL,
+        chat_id TEXT NOT NULL,
+        ts TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN (
+          'cron_eval_pushed', 'cron_eval_skipped', 'cron_eval_failed',
+          'observation_written', 'milestone'
+        )),
+        trigger TEXT NOT NULL,
+        reasoning TEXT NOT NULL,
+        push_text TEXT,
+        observation_id TEXT,
+        milestone_id TEXT,
+        jsonl_session_id TEXT
+      ) STRICT;
+      INSERT INTO events_new SELECT * FROM events;
+      DROP TABLE events;
+      ALTER TABLE events_new RENAME TO events;
+      CREATE INDEX events_chat_ts ON events(chat_id, ts DESC);
+    `)
+  },
 ]
 
 export interface OpenDbOpts {
@@ -152,6 +184,18 @@ export interface OpenDbOpts {
    * directory is created (recursively, mode 0700) if it doesn't exist.
    */
   path: string
+}
+
+/**
+ * Convenience wrapper that resolves the daemon's canonical state file
+ * (`<stateDir>/wechat-cc.db`) and opens it. Used by the CLI leaf commands
+ * — every read-only `wechat-cc <noun> list` path goes through here so the
+ * boilerplate isn't repeated 10× across cli.ts.
+ *
+ * For tests / non-canonical paths, use `openDb({ path })` directly.
+ */
+export function openWechatDb(stateDir: string): Database {
+  return openDb({ path: join(stateDir, 'wechat-cc.db') })
 }
 
 export function openDb(opts: OpenDbOpts): Database {
