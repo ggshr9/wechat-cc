@@ -284,6 +284,8 @@ export function wireMain(opts: WireMainOpts): WiredDeps {
     },
     startupDeps: {
       stateDir, db, ilink, log,
+      accountCount: opts.accounts.length,
+      dangerously: opts.dangerously,
       runIntrospectOnce: introspectTick,
     },
     refs: { polling: pollingRef, guard: guardRef },

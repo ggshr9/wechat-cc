@@ -15,6 +15,10 @@ export interface StartupSweepDeps {
   db: Db
   ilink: IlinkAdapter
   log: (tag: string, line: string) => void
+  /** Bound account count for the startup notification text (admins see "accounts=N"). */
+  accountCount: number
+  /** `--dangerously` flag for the startup notification mode string. */
+  dangerously: boolean
   /** introspect tick body — invoked if 24h+ since last */
   runIntrospectOnce: () => Promise<void>
 }
@@ -73,7 +77,7 @@ async function runStartupNotify(deps: StartupSweepDeps): Promise<void> {
         send: (cid, txt) => deps.ilink.sendMessage(cid, txt),
         log: deps.log,
       },
-      { pid: process.pid, accounts: 0, dangerously: false },
+      { pid: process.pid, accounts: deps.accountCount, dangerously: deps.dangerously },
     )
   } catch (err) {
     deps.log('NOTIFY', `unhandled: ${err instanceof Error ? err.message : err}`)
