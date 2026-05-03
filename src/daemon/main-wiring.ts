@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import { Ref } from '../lib/lifecycle'
 import type { Db } from '../lib/db'
 import type { IlinkAdapter, IlinkAccount } from './ilink-glue'
 import type { Bootstrap } from './bootstrap'
@@ -65,8 +66,8 @@ export interface WiredDeps {
    * the live handle without circular construction.
    */
   refs: {
-    polling: { current: PollingLifecycle | null }
-    guard: { current: GuardLifecycle | null }
+    polling: Ref<PollingLifecycle>
+    guard: Ref<GuardLifecycle>
   }
 }
 
@@ -76,8 +77,8 @@ function errMsg(err: unknown): string { return err instanceof Error ? err.messag
 
 export function wireMain(opts: WireMainOpts): WiredDeps {
   const { stateDir, db, ilink, accounts, boot, log } = opts
-  const pollingRef: { current: PollingLifecycle | null } = { current: null }
-  const guardRef: { current: GuardLifecycle | null } = { current: null }
+  const pollingRef = new Ref<PollingLifecycle>('polling')
+  const guardRef = new Ref<GuardLifecycle>('guard')
 
   // Closures over per-chat side effects (formerly inline in main.ts)
   async function fireMilestonesFor(chatId: string): Promise<void> {

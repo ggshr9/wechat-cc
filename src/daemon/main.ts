@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { acquireInstanceLock, releaseInstanceLock } from './single-instance'
 import { openDb } from '../lib/db'
-import { LifecycleSet } from '../lib/lifecycle'
+import { LifecycleSet, wireRef } from '../lib/lifecycle'
 import { log } from '../lib/log'
 import { buildBootstrap } from './bootstrap'
 import { makeMemoryFS } from './memory/fs-api'
@@ -66,11 +66,11 @@ async function main() {
     lc.register(registerCompanionPush(wired.companionPushDeps))
     lc.register(registerCompanionIntrospect(wired.companionIntrospectDeps))
     const guardLc = registerGuard(wired.guardDeps)
-    wired.refs.guard.current = guardLc; lc.register(guardLc)
+    wireRef(wired.refs.guard, guardLc); lc.register(guardLc)
     lc.register(registerSessions(wired.sessionsDeps))
     lc.register(registerIlink(wired.ilinkDeps))
     const pollingLc = registerPolling({ ...wired.pollingDeps, runPipeline: pipeline })
-    wired.refs.polling.current = pollingLc; lc.register(pollingLc)
+    wireRef(wired.refs.polling, pollingLc); lc.register(pollingLc)
     // 5. one-shot startup sweeps — fire-and-forget
     runStartupSweeps(wired.startupDeps)
     // 6. signal handlers
