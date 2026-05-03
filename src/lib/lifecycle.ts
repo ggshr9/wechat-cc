@@ -30,24 +30,35 @@ export class LifecycleSet {
 
   register(handle: Lifecycle): void { this.handles.push(handle) }
 
-  async stopAll(): Promise<void> {
+  stopAll(): Promise<void> {
+    const result = this._stopAll()
+    // Pre-attach a no-op rejection handler so Node.js does not fire
+    // `unhandledRejection` during the async gap between when `result` settles
+    // (e.g. under fake timers) and when the caller attaches its own handler.
+    // The caller still receives the rejection because it holds the same promise.
+    result.catch(() => {})
+    return result
+  }
+
+  private async _stopAll(): Promise<void> {
     const ordered = [...this.handles].reverse()
     const failures: Array<{ name: string; err: unknown }> = []
     for (const h of ordered) {
       const t0 = Date.now()
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const timeout = new Promise<never>((_, rej) => {
+        timer = setTimeout(() => rej(new Error('stop timeout (5000ms)')), 5000)
+      })
       try {
-        await Promise.race([
-          h.stop(),
-          new Promise<never>((_, rej) =>
-            setTimeout(() => rej(new Error('stop timeout (5000ms)')), 5000),
-          ),
-        ])
+        await Promise.race([h.stop(), timeout])
         this.log('LIFECYCLE', `stopped ${h.name} (${Date.now() - t0}ms)`)
       } catch (err) {
         this.log('LIFECYCLE', `stop ${h.name} failed (${Date.now() - t0}ms): ${
           err instanceof Error ? err.message : err
         }`)
         failures.push({ name: h.name, err })
+      } finally {
+        if (timer) clearTimeout(timer)
       }
     }
     if (failures.length > 0) {
