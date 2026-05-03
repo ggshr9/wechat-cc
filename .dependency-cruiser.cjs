@@ -61,6 +61,20 @@ module.exports = {
       to: { path: '^src/daemon/' },
     },
     {
+      name: 'inbound-must-not-link-main',
+      severity: 'error',
+      comment: 'inbound mw 通过工厂注入 deps，不能 import main.ts',
+      from: { path: '^src/daemon/inbound/', pathNot: '\\.test\\.ts$' },
+      to: { path: '^src/daemon/main\\.ts$' },
+    },
+    {
+      name: 'inbound-must-not-link-other-lifecycle',
+      severity: 'error',
+      comment: 'inbound mw 不能 import 其他子系统的 lifecycle 文件',
+      from: { path: '^src/daemon/inbound/', pathNot: '\\.test\\.ts$' },
+      to: { path: '(lifecycle\\.ts$|-lifecycle\\.ts$)' },
+    },
+    {
       name: 'no-orphans',
       severity: 'warn',
       comment: 'Unreachable files are usually dead code. Verify and delete.',
