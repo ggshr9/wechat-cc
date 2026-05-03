@@ -8,13 +8,11 @@ import { makeAdminCommands } from './admin-commands'
 import { makeModeCommands } from './mode-commands'
 import { makeOnboardingHandler } from './onboarding'
 import { materializeAttachments } from './media'
-import { loadCompanionConfig, saveCompanionConfig } from './companion/config'
+import { loadCompanionConfig } from './companion/config'
 import { loadGuardConfig } from './guard/store'
-import { buildMemorySnapshot } from './memory/snapshot'
-import { makeEventsStore } from './events/store'
-import { makeObservationsStore } from './observations/store'
 import { parseUpdates } from './poll-loop'
-import { makeFireMilestonesFor, makeRecordInbound, makeMaybeWriteWelcomeObservation, makeIsolatedSdkEval } from './wiring/side-effects'
+import { makeFireMilestonesFor, makeRecordInbound, makeMaybeWriteWelcomeObservation } from './wiring/side-effects'
+import { buildTickBodies } from './wiring/tick-bodies'
 import type { InboundPipelineDeps } from './inbound/build'
 import type { CompanionPushDeps, CompanionIntrospectDeps } from './companion/lifecycle'
 import type { SchedulerDeps } from './guard/scheduler'   // NOTE: not GuardSchedulerDeps
@@ -23,8 +21,6 @@ import type { IlinkLifecycleDeps } from './ilink-lifecycle'
 import type { PollingDeps, PollingLifecycle } from './polling-lifecycle'
 import type { StartupSweepDeps } from './startup-sweeps'
 import type { GuardLifecycle } from './guard/lifecycle'
-import { runIntrospectTick } from './companion/introspect'
-import { resolveIntrospectChatId, makeIntrospectAgent } from './companion/introspect-runtime'
 
 export interface WireMainOpts {
   stateDir: string
@@ -69,8 +65,6 @@ export interface WiredDeps {
 
 const STARTED_AT_ISO = new Date().toISOString()
 
-function errMsg(err: unknown): string { return err instanceof Error ? err.message : String(err) }
-
 export function wireMain(opts: WireMainOpts): WiredDeps {
   const { stateDir, db, ilink, accounts, boot, log } = opts
   const pollingRef = new Ref<PollingLifecycle>('polling')
@@ -80,48 +74,11 @@ export function wireMain(opts: WireMainOpts): WiredDeps {
   const fireMilestonesFor = makeFireMilestonesFor({ stateDir, db })
   const recordInbound = makeRecordInbound({ stateDir, db })
   const maybeWriteWelcomeObservation = makeMaybeWriteWelcomeObservation({ stateDir, db })
-  const isolatedSdkEval = makeIsolatedSdkEval()
 
   const inboxDir = join(stateDir, 'inbox')
-  const launchCwd = process.cwd()
 
-  // Companion push tick body — same logic as legacy main.ts
-  async function pushTick(): Promise<void> {
-    const cfg = loadCompanionConfig(stateDir)
-    if (!cfg.default_chat_id) { log('SCHED', 'skip tick — no default_chat_id'); return }
-    const snapshot = ilink.loadProjects()
-    const currentAlias = snapshot.current && snapshot.projects[snapshot.current] ? snapshot.current : null
-    const proj = currentAlias
-      ? { alias: currentAlias, path: snapshot.projects[currentAlias]!.path }
-      : { alias: '_default', path: launchCwd }
-    const handle = await boot.sessionManager.acquire(proj.alias, proj.path, boot.defaultProviderId)
-    const tickText =
-      `<companion_tick ts="${new Date().toISOString()}" default_chat_id="${cfg.default_chat_id}" />\n` +
-      `定时唤醒。先 memory_list + memory_read 你觉得相关的文件。` +
-      `再看当前时间和用户最近状态。决定是否向 ${cfg.default_chat_id} push，或保持沉默。` +
-      `不确定就选不打扰。push 后写一条 memory 记下决策和意图（便于下次 tick 读到效果）。`
-    try { await handle.dispatch(tickText) }
-    catch (err) { log('SCHED', `companion tick dispatch failed: ${errMsg(err)}`) }
-  }
-
-  // Companion introspect tick body
-  async function introspectTick(): Promise<void> {
-    const chatId = resolveIntrospectChatId(stateDir)
-    if (!chatId) { log('INTROSPECT', 'skip tick — no default_chat_id'); return }
-    const memoryRoot = join(stateDir, 'memory')
-    const events = makeEventsStore(db, chatId, { migrateFromFile: join(memoryRoot, chatId, 'events.jsonl') })
-    const observations = makeObservationsStore(db, chatId, { migrateFromFile: join(memoryRoot, chatId, 'observations.jsonl') })
-    const agent = makeIntrospectAgent({
-      chatId, events, observations,
-      memorySnapshot: () => buildMemorySnapshot(stateDir, chatId),
-      // Matches legacy main.ts v0.4.1 — recentInboundForChat() also returned [].
-      // Per-chat inbound history surfacing is left for v0.5 (spec §6 footnote).
-      recentInboundMessages: () => Promise.resolve([] as string[]),
-      sdkEval: isolatedSdkEval,
-    })
-    await runIntrospectTick({ events, observations, agent, chatId, log })
-    await saveCompanionConfig(stateDir, { ...loadCompanionConfig(stateDir), last_introspect_at: new Date().toISOString() })
-  }
+  // Tick bodies (extracted to wiring/tick-bodies.ts)
+  const { pushTick, introspectTick } = buildTickBodies({ stateDir, db, ilink, boot, log })
 
   // Build pipelineDeps. pollHandle is ref-indirected: pollingRef.current is
   // null at construction time; main.ts populates it after registerPolling().
