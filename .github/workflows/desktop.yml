@@ -168,9 +168,16 @@ jobs:
       - name: Compile sidecar (Windows)
         if: matrix.os == 'windows-latest'
         shell: bash
+        # --windows-hide-console: ScheduledTask launches the binary at
+        # logon (or via Start-ScheduledTask). Without this flag, a
+        # console window pops up and stays open for the daemon's
+        # lifetime — users see a CMD they didn't open, can accidentally
+        # close it (kills the daemon), and the wizard's whole "background
+        # service" promise falls apart. The daemon already dual-writes
+        # logs to <stateDir>/channel.log, so losing stderr is fine.
         run: |
           mkdir -p apps/desktop/src-tauri/binaries
-          bun build --compile --target=${{ matrix.bun_target }} cli.ts \
+          bun build --compile --windows-hide-console --target=${{ matrix.bun_target }} cli.ts \
             --outfile apps/desktop/src-tauri/binaries/wechat-cc-cli-${{ matrix.rust_triple }}.exe
           ls -lh apps/desktop/src-tauri/binaries/
 
