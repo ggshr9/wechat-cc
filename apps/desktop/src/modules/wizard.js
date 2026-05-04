@@ -40,14 +40,15 @@ export function renderDoctorWizard(report) {
 
 function renderWslNotice(report) {
   if (!report.wslDetected) return ""
+  // Tip-style: single muted line with click-to-expand details. Avoids
+  // dominating the doctor checklist for the 95% of users who don't have
+  // Claude in WSL — they don't need this lecture every time they open the
+  // wizard. The 5% who do can click for the full explanation.
   return `
-    <div class="env-notice env-notice-wsl">
-      <span class="ic">i</span>
-      <div>
-        <div class="nm">检测到 WSL</div>
-        <div class="val">当前版本只支持 Windows 端的 Claude / Codex。装在 WSL 里的 Claude Code 这个 GUI 客户端连不到 —— 需要在 Windows 端再装一份才能用。WSL 直连集成在路上。</div>
-      </div>
-    </div>
+    <details class="env-tip env-tip-wsl">
+      <summary><span class="ic">ⓘ</span>检测到 WSL · GUI 仅识别 Windows 端的 Claude / Codex</summary>
+      <div class="env-tip-body">装在 WSL 里的 Claude Code，这个 Windows GUI 客户端连不到 —— 需要在 Windows 端再装一份才能用。WSL 直连集成在路上。</div>
+    </details>
   `
 }
 

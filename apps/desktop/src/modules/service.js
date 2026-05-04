@@ -44,7 +44,19 @@ export async function serviceAction(deps, state, action) {
     btn.innerHTML = originalLabel
   }
   if (action === "install") {
-    progressStop = startProgressPolling(deps, setBtnLabel)
+    // Open the technical-details panel + start with a "preparing" header
+    // so the user sees real-time activity instead of clicking the chevron
+    // on an empty box. Each progress event below appends a line.
+    if (planEl) {
+      planEl.textContent = `[${nowStamp()}] 准备安装…\n`
+      planEl.classList.add("show")
+    }
+    const appendPlan = (line) => {
+      if (!planEl) return
+      planEl.textContent += line.endsWith('\n') ? line : line + '\n'
+      planEl.scrollTop = planEl.scrollHeight
+    }
+    progressStop = startProgressPolling(deps, setBtnLabel, appendPlan)
   }
   try {
     return await serviceActionInner(deps, state, action, planEl, summaryEl, alertEl, setBtnLabel)
@@ -54,14 +66,18 @@ export async function serviceAction(deps, state, action) {
   }
 }
 
+function nowStamp() {
+  const d = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
 /**
- * Poll install-progress.json (written by CLI's installService.onProgress) and
- * update the button label. Returns a stop fn that cancels the interval.
- *
- * Reads via shim.invoke('install_progress_read') — Tauri/shim side reads the
- * file under STATE_DIR. Returns null when file is missing or stale.
+ * Poll install-progress.json (written by CLI's installService.onProgress).
+ * Updates the button label AND the technical-details log so the user can
+ * follow along step-by-step in both places.
  */
-function startProgressPolling(deps, setBtnLabel) {
+function startProgressPolling(deps, setBtnLabel, appendPlan) {
   let timer = null
   let lastShown = null
   let cancelled = false
@@ -76,6 +92,7 @@ function startProgressPolling(deps, setBtnLabel) {
           if (key !== lastShown) {
             lastShown = key
             setBtnLabel(`安装中… (${p.step}/${p.total}) ${escapeHtml(p.label || '')}`)
+            if (appendPlan) appendPlan(`[${nowStamp()}] (${p.step}/${p.total}) ${p.label || ''}`)
           }
         }
       }
@@ -132,11 +149,23 @@ async function serviceActionInner(deps, state, action, planEl, summaryEl, alertE
   } catch (err) {
     const friendly = deps.formatInvokeError(err)
     summaryEl.textContent = friendly
-    planEl.textContent = `service ${action} 失败：\n${friendly}\n\n— 原始错误 —\n${err?.stack || err}`
-    planEl.classList.add("show")
+    if (planEl) {
+      planEl.textContent += `\n[${nowStamp()}] ❌ service ${action} 失败：\n${friendly}\n\n— 原始错误 —\n${err?.stack || err}\n`
+      planEl.classList.add("show")
+      planEl.scrollTop = planEl.scrollHeight
+    }
     return
   }
-  planEl.textContent = JSON.stringify(result, null, 2)
+  if (planEl) {
+    if (action === "install") {
+      planEl.textContent += `\n[${nowStamp()}] ✓ CLI 返回结果：\n${JSON.stringify(result, null, 2)}\n`
+      planEl.scrollTop = planEl.scrollHeight
+    } else {
+      // For non-install actions (start/stop/uninstall), no progressive log;
+      // just dump the result as before.
+      planEl.textContent = JSON.stringify(result, null, 2)
+    }
+  }
   if (result.dryRun) {
     summaryEl.textContent = action === "stop"
       ? "演示模式：实际未停止 daemon（DRY_RUN）。"
@@ -148,6 +177,10 @@ async function serviceActionInner(deps, state, action, planEl, summaryEl, alertE
   // and finish bootstrap. doctorPoller.waitForCondition refreshes every
   // 500ms (with subscriber notifications) until daemon.alive=true or 8s.
   if (!result.dryRun && (action === "install" || action === "start")) {
+    if (planEl && action === "install") {
+      planEl.textContent += `[${nowStamp()}] ⏳ 等待 daemon 就绪…（最多 ${DAEMON_SETTLE_TIMEOUT_MS / 1000}s）\n`
+      planEl.scrollTop = planEl.scrollHeight
+    }
     await deps.doctorPoller.waitForCondition(
       r => !!r?.checks?.daemon?.alive,
       DAEMON_SETTLE_TIMEOUT_MS,
@@ -161,8 +194,16 @@ async function serviceActionInner(deps, state, action, planEl, summaryEl, alertE
   if (!result.dryRun && (action === "install" || action === "start")) {
     if (post?.checks.daemon.alive) {
       summaryEl.textContent = `服务已启动 · pid ${post.checks.daemon.pid}`
+      if (planEl && action === "install") {
+        planEl.textContent += `[${nowStamp()}] ✓ daemon alive (pid ${post.checks.daemon.pid})\n`
+        planEl.scrollTop = planEl.scrollHeight
+      }
     } else if (post?.checks.service?.installed) {
       summaryEl.textContent = "服务已安装但 daemon 未运行（systemctl 可能正在重试，30s 后再看）。"
+      if (planEl && action === "install") {
+        planEl.textContent += `[${nowStamp()}] ⚠ 服务已注册但 daemon 未起来 — 可能 systemctl/launchd/schtasks 在重试，30s 后查 service status\n`
+        planEl.scrollTop = planEl.scrollHeight
+      }
     }
   }
 }
