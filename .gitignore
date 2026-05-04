@@ -37,6 +37,10 @@ apps/desktop/src-tauri/binaries/
 # Playwright MCP snapshots — local debugging artifacts
 .playwright-mcp/
 
+# Playwright test artifacts (per-run traces / screenshots / state)
+apps/desktop/test-results/
+apps/desktop/playwright-report/
+
 # Claude Code local state
 .claude/
 *.bun-build
