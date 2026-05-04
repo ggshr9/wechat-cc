@@ -15,5 +15,5 @@
     "resolveJsonModule": true
   },
   "include": ["**/*.ts", "src/**/*.ts", "types/**/*.d.ts"],
-  "exclude": ["node_modules", "docs/spike/**"]
+  "exclude": ["node_modules", "docs/spike/**", "apps/desktop/playwright/**"]
 }

@@ -244,3 +244,16 @@ jobs:
           body_path: docs/releases/${{ github.ref_name }}.md
           files: release-files/*
           fail_on_unmatched_files: false
+
+  e2e-browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - working-directory: apps/desktop
+        run: |
+          bun install
+          bunx playwright install chromium --with-deps
+          bun run test:e2e:browser
