@@ -4,6 +4,13 @@
 **Tag**: `desktop-v0.5.0`
 **Scope**: Version sync with CLI v0.5.0 + 3 user-facing UI improvements bundled in.
 
+> **2026-05-04 hotfix retag**: earlier desktop-v0.5.0 builds had a critical bug
+> where the compiled `wechat-cc-cli.exe run` silently no-op'd — install
+> succeeded, ScheduledTask launched, but no daemon ever came up (`import.meta.main`
+> is false for ESM-imported modules, so cli.ts's import-side-effect dispatch
+> never invoked the daemon). Fixed in `fbded80` — daemon now starts properly
+> in compiled binaries. Re-download the bundle if you got the broken one.
+
 ## What's new (visible)
 
 ### 1. 安装向导显示真实步骤进度
