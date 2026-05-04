@@ -179,6 +179,25 @@ describe('service-manager', () => {
     expect(create[create.indexOf('/RU') + 1]).toBe('bob')
   })
 
+  // /RU without /IT (or /RP) makes schtasks prompt for the user's password
+  // to "store credentials for run-when-not-logged-on". The prompt has no
+  // GUI in the wizard's spawnSync context — process hangs at "(2/4) 注册
+  // ScheduledTask" forever. /IT (Interactive Token) tells schtasks to use
+  // the user's existing logon token, matching the XML's <LogonType>
+  // InteractiveToken</LogonType> + <LogonTrigger>. This regression bit
+  // Win11 users in v0.5.0; this test pins the fix.
+  it('Windows /Create command passes /IT to skip schtasks password prompt', () => {
+    const plan = buildServicePlan({
+      platform: 'win32',
+      homeDir: 'C:\\Users\\bob',
+      cwd: 'C:\\app',
+      bunPath: 'C:\\bun.exe',
+      windowsUser: 'bob',
+    })
+    const create = plan.installCommands.find(c => c[1] === '/Create')!
+    expect(create).toContain('/IT')
+  })
+
   // schtasks /XML on Chinese Windows (and other non-en-US locales)
   // rejects UTF-8 with "无法切换编码" — it requires UTF-16 LE with BOM.
   // Regression: catch any future writeFileSync change that drops the

@@ -106,7 +106,15 @@ export function buildServicePlan(input: ServicePlanInput): ServicePlan {
       // before runCommands runs) — this command list only contains schtasks
       // calls. We thread the XML content via fileContent, and the file path
       // via serviceFile so installService writes it before /Create.
-      ['schtasks', '/Create', '/TN', serviceName, '/XML', xmlPath, '/RU', winUser, '/F'],
+      //
+      // /IT (Interactive Token) is CRITICAL on Windows: without it, /RU
+      // makes schtasks prompt for the user's password (to persist creds for
+      // "run when not logged on"). The prompt has no GUI in our context —
+      // process just hangs forever, user sees "(2/4) 注册 ScheduledTask"
+      // stuck. /IT means "use the user's existing logon token, only run
+      // when logged in" — matches our LogonTrigger + InteractiveToken
+      // principal in the XML, so no creds are needed.
+      ['schtasks', '/Create', '/TN', serviceName, '/XML', xmlPath, '/RU', winUser, '/IT', '/F'],
     ]
     if (!autoStart) installCommands.push(['schtasks', '/Change', '/TN', serviceName, '/DISABLE'])
     installCommands.push(['schtasks', '/Run', '/TN', serviceName])
