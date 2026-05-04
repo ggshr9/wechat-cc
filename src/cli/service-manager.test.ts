@@ -179,14 +179,13 @@ describe('service-manager', () => {
     expect(create[create.indexOf('/RU') + 1]).toBe('bob')
   })
 
-  // /RU without /IT (or /RP) makes schtasks prompt for the user's password
-  // to "store credentials for run-when-not-logged-on". The prompt has no
-  // GUI in the wizard's spawnSync context — process hangs at "(2/4) 注册
-  // ScheduledTask" forever. /IT (Interactive Token) tells schtasks to use
-  // the user's existing logon token, matching the XML's <LogonType>
-  // InteractiveToken</LogonType> + <LogonTrigger>. This regression bit
-  // Win11 users in v0.5.0; this test pins the fix.
-  it('Windows /Create command passes /IT to skip schtasks password prompt', () => {
+  // schtasks password prompt + access-denied saga (Win11 v0.5.0):
+  // 1) /RU alone → password prompt → hang
+  // 2) /RU + /IT → "file not found / access denied" pair (XML Principal conflict)
+  // 3) /RU + XML LogonType=S4U (CURRENT) → no password, no conflict
+  // S4U mints a token without password storage; pairs with bare /RU /F.
+  // This test pins both the XML LogonType and the absence of /IT.
+  it('Windows ScheduledTask uses S4U logon (no password prompt) and bare /RU /F', () => {
     const plan = buildServicePlan({
       platform: 'win32',
       homeDir: 'C:\\Users\\bob',
@@ -194,8 +193,11 @@ describe('service-manager', () => {
       bunPath: 'C:\\bun.exe',
       windowsUser: 'bob',
     })
+    expect(plan.fileContent).toContain('<LogonType>S4U</LogonType>')
     const create = plan.installCommands.find(c => c[1] === '/Create')!
-    expect(create).toContain('/IT')
+    expect(create).not.toContain('/IT')
+    expect(create).not.toContain('/RP')
+    expect(create).toContain('/RU')
   })
 
   // schtasks /XML on Chinese Windows (and other non-en-US locales)

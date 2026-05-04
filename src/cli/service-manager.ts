@@ -107,14 +107,24 @@ export function buildServicePlan(input: ServicePlanInput): ServicePlan {
       // calls. We thread the XML content via fileContent, and the file path
       // via serviceFile so installService writes it before /Create.
       //
-      // /IT (Interactive Token) is CRITICAL on Windows: without it, /RU
-      // makes schtasks prompt for the user's password (to persist creds for
-      // "run when not logged on"). The prompt has no GUI in our context —
-      // process just hangs forever, user sees "(2/4) 注册 ScheduledTask"
-      // stuck. /IT means "use the user's existing logon token, only run
-      // when logged in" — matches our LogonTrigger + InteractiveToken
-      // principal in the XML, so no creds are needed.
-      ['schtasks', '/Create', '/TN', serviceName, '/XML', xmlPath, '/RU', winUser, '/IT', '/F'],
+      // schtasks /Create /XML password / "file not found" history:
+      //   v0.5.0 — `/RU user /F` (no /IT, no /RP):
+      //     schtasks prompts for the user's password to persist creds
+      //     (for "run when not logged on" capability) — prompt has no GUI
+      //     in our spawnSync context, hangs forever at "(2/4) 注册...".
+      //   v0.5.0 hotfix #1 — added `/IT` (Interactive Token):
+      //     skipped the password prompt but emitted the confusing pair
+      //     `ERROR: The system cannot find the file specified. /
+      //     ERROR: Access is denied.` — `/IT` conflicts with the XML's
+      //     Principal section on some Win11 builds.
+      //   v0.5.0 hotfix #2 (CURRENT) — drop /IT, switch XML LogonType to S4U:
+      //     S4U (Service-for-User) tells Windows to mint a token for the
+      //     RU user without storing a password. No password prompt, no /IT
+      //     conflict. Task runs whether the user is logged in or not, but
+      //     network access is limited to local resources (which is fine
+      //     for wechat-cc — daemon talks to localhost ilink + spawns
+      //     local Claude Code subprocess).
+      ['schtasks', '/Create', '/TN', serviceName, '/XML', xmlPath, '/RU', winUser, '/F'],
     ]
     if (!autoStart) installCommands.push(['schtasks', '/Change', '/TN', serviceName, '/DISABLE'])
     installCommands.push(['schtasks', '/Run', '/TN', serviceName])
@@ -300,7 +310,11 @@ function buildScheduledTaskXml(opts: { command: string; args: string; autoStart:
   <Principals>
     <Principal id="Author">
       <UserId>${userEsc}</UserId>
-      <LogonType>InteractiveToken</LogonType>
+      <!-- S4U logon: no password needed; pairs with bare /RU /F command-line.
+           Skips the password prompt that plain InteractiveToken triggered
+           on Win11 in v0.5.0. Network access restricted to local resources
+           (fine for wechat-cc; daemon only talks to localhost). -->
+      <LogonType>S4U</LogonType>
       <RunLevel>LeastPrivilege</RunLevel>
     </Principal>
   </Principals>
