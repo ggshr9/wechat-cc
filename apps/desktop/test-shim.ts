@@ -41,14 +41,16 @@ const dryRun = process.env.WECHAT_CC_DRY_RUN === '1'
 // DRY_RUN=1 AND the relevant field is non-empty (observations, milestones,
 // sessions) or set (qrScanComplete, qrScanFails, envCheck).
 const __mockState: {
-  chats: Array<{ id: string; name: string; last_active: number }>
+  chats: Array<{ id: string; name: string; last_active: number; mode?: { kind: string; provider?: string } }>
   observations: Array<{ id: string; body: string; tone: string; archived: boolean }>
   milestones: Array<{ id: string; label: string; triggered_at: number }>
   sessions: Array<{ id: string; project: string; created_at: number; favorited: boolean }>
   qrScanComplete?: boolean
   qrScanFails?: boolean
   envCheck?: { binary_missing?: string }
-} = { chats: [], observations: [], milestones: [], sessions: [] }
+  installProgress: { step: number; total: number; label: string; ts: number } | null
+  installSimulationStep: number
+} = { chats: [], observations: [], milestones: [], sessions: [], installProgress: null, installSimulationStep: 0 }
 
 const POLYFILL = `<script>
 window.__TAURI__ = window.__TAURI__ ?? { core: {
@@ -274,6 +276,84 @@ Bun.serve({
               return Response.json({ result: { status: 'confirmed', accountId: 'mock-bot', userId: 'mock-user' } })
             }
             return Response.json({ result: { status: 'wait' } })
+          }
+
+          // Intercept service install in DRY_RUN — kick off install-progress simulation.
+          // Frontend calls: ["service", "install", "--json"]
+          if (
+            dryRun &&
+            body.command === 'wechat_cli_json' &&
+            cliArgs[0] === 'service' &&
+            cliArgs[1] === 'install'
+          ) {
+            const progressSteps = [
+              '写入服务定义文件',
+              'systemctl daemon-reload',
+              'systemctl enable',
+              '启动 systemd 服务',
+            ]
+            __mockState.installSimulationStep = 0
+            __mockState.installProgress = { step: 1, total: progressSteps.length, label: progressSteps[0]!, ts: Date.now() }
+            // Clear progress after a grace period (service "finished")
+            setTimeout(() => { __mockState.installProgress = null }, 3000)
+            return Response.json({ result: { ok: true, action: 'install', dryRun: true } })
+          }
+
+          // Intercept install-progress in DRY_RUN — advance simulation on each poll.
+          // Frontend calls: ["install-progress", "--json"]
+          if (
+            dryRun &&
+            body.command === 'wechat_cli_json' &&
+            cliArgs[0] === 'install-progress'
+          ) {
+            const progressSteps = [
+              '写入服务定义文件',
+              'systemctl daemon-reload',
+              'systemctl enable',
+              '启动 systemd 服务',
+            ]
+            if (!__mockState.installProgress) {
+              return Response.json({ result: {} })
+            }
+            // Advance simulation step each poll
+            __mockState.installSimulationStep += 1
+            const nextStep = __mockState.installSimulationStep + 1  // steps are 1-indexed
+            if (nextStep <= progressSteps.length) {
+              __mockState.installProgress = {
+                step: nextStep,
+                total: progressSteps.length,
+                label: progressSteps[nextStep - 1]!,
+                ts: Date.now(),
+              }
+            }
+            return Response.json({ result: { ...__mockState.installProgress } })
+          }
+
+          // Intercept mode set in DRY_RUN — update mock chat mode + return ok.
+          // Frontend calls: ["mode", "set", <chatId>, <mode>, "--json"]
+          if (
+            dryRun &&
+            body.command === 'wechat_cli_json' &&
+            cliArgs[0] === 'mode' &&
+            cliArgs[1] === 'set'
+          ) {
+            const chatId = cliArgs[2]
+            const modeArg = cliArgs[3]
+            // Map shorthand to mode shape (mirrors cli.ts modeShorthand mapping)
+            const SHORTHAND: Record<string, { kind: string; provider?: string }> = {
+              cc:    { kind: 'solo', provider: 'claude' },
+              codex: { kind: 'solo', provider: 'codex' },
+              solo:  { kind: 'solo', provider: 'claude' },
+              both:  { kind: 'parallel' },
+              chat:  { kind: 'chatroom' },
+            }
+            const mode = modeArg ? (SHORTHAND[modeArg] ?? (() => { try { return JSON.parse(modeArg) } catch { return null } })()) : null
+            if (mode && chatId) {
+              __mockState.chats = __mockState.chats.map(c =>
+                c.id === chatId ? { ...c, mode } : c
+              )
+            }
+            return Response.json({ result: { ok: true } })
           }
 
           const r = await runCli(cliArgs)

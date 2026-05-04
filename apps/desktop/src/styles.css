@@ -228,6 +228,31 @@ input { font: inherit; color: inherit; }
   font-size: 11px; color: var(--ink-3);
 }
 
+/* ─── mode dropdown (replaces read-only pill — same palette) ──────────── */
+/* Inherits the per-mode background/color from the badge tone classes so  */
+/* switching modes visually snaps to the new mode's colour immediately.   */
+.mode-select {
+  display: inline-flex; align-items: center;
+  height: 22px; padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px; font-weight: 500;
+  letter-spacing: 0.2px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23888'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  padding-right: 18px;
+}
+.mode-select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mode-select.mode-solo     { background-color: var(--green-soft); color: var(--green-ink); }
+.mode-select.mode-parallel { background-color: var(--amber-soft); color: var(--amber); }
+.mode-select.mode-primary  { background-color: #e3e8f0;          color: #3b4a63; }
+.mode-select.mode-chatroom { background-color: #ece1f4;          color: #6b3e8a; }
+.mode-select.mode-select-error { outline: 2px solid var(--red, #e53e3e); border-color: var(--red, #e53e3e); }
+
 /* ═══════════════════════════════════════════════════════════════════════ */
 /*  WIZARD MODE                                                           */
 /* ═══════════════════════════════════════════════════════════════════════ */

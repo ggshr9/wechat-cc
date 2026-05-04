@@ -51,6 +51,10 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
   let token: Buffer | null = null
   // RFC 03 P4 late binding — main.ts wires this in after bootstrap returns.
   let lateDelegate: InternalApiDelegateDep | null = deps.delegate ?? null
+  // Late binding for conversation controller — wired after buildBootstrap() returns.
+  // Routes access deps.conversation at request time; we update the same deps object.
+  // (deps is passed by reference to makeRoutes which closes over it, so mutations
+  // are visible at request time without any additional indirection.)
 
   function authOk(req: IncomingMessage): boolean {
     if (!token) return false
@@ -192,6 +196,10 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
 
     setDelegate(d) {
       lateDelegate = d
+    },
+
+    setConversation(c) {
+      deps.conversation = c
     },
   }
 }

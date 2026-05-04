@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { writeFileSync } from 'node:fs'
+import { writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { defineCommand, runMain } from 'citty'
 import { STATE_DIR } from './src/lib/config'
 import { loadAgentConfig, saveAgentConfig, type AgentProviderKind } from './src/lib/agent-config'
@@ -1063,13 +1063,52 @@ const serviceCmd = defineCommand({
       // — a partial/stale state (plist missing, launchd doesn't have it)
       // would otherwise block the fresh install.
       try { uninstallService(plan, sideOpts) } catch { /* tolerate */ }
-      installService(plan, sideOpts)
+      // Wire onProgress → install-progress.json so the GUI wizard can poll
+      // real step state ("(2/4) systemctl daemon-reload") instead of showing
+      // an opaque "安装中…" forever. Cleared at start + end so a stale file
+      // from a previous crashed install doesn't haunt the next one.
+      const progressPath = join(STATE_DIR, 'install-progress.json')
+      try { rmSync(progressPath, { force: true }) } catch { /* tolerate */ }
+      installService(plan, {
+        ...sideOpts,
+        onProgress: (e) => {
+          try {
+            mkdirSync(STATE_DIR, { recursive: true })
+            writeFileSync(progressPath, JSON.stringify({ ...e, ts: Date.now() }))
+          } catch { /* progress is best-effort — never break install */ }
+        },
+      })
+      try { rmSync(progressPath, { force: true }) } catch { /* tolerate */ }
     } else if (action === 'start') startService(plan, sideOpts)
     else if (action === 'stop') stopService(plan, sideOpts)
     else if (action === 'uninstall') uninstallService(plan, sideOpts)
     const out = { ok: true, action, plan, agentConfig: config, dryRun }
     if (json) console.log(JSON.stringify(out, null, 2))
     else console.log(`service ${action}: ok${dryRun ? ' (dry-run)' : ''}`)
+  },
+})
+
+const installProgressCmd = defineCommand({
+  meta: {
+    name: 'install-progress',
+    description: 'Read the current service-install progress (JSON: {step, total, label, ts}). Used by the desktop wizard to poll real install state instead of guessing. Empty {} when no install is in flight.',
+  },
+  args: {
+    json: { type: 'boolean', description: 'JSON envelope (default; flag is for symmetry with other commands)' },
+  },
+  async run() {
+    const { existsSync, readFileSync } = await import('node:fs')
+    const progressPath = join(STATE_DIR, 'install-progress.json')
+    if (!existsSync(progressPath)) {
+      console.log('{}')
+      return
+    }
+    try {
+      const raw = readFileSync(progressPath, 'utf8')
+      console.log(raw.trim() || '{}')
+    } catch {
+      console.log('{}')
+    }
   },
 })
 
@@ -1184,6 +1223,109 @@ const updateCmd = defineCommand({
   },
 })
 
+// ── mode set — programmatic mode switch via running daemon's internal-api ──
+//
+// Reads STATE_DIR/internal-api-info.json (written by daemon on start) to
+// discover the bound port + token file. Posts to /v1/conversation/set-mode.
+// On error (daemon not running, 401, 5xx): clear error message + exit 1.
+
+const modeSetCmd = defineCommand({
+  meta: { name: 'set', description: 'Set chat mode programmatically (calls running daemon via internal-api)' },
+  args: {
+    chatId: { type: 'positional', required: true, description: 'WeChat chat id', valueHint: 'chat-id' },
+    mode: {
+      type: 'positional',
+      required: true,
+      description: 'cc|codex|solo|both|chat (or full JSON mode shape)',
+      valueHint: 'cc|codex|solo|both|chat|json',
+    },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    const { existsSync, readFileSync } = await import('node:fs')
+    const infoPath = join(STATE_DIR, 'internal-api-info.json')
+    const jsonOut = Boolean(args.json)
+
+    const emitError = (msg: string): never => {
+      if (jsonOut) console.log(JSON.stringify({ ok: false, error: msg }))
+      else console.error(`mode set: ${msg}`)
+      process.exit(1)
+    }
+
+    if (!existsSync(infoPath)) {
+      emitError('daemon not running (internal-api-info.json not found — start the daemon first)')
+    }
+
+    let info: { baseUrl: string; tokenFilePath: string }
+    try {
+      info = JSON.parse(readFileSync(infoPath, 'utf8'))
+    } catch (err) {
+      emitError(`could not read internal-api-info.json: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    if (!info!.baseUrl || !info!.tokenFilePath) {
+      emitError('internal-api-info.json is malformed (missing baseUrl or tokenFilePath)')
+    }
+
+    let tokenHex: string
+    try {
+      tokenHex = readFileSync(info!.tokenFilePath, 'utf8').trim()
+    } catch (err) {
+      emitError(`could not read token file: ${err instanceof Error ? err.message : String(err)}`)
+    }
+
+    // Map shorthands to full Mode shapes (matches mode-commands.ts semantics)
+    const SHORTHAND: Record<string, object> = {
+      cc:    { kind: 'solo', provider: 'claude' },
+      codex: { kind: 'solo', provider: 'codex' },
+      solo:  { kind: 'solo', provider: 'claude' },
+      both:  { kind: 'parallel' },
+      chat:  { kind: 'chatroom' },
+    }
+
+    let modeObj: object
+    const raw = args.mode
+    if (SHORTHAND[raw]) {
+      modeObj = SHORTHAND[raw]!
+    } else {
+      try {
+        modeObj = JSON.parse(raw)
+        if (typeof modeObj !== 'object' || modeObj === null) throw new Error('must be a JSON object')
+      } catch (err) {
+        emitError(`unrecognised mode '${raw}' — use cc/codex/solo/both/chat or a JSON mode shape: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+
+    let resp: Response
+    try {
+      resp = await fetch(`${info!.baseUrl}/v1/conversation/set-mode`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'authorization': `Bearer ${tokenHex!}`,
+        },
+        body: JSON.stringify({ chatId: args.chatId, mode: modeObj! }),
+      })
+    } catch (err) {
+      emitError(`could not reach daemon (${info!.baseUrl}): ${err instanceof Error ? err.message : String(err)}`)
+    }
+
+    if (!resp!.ok) {
+      const text = await resp!.text().catch(() => '')
+      if (resp!.status === 401) emitError('unauthorized — token mismatch (restart the daemon?)')
+      emitError(`daemon returned ${resp!.status}: ${text}`)
+    }
+
+    const result = await resp!.json() as Record<string, unknown>
+    if (jsonOut) console.log(JSON.stringify(result, null, 2))
+    else console.log(`mode set: ok (chat=${args.chatId} mode=${JSON.stringify(modeObj!)})`)
+  },
+})
+
+const modeCmd = defineCommand({
+  meta: { name: 'mode', description: 'Conversation mode management (programmatic switch via running daemon)' },
+  subCommands: { set: modeSetCmd },
+})
+
 // Subcommands literal first → both `cittyRoot.subCommands` and
 // `MIGRATED_COMMANDS` derive from this single source of truth. Adding a new
 // citty subcommand only requires touching this object — the dispatch set
@@ -1220,6 +1362,8 @@ const SUBCOMMANDS = {
   service: serviceCmd,
   reply: replyCmd,
   update: updateCmd,
+  'install-progress': installProgressCmd,
+  mode: modeCmd,
 } as const
 
 export const cittyRoot = defineCommand({

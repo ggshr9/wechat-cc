@@ -154,7 +154,7 @@ function wireDoctorSubscribers() {
   doctorPoller.subscribe(renderDashboardIfActive)
   doctorPoller.subscribe(renderRestartButton)
   conversationsPoller.subscribe(report => {
-    if (state.mode === "dashboard") renderConversations(report)
+    if (state.mode === "dashboard") renderConversations(report, { invoke })
   })
 }
 

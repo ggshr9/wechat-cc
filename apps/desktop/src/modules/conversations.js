@@ -1,17 +1,28 @@
-// Conversations module — RFC 03 P5.2 read-only mode display.
+// Conversations module — RFC 03 P5.2 mode display + programmatic switch.
 // Owns the dashboard's per-chat mode table (#conversations-body,
-// #conversations-meta). Read-only by design: all mode flips happen in
-// the chat itself via /cc /codex /both /chat (RFC 03 §5).
+// #conversations-meta). Mode can now be flipped from the console via
+// the dropdown — fires `mode set <chatId> <shorthand> --json` through
+// the same coordinator.setMode path that /cc /codex use, plus a wechat
+// reply "🎛 已切换到 X（来自控制台）".
 //
 // Rendering is driven by a periodic `wechat-cc conversations list --json`
-// poll. The poll is independent of the doctor poll because it reads a
-// different file (conversations.json vs the live daemon socket) and has
-// a different freshness contract — modes change only when the user types
-// a slash command, so a 10s tick is plenty.
+// poll (10s tick). Dropdown onChange fires immediately; poller picks up the
+// new persisted mode on next tick.
 
 import { conversationRows, escapeHtml } from "../view.js"
 
-export function renderConversations(report) {
+// Map badge.tone → the closest shorthand for pre-selecting the dropdown.
+// parallel → both, primary_tool → primary (no clean shorthand, use cc as fallback).
+function modeToShorthand(mode) {
+  if (!mode || typeof mode !== "object") return "cc"
+  if (mode.kind === "solo") return mode.provider === "codex" ? "codex" : "cc"
+  if (mode.kind === "parallel") return "both"
+  if (mode.kind === "chatroom") return "chat"
+  if (mode.kind === "primary_tool") return mode.primary === "codex" ? "codex" : "cc"
+  return "cc"
+}
+
+export function renderConversations(report, deps) {
   const tbody = document.getElementById("conversations-body")
   const meta = document.getElementById("conversations-meta")
   if (!tbody) return
@@ -21,12 +32,55 @@ export function renderConversations(report) {
     if (meta) meta.textContent = "0 个会话"
     return
   }
-  tbody.innerHTML = rows.map(row => `
+  const conversations = report?.conversations || []
+  tbody.innerHTML = rows.map(row => {
+    const conv = conversations.find(c => c.chat_id === row.chatId)
+    const currentShorthand = conv ? modeToShorthand(conv.mode) : "cc"
+    return `
     <tr>
       <td class="name">${escapeHtml(row.name)}</td>
       <td class="id">${escapeHtml(row.chatId)}</td>
-      <td><span class="mode-badge mode-${row.badge.tone}">${escapeHtml(row.badge.label)}</span> <span class="mode-detail">${escapeHtml(row.badge.detail)}</span></td>
+      <td>
+        <select class="mode-select mode-${row.badge.tone}" data-chat-id="${escapeHtml(row.chatId)}" data-current="${escapeHtml(currentShorthand)}">
+          <option value="cc"${currentShorthand === "cc" ? " selected" : ""}>/cc (Claude solo)</option>
+          <option value="codex"${currentShorthand === "codex" ? " selected" : ""}>/codex (Codex solo)</option>
+          <option value="both"${currentShorthand === "both" ? " selected" : ""}>/both (Parallel)</option>
+          <option value="chat"${currentShorthand === "chat" ? " selected" : ""}>/chat (Chatroom)</option>
+        </select>
+        <span class="mode-detail">${escapeHtml(row.badge.detail)}</span>
+      </td>
     </tr>
-  `).join("")
+  `
+  }).join("")
   if (meta) meta.textContent = `${rows.length} 个会话`
+
+  // Wire change handlers for mode-select dropdowns.
+  tbody.querySelectorAll("select.mode-select").forEach(sel => {
+    sel.addEventListener("change", async (ev) => {
+      const select = ev.currentTarget
+      const chatId = select.dataset.chatId
+      const newMode = select.value
+      const prevMode = select.dataset.current
+
+      // Optimistic UI: update the select's tone class immediately.
+      const toneMap = { cc: "solo", codex: "solo", both: "parallel", chat: "chatroom" }
+      select.className = `mode-select mode-${toneMap[newMode] || "solo"}`
+
+      if (!deps?.invoke) return
+
+      try {
+        await deps.invoke("wechat_cli_json", { args: ["mode", "set", chatId, newMode, "--json"] })
+        // Success: update current shorthand so next change event has a correct prev value.
+        select.dataset.current = newMode
+      } catch (err) {
+        // Failure: revert to previous selection + show error border.
+        select.value = prevMode
+        select.className = `mode-select mode-${toneMap[prevMode] || "solo"} mode-select-error`
+        // Clear error indication after 3s.
+        setTimeout(() => {
+          select.classList.remove("mode-select-error")
+        }, 3000)
+      }
+    })
+  })
 }

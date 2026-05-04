@@ -10,6 +10,7 @@
  */
 import { errMsg, type InternalApiDeps, type InternalApiDelegateDep, type RouteTable } from './types'
 import { lookup } from '../../core/capability-matrix'
+import type { Mode } from '../../core/conversation'
 
 export interface MakeRoutesContext {
   deps: InternalApiDeps
@@ -351,6 +352,45 @@ export function makeRoutes({ deps, getDelegate, maybePrefix }: MakeRoutesContext
       } catch (err) {
         return { status: 200, body: { ok: false, error: errMsg(err) } }
       }
+    },
+
+    // ── conversation mode switch (console-triggered) ─────────────────────
+    'POST /v1/conversation/set-mode': async (_q, body) => {
+      if (!deps.conversation) return { status: 503, body: { error: 'conversation_not_wired' } }
+      const b = body as { chatId?: unknown; mode?: unknown } | null
+      if (typeof b?.chatId !== 'string') return { status: 400, body: { error: 'chatId_required' } }
+      if (!b?.mode || typeof b.mode !== 'object') return { status: 400, body: { error: 'mode_required' } }
+      const modeObj = b.mode as Record<string, unknown>
+      const validKinds = ['solo', 'parallel', 'primary_tool', 'chatroom'] as const
+      if (!validKinds.includes(modeObj.kind as typeof validKinds[number])) {
+        return { status: 400, body: { error: 'mode.kind_invalid', allowed: validKinds } }
+      }
+      const mode = modeObj as unknown as Mode
+      try {
+        deps.conversation.setMode(b.chatId, mode)
+      } catch (err) {
+        return { status: 400, body: { error: errMsg(err) } }
+      }
+      // Human-readable name for the confirmation message.
+      const kindNames: Record<string, string> = {
+        solo: `solo · ${(modeObj.provider as string | undefined) ?? '?'}`,
+        parallel: 'parallel',
+        primary_tool: `primary_tool · ${(modeObj.primary as string | undefined) ?? '?'}`,
+        chatroom: 'chatroom',
+      }
+      const humanName = kindNames[modeObj.kind as string] ?? String(modeObj.kind)
+      // Best-effort wechat reply — never fail the route if send fails.
+      if (deps.ilink) {
+        deps.ilink.sendReply(b.chatId, `🎛 已切换到 ${humanName}（来自控制台）`).catch(err => {
+          deps.log?.('SET_MODE', `wechat reply failed: ${errMsg(err)}`)
+        })
+      }
+      deps.log?.('SET_MODE', `chat=${b.chatId} mode=${JSON.stringify(modeObj)}`, {
+        event: 'set_mode_ok',
+        chatId: b.chatId,
+        mode: modeObj,
+      })
+      return { status: 200, body: { ok: true } }
     },
 
     'POST /v1/voice/save_config': async (_q, body) => {

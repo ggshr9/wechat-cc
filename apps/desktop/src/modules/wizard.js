@@ -45,7 +45,7 @@ function renderWslNotice(report) {
       <span class="ic">i</span>
       <div>
         <div class="nm">检测到 WSL</div>
-        <div class="val">当前版本只识别 Windows 端的 Claude / Codex。如果你的 Claude Code 装在 WSL 里，先在 Windows 端再装一份；WSL 集成在路上。</div>
+        <div class="val">当前版本只支持 Windows 端的 Claude / Codex。装在 WSL 里的 Claude Code 这个 GUI 客户端连不到 —— 需要在 Windows 端再装一份才能用。WSL 直连集成在路上。</div>
       </div>
     </div>
   `

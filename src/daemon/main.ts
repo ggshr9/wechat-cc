@@ -69,6 +69,9 @@ export async function bootDaemon(opts: BootDaemonOpts): Promise<DaemonHandle> {
       internalApi: { baseUrl: internalApi.baseUrl, tokenFilePath: internalApi.tokenFilePath },
     })
     internalApi.setDelegate({ dispatchOneShot: boot.dispatchDelegate, knownPeers: () => boot.registry.list() })
+    // Wire conversation dep now that coordinator is available. Routes access
+    // deps.conversation at request time, so this late assignment is safe.
+    internalApi.setConversation({ setMode: (chatId, mode) => boot.coordinator.setMode(chatId, mode) })
     // 3. main-wiring builds all deps for pipeline + lifecycles
     const wired = wireMain({ stateDir, db, ilink, accounts, boot, dangerously, log: (t, l) => log(t, l) })
     const pipeline = buildInboundPipeline(wired.pipelineDeps)

@@ -128,6 +128,16 @@ export interface InternalApiDeps {
    * are constructed inside bootstrap, which runs after createInternalApi.
    */
   delegate?: InternalApiDelegateDep
+  /**
+   * Optional conversation controller — exposes setMode so the
+   * POST /v1/conversation/set-mode route can flip a chat's mode
+   * programmatically (same coordinator path that /cc /codex use).
+   * Decoupled from the full ConversationCoordinator surface so the
+   * route table doesn't import coordinator internals.
+   */
+  conversation?: {
+    setMode(chatId: string, mode: import('../../core/conversation').Mode): void
+  }
   /** Optional log hook so api activity surfaces in channel.log. */
   /**
    * Optional `fields` arg lands in channel.log.jsonl when wired (the
@@ -151,6 +161,12 @@ export interface InternalApi {
    * 503 until this is called.
    */
   setDelegate(d: InternalApiDelegateDep): void
+  /**
+   * Late-bind the conversation controller (coordinator.setMode) after
+   * bootstrap has constructed the coordinator. /v1/conversation/set-mode
+   * returns 503 until this is called.
+   */
+  setConversation(c: NonNullable<InternalApiDeps['conversation']>): void
 }
 
 /**

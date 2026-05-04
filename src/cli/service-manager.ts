@@ -151,27 +151,69 @@ export function buildServicePlan(input: ServicePlanInput): ServicePlan {
 // launchctl. The plan is still computed and returned to the caller. Set via
 // WECHAT_CC_DRY_RUN=1 (read in cli.ts service handler) so e2e/CI runs against
 // the real cli.ts without touching ~/Library/LaunchAgents or launchd.
+//
+// onProgress is fired BEFORE each step (file write + each install command)
+// so a UI driver can display "(M/N) <label>". The wizard wires this via
+// install-progress.json so the dashboard can poll real progress instead of
+// guessing — install is 5-10s and "卡在哪" is the diagnostic question.
+export interface ServiceProgressEvent {
+  step: number
+  total: number
+  label: string
+}
 export interface ServiceSideEffectOpts {
   dryRun?: boolean
+  onProgress?: (e: ServiceProgressEvent) => void
+}
+
+/** Human label for a single install command (Chinese — matches existing wizard UX). */
+function labelForCommand(cmd: readonly string[]): string {
+  const head = cmd[0] ?? ''
+  if (head === 'systemctl') {
+    if (cmd.includes('daemon-reload')) return 'systemctl daemon-reload'
+    if (cmd.includes('enable')) return 'systemctl enable'
+    if (cmd.includes('start')) return '启动 systemd 服务'
+  }
+  if (head === 'launchctl') {
+    if (cmd.includes('bootout')) return 'launchctl bootout (清理旧实例)'
+    if (cmd.includes('bootstrap')) return 'launchctl bootstrap'
+    if (cmd.includes('enable')) return 'launchctl enable'
+    if (cmd.includes('kickstart')) return '启动 launchd 服务'
+  }
+  if (head === 'schtasks') {
+    if (cmd.includes('/Create')) return '注册 ScheduledTask'
+    if (cmd.includes('/Run')) return '启动 ScheduledTask'
+    if (cmd.includes('/Delete')) return '删除旧 ScheduledTask'
+  }
+  return `${head} ${cmd.slice(1, 3).join(' ')}`
 }
 
 export function installService(plan: ServicePlan, opts: ServiceSideEffectOpts = {}): void {
   if (opts.dryRun) return
-  if (plan.serviceFile && plan.fileContent) {
-    mkdirSync(dirname(plan.serviceFile), { recursive: true, mode: 0o700 })
+  const hasFile = !!(plan.serviceFile && plan.fileContent)
+  const total = (hasFile ? 1 : 0) + plan.installCommands.length
+  let step = 0
+  const emit = (label: string) => opts.onProgress?.({ step: ++step, total, label })
+
+  if (hasFile) {
+    emit('写入服务定义文件')
+    mkdirSync(dirname(plan.serviceFile!), { recursive: true, mode: 0o700 })
     if (plan.kind === 'scheduled-task') {
       // Windows schtasks /XML requires UTF-16 LE with BOM. Bun's
       // writeFileSync defaults to UTF-8 (no BOM) which schtasks
       // rejects on non-en-US locales with "cannot switch encoding".
       // Manually prepend U+FEFF (encodes to 0xFF 0xFE in LE) and
       // serialize the rest as utf16le.
-      const utf16Buf = Buffer.from('﻿' + plan.fileContent, 'utf16le')
-      writeFileSync(plan.serviceFile, utf16Buf, { mode: 0o600 })
+      const utf16Buf = Buffer.from('﻿' + plan.fileContent!, 'utf16le')
+      writeFileSync(plan.serviceFile!, utf16Buf, { mode: 0o600 })
     } else {
-      writeFileSync(plan.serviceFile, plan.fileContent, { mode: 0o600 })
+      writeFileSync(plan.serviceFile!, plan.fileContent!, { mode: 0o600 })
     }
   }
-  runCommands(plan.installCommands)
+  for (const cmd of plan.installCommands) {
+    emit(labelForCommand(cmd))
+    runCommands([cmd])
+  }
 }
 
 export function startService(plan: ServicePlan, opts: ServiceSideEffectOpts = {}): void {

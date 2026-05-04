@@ -15,6 +15,10 @@
 
 const DAEMON_SETTLE_TIMEOUT_MS = 8000
 const DAEMON_SETTLE_POLL_MS = 500
+const PROGRESS_POLL_MS = 250
+// Stale guard: if a previous install crashed before clearing the file, ignore
+// progress events older than this. Real installs finish in <15s.
+const PROGRESS_STALE_MS = 30_000
 
 export async function serviceAction(deps, state, action) {
   const planEl = document.getElementById("service-plan")
@@ -22,23 +26,68 @@ export async function serviceAction(deps, state, action) {
   const alertEl = document.getElementById("post-stop-alert")
   const btn = document.getElementById("service-install")
   // The whole flow takes 5–10 s (foreground guard + cli invoke + 8 s
-  // settle wait). Without disabling the button + showing in-progress
-  // copy, users click again, see no reaction, and assume the GUI froze.
+  // settle wait). Without disabling the button + showing real step
+  // progress, users see "安装中…" forever and can't tell where it's
+  // stuck. Phase labels read CLI's install-progress.json (true state)
+  // for the install-command portion, falling back to client-known phase
+  // names for foreground-check + daemon-settle (which are wizard-side).
   const originalLabel = btn ? btn.innerHTML : ''
+  let progressStop = null
+  const setBtnLabel = (text) => { if (btn) btn.innerHTML = text }
   if (btn) {
     btn.disabled = true
-    btn.innerHTML = action === "stop" ? "停止中…" : "安装中…"
+    setBtnLabel(action === "stop" ? "停止中…" : "安装中…")
   }
   const restoreBtn = () => {
     if (!btn) return
     btn.disabled = false
     btn.innerHTML = originalLabel
   }
+  if (action === "install") {
+    progressStop = startProgressPolling(deps, setBtnLabel)
+  }
   try {
-    return await serviceActionInner(deps, state, action, planEl, summaryEl, alertEl)
+    return await serviceActionInner(deps, state, action, planEl, summaryEl, alertEl, setBtnLabel)
   } finally {
+    if (progressStop) progressStop()
     restoreBtn()
   }
+}
+
+/**
+ * Poll install-progress.json (written by CLI's installService.onProgress) and
+ * update the button label. Returns a stop fn that cancels the interval.
+ *
+ * Reads via shim.invoke('install_progress_read') — Tauri/shim side reads the
+ * file under STATE_DIR. Returns null when file is missing or stale.
+ */
+function startProgressPolling(deps, setBtnLabel) {
+  let timer = null
+  let lastShown = null
+  let cancelled = false
+  const tick = async () => {
+    if (cancelled) return
+    try {
+      const p = await deps.invoke("wechat_cli_json", { args: ["install-progress", "--json"] }).catch(() => null)
+      if (p && typeof p.step === 'number' && typeof p.total === 'number') {
+        const ageMs = typeof p.ts === 'number' ? Date.now() - p.ts : 0
+        if (ageMs >= 0 && ageMs < PROGRESS_STALE_MS) {
+          const key = `${p.step}/${p.total}/${p.label}`
+          if (key !== lastShown) {
+            lastShown = key
+            setBtnLabel(`安装中… (${p.step}/${p.total}) ${escapeHtml(p.label || '')}`)
+          }
+        }
+      }
+    } catch { /* polling is best-effort */ }
+    if (!cancelled) timer = setTimeout(tick, PROGRESS_POLL_MS)
+  }
+  tick()
+  return () => { cancelled = true; if (timer) clearTimeout(timer) }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 }
 
 async function serviceActionInner(deps, state, action, planEl, summaryEl, alertEl) {
