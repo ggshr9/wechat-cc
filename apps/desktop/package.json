@@ -9,9 +9,11 @@
     "build": "tauri build",
     "preview": "python3 -m http.server 4173 -d src",
     "shim": "WECHAT_CC_DRY_RUN=1 bun test-shim.ts",
-    "shim:live": "bun test-shim.ts"
+    "shim:live": "bun test-shim.ts",
+    "test:e2e:browser": "playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.49.0",
     "@tauri-apps/cli": "^2.0.0"
   }
 }
