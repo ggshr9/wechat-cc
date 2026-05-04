@@ -34,6 +34,22 @@ const PORT = Number(process.env.WECHAT_CC_SHIM_PORT ?? 4174)
 
 const dryRun = process.env.WECHAT_CC_DRY_RUN === '1'
 
+// ─── Playwright mock state ────────────────────────────────────────────────────
+// Shared mutable bag for test-controlled data. Playwright tests seed this via
+// POST /__invoke { command: "demo.seed" } before navigating to page features.
+// Real-mode (dryRun=false) still hits the CLI — state is only consulted when
+// DRY_RUN=1 AND the relevant field is non-empty (observations, milestones,
+// sessions) or set (qrScanComplete, qrScanFails, envCheck).
+const __mockState: {
+  chats: Array<{ id: string; name: string; last_active: number }>
+  observations: Array<{ id: string; body: string; tone: string; archived: boolean }>
+  milestones: Array<{ id: string; label: string; triggered_at: number }>
+  sessions: Array<{ id: string; project: string; created_at: number; favorited: boolean }>
+  qrScanComplete?: boolean
+  qrScanFails?: boolean
+  envCheck?: { binary_missing?: string }
+} = { chats: [], observations: [], milestones: [], sessions: [] }
+
 const POLYFILL = `<script>
 window.__TAURI__ = window.__TAURI__ ?? { core: {
   invoke: async (command, args) => {
@@ -109,10 +125,157 @@ Bun.serve({
     }
 
     if (url.pathname === '/__invoke' && req.method === 'POST') {
-      const body = (await req.json()) as { command: string; args?: { args?: string[]; text?: string } }
+      const body = (await req.json()) as { command: string; args?: { args?: string[] } & Record<string, unknown> }
       try {
+        // ── Playwright test-control commands ───────────────────────────────
+        // These are shim-only commands that Playwright tests POST to seed mock
+        // state or configure failure modes. They are NOT forwarded to the CLI.
+
+        if (body.command === 'demo.seed') {
+          const args = body.args as { chat_id?: string } | undefined
+          const chatId = args?.chat_id ?? 'test_chat'
+          __mockState.chats = [{ id: chatId, name: 'Test User', last_active: Date.now() }]
+          __mockState.observations = [
+            { id: 'obs_demo_1', body: 'demo observation 1', tone: 'playful', archived: false },
+            { id: 'obs_demo_2', body: 'demo observation 2', tone: 'reflective', archived: false },
+            { id: 'obs_demo_3', body: 'demo observation 3', tone: 'playful', archived: false },
+            { id: 'obs_demo_4', body: 'demo observation 4', tone: 'reflective', archived: false },
+            { id: 'obs_demo_5', body: 'demo observation 5', tone: 'playful', archived: false },
+          ]
+          __mockState.milestones = [
+            { id: 'ms_demo_1', label: '100 messages', triggered_at: Date.now() - 86400000 },
+            { id: 'ms_demo_2', label: '7-day streak', triggered_at: Date.now() - 172800000 },
+            { id: 'ms_demo_3', label: 'first push reply', triggered_at: Date.now() - 259200000 },
+          ]
+          __mockState.sessions = [
+            { id: 'sess_1', project: 'wechat-cc', created_at: Date.now(), favorited: false },
+            { id: 'sess_2', project: 'compass', created_at: Date.now() - 3600000, favorited: false },
+          ]
+          // Reset QR + env-check state when re-seeding
+          __mockState.qrScanComplete = false
+          __mockState.qrScanFails = false
+          __mockState.envCheck = undefined
+          return Response.json({ ok: true, seeded: true })
+        }
+
+        if (body.command === 'test.set-env-check-state') {
+          __mockState.envCheck = body.args as typeof __mockState.envCheck
+          return Response.json({ ok: true })
+        }
+
+        if (body.command === 'test.fail-qr-scan') {
+          __mockState.qrScanFails = true
+          return Response.json({ ok: true })
+        }
+
+        // ── Shim-native commands (not forwarded to CLI) ────────────────────
         if (body.command === 'wechat_cli_json' || body.command === 'wechat_cli_text') {
           const cliArgs = body.args?.args ?? []
+
+          // Intercept observations list in DRY_RUN when demo data has been seeded.
+          // Frontend calls: ["observations", "list", <chatId>, "--json"]
+          if (
+            dryRun &&
+            body.command === 'wechat_cli_json' &&
+            cliArgs[0] === 'observations' &&
+            cliArgs[1] === 'list' &&
+            __mockState.observations.length > 0
+          ) {
+            const visible = __mockState.observations.filter(o => !o.archived)
+            return Response.json({ result: { observations: visible } })
+          }
+
+          // Intercept observations archive in DRY_RUN when demo data has been seeded.
+          // Frontend calls: ["observations", "archive", <chatId>, <obsId>, "--json"]
+          if (
+            dryRun &&
+            body.command === 'wechat_cli_json' &&
+            cliArgs[0] === 'observations' &&
+            cliArgs[1] === 'archive' &&
+            __mockState.observations.length > 0
+          ) {
+            const obsId = cliArgs[3]  // ["observations", "archive", chatId, obsId, "--json"]
+            if (obsId) {
+              __mockState.observations = __mockState.observations.map(o =>
+                o.id === obsId ? { ...o, archived: true } : o
+              )
+            }
+            return Response.json({ result: { ok: true } })
+          }
+
+          // Intercept milestones list in DRY_RUN when demo data has been seeded.
+          // Frontend calls: ["milestones", "list", <chatId>, "--json"]
+          if (
+            dryRun &&
+            body.command === 'wechat_cli_json' &&
+            cliArgs[0] === 'milestones' &&
+            cliArgs[1] === 'list' &&
+            __mockState.milestones.length > 0
+          ) {
+            return Response.json({ result: { milestones: __mockState.milestones } })
+          }
+
+          // Intercept sessions list-projects in DRY_RUN when demo data has been seeded.
+          // Frontend calls: ["sessions", "list-projects", "--json"]
+          if (
+            dryRun &&
+            body.command === 'wechat_cli_json' &&
+            cliArgs[0] === 'sessions' &&
+            cliArgs[1] === 'list-projects' &&
+            __mockState.sessions.length > 0
+          ) {
+            // Map internal sessions to the shape the frontend expects
+            // (alias, last_used_at, summary — matches sessions list-projects output)
+            const projects = __mockState.sessions.map(s => ({
+              alias: s.project,
+              last_used_at: new Date(s.created_at).toISOString(),
+              summary: null,
+            }))
+            return Response.json({ result: { projects } })
+          }
+
+          // Intercept setup --qr-json in DRY_RUN for QR auto-pass flow.
+          // Frontend calls: ["setup", "--qr-json"]
+          if (
+            dryRun &&
+            body.command === 'wechat_cli_json' &&
+            cliArgs[0] === 'setup' &&
+            cliArgs.includes('--qr-json')
+          ) {
+            if (__mockState.qrScanFails) {
+              return Response.json({
+                result: {
+                  qrcode: 'mock-fail-qr',
+                  qrcode_img_content: 'weixin://mock-fail-qr',
+                  expires_in_ms: 480000,
+                  error: '扫码失败',
+                },
+              })
+            }
+            // Success path: schedule auto-complete after 1s
+            setTimeout(() => { __mockState.qrScanComplete = true }, 1000)
+            return Response.json({
+              result: {
+                qrcode: 'mock-qr-token',
+                qrcode_img_content: 'weixin://mock-qr',
+                expires_in_ms: 480000,
+              },
+            })
+          }
+
+          // Intercept setup-poll in DRY_RUN for QR auto-pass flow.
+          // Frontend calls: ["setup-poll", "--qrcode", <token>, "--json"]
+          if (
+            dryRun &&
+            body.command === 'wechat_cli_json' &&
+            cliArgs[0] === 'setup-poll'
+          ) {
+            if (__mockState.qrScanComplete) {
+              return Response.json({ result: { status: 'confirmed', accountId: 'mock-bot', userId: 'mock-user' } })
+            }
+            return Response.json({ result: { status: 'wait' } })
+          }
+
           const r = await runCli(cliArgs)
           if (r.code !== 0) return Response.json({ error: r.stderr.trim() || `cli exit ${r.code}` })
           const stdout = r.stdout.trim()
@@ -156,7 +319,8 @@ Bun.serve({
           return Response.json({ result: target })
         }
         if (body.command === 'render_qr_svg') {
-          return Response.json({ result: placeholderQr(body.args?.text ?? '') })
+          const text = (body.args as { text?: string } | undefined)?.text ?? ''
+          return Response.json({ result: placeholderQr(text) })
         }
         return Response.json({ error: `unknown command: ${body.command}` })
       } catch (err) {
