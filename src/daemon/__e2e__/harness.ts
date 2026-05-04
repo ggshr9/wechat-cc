@@ -41,6 +41,12 @@ export interface TestDaemonOpts {
   companion?: { enabled?: boolean; default_chat_id?: string }
   /** preset bot accounts — default: 1 fake bot pointing at fake ilink */
   accounts?: TestDaemonAccount[]
+  /**
+   * Pre-known users (chatId → name). Populates user_names.json so onboarding
+   * is skipped for these users. Default: { chat1: 'testuser' }.
+   * Pass `{}` to disable all pre-population (for onboarding tests).
+   */
+  knownUsers?: Record<string, string>
 }
 
 export interface DaemonHandle {
@@ -72,16 +78,33 @@ export async function startTestDaemon(opts: TestDaemonOpts = {}): Promise<Daemon
   }
   writeFileSync(join(stateDir, 'access.json'), JSON.stringify(access, null, 2))
 
-  // 3. Write fake bot account(s)
+  // 3. Write fake bot account(s) — format: accounts/<id>/account.json + token
   const accounts: TestDaemonAccount[] = opts.accounts ?? [{
     id: 'bot1', botId: 'bot1', userId: 'owner1',
     baseUrl: ilink.baseUrl, token: 'fake-token', syncBuf: '',
   }]
   for (const a of accounts) {
-    writeFileSync(join(stateDir, 'accounts', `${a.id}.json`), JSON.stringify(a, null, 2))
+    const acctDir = join(stateDir, 'accounts', a.id)
+    mkdirSync(acctDir, { recursive: true })
+    writeFileSync(join(acctDir, 'account.json'), JSON.stringify({ botId: a.botId, userId: a.userId, baseUrl: a.baseUrl }, null, 2))
+    writeFileSync(join(acctDir, 'token'), a.token)
+    if (a.syncBuf) writeFileSync(join(acctDir, 'sync_buf'), a.syncBuf)
   }
 
-  // 4. Write companion config if provided
+  // 4. Pre-populate routing state so send-reply can route without waiting for
+  // debounced state-store flush, and so onboarding is skipped for known users.
+  const knownUsers = 'knownUsers' in opts ? opts.knownUsers : { chat1: 'testuser' }
+  if (knownUsers && Object.keys(knownUsers).length > 0) {
+    // user_names.json — onboarding check (isKnownUser)
+    writeFileSync(join(stateDir, 'user_names.json'), JSON.stringify(knownUsers))
+    // user_account_ids.json — sendReplyOnce routing (chatId → accountId)
+    const defaultAccountId = accounts[0]?.id ?? 'bot1'
+    const userAccountIds: Record<string, string> = {}
+    for (const chatId of Object.keys(knownUsers)) userAccountIds[chatId] = defaultAccountId
+    writeFileSync(join(stateDir, 'user_account_ids.json'), JSON.stringify(userAccountIds))
+  }
+
+  // 5. Write companion config if provided
   if (opts.companion) {
     writeFileSync(join(stateDir, 'companion-config.json'), JSON.stringify({
       enabled: opts.companion.enabled ?? false,
@@ -102,26 +125,30 @@ export async function startTestDaemon(opts: TestDaemonOpts = {}): Promise<Daemon
     cleanups.push(uninstall)
   }
 
-  // 6. Override env to point daemon at test stateDir
+  // 6. Override env to point daemon at test stateDir.
+  // WECHAT_CC_STATE_DIR is read by main.ts; WECHAT_STATE_DIR is read by
+  // config.ts (send-reply.ts, access.ts, log.ts) which are module-level
+  // singletons — but they DO re-read from disk each call (sendReplyOnce
+  // passes stateDir arg or reads from the env-resolved STATE_DIR).
+  // Setting both ensures the routing files (context_tokens, user_account_ids)
+  // are written and read from the same directory.
   const origStateDir = process.env.WECHAT_CC_STATE_DIR
+  const origWechatStateDir = process.env.WECHAT_STATE_DIR
   process.env.WECHAT_CC_STATE_DIR = stateDir
+  process.env.WECHAT_STATE_DIR = stateDir
   let argvAdded = false
   if (opts.dangerously && !process.argv.includes('--dangerously')) {
     process.argv.push('--dangerously')
     argvAdded = true
   }
 
-  // 7. Boot daemon — fire-and-forget. Daemon's polling loop will start
-  // pulling from fake ilink within ~1s.
+  // 7. Boot daemon via exported bootDaemon — no SIGTERM needed for shutdown.
   // NOTE: import is dynamic so vi.mock has time to register before SDK loads.
-  void import('../main').catch(err => {
-    console.error('[e2e harness] daemon main() crashed:', err)
-  })
+  const { bootDaemon } = await import('../main')
+  const daemonHandle = await bootDaemon({ stateDir, dangerously: opts.dangerously ?? false })
 
-  // Give the daemon a moment to start polling (typing call confirms ready).
-  // Real production has a "ready" log line; tests poll the fake ilink for
-  // any activity (which the daemon does on first inbound).
-  await new Promise(r => setTimeout(r, 200))
+  // Give polling loop a moment to spin up.
+  await new Promise(r => setTimeout(r, 50))
 
   const defaultBotId = accounts[0]?.botId ?? 'bot1'
 
@@ -148,13 +175,13 @@ export async function startTestDaemon(opts: TestDaemonOpts = {}): Promise<Daemon
       )
     },
     async stop() {
-      // Send SIGTERM equivalent — daemon's lifecycle.stopAll runs.
-      // process.kill of self is acceptable in test context.
-      try { process.kill(process.pid, 'SIGTERM') } catch {}
-      await new Promise(r => setTimeout(r, 300))
+      // Shut down via DaemonHandle — no SIGTERM, safe in test runner.
+      await daemonHandle.shutdown()
       cleanups.forEach(fn => fn())
       if (origStateDir === undefined) delete process.env.WECHAT_CC_STATE_DIR
       else process.env.WECHAT_CC_STATE_DIR = origStateDir
+      if (origWechatStateDir === undefined) delete process.env.WECHAT_STATE_DIR
+      else process.env.WECHAT_STATE_DIR = origWechatStateDir
       if (argvAdded) {
         const idx = process.argv.indexOf('--dangerously')
         if (idx >= 0) process.argv.splice(idx, 1)

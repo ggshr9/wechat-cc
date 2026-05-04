@@ -20,81 +20,95 @@ import { registerIlink } from './ilink-lifecycle'
 import { buildInboundPipeline } from './inbound/build'
 import { runStartupSweeps } from './startup-sweeps'
 import { wireMain } from './wiring'
-const STATE_DIR = join(homedir(), '.claude', 'channels', 'wechat')
-const PID_PATH = join(STATE_DIR, 'server.pid')
-const DANGEROUSLY = process.argv.includes('--dangerously')
-let shuttingDown = false
-async function main() {
+
+export interface BootDaemonOpts { stateDir: string; dangerously: boolean }
+export interface DaemonHandle { shutdown(): Promise<void>; pollingReconcile?(): Promise<void> }
+
+export async function bootDaemon(opts: BootDaemonOpts): Promise<DaemonHandle> {
+  const { stateDir, dangerously } = opts
+  const PID_PATH = join(stateDir, 'server.pid')
   const lock = acquireInstanceLock(PID_PATH)
-  if (!lock.ok) { console.error(`[wechat-cc] ${lock.reason} (pid=${lock.pid}). Exiting.`); process.exit(1) }
-  const accounts = await loadAllAccounts(STATE_DIR)
-  if (accounts.length === 0) {
-    console.error('[wechat-cc] no accounts bound. Run `wechat-cc setup` first.')
-    releaseInstanceLock(PID_PATH); process.exit(1)
-  }
-  const db = openDb({ path: join(STATE_DIR, 'wechat-cc.db') })
-  const ilink = makeIlinkAdapter({ stateDir: STATE_DIR, accounts, db })
-  const memoryFS = makeMemoryFS({ rootDir: join(STATE_DIR, 'memory') })
-  const conversationStore = makeConversationStore(db, { migrateFromFile: join(STATE_DIR, 'conversations.json') })
+  if (!lock.ok) throw new Error(`[wechat-cc] ${lock.reason} (pid=${lock.pid})`)
+  const accounts = await loadAllAccounts(stateDir)
+  if (accounts.length === 0) { releaseInstanceLock(PID_PATH); throw new Error('[wechat-cc] no accounts bound. Run `wechat-cc setup` first.') }
+  const db = openDb({ path: join(stateDir, 'wechat-cc.db') })
+  const ilink = makeIlinkAdapter({ stateDir, accounts, db })
+  const memoryFS = makeMemoryFS({ rootDir: join(stateDir, 'memory') })
+  const conversationStore = makeConversationStore(db, { migrateFromFile: join(stateDir, 'conversations.json') })
   const lc = new LifecycleSet((tag, line) => log(tag, line))
+  let shuttingDown = false; let didStartup = false
+  let pollingLcRef: { reconcile(): Promise<void> } | null = null
+
+  const shutdown = async () => {
+    if (shuttingDown) return
+    shuttingDown = true; log('DAEMON', 'shutdown initiated')
+    if (didStartup) { try { await lc.stopAll() } catch { /* logged by lc */ } }
+    try { db.close() } catch (err) { console.error('db close failed:', err) }
+    releaseInstanceLock(PID_PATH)
+  }
+
   try {
     // 1. internal-api FIRST — bootstrap needs its baseUrl/token for MCP wiring
     const internalApi = await registerInternalApi({
-      stateDir: STATE_DIR, daemonPid: process.pid, memory: memoryFS, projects: ilink.projects,
+      stateDir, daemonPid: process.pid, memory: memoryFS, projects: ilink.projects,
       setUserName: (chatId, name) => ilink.setUserName(chatId, name),
       voice: { replyVoice: (c, t) => ilink.voice.replyVoice(c, t), saveConfig: (i) => ilink.voice.saveConfig(i), configStatus: () => ilink.voice.configStatus() },
       sharePage: (t, c, o) => ilink.sharePage(t, c, o), resurfacePage: (q) => ilink.resurfacePage(q),
       companion: { enable: () => ilink.companion.enable(), disable: () => ilink.companion.disable(), status: () => ilink.companion.status(), snooze: (m) => ilink.companion.snooze(m) },
       ilink: { sendReply: (c, t) => ilink.sendMessage(c, t).then(r => r as { msgId: string; error?: string }), sendFile: (c, p) => ilink.sendFile(c, p), editMessage: (c, m, t) => ilink.editMessage(c, m, t), broadcast: (t, a) => ilink.broadcast(t, a) },
-      prefix: { conversationStore, providerDisplayName, permissionMode: DANGEROUSLY ? 'dangerously' as const : 'strict' as const },
+      prefix: { conversationStore, providerDisplayName, permissionMode: dangerously ? 'dangerously' as const : 'strict' as const },
       log: (t, l) => log(t, l),
     })
     lc.register(internalApi)
     // 2. bootstrap composes provider registry / session manager / coordinator
     const boot = buildBootstrap({
-      stateDir: STATE_DIR, db, ilink, loadProjects: ilink.loadProjects,
+      stateDir, db, ilink, loadProjects: ilink.loadProjects,
       lastActiveChatId: ilink.lastActiveChatId, log: (t, l) => log(t, l),
       fallbackProject: () => ({ alias: '_default', path: process.cwd() }),
-      dangerouslySkipPermissions: DANGEROUSLY, conversationStore,
+      dangerouslySkipPermissions: dangerously, conversationStore,
       internalApi: { baseUrl: internalApi.baseUrl, tokenFilePath: internalApi.tokenFilePath },
     })
     internalApi.setDelegate({ dispatchOneShot: boot.dispatchDelegate, knownPeers: () => boot.registry.list() })
     // 3. main-wiring builds all deps for pipeline + lifecycles
-    const wired = wireMain({ stateDir: STATE_DIR, db, ilink, accounts, boot, dangerously: DANGEROUSLY, log: (t, l) => log(t, l) })
+    const wired = wireMain({ stateDir, db, ilink, accounts, boot, dangerously, log: (t, l) => log(t, l) })
     const pipeline = buildInboundPipeline(wired.pipelineDeps)
     // 4. register lifecycles (LIFO stop = startup order reversed)
     lc.register(registerCompanionPush(wired.companionPushDeps))
     lc.register(registerCompanionIntrospect(wired.companionIntrospectDeps))
-    const guardLc = registerGuard(wired.guardDeps)
-    wireRef(wired.refs.guard, guardLc); lc.register(guardLc)
+    const guardLc = registerGuard(wired.guardDeps); wireRef(wired.refs.guard, guardLc); lc.register(guardLc)
     lc.register(registerSessions(wired.sessionsDeps))
     lc.register(registerIlink(wired.ilinkDeps))
     const pollingLc = registerPolling({ ...wired.pollingDeps, runPipeline: pipeline })
-    wireRef(wired.refs.polling, pollingLc); lc.register(pollingLc)
+    wireRef(wired.refs.polling, pollingLc); lc.register(pollingLc); pollingLcRef = pollingLc
     // 5. one-shot startup sweeps — fire-and-forget
     runStartupSweeps(wired.startupDeps)
-    // 6. signal handlers
-    const shutdown = async (sig: string) => {
-      if (shuttingDown) { log('DAEMON', `${sig} during shutdown — forcing exit`); process.exit(130) }
-      shuttingDown = true; log('DAEMON', `${sig} received, shutting down`)
-      try { await lc.stopAll() } catch { /* logged by lc */ }
-      try { db.close() } catch (err) { console.error('db close failed:', err) }
-      releaseInstanceLock(PID_PATH); process.exit(0)
-    }
-    process.on('SIGINT', () => shutdown('SIGINT'))
-    process.on('SIGTERM', () => shutdown('SIGTERM'))
-    process.on('SIGUSR1', () => pollingLc.reconcile().catch(err =>
-      log('RECONCILE', `SIGUSR1 reconcile failed: ${err instanceof Error ? err.message : String(err)}`),
-    ))
-    const modeStr = DANGEROUSLY
-      ? 'mode=dangerouslySkipPermissions=true (no WeChat permission prompts will fire)'
-      : 'mode=strict (Phase 1 permission relay active)'
+    const modeStr = dangerously ? 'mode=dangerouslySkipPermissions=true (no WeChat permission prompts will fire)' : 'mode=strict (Phase 1 permission relay active)'
     log('DAEMON', `started pid=${process.pid} accounts=${accounts.length} ${modeStr}`)
-    if (DANGEROUSLY) log('DAEMON', 'warning: Claude will still confirm destructive ops via natural-language reply, but no permission prompts will appear.')
+    if (dangerously) log('DAEMON', 'warning: Claude will still confirm destructive ops via natural-language reply, but no permission prompts will appear.')
+    didStartup = true
   } catch (err) {
     log('DAEMON', `startup failed mid-init: ${err instanceof Error ? err.message : String(err)}`)
-    try { await lc.stopAll() } catch {}
-    db.close(); releaseInstanceLock(PID_PATH); throw err
+    await shutdown(); throw err
   }
+
+  return { shutdown, pollingReconcile: pollingLcRef ? () => pollingLcRef!.reconcile() : undefined }
 }
+
+// CLI entry — sets up signal handlers, calls bootDaemon, waits.
+async function main() {
+  const stateDir = process.env.WECHAT_CC_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'wechat')
+  const dangerously = process.argv.includes('--dangerously')
+  let handle: DaemonHandle
+  try { handle = await bootDaemon({ stateDir, dangerously }) } catch (err) { console.error('[wechat-cc] fatal:', err); process.exit(1) }
+  let alreadyShuttingDown = false
+  const cliShutdown = async (sig: string) => {
+    if (alreadyShuttingDown) { log('DAEMON', `${sig} during shutdown — forcing exit`); process.exit(130) }
+    alreadyShuttingDown = true; log('DAEMON', `${sig} received, shutting down`)
+    await handle.shutdown(); process.exit(0)
+  }
+  process.on('SIGINT', () => void cliShutdown('SIGINT'))
+  process.on('SIGTERM', () => void cliShutdown('SIGTERM'))
+  process.on('SIGUSR1', () => { handle.pollingReconcile?.()?.catch(err => log('RECONCILE', `SIGUSR1 reconcile failed: ${err instanceof Error ? err.message : String(err)}`)) })
+}
+
 main().catch((err) => { console.error('[wechat-cc] fatal:', err); process.exit(1) })

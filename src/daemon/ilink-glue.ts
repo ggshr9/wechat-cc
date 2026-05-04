@@ -91,7 +91,7 @@ export async function loadAllAccounts(stateDir: string): Promise<Account[]> {
 
 export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[]; db: Db }): IlinkAdapter {
   const ctx = makeIlinkContext(opts)
-  const { accounts, ctxStore, nameStore, acctStore, sessionState, pending, sweepTimer, projectsFile, resolveAccount, assertChatRoutable } = ctx
+  const { stateDir, accounts, ctxStore, nameStore, acctStore, sessionState, pending, sweepTimer, projectsFile, resolveAccount, assertChatRoutable } = ctx
 
   const voice = makeVoice(ctx)
   const companion = makeCompanion(ctx)
@@ -99,7 +99,7 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[]; 
 
   const adapter: IlinkAdapter = {
     async sendMessage(chatId, text) {
-      const result = await sendReplyOnce(chatId, text)
+      const result = await sendReplyOnce(chatId, text, stateDir)
       if (!result.ok) {
         // Keep returning a dummy msgId for back-compat with callers that
         // destructure blindly (e.g. askUser prompt send), but ALSO surface
@@ -142,7 +142,7 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[]; 
           const chatAcct = acctStore.get(chatId)
           if (chatAcct && chatAcct !== accountId) continue
         }
-        const result = await sendReplyOnce(chatId, text)
+        const result = await sendReplyOnce(chatId, text, stateDir)
         if (result.ok) ok++
         else failed++
       }
