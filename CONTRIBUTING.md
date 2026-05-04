@@ -8,7 +8,11 @@
 git checkout master && git pull           # 永远从最新 master 起
 git checkout -b feat/<your-thing>          # 切个分支
 # 写、改、测
-bun run test
+bun run test                                # unit (~1220 tests, ~10s)
+bun run test:e2e                            # daemon 整链 smoke (~1s)
+cd apps/desktop && bun run test:e2e:browser # Playwright 7 specs (~5s, 需要先 bunx playwright install chromium)
+bun x tsc --noEmit                          # type check
+bun run depcheck                            # module boundary lint
 git push -u origin feat/<your-thing>
 gh pr create                                # 或在 GitHub UI 开 PR
 # 等 review + CI 全绿 → squash merge → 分支自动删

@@ -55,7 +55,7 @@ relationship, this is it.
 | | **Desktop installer** (recommended) | **Terminal** (developer) |
 |---|---|---|
 | Who | Anyone, including non-technical users | You're comfortable with bun + git |
-| What you get | A 4-step wizard (env check → agent → QR → service install) + a dashboard with bound accounts, memory, sessions, logs, one-click upgrades | Same daemon, no GUI |
+| What you get | A 4-step wizard (env check → agent → QR → service install with live `(M/N) <step>` progress) + a dashboard with bound accounts, memory, sessions (with mode dropdown to switch chat mode from console), logs, one-click upgrades | Same daemon, no GUI |
 | Path | Download a bundle from the [latest release](https://github.com/ggshr9/wechat-cc/releases/latest) | `git clone` + `bun install` + `wechat-cc setup` |
 | Caveats | Bundles are unsigned (Apple Dev ID + Windows EV cert not yet provisioned) — first launch needs a one-time OS-warning bypass. macOS Intel not supported (Apple Silicon only). The desktop app shells out to the source-mode CLI, so you also need the source somewhere (or set `WECHAT_CC_ROOT`). | Works everywhere bun runs. |
 
@@ -222,8 +222,11 @@ Appendix D.
 > See [`docs/releases/2026-05-02-rfc03.md`](docs/releases/2026-05-02-rfc03.md).
 
 The dashboard's **会话模式 · Conversations** card shows the current mode for
-every active chat as a tinted pill. Read-only — flips happen in the chat
-itself so there's a single source of truth.
+every active chat as a dropdown — change it from the console and the daemon
+fires a confirmation back to that chat ("🎛 已切换到 X（来自控制台）") so the
+person on their phone sees the switch. Mode flips from the chat (`/cc`,
+`/codex`, etc.) and from the dashboard go through the same `coordinator.setMode`
+call; SQLite `conversations` table is the single source of truth.
 
 ### 5 · Companion — the Claude that reaches out
 
@@ -455,6 +458,10 @@ won't kill your shell — Ctrl+C the foreground process first.
 ├── session-state.json     # bot health (errcode tracking)
 ├── channel.log            # rolling log (10 MB rotation)
 ├── server.pid             # single-instance lock
+├── internal-token         # internal-api bearer token (mode 0600, rotated each boot)
+├── internal-api-info.json # internal-api {baseUrl, tokenFilePath, pid, ts} for CLI discovery
+├── install-progress.json  # transient: written by `service install` (M/N step), read by GUI
+├── wechat-cc.db           # SQLite (sessions / conversations / activity / milestones / events / observations / avatar)
 ├── docs/                  # share_page content (7-day TTL)
 ├── bin/cloudflared        # auto-downloaded (.exe on Windows)
 ├── inbox/                 # downloaded media (30-day TTL)
@@ -463,13 +470,16 @@ won't kill your shell — Ctrl+C the foreground process first.
 │   └── config.json        # enabled / snooze / default_chat_id / last_introspect_at
 └── memory/<chat_id>/      # per-chat content
     ├── profile.md         # editable user-facing notes
-    ├── observations.jsonl # Claude's recent observations (TTL 30d)
-    ├── milestones.jsonl   # 100msg / streak / etc. (permanent, id-deduped)
-    ├── events.jsonl       # cron decisions (push/skip/failed/observation/milestone)
-    └── activity.jsonl     # daily UTC date + msg count (for streak detector)
+    ├── observations.jsonl # legacy — migrated to wechat-cc.db on first boot post-PR7
+    ├── milestones.jsonl   # legacy — migrated to wechat-cc.db
+    ├── events.jsonl       # legacy — migrated to wechat-cc.db
+    └── activity.jsonl     # legacy — migrated to wechat-cc.db
 ```
 
-All state lives under `~/.claude/` — nothing is committed to the repo.
+All state lives under `~/.claude/` — nothing is committed to the repo. Since
+v2.0.1 the JSONL files above are migration sources only; live writes go to
+`wechat-cc.db`. The legacy files stay on disk for backwards compatibility
+(safe to delete after first boot on v2.0.1+).
 
 ---
 
@@ -581,14 +591,17 @@ the OS package manager.
 
 ## Versions
 
-- **CLI / daemon**: see [`package.json`](./package.json). The latest
-  shipped milestone is **RFC 03 multi-agent** (Claude × Codex modes / stdio
-  MCP / open provider registry) — see
-  [`docs/releases/2026-05-02-rfc03.md`](./docs/releases/2026-05-02-rfc03.md).
+- **CLI / daemon**: see [`package.json`](./package.json). Latest shipped is
+  **v0.5.0** — architecture cleanup (`Ref` + `wireRef` helper, `wiring/` 5-file split,
+  `bootDaemon()` export, daemon e2e infra) + UX bundle (install wizard real-time
+  step progress, dashboard mode-switch dropdown with WeChat confirmation back to
+  the chat, clearer WSL hint). See [`docs/releases/2026-05-03-v0.5.md`](./docs/releases/2026-05-03-v0.5.md).
+  Previous milestone: [RFC 03 multi-agent](./docs/releases/2026-05-02-rfc03.md)
+  (Claude × Codex modes / stdio MCP / open provider registry).
 - **Desktop bundle**: latest signed release is
   [`desktop-v0.5.0`](https://github.com/ggshr9/wechat-cc/releases/tag/desktop-v0.5.0).
-  Version-synced with CLI v0.5.0; no functional UI change since v0.4.5,
-  same Tauri 2 dashboard / wizard / memory pane.
+  Version-synced with CLI v0.5.0; brings install-progress display + mode-switch
+  dropdown to the dashboard. See [`docs/releases/desktop-v0.5.0.md`](./docs/releases/desktop-v0.5.0.md).
 - **Per-version release notes**: [`docs/releases/`](./docs/releases/)
 - **Architecture / design specs**: [`docs/specs/`](./docs/specs/)
 - **Roadmap**: [`docs/rfc/02-post-v1.1-roadmap.md`](./docs/rfc/02-post-v1.1-roadmap.md)
