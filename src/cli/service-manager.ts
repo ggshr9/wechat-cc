@@ -295,33 +295,42 @@ function psCmd(script: string): string[] {
 }
 
 /**
- * Build the install-time PowerShell commands. Returns 1-2 commands:
- *   1. Register-ScheduledTask  (always)
- *   2. Disable-ScheduledTask   (only when autoStart=false — matches the
- *      old XML's <Enabled>false</Enabled> semantics)
- *   3. Start-ScheduledTask     (always — equivalent to old `schtasks /Run`,
- *      kicks off the daemon immediately so user doesn't need to log out
- *      to see it running)
+ * Build the install-time PowerShell commands. Returns 2 commands:
+ *   1. Register-ScheduledTask — defines + registers the task. The
+ *      LogonTrigger's Enabled is set to $autoStart (true → fires at user
+ *      logon; false → trigger inert, but task itself is fully enabled).
+ *   2. Start-ScheduledTask    — kicks off the daemon immediately. Matches
+ *      Linux/macOS semantics: install always starts the daemon now;
+ *      autoStart=false just opts out of the "fire on next user logon"
+ *      trigger, NOT out of the current run.
+ *
+ * Why not Disable-ScheduledTask when autoStart=false?
+ *   Disable-ScheduledTask sets the WHOLE task's State=Disabled — Start
+ *   then fails with "The task is disabled." We want only the trigger
+ *   off, so manual starts (this Start, plus any future dashboard
+ *   "start service" click) keep working.
  *
  * Each command is its own PS invocation so the install-progress.json
- * trail shows distinct phases ("(2/4) 注册 ScheduledTask" etc).
+ * trail shows distinct phases ("(2/2) 启动 ScheduledTask" etc).
  */
 function powershellInstallCommands(opts: { taskName: string; execPath: string; execArgs: string; userName: string; autoStart: boolean }): string[][] {
   const tn = psQuote(opts.taskName)
   const exe = psQuote(opts.execPath)
   const args = psQuote(opts.execArgs)
   const usr = psQuote(opts.userName)
+  const triggerEnabled = opts.autoStart ? '$true' : '$false'
   const register = `
 $action    = New-ScheduledTaskAction    -Execute '${exe}' -Argument '${args}'
 $trigger   = New-ScheduledTaskTrigger   -AtLogOn -User '${usr}'
+$trigger.Enabled = ${triggerEnabled}
 $principal = New-ScheduledTaskPrincipal -UserId '${usr}' -LogonType Interactive -RunLevel Limited
 $settings  = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
 Register-ScheduledTask -TaskName '${tn}' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
 `.trim()
-  const out: string[][] = [psCmd(register)]
-  if (!opts.autoStart) out.push(psCmd(`Disable-ScheduledTask -TaskName '${tn}' | Out-Null`))
-  out.push(psCmd(`Start-ScheduledTask -TaskName '${tn}'`))
-  return out
+  return [
+    psCmd(register),
+    psCmd(`Start-ScheduledTask -TaskName '${tn}'`),
+  ]
 }
 
 function runCommands(commands: string[][]): void {

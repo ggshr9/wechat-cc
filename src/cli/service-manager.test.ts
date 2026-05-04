@@ -165,23 +165,47 @@ describe('service-manager', () => {
     expect(plan.uninstallCommands.find(c => c.includes('disable'))).toBeUndefined()
   })
 
-  it('Windows installCommands include Disable-ScheduledTask when autoStart=false', () => {
+  // autoStart controls the LogonTrigger's Enabled, NOT the whole task's
+  // State. We previously used Disable-ScheduledTask which disabled the
+  // entire task — the next Start-ScheduledTask would fail with "The task
+  // is disabled." Now autoStart=false just sets $trigger.Enabled = $false,
+  // so manual Start (this install + future dashboard restart) still works.
+  it('Windows trigger.Enabled mirrors autoStart=false (no whole-task Disable)', () => {
     const plan = buildServicePlan({
       platform: 'win32', homeDir: 'C:\\Users\\alice', cwd: 'C:\\app', bunPath: 'C:\\bun.exe',
       windowsUser: 'alice',
       autoStart: false,
     })
-    const disable = plan.installCommands.find(c => decodePsScript(c).includes('Disable-ScheduledTask'))
-    expect(disable).toBeDefined()
+    // No Disable-ScheduledTask anywhere — that would disable manual Start
+    expect(plan.installCommands.find(c => decodePsScript(c).includes('Disable-ScheduledTask'))).toBeUndefined()
+    // Register script sets trigger.Enabled = $false
+    const register = decodePsScript(plan.installCommands.find(c => decodePsScript(c).includes('Register-ScheduledTask'))!)
+    expect(register).toContain('$trigger.Enabled = $false')
   })
 
-  it('Windows installCommands omit Disable-ScheduledTask when autoStart=true (default)', () => {
+  it('Windows trigger.Enabled = $true when autoStart defaults true', () => {
     const plan = buildServicePlan({
       platform: 'win32', homeDir: 'C:\\Users\\alice', cwd: 'C:\\app', bunPath: 'C:\\bun.exe',
       windowsUser: 'alice',
     })
-    const disable = plan.installCommands.find(c => decodePsScript(c).includes('Disable-ScheduledTask'))
-    expect(disable).toBeUndefined()
+    const register = decodePsScript(plan.installCommands.find(c => decodePsScript(c).includes('Register-ScheduledTask'))!)
+    expect(register).toContain('$trigger.Enabled = $true')
+  })
+
+  // Linux/macOS install always start the daemon immediately, regardless of
+  // autoStart toggle (which only controls boot-time trigger). Match that on
+  // Windows: install always ends with Start-ScheduledTask.
+  it('Windows install always ends with Start-ScheduledTask (matches linux/macos semantics)', () => {
+    for (const autoStart of [true, false]) {
+      const plan = buildServicePlan({
+        platform: 'win32', homeDir: 'C:\\Users\\alice', cwd: 'C:\\app', bunPath: 'C:\\bun.exe',
+        windowsUser: 'alice',
+        autoStart,
+      })
+      const last = plan.installCommands[plan.installCommands.length - 1]!
+      const lastScript = decodePsScript(last)
+      expect(lastScript).toContain('Start-ScheduledTask')
+    }
   })
 
   // PowerShell New-ScheduledTaskPrincipal -UserId + -LogonType Interactive
