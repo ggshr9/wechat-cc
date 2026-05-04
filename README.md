@@ -6,7 +6,7 @@
 
 <p align="center">
   <img alt="version"  src="https://img.shields.io/badge/cli-v0.5.0-blue">
-  <img alt="desktop"  src="https://img.shields.io/badge/desktop-v0.4.5-blue">
+  <img alt="desktop"  src="https://img.shields.io/badge/desktop-v0.5.0-blue">
   <img alt="platform" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey">
   <img alt="runtime"  src="https://img.shields.io/badge/runtime-Bun-black">
   <img alt="license"  src="https://img.shields.io/badge/license-MIT-green">
@@ -586,10 +586,9 @@ the OS package manager.
   MCP / open provider registry) — see
   [`docs/releases/2026-05-02-rfc03.md`](./docs/releases/2026-05-02-rfc03.md).
 - **Desktop bundle**: latest signed release is
-  [`desktop-v0.4.0`](https://github.com/ggshr9/wechat-cc/releases/tag/desktop-v0.4.0).
-  v0.4 / v0.4.1 features (双面镜子 dashboard, real introspect SDK,
-  per-project summary, 7-day streak) are in `master` and will ship with the
-  next desktop bundle cut.
+  [`desktop-v0.5.0`](https://github.com/ggshr9/wechat-cc/releases/tag/desktop-v0.5.0).
+  Version-synced with CLI v0.5.0; no functional UI change since v0.4.5,
+  same Tauri 2 dashboard / wizard / memory pane.
 - **Per-version release notes**: [`docs/releases/`](./docs/releases/)
 - **Architecture / design specs**: [`docs/specs/`](./docs/specs/)
 - **Roadmap**: [`docs/rfc/02-post-v1.1-roadmap.md`](./docs/rfc/02-post-v1.1-roadmap.md)
