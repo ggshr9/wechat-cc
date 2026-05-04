@@ -97,8 +97,14 @@ export async function bootDaemon(opts: BootDaemonOpts): Promise<DaemonHandle> {
   return { shutdown, pollingReconcile: pollingLcRef ? () => pollingLcRef!.reconcile() : undefined }
 }
 
-// CLI entry — sets up signal handlers, calls bootDaemon, waits.
-async function main() {
+// CLI entry — sets up signal handlers, calls bootDaemon, waits. Exported so
+// cli.ts's `run` command can call it explicitly. Previously cli.ts relied on
+// `await import('./src/daemon/main.ts')` triggering a top-level main() via
+// side-effect, but that broke the moment we added the e2e bootDaemon export
+// and gated the side-effect on `import.meta.main` — when cli.ts imports this
+// module, import.meta.main is false (standard ESM semantics), so no daemon
+// would start. Compiled `wechat-cc-cli.exe run` would silently no-op.
+export async function main() {
   const stateDir = process.env.WECHAT_CC_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'wechat')
   const dangerously = process.argv.includes('--dangerously')
   let handle: DaemonHandle
@@ -114,7 +120,9 @@ async function main() {
   process.on('SIGUSR1', () => { handle.pollingReconcile?.()?.catch(err => log('RECONCILE', `SIGUSR1 reconcile failed: ${err instanceof Error ? err.message : String(err)}`)) })
 }
 
-// Only run main() when invoked as a CLI (not when imported by e2e harness).
+// Direct invocation: `bun src/daemon/main.ts` (dev mode). In compiled binaries
+// the entry is cli.ts, which imports + calls main() explicitly, so this guard
+// only matters for source-mode dev runs.
 if (import.meta.main) {
   main().catch((err) => { console.error('[wechat-cc] fatal:', err); process.exit(1) })
 }

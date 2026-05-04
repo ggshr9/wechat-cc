@@ -940,18 +940,22 @@ const runCmd = defineCommand({
     if (args.continue) console.warn(`[wechat-cc] legacy flag ignored: --continue (v1.0+ daemon doesn't spawn claude directly)`)
     if (args.channels) console.warn(`[wechat-cc] legacy flag ignored: --channels (v1.0+ daemon doesn't spawn claude directly)`)
     if (args['mcp-config']) console.warn(`[wechat-cc] legacy flag ignored: --mcp-config (v1.0+ daemon doesn't spawn claude directly)`)
-    // Run the daemon in-process by importing main.ts (its module top-level
-    // invokes main()). This used to spawn `bun src/daemon/main.ts`, but that
-    // doesn't work in `bun build --compile`d binaries where the source tree
-    // isn't on disk anymore — and the compiled sidecar shipped inside the
-    // desktop bundle is the single source of truth for both CLI and daemon.
+    // Run the daemon in-process by calling main.ts's exported main(). Used
+    // to spawn `bun src/daemon/main.ts`, but that doesn't work in
+    // `bun build --compile`d binaries where the source tree isn't on disk —
+    // the compiled sidecar shipped inside the desktop bundle is the single
+    // source of truth for both CLI and daemon. We must call main() EXPLICITLY:
+    // a bare `await import(...)` won't trigger main() because import.meta.main
+    // is false for any imported module under standard ESM semantics, so the
+    // import-then-block pattern silently no-ops.
     if (args.dangerously && !process.argv.includes('--dangerously')) {
       process.argv.push('--dangerously')
     }
-    await import('./src/daemon/main.ts')
-    // main() is started by main.ts's top-level; it never resolves under
-    // normal operation (long poll loops keep the event loop alive). Block
-    // here so cli.ts's main() doesn't return and trigger process exit.
+    const { main: runDaemon } = await import('./src/daemon/main.ts')
+    await runDaemon()
+    // main() returns after attaching signal handlers; the daemon's lifecycle
+    // (HTTP server, polling intervals) keeps the event loop alive. Block here
+    // so cli.ts's caller doesn't see a premature resolve.
     await new Promise(() => {})
   },
 })
