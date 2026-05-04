@@ -111,4 +111,7 @@ async function main() {
   process.on('SIGUSR1', () => { handle.pollingReconcile?.()?.catch(err => log('RECONCILE', `SIGUSR1 reconcile failed: ${err instanceof Error ? err.message : String(err)}`)) })
 }
 
-main().catch((err) => { console.error('[wechat-cc] fatal:', err); process.exit(1) })
+// Only run main() when invoked as a CLI (not when imported by e2e harness).
+if (import.meta.main) {
+  main().catch((err) => { console.error('[wechat-cc] fatal:', err); process.exit(1) })
+}

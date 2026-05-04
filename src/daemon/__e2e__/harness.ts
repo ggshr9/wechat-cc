@@ -166,6 +166,7 @@ export async function startTestDaemon(opts: TestDaemonOpts = {}): Promise<Daemon
         item_list: [{ type: 1, msg_id: `m${nextMessageId()}`, text_item: { text } }],
         ...(sendOpts?.contextToken ? { context_token: sendOpts.contextToken } : {}),
       }
+      if (process.env.E2E_DEBUG_ILINK) console.log('[harness] sendText enqueue:', JSON.stringify(update).slice(0, 200))
       ilink.enqueueInbound(update)
     },
     waitForReplyTo(chatId, timeoutMs = 5000) {

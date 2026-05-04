@@ -44,10 +44,17 @@ export async function startFakeIlink(): Promise<FakeIlinkHandle> {
     async fetch(req) {
       const url = new URL(req.url)
       const body = req.method === 'POST' ? await req.json().catch(() => ({})) as Record<string, unknown> : {}
+      // Debug log every request — controlled by E2E_DEBUG_ILINK env
+      if (process.env.E2E_DEBUG_ILINK) console.log('[fake-ilink]', req.method, url.pathname)
 
       if (url.pathname === '/ilink/bot/getupdates') {
-        const updates = queue.splice(0, queue.length)
-        return Response.json({ errcode: 0, updates, sync_buf: '' })
+        const msgs = queue.splice(0, queue.length)
+        if (process.env.E2E_DEBUG_ILINK && msgs.length > 0) {
+          console.log('[fake-ilink] returning', msgs.length, 'msgs to bot:', JSON.stringify(msgs).slice(0, 300))
+        }
+        // Real ilink wire format: { ret: 0, msgs: [...], get_updates_buf: '...' }
+        // transport.ts:74 extracts resp.msgs → updates and resp.get_updates_buf → sync_buf
+        return Response.json({ ret: 0, msgs, get_updates_buf: '' })
       }
       if (url.pathname === '/ilink/bot/sendmessage') {
         const messageItem = body.message_item as Record<string, unknown> | undefined
