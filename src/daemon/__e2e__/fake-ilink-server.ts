@@ -56,13 +56,18 @@ export async function startFakeIlink(): Promise<FakeIlinkHandle> {
         // transport.ts:74 extracts resp.msgs → updates and resp.get_updates_buf → sync_buf
         return Response.json({ ret: 0, msgs, get_updates_buf: '' })
       }
+      // Real ilink wire shape for send endpoints is {msg: {to_user_id, ...},
+      // base_info}. The fake originally read body.to_user_id at the top level
+      // and silently captured chatId='' for every reply — making it impossible
+      // to write a real inbound→reply e2e because waitForReplyTo could never
+      // match. Unwrap msg first; fall back to top-level for forward compat.
+      const msg = (body.msg as Record<string, unknown> | undefined) ?? body
+      const itemList = msg.item_list as Array<{ text_item?: { text?: string } }> | undefined
       if (url.pathname === '/ilink/bot/sendmessage') {
-        const messageItem = body.message_item as Record<string, unknown> | undefined
-        const textItem = messageItem?.text_item as { text?: string } | undefined
         captured.push({
           endpoint: 'sendmessage',
-          chatId: String(body.to_user_id ?? ''),
-          text: typeof body.text === 'string' ? body.text : textItem?.text,
+          chatId: String(msg.to_user_id ?? ''),
+          text: typeof msg.text === 'string' ? msg.text : itemList?.[0]?.text_item?.text,
           raw: body,
         })
         return Response.json({ errcode: 0, msg_id: `m${captured.length}` })
@@ -70,8 +75,8 @@ export async function startFakeIlink(): Promise<FakeIlinkHandle> {
       if (url.pathname === '/ilink/bot/sendfile') {
         captured.push({
           endpoint: 'sendfile',
-          chatId: String(body.to_user_id ?? ''),
-          filePath: typeof body.file_path === 'string' ? body.file_path : undefined,
+          chatId: String(msg.to_user_id ?? ''),
+          filePath: typeof msg.file_path === 'string' ? msg.file_path : undefined,
           raw: body,
         })
         return Response.json({ errcode: 0, msg_id: `f${captured.length}` })
@@ -79,7 +84,7 @@ export async function startFakeIlink(): Promise<FakeIlinkHandle> {
       if (url.pathname === '/ilink/bot/typing') {
         captured.push({
           endpoint: 'typing',
-          chatId: String(body.to_user_id ?? ''),
+          chatId: String(msg.to_user_id ?? body.ilink_user_id ?? ''),
           raw: body,
         })
         return Response.json({ errcode: 0 })
