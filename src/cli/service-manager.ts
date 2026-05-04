@@ -82,61 +82,41 @@ export function buildServicePlan(input: ServicePlanInput): ServicePlan {
   }
 
   if (pf === 'win32') {
-    // Use schtasks /XML import to sidestep Bun-on-Windows arg-quoting
-    // issues (the previous `/TR "path" args` form had spawnSync drop
-    // outer quotes, leaving args dangling outside /TR — schtasks then
-    // failed with "Access denied" / "file not found"). XML separates
-    // <Command> from <Arguments> so quoting is irrelevant.
+    // PowerShell `*-ScheduledTask` cmdlets via -EncodedCommand. Why not
+    // schtasks.exe /Create /XML?
     //
-    // Critical: schtasks /Create /XML needs BOTH a <UserId> element in
-    // the XML AND a /RU flag on the command line. With either missing,
-    // schtasks errors with "The system cannot find the file specified."
-    // followed by "Access is denied." — both noisy generic messages
-    // that don't actually point at the missing principal. (Confirmed
-    // via Microsoft Learn + community threads on schtasks /XML.)
+    // schtasks /Create /XML went through a 3-attempt saga in v0.5.0 — all
+    // hit user-blocking failures on Win11 24H2+ (build 26100+):
+    //   1. /RU user /F                       → password prompt → hang
+    //   2. /RU user /IT /F                   → "file not found / access denied"
+    //   3. /RU user /F + LogonType=S4U       → password prompt again (S4U
+    //      command-line behavior is independent of XML; also S4U requires
+    //      SeBatchLogonRight which most users lack on Win11)
+    //
+    // Root cause: schtasks.exe uses the legacy LogonUser API which doesn't
+    // play well with Microsoft Account / Azure AD logins (the default on
+    // Win11 24H2+). PowerShell's *-ScheduledTask cmdlets use the modern
+    // Task Scheduler COM API which does.
+    //
+    // Trade-off: requires PowerShell 5.1+ to be available (it is, on every
+    // Windows 7+ install). Each cmdlet invocation spawns a PS interpreter
+    // (~1s overhead vs schtasks's ~50ms), so installing takes ~3-4s instead
+    // of ~1s. Worth the 2s for "actually works on every Win11 build".
     const winUser = input.windowsUser ?? userInfo().username
     const command = binaryPath ?? bunPath
-    const args = binaryPath
+    const cmdArgs = binaryPath
       ? runArgs.join(' ')
       : `"${join(input.cwd, 'cli.ts')}" ${runArgs.join(' ')}`
-    const xmlPath = join(homeDir, 'AppData', 'Local', 'Temp', `wechat-cc-task.xml`)
-    const xmlContent = buildScheduledTaskXml({ command, args, autoStart, userId: winUser })
-    const installCommands: string[][] = [
-      // The XML write is an in-memory side effect (handled by installService
-      // before runCommands runs) — this command list only contains schtasks
-      // calls. We thread the XML content via fileContent, and the file path
-      // via serviceFile so installService writes it before /Create.
-      //
-      // schtasks /Create /XML password / "file not found" history:
-      //   v0.5.0 — `/RU user /F` (no /IT, no /RP):
-      //     schtasks prompts for the user's password to persist creds
-      //     (for "run when not logged on" capability) — prompt has no GUI
-      //     in our spawnSync context, hangs forever at "(2/4) 注册...".
-      //   v0.5.0 hotfix #1 — added `/IT` (Interactive Token):
-      //     skipped the password prompt but emitted the confusing pair
-      //     `ERROR: The system cannot find the file specified. /
-      //     ERROR: Access is denied.` — `/IT` conflicts with the XML's
-      //     Principal section on some Win11 builds.
-      //   v0.5.0 hotfix #2 (CURRENT) — drop /IT, switch XML LogonType to S4U:
-      //     S4U (Service-for-User) tells Windows to mint a token for the
-      //     RU user without storing a password. No password prompt, no /IT
-      //     conflict. Task runs whether the user is logged in or not, but
-      //     network access is limited to local resources (which is fine
-      //     for wechat-cc — daemon talks to localhost ilink + spawns
-      //     local Claude Code subprocess).
-      ['schtasks', '/Create', '/TN', serviceName, '/XML', xmlPath, '/RU', winUser, '/F'],
-    ]
-    if (!autoStart) installCommands.push(['schtasks', '/Change', '/TN', serviceName, '/DISABLE'])
-    installCommands.push(['schtasks', '/Run', '/TN', serviceName])
     return {
       kind: 'scheduled-task',
       serviceName,
-      serviceFile: xmlPath,
-      fileContent: xmlContent,
-      installCommands,
-      startCommands: [['schtasks', '/Run', '/TN', serviceName]],
-      stopCommands: [['schtasks', '/End', '/TN', serviceName]],
-      uninstallCommands: [['schtasks', '/Delete', '/TN', serviceName, '/F']],
+      // No XML file — PowerShell builds the task definition in-memory.
+      serviceFile: null,
+      fileContent: null,
+      installCommands: powershellInstallCommands({ taskName: serviceName, execPath: command, execArgs: cmdArgs, userName: winUser, autoStart }),
+      startCommands: [psCmd(`Start-ScheduledTask -TaskName '${psQuote(serviceName)}'`)],
+      stopCommands: [psCmd(`Stop-ScheduledTask -TaskName '${psQuote(serviceName)}'`)],
+      uninstallCommands: [psCmd(`Unregister-ScheduledTask -TaskName '${psQuote(serviceName)}' -Confirm:$false`)],
     }
   }
 
@@ -203,6 +183,23 @@ function labelForCommand(cmd: readonly string[]): string {
     if (cmd.includes('/Run')) return '启动 ScheduledTask'
     if (cmd.includes('/Delete')) return '删除旧 ScheduledTask'
   }
+  if (head === 'powershell.exe' || head === 'powershell' || head === 'pwsh') {
+    // -EncodedCommand argv: ['powershell.exe', '-NoProfile', '-NonInteractive',
+    // '-EncodedCommand', '<base64>']. Decode the base64 (UTF-16 LE) so we can
+    // identify the cmdlet by name for the user-visible label.
+    const idx = cmd.indexOf('-EncodedCommand')
+    if (idx >= 0 && cmd[idx + 1]) {
+      try {
+        const decoded = Buffer.from(cmd[idx + 1]!, 'base64').toString('utf16le')
+        if (decoded.includes('Register-ScheduledTask')) return '注册 ScheduledTask'
+        if (decoded.includes('Disable-ScheduledTask')) return '禁用自启 (autoStart=off)'
+        if (decoded.includes('Start-ScheduledTask')) return '启动 ScheduledTask'
+        if (decoded.includes('Stop-ScheduledTask')) return '停止 ScheduledTask'
+        if (decoded.includes('Unregister-ScheduledTask')) return '删除 ScheduledTask'
+      } catch { /* fall through */ }
+    }
+    return 'PowerShell ScheduledTask cmdlet'
+  }
   return `${head} ${cmd.slice(1, 3).join(' ')}`
 }
 
@@ -216,17 +213,11 @@ export function installService(plan: ServicePlan, opts: ServiceSideEffectOpts = 
   if (hasFile) {
     emit('写入服务定义文件')
     mkdirSync(dirname(plan.serviceFile!), { recursive: true, mode: 0o700 })
-    if (plan.kind === 'scheduled-task') {
-      // Windows schtasks /XML requires UTF-16 LE with BOM. Bun's
-      // writeFileSync defaults to UTF-8 (no BOM) which schtasks
-      // rejects on non-en-US locales with "cannot switch encoding".
-      // Manually prepend U+FEFF (encodes to 0xFF 0xFE in LE) and
-      // serialize the rest as utf16le.
-      const utf16Buf = Buffer.from('﻿' + plan.fileContent!, 'utf16le')
-      writeFileSync(plan.serviceFile!, utf16Buf, { mode: 0o600 })
-    } else {
-      writeFileSync(plan.serviceFile!, plan.fileContent!, { mode: 0o600 })
-    }
+    // Windows used to need UTF-16 LE + BOM here (schtasks /XML quirk on
+    // non-en-US locales). Since v0.5.0+ Windows uses PowerShell cmdlets
+    // with no on-disk file, so this branch only runs for systemd / launchd
+    // unit files (plain UTF-8).
+    writeFileSync(plan.serviceFile!, plan.fileContent!, { mode: 0o600 })
   }
   for (const cmd of plan.installCommands) {
     emit(labelForCommand(cmd))
@@ -271,84 +262,66 @@ export function uninstallService(plan: ServicePlan, opts: ServiceSideEffectOpts 
 // linux/macOS — file existence at the unit/plist path. The service-manager
 // owns that file (writes it during install, removes it during uninstall),
 // so file presence is authoritative.
-// windows — schtasks /Query exits 0 iff the named task exists.
+// windows — Get-ScheduledTask via PowerShell exits 0 iff the named task exists.
 export function isServiceInstalled(plan: ServicePlan): boolean {
   if (plan.serviceFile) return existsSync(plan.serviceFile)
   if (plan.kind === 'scheduled-task') {
-    const r = spawnSync('schtasks', ['/Query', '/TN', plan.serviceName], { encoding: 'utf8' })
+    const cmd = psCmd(`if (Get-ScheduledTask -TaskName '${psQuote(plan.serviceName)}' -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }`)
+    const r = spawnSync(cmd[0]!, cmd.slice(1), { encoding: 'utf8' })
     return (r.status ?? 1) === 0
   }
   return false
 }
 
 /**
- * Build a Windows Scheduled Task XML payload (schtasks /XML format).
- * Avoids the /TR-arg-quoting hell — Command and Arguments live in
- * separate XML elements, so spawnSync arg-list quoting never gets
- * applied to the executable path.
+ * Escape a string for safe inclusion inside PowerShell single quotes.
+ * Single quotes inside single-quoted strings are escaped by doubling: `'` → `''`.
+ * Used for task names, paths, and usernames before interpolation into PS scripts.
  */
-function buildScheduledTaskXml(opts: { command: string; args: string; autoStart: boolean; userId: string }): string {
-  const cmdEsc = xmlEsc(opts.command)
-  const argsEsc = xmlEsc(opts.args)
-  const userEsc = xmlEsc(opts.userId)
-  const enabled = opts.autoStart ? 'true' : 'false'
-  // schtasks /XML on Windows is strict about encoding — on locales
-  // like zh-CN it rejects UTF-8 with "无法切换编码" (cannot switch
-  // encoding) regardless of what the declaration claims. Declare
-  // UTF-16 here; installService writes the file as UTF-16 LE with a
-  // BOM (0xFF 0xFE) so schtasks reads it correctly across locales.
-  return `<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo>
-    <Description>wechat-cc daemon — bridges WeChat ilink to Claude Code</Description>
-  </RegistrationInfo>
-  <Triggers>
-    <LogonTrigger>
-      <Enabled>${enabled}</Enabled>
-    </LogonTrigger>
-  </Triggers>
-  <Principals>
-    <Principal id="Author">
-      <UserId>${userEsc}</UserId>
-      <!-- S4U logon: no password needed; pairs with bare /RU /F command-line.
-           Skips the password prompt that plain InteractiveToken triggered
-           on Win11 in v0.5.0. Network access restricted to local resources
-           (fine for wechat-cc; daemon only talks to localhost). -->
-      <LogonType>S4U</LogonType>
-      <RunLevel>LeastPrivilege</RunLevel>
-    </Principal>
-  </Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <AllowHardTerminate>true</AllowHardTerminate>
-    <StartWhenAvailable>true</StartWhenAvailable>
-    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
-    <IdleSettings>
-      <StopOnIdleEnd>false</StopOnIdleEnd>
-      <RestartOnIdle>false</RestartOnIdle>
-    </IdleSettings>
-    <AllowStartOnDemand>true</AllowStartOnDemand>
-    <Enabled>${enabled}</Enabled>
-    <Hidden>false</Hidden>
-    <RunOnlyIfIdle>false</RunOnlyIfIdle>
-    <WakeToRun>false</WakeToRun>
-    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <Priority>7</Priority>
-  </Settings>
-  <Actions Context="Author">
-    <Exec>
-      <Command>${cmdEsc}</Command>
-      <Arguments>${argsEsc}</Arguments>
-    </Exec>
-  </Actions>
-</Task>
-`
+function psQuote(s: string): string {
+  return s.replace(/'/g, "''")
 }
 
-function xmlEsc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+/**
+ * Wrap a PowerShell one-liner into a `powershell.exe -EncodedCommand <b64>`
+ * argv array. -EncodedCommand takes UTF-16 LE base64; this sidesteps every
+ * Windows arg-quoting subtlety (cmd.exe pre-parses, PowerShell re-parses,
+ * and any embedded quote/backtick can derail one or the other).
+ */
+function psCmd(script: string): string[] {
+  const utf16 = Buffer.from(script, 'utf16le')
+  const b64 = utf16.toString('base64')
+  return ['powershell.exe', '-NoProfile', '-NonInteractive', '-EncodedCommand', b64]
+}
+
+/**
+ * Build the install-time PowerShell commands. Returns 1-2 commands:
+ *   1. Register-ScheduledTask  (always)
+ *   2. Disable-ScheduledTask   (only when autoStart=false — matches the
+ *      old XML's <Enabled>false</Enabled> semantics)
+ *   3. Start-ScheduledTask     (always — equivalent to old `schtasks /Run`,
+ *      kicks off the daemon immediately so user doesn't need to log out
+ *      to see it running)
+ *
+ * Each command is its own PS invocation so the install-progress.json
+ * trail shows distinct phases ("(2/4) 注册 ScheduledTask" etc).
+ */
+function powershellInstallCommands(opts: { taskName: string; execPath: string; execArgs: string; userName: string; autoStart: boolean }): string[][] {
+  const tn = psQuote(opts.taskName)
+  const exe = psQuote(opts.execPath)
+  const args = psQuote(opts.execArgs)
+  const usr = psQuote(opts.userName)
+  const register = `
+$action    = New-ScheduledTaskAction    -Execute '${exe}' -Argument '${args}'
+$trigger   = New-ScheduledTaskTrigger   -AtLogOn -User '${usr}'
+$principal = New-ScheduledTaskPrincipal -UserId '${usr}' -LogonType Interactive -RunLevel Limited
+$settings  = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
+Register-ScheduledTask -TaskName '${tn}' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+`.trim()
+  const out: string[][] = [psCmd(register)]
+  if (!opts.autoStart) out.push(psCmd(`Disable-ScheduledTask -TaskName '${tn}' | Out-Null`))
+  out.push(psCmd(`Start-ScheduledTask -TaskName '${tn}'`))
+  return out
 }
 
 function runCommands(commands: string[][]): void {

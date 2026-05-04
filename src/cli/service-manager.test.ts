@@ -30,9 +30,23 @@ describe('service-manager', () => {
 
     expect(plan.kind).toBe('scheduled-task')
     expect(plan.serviceName).toBe('wechat-cc')
-    expect(plan.installCommands[0]![0]).toBe('schtasks')
-    expect(plan.installCommands[0]!).toContain('/Create')
+    // Since v0.5.0 hotfix #3: Windows uses PowerShell *-ScheduledTask cmdlets
+    // via -EncodedCommand. schtasks.exe was retired (had blocking failures
+    // on Win11 24H2+ with MSA logins).
+    expect(plan.installCommands[0]![0]).toBe('powershell.exe')
+    expect(plan.installCommands[0]!).toContain('-EncodedCommand')
+    // No on-disk XML — PowerShell builds the task definition in-memory
+    expect(plan.serviceFile).toBeNull()
+    expect(plan.fileContent).toBeNull()
   })
+
+  // Decode a PowerShell -EncodedCommand argv into the underlying script
+  // (used by Windows tests below that need to assert on cmdlet args).
+  function decodePsScript(cmd: string[]): string {
+    const idx = cmd.indexOf('-EncodedCommand')
+    if (idx < 0 || !cmd[idx + 1]) return ''
+    return Buffer.from(cmd[idx + 1]!, 'base64').toString('utf16le')
+  }
 
   it('builds a Linux systemd user plan', () => {
     const plan = buildServicePlan({
@@ -70,7 +84,7 @@ describe('service-manager', () => {
     expect(plan.fileContent).not.toContain('--dangerously')
   })
 
-  it('Windows ScheduledTask XML <Arguments> includes --dangerously when unattended', () => {
+  it('Windows ScheduledTask Action -Argument includes --dangerously when unattended', () => {
     const plan = buildServicePlan({
       platform: 'win32',
       homeDir: 'C:\\Users\\alice',
@@ -78,15 +92,13 @@ describe('service-manager', () => {
       bunPath: 'C:\\bun.exe',
       windowsUser: 'alice',
     })
-    expect(plan.fileContent).toContain('<Arguments>')
-    expect(plan.fileContent).toContain('run --dangerously')
-    // /Create arg list is /XML <path> /F — no /TR arg now
-    const create = plan.installCommands.find(c => c[1] === '/Create')!
-    expect(create).toContain('/XML')
-    expect(create).not.toContain('/TR')
+    const register = plan.installCommands.find(c => decodePsScript(c).includes('Register-ScheduledTask'))!
+    const script = decodePsScript(register)
+    expect(script).toContain('-Argument')
+    expect(script).toContain('run --dangerously')
   })
 
-  it('Windows ScheduledTask XML separates Command from Arguments (no quoting hell)', () => {
+  it('Windows ScheduledTask passes execPath separately from args (-Execute / -Argument)', () => {
     const plan = buildServicePlan({
       platform: 'win32',
       homeDir: 'C:\\Users\\alice',
@@ -95,8 +107,10 @@ describe('service-manager', () => {
       binaryPath: 'D:\\wechat-cc\\wechat-cc-cli.exe',
       windowsUser: 'alice',
     })
-    expect(plan.fileContent).toContain('<Command>D:\\wechat-cc\\wechat-cc-cli.exe</Command>')
-    expect(plan.fileContent).toContain('<Arguments>run --dangerously</Arguments>')
+    const script = decodePsScript(plan.installCommands.find(c => decodePsScript(c).includes('Register-ScheduledTask'))!)
+    // -Execute and -Argument are separate New-ScheduledTaskAction params
+    expect(script).toContain("-Execute 'D:\\wechat-cc\\wechat-cc-cli.exe'")
+    expect(script).toContain("-Argument 'run --dangerously'")
   })
 
   it('Linux systemd ExecStart includes --dangerously when unattended', () => {
@@ -151,21 +165,33 @@ describe('service-manager', () => {
     expect(plan.uninstallCommands.find(c => c.includes('disable'))).toBeUndefined()
   })
 
-  it('Windows installCommands include /Change /DISABLE step when autoStart=false', () => {
+  it('Windows installCommands include Disable-ScheduledTask when autoStart=false', () => {
     const plan = buildServicePlan({
       platform: 'win32', homeDir: 'C:\\Users\\alice', cwd: 'C:\\app', bunPath: 'C:\\bun.exe',
       windowsUser: 'alice',
       autoStart: false,
     })
-    const disable = plan.installCommands.find(c => c.includes('/Change') && c.includes('/DISABLE'))
+    const disable = plan.installCommands.find(c => decodePsScript(c).includes('Disable-ScheduledTask'))
     expect(disable).toBeDefined()
   })
 
-  // schtasks /XML needs BOTH a <UserId> element AND a /RU flag —
-  // missing either yields a confusing "file not found / access
-  // denied" pair that doesn't actually point at the missing principal.
-  // This test pins both pieces.
-  it('Windows ScheduledTask XML includes <UserId> and command line passes /RU', () => {
+  it('Windows installCommands omit Disable-ScheduledTask when autoStart=true (default)', () => {
+    const plan = buildServicePlan({
+      platform: 'win32', homeDir: 'C:\\Users\\alice', cwd: 'C:\\app', bunPath: 'C:\\bun.exe',
+      windowsUser: 'alice',
+    })
+    const disable = plan.installCommands.find(c => decodePsScript(c).includes('Disable-ScheduledTask'))
+    expect(disable).toBeUndefined()
+  })
+
+  // PowerShell New-ScheduledTaskPrincipal -UserId + -LogonType Interactive
+  // is the modern Win11-friendly path: no password prompt, no SeBatchLogonRight
+  // requirement, MSA-account-compatible. Saga (all in v0.5.0):
+  //   1) schtasks /Create /RU user /F          → password prompt → hang
+  //   2) schtasks /Create /RU user /IT /F      → "file not found / access denied"
+  //   3) schtasks /Create /RU user /F + S4U XML → still password prompt + S4U needs SeBatchLogonRight
+  //   4) PowerShell Register-ScheduledTask     → works clean (CURRENT)
+  it('Windows Register-ScheduledTask script uses Interactive LogonType + Limited RunLevel', () => {
     const plan = buildServicePlan({
       platform: 'win32',
       homeDir: 'C:\\Users\\bob',
@@ -173,59 +199,33 @@ describe('service-manager', () => {
       bunPath: 'C:\\bun.exe',
       windowsUser: 'bob',
     })
-    expect(plan.fileContent).toContain('<UserId>bob</UserId>')
-    const create = plan.installCommands.find(c => c[1] === '/Create')!
-    expect(create).toContain('/RU')
-    expect(create[create.indexOf('/RU') + 1]).toBe('bob')
+    const script = decodePsScript(plan.installCommands.find(c => decodePsScript(c).includes('Register-ScheduledTask'))!)
+    expect(script).toContain("-UserId 'bob'")
+    expect(script).toContain('-LogonType Interactive')
+    expect(script).toContain('-RunLevel Limited')
+    // No more schtasks-era flags or password references
+    expect(script).not.toContain('schtasks')
+    expect(script).not.toContain('S4U')
+    expect(script).not.toContain('/IT')
+    expect(script).not.toContain('/RP')
   })
 
-  // schtasks password prompt + access-denied saga (Win11 v0.5.0):
-  // 1) /RU alone → password prompt → hang
-  // 2) /RU + /IT → "file not found / access denied" pair (XML Principal conflict)
-  // 3) /RU + XML LogonType=S4U (CURRENT) → no password, no conflict
-  // S4U mints a token without password storage; pairs with bare /RU /F.
-  // This test pins both the XML LogonType and the absence of /IT.
-  it('Windows ScheduledTask uses S4U logon (no password prompt) and bare /RU /F', () => {
+  // -EncodedCommand is critical: it's UTF-16 LE base64 — no quoting needed
+  // around the script itself, sidesteps every Windows arg-parsing layer
+  // (cmd.exe, PowerShell, spawnSync). Regression test: catch any future
+  // shift to plain -Command which would re-introduce quoting bugs.
+  it('Windows commands use powershell.exe -EncodedCommand with UTF-16 LE base64 payload', () => {
     const plan = buildServicePlan({
-      platform: 'win32',
-      homeDir: 'C:\\Users\\bob',
-      cwd: 'C:\\app',
-      bunPath: 'C:\\bun.exe',
-      windowsUser: 'bob',
+      platform: 'win32', homeDir: 'C:\\Users\\bob', cwd: 'C:\\app', bunPath: 'C:\\bun.exe', windowsUser: 'bob',
     })
-    expect(plan.fileContent).toContain('<LogonType>S4U</LogonType>')
-    const create = plan.installCommands.find(c => c[1] === '/Create')!
-    expect(create).not.toContain('/IT')
-    expect(create).not.toContain('/RP')
-    expect(create).toContain('/RU')
-  })
-
-  // schtasks /XML on Chinese Windows (and other non-en-US locales)
-  // rejects UTF-8 with "无法切换编码" — it requires UTF-16 LE with BOM.
-  // Regression: catch any future writeFileSync change that drops the
-  // explicit utf16le encoding.
-  it('Windows ScheduledTask XML file is written as UTF-16 LE with BOM (0xFF 0xFE)', () => {
-    const tmpHome = mkdtempSync(join(tmpdir(), 'svcmgr-'))
-    try {
-      const plan = buildServicePlan({
-        platform: 'win32',
-        homeDir: tmpHome,
-        cwd: join(tmpHome, 'app'),
-        bunPath: 'C:\\bun.exe',
-        windowsUser: 'alice',
-      })
-      // Stub commands so installService doesn't actually shell out.
-      const planNoCmds = { ...plan, installCommands: [] }
-      installService(planNoCmds)
-      const bytes = readFileSync(plan.serviceFile!)
-      // UTF-16 LE BOM is the first two bytes
-      expect(bytes[0]).toBe(0xFF)
-      expect(bytes[1]).toBe(0xFE)
-      // After the BOM, the next bytes should encode '<' (0x3C 0x00) — XML opener
-      expect(bytes[2]).toBe(0x3C)
-      expect(bytes[3]).toBe(0x00)
-    } finally {
-      rmSync(tmpHome, { recursive: true, force: true })
+    for (const cmd of [...plan.installCommands, ...plan.startCommands, ...plan.stopCommands, ...plan.uninstallCommands]) {
+      expect(cmd[0]).toBe('powershell.exe')
+      expect(cmd).toContain('-NoProfile')
+      expect(cmd).toContain('-NonInteractive')
+      expect(cmd).toContain('-EncodedCommand')
+      // The script is non-empty UTF-16 LE
+      const decoded = decodePsScript(cmd)
+      expect(decoded.length).toBeGreaterThan(0)
     }
   })
 })
