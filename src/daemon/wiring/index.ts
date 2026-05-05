@@ -9,6 +9,7 @@ import { Ref } from '../../lib/lifecycle'
 import type { GuardLifecycle } from '../guard/lifecycle'
 import type { PollingLifecycle } from '../polling-lifecycle'
 import type { InboundPipelineDeps } from '../inbound/build'
+import type { PipelineRun } from '../inbound/types'
 import type { CompanionPushDeps, CompanionIntrospectDeps } from '../companion/lifecycle'
 import type { SchedulerDeps } from '../guard/scheduler'
 import type { SessionsLifecycleDeps } from '../sessions-lifecycle'
@@ -48,6 +49,7 @@ export interface WiredDeps {
   refs: {
     polling: Ref<PollingLifecycle>
     guard: Ref<GuardLifecycle>
+    pipeline: Ref<PipelineRun>
   }
 }
 
@@ -55,6 +57,7 @@ export function wireMain(opts: WireMainOpts): WiredDeps {
   const refs = {
     polling: new Ref<PollingLifecycle>('polling'),
     guard: new Ref<GuardLifecycle>('guard'),
+    pipeline: new Ref<PipelineRun>('pipeline'),
   }
   const ticks = buildTickBodies(opts)
   const { pipelineDeps } = buildPipelineDeps(opts, refs)

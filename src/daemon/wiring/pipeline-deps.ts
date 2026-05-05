@@ -5,16 +5,19 @@
  * Refs are passed in for late-bound polling/guard access from closures.
  */
 import { join } from 'node:path'
+import { randomBytes } from 'node:crypto'
 import type { Ref } from '../../lib/lifecycle'
 import type { IlinkAdapter } from '../ilink-glue'
 import type { Bootstrap } from '../bootstrap'
 import type { GuardLifecycle } from '../guard/lifecycle'
 import type { PollingLifecycle } from '../polling-lifecycle'
 import type { InboundPipelineDeps } from '../inbound/build'
+import type { PipelineRun } from '../inbound/types'
 import { isAdmin } from '../../lib/access'
 import { makeAdminCommands } from '../admin-commands'
 import { makeModeCommands } from '../mode-commands'
 import { makeOnboardingHandler } from '../onboarding'
+import { botNameForMode } from '../bot-name'
 import { materializeAttachments } from '../media'
 import { loadGuardConfig } from '../guard/store'
 import { makeFireMilestonesFor, makeRecordInbound, makeMaybeWriteWelcomeObservation } from './side-effects'
@@ -30,6 +33,7 @@ export interface PipelineDepsOpts {
 export interface PipelineDepsRefs {
   polling: Ref<PollingLifecycle>
   guard: Ref<GuardLifecycle>
+  pipeline: Ref<PipelineRun>
 }
 
 const STARTED_AT_ISO = new Date().toISOString()
@@ -70,10 +74,18 @@ export function buildPipelineDeps(opts: PipelineDepsOpts, refs: PipelineDepsRefs
     isKnownUser: (uid) => ilink.resolveUserName(uid) !== undefined,
     setUserName: (cid, name) => ilink.setUserName(cid, name),
     sendMessage: async (cid, txt) => { await ilink.sendMessage(cid, txt) },
-    // TODO PR2 Task 8: wire botName from boot.coordinator.getMode + botNameForMode;
-    // wire dispatchInbound via Ref<InboundPipeline> set by wiring/index.ts
-    botName: () => 'cc',                          // STUB
-    dispatchInbound: async () => {},              // STUB
+    botName: (cid) => botNameForMode(boot.coordinator.getMode(cid)),
+    dispatchInbound: async (msg) => {
+      // Re-fire this inbound through the normal pipeline. Onboarding has
+      // already cleared its awaiting state and persisted the nickname, so
+      // mw-onboarding will short-circuit (isKnownUser=true) and the message
+      // flows to the provider as if it were just received.
+      await refs.pipeline.deref('onboarding echo dispatch')({
+        msg,
+        receivedAtMs: Date.now(),
+        requestId: randomBytes(4).toString('hex'),
+      })
+    },
     log,
   })
 

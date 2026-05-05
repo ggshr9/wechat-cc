@@ -75,6 +75,7 @@ export async function bootDaemon(opts: BootDaemonOpts): Promise<DaemonHandle> {
     // 3. main-wiring builds all deps for pipeline + lifecycles
     const wired = wireMain({ stateDir, db, ilink, accounts, boot, dangerously, log: (t, l) => log(t, l) })
     const pipeline = buildInboundPipeline(wired.pipelineDeps)
+    wireRef(wired.refs.pipeline, pipeline)
     // 4. register lifecycles (LIFO stop = startup order reversed)
     lc.register(registerCompanionPush(wired.companionPushDeps))
     lc.register(registerCompanionIntrospect(wired.companionIntrospectDeps))
