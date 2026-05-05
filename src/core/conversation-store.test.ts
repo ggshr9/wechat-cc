@@ -80,6 +80,50 @@ describe('ConversationStore', () => {
     expect(Object.keys(snap)).toEqual(['chat-1'])
   })
 
+  describe('identity (PR5 Task 19)', () => {
+    it('upsertIdentity + getIdentity round-trip', () => {
+      const s = makeConversationStore(db)
+      s.upsertIdentity('c1', { userId: 'u1', accountId: 'a1', userName: '张三' })
+      expect(s.getIdentity('c1')).toEqual({
+        user_id: 'u1',
+        account_id: 'a1',
+        last_user_name: '张三',
+      })
+    })
+
+    it('upsertIdentity preserves existing mode (does not clobber set())', () => {
+      const s = makeConversationStore(db)
+      s.set('c1', { kind: 'solo', provider: 'codex' })
+      s.upsertIdentity('c1', { userId: 'u1', accountId: 'a1' })
+      expect(s.get('c1')?.mode).toEqual({ kind: 'solo', provider: 'codex' })
+      expect(s.getIdentity('c1')?.user_id).toBe('u1')
+    })
+
+    it('upsertIdentity merges — undefined args preserve, defined overwrite', () => {
+      const s = makeConversationStore(db)
+      s.upsertIdentity('c1', { userId: 'u1', accountId: 'a1', userName: '张三' })
+      // Second call: only userName changes; userId/accountId omitted should preserve
+      s.upsertIdentity('c1', { userName: '张三 (renamed)' })
+      expect(s.getIdentity('c1')).toEqual({
+        user_id: 'u1',
+        account_id: 'a1',
+        last_user_name: '张三 (renamed)',
+      })
+    })
+
+    it('getIdentity returns null for unknown chat', () => {
+      const s = makeConversationStore(db)
+      expect(s.getIdentity('c-unknown')).toBeNull()
+    })
+
+    it('upsertIdentity for new chat inserts a row with default mode (solo+claude)', () => {
+      const s = makeConversationStore(db)
+      s.upsertIdentity('c1', { userId: 'u1' })
+      // The row exists and has the default mode — get() should return it
+      expect(s.get('c1')?.mode).toEqual({ kind: 'solo', provider: 'claude' })
+    })
+  })
+
   describe('legacy file migration', () => {
     it('imports a v1 conversations.json and renames it .migrated', () => {
       const file = join(dir, 'conversations.json')

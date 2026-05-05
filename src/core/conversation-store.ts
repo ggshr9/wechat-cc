@@ -18,6 +18,12 @@ import { existsSync, readFileSync } from 'node:fs'
 import { renameMigrated, type Db } from '../lib/db'
 import type { Mode, PersistedConversation } from './conversation'
 
+export interface ConversationIdentity {
+  user_id: string | null
+  account_id: string | null
+  last_user_name: string | null
+}
+
 export interface ConversationStore {
   /** Get the persisted mode for a chat, or null if none set. */
   get(chatId: string): PersistedConversation | null
@@ -29,6 +35,17 @@ export interface ConversationStore {
   all(): Record<string, PersistedConversation>
   /** No-op for SQLite-backed stores; retained so callers using the JSON-era API still compile. */
   flush(): Promise<void>
+
+  /**
+   * Upsert WeChat identity for a chat. Merge semantics: undefined fields
+   * preserve the existing value; null fields explicitly clear it.
+   * If the chat has no row yet, inserts with default mode `solo+claude`
+   * (the daemon default for the vast majority of installations).
+   */
+  upsertIdentity(chatId: string, ids: { userId?: string; accountId?: string; userName?: string }): void
+
+  /** Read identity columns for a chat. Null if no row exists. */
+  getIdentity(chatId: string): ConversationIdentity | null
 }
 
 export interface ConversationStoreOpts {
@@ -45,6 +62,9 @@ interface Row {
   mode_kind: string
   mode_provider: string | null
   mode_primary: string | null
+  user_id: string | null
+  account_id: string | null
+  last_user_name: string | null
 }
 
 function rowToMode(r: Row): Mode | null {
@@ -79,7 +99,7 @@ export function makeConversationStore(db: Db, opts: ConversationStoreOpts = {}):
   if (opts.migrateFromFile) maybeImportLegacy(db, opts.migrateFromFile)
 
   const stmtGet = db.query<Row, [string]>(
-    'SELECT chat_id, mode_kind, mode_provider, mode_primary FROM conversations WHERE chat_id = ?',
+    'SELECT chat_id, mode_kind, mode_provider, mode_primary, user_id, account_id, last_user_name FROM conversations WHERE chat_id = ?',
   )
   const stmtUpsert = db.query<unknown, [string, string, string | null, string | null, string]>(
     'INSERT INTO conversations(chat_id, mode_kind, mode_provider, mode_primary, updated_at) VALUES (?, ?, ?, ?, ?) ' +
@@ -87,7 +107,28 @@ export function makeConversationStore(db: Db, opts: ConversationStoreOpts = {}):
   )
   const stmtDelete = db.query<unknown, [string]>('DELETE FROM conversations WHERE chat_id = ?')
   const stmtAll = db.query<Row, []>(
-    'SELECT chat_id, mode_kind, mode_provider, mode_primary FROM conversations',
+    'SELECT chat_id, mode_kind, mode_provider, mode_primary, user_id, account_id, last_user_name FROM conversations',
+  )
+
+  const stmtGetIdentity = db.query<ConversationIdentity, [string]>(
+    'SELECT user_id, account_id, last_user_name FROM conversations WHERE chat_id = ?',
+  )
+
+  // Upsert identity. INSERT path uses default mode (solo+claude) so the
+  // row satisfies the NOT NULL CHECK on mode_kind. UPDATE path COALESCEs
+  // each identity column with excluded so undefined args (mapped to NULL
+  // at the call site) preserve, and defined args overwrite. Mode columns
+  // are NEVER touched in the UPDATE branch — preserves any existing
+  // /cc /codex selection set via the regular set() method.
+  const stmtUpsertIdentity = db.query<unknown, [string, string | null, string | null, string | null, string]>(
+    `INSERT INTO conversations
+       (chat_id, mode_kind, mode_provider, mode_primary, user_id, account_id, last_user_name, updated_at)
+     VALUES (?, 'solo', 'claude', NULL, ?, ?, ?, ?)
+     ON CONFLICT(chat_id) DO UPDATE SET
+       user_id        = COALESCE(excluded.user_id, user_id),
+       account_id     = COALESCE(excluded.account_id, account_id),
+       last_user_name = COALESCE(excluded.last_user_name, last_user_name),
+       updated_at     = excluded.updated_at`,
   )
 
   return {
@@ -117,6 +158,25 @@ export function makeConversationStore(db: Db, opts: ConversationStoreOpts = {}):
     },
 
     async flush() { /* SQLite writes are immediate */ },
+
+    upsertIdentity(chatId, ids) {
+      // Map undefined → null so the SQL gets a deterministic value; COALESCE
+      // in the UPDATE branch then preserves prior values for NULLs. (For the
+      // INSERT branch, NULL is the correct stored value when the field is
+      // truly absent.)
+      stmtUpsertIdentity.run(
+        chatId,
+        ids.userId ?? null,
+        ids.accountId ?? null,
+        ids.userName ?? null,
+        new Date().toISOString(),
+      )
+    },
+
+    getIdentity(chatId) {
+      const row = stmtGetIdentity.get(chatId)
+      return row ?? null
+    },
   }
 }
 
