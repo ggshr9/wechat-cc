@@ -314,25 +314,30 @@ const milestonesCmd = defineCommand({
 })
 
 const conversationsListCmd = defineCommand({
-  meta: { name: 'list', description: 'Read-only snapshot of conversations + user_names' },
+  meta: { name: 'list', description: 'Read-only snapshot of conversations + identities' },
   args: {
     json: { type: 'boolean', description: 'JSON envelope' },
   },
   async run({ args }) {
-    // Read-only snapshot of conversations + user_names.json. Used by
-    // the desktop dashboard (P5.2) to display per-chat mode badges. Falls
-    // back to chat_id as user_name when no name has been captured yet.
+    // Read-only snapshot of conversations. Used by the desktop dashboard
+    // (P5.2) to display per-chat mode badges. PR5 Task 22: identity now
+    // sources from conversationStore.getIdentity (user_names.json was
+    // deprecated in Task 21); envelope grows user_id/account_id alongside
+    // user_name so the dashboard table can render account/user columns.
     const { makeConversationStore } = await import('./src/core/conversation-store')
-    const { makeStateStore } = await import('./src/daemon/state-store')
     const { openWechatDb } = await import('./src/lib/db')
     const db = openWechatDb(STATE_DIR)
     const store = makeConversationStore(db, { migrateFromFile: join(STATE_DIR, 'conversations.json') })
-    const names = makeStateStore(join(STATE_DIR, 'user_names.json'), { debounceMs: 0 })
-    const conversations = Object.entries(store.all()).map(([chat_id, rec]) => ({
-      chat_id,
-      user_name: names.get(chat_id) ?? null,
-      mode: rec.mode,
-    }))
+    const conversations = Object.entries(store.all()).map(([chat_id, rec]) => {
+      const id = store.getIdentity(chat_id)
+      return {
+        chat_id,
+        user_id: id?.user_id ?? null,
+        account_id: id?.account_id ?? null,
+        user_name: id?.last_user_name ?? null,
+        mode: rec.mode,
+      }
+    })
     if (args.json) console.log(JSON.stringify({ ok: true, conversations }, null, 2))
     else console.log(conversations.map(c => `${c.chat_id} ${c.user_name ?? ''} ${c.mode.kind}`).join('\n'))
   },

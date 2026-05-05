@@ -7,6 +7,8 @@ import { findOnPath } from '../lib/util'
 import { loadAgentConfig, type AgentConfig } from '../lib/agent-config'
 import { buildServicePlan, isServiceInstalled, type ServiceKind } from './service-manager'
 import { compiledBinaryPath, compiledRepoRoot, isCompiledBundle } from '../lib/runtime-info'
+import { openWechatDb } from '../lib/db'
+import { makeConversationStore } from '../core/conversation-store'
 
 export interface BoundAccount {
   id: string
@@ -328,15 +330,25 @@ export function readExpiredBots(stateDir: string): ExpiredBotEntry[] {
 }
 
 export function readUserNames(stateDir: string): Record<string, string> {
+  // PR5 (Task 22): user_names.json was deprecated in favor of the
+  // conversations table's last_user_name column (Task 21 renamed the
+  // legacy file to .migrated). Source the dashboard's name lookup from
+  // the same SQLite table the daemon writes to so freshly-installed
+  // installations populate as soon as the first inbound message lands.
+  let db: ReturnType<typeof openWechatDb> | undefined
   try {
-    const parsed = JSON.parse(readFileSync(join(stateDir, 'user_names.json'), 'utf8')) as Record<string, unknown>
+    db = openWechatDb(stateDir)
+    const store = makeConversationStore(db)
     const out: Record<string, string> = {}
-    for (const [k, v] of Object.entries(parsed)) {
-      if (typeof v === 'string') out[k] = v
+    for (const chatId of Object.keys(store.all())) {
+      const id = store.getIdentity(chatId)
+      if (id?.last_user_name) out[chatId] = id.last_user_name
     }
     return out
   } catch {
     return {}
+  } finally {
+    try { db?.close() } catch { /* best-effort */ }
   }
 }
 
