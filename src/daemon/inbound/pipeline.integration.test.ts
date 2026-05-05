@@ -13,6 +13,7 @@ function fakeDeps(over: Partial<{
   const log = () => {}
   const deps: InboundPipelineDeps = {
     trace: { log },
+    identity: { upsertIdentity: () => {} },
     capture: { markChatActive: () => {}, captureContextToken: () => {} },
     typing: { sendTyping: async () => {} },
     admin: { adminHandler: { handle: async () => over.adminConsumes ?? false } },

@@ -1,6 +1,7 @@
 import type { PipelineRun } from './types'
 import { compose } from './compose'
 import { makeMwTrace, type TraceMwDeps } from './mw-trace'
+import { makeMwIdentity, type IdentityMwDeps } from './mw-identity'
 import { makeMwCaptureCtx, type CaptureCtxMwDeps } from './mw-capture-ctx'
 import { makeMwTyping, type TypingMwDeps } from './mw-typing'
 import { makeMwAdmin, type AdminMwDeps } from './mw-admin'
@@ -16,6 +17,7 @@ import { makeMwDispatch, type DispatchMwDeps } from './mw-dispatch'
 
 export interface InboundPipelineDeps {
   trace: TraceMwDeps
+  identity: IdentityMwDeps
   capture: CaptureCtxMwDeps
   typing: TypingMwDeps
   admin: AdminMwDeps
@@ -33,6 +35,7 @@ export interface InboundPipelineDeps {
 export function buildInboundPipeline(d: InboundPipelineDeps): PipelineRun {
   return compose([
     makeMwTrace(d.trace),
+    makeMwIdentity(d.identity),
     makeMwCaptureCtx(d.capture),
     makeMwTyping(d.typing),
     makeMwAdmin(d.admin),

@@ -91,6 +91,9 @@ export function buildPipelineDeps(opts: PipelineDepsOpts, refs: PipelineDepsRefs
 
   const pipelineDeps: InboundPipelineDeps = {
     trace: { log },
+    identity: {
+      upsertIdentity: (cid, ids) => boot.conversationStore.upsertIdentity(cid, ids),
+    },
     capture: {
       markChatActive: (c, a) => ilink.markChatActive(c, a),
       captureContextToken: (c, t) => ilink.captureContextToken(c, t),
