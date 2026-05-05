@@ -36,9 +36,10 @@ const NICKNAME_MAX_LEN = 24
 const NICKNAME_MIN_LEN = 1
 const NICKNAME_RE = /^[一-鿿_a-zA-Z0-9 -]+$/
 const AWAIT_TIMEOUT_MS = 30 * 60_000  // 30 min
+const DEDUP_WINDOW_MS = 1500  // ilink re-delivery / user double-tap window — see #16
 
 export function makeOnboardingHandler(deps: OnboardingDeps): OnboardingHandler {
-  const awaiting = new Map<string, number>()  // chatId -> millis when greeting was sent
+  const awaiting = new Map<string, { since: number; triggerText: string }>()
   const now = deps.now ?? (() => Date.now())
 
   return {
@@ -46,10 +47,17 @@ export function makeOnboardingHandler(deps: OnboardingDeps): OnboardingHandler {
       // Already-known users skip onboarding entirely.
       if (deps.isKnownUser(msg.userId)) return false
 
-      const ts = awaiting.get(msg.chatId)
-      const stillWaiting = ts !== undefined && (now() - ts) < AWAIT_TIMEOUT_MS
+      const aw = awaiting.get(msg.chatId)
+      const stillWaiting = aw !== undefined && (now() - aw.since) < AWAIT_TIMEOUT_MS
 
       if (stillWaiting) {
+        // Dedup: ilink re-delivery / user double-tap arrives ~1ms after the
+        // first inbound. Without this guard the duplicate gets consumed as
+        // the user's nickname (e.g. user_names.json "你好" / "在吗").
+        if (now() - aw.since < DEDUP_WINDOW_MS && msg.text === aw.triggerText) {
+          deps.log('ONBOARDING', `dedup chat=${msg.chatId} (same trigger text within ${now() - aw.since}ms)`)
+          return true
+        }
         const proposed = msg.text.trim()
         if (proposed.length < NICKNAME_MIN_LEN) {
           await deps.sendMessage(msg.chatId, '请发一个昵称（不能为空）。')
@@ -71,7 +79,7 @@ export function makeOnboardingHandler(deps: OnboardingDeps): OnboardingHandler {
       }
 
       // First contact (or stale awaiting state past timeout): greet + start the clock.
-      awaiting.set(msg.chatId, now())
+      awaiting.set(msg.chatId, { since: now(), triggerText: msg.text })
       deps.log('ONBOARDING', `start chat=${msg.chatId} userId=${msg.userId}`)
       await deps.sendMessage(
         msg.chatId,

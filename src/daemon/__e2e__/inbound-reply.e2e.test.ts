@@ -33,8 +33,8 @@ describe('e2e: inbound text → pipeline → fake-claude reply → outbox', () =
     try {
       daemon.sendText('chat1', '你好')
       const replies = await daemon.waitForReplyTo('chat1', 8000)
-      expect(replies.length).toBeGreaterThan(0)
       const reply = replies[0]
+      if (!reply) throw new Error('expected at least one reply in outbox')
       expect(reply.endpoint).toBe('sendmessage')
       expect(reply.chatId).toBe('chat1')
       // Provider was actually invoked with the user's text (not a stub).

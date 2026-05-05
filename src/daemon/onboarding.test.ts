@@ -94,4 +94,49 @@ describe('makeOnboardingHandler', () => {
     await handler.handle({ userId: 'u', chatId: 'u', text: '丸子-2' })
     expect(saved[0]!.name).toBe('丸子-2')
   })
+
+  it('drops a duplicate inbound with the same trigger text within 1.5s window', async () => {
+    let nameSet: string | null = null
+    const sent: string[] = []
+    let clock = 1_000_000
+
+    const handler = makeOnboardingHandler({
+      isKnownUser: () => false,
+      setUserName: async (_chat, name) => { nameSet = name },
+      sendMessage: async (_chat, text) => { sent.push(text) },
+      log: () => {},
+      now: () => clock,
+    })
+
+    const r1 = await handler.handle({ userId: 'u1', chatId: 'c1', text: '你好' })
+    expect(r1).toBe(true)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toContain('昵称')
+
+    clock += 100
+    const r2 = await handler.handle({ userId: 'u1', chatId: 'c1', text: '你好' })
+    expect(r2).toBe(true)
+    expect(nameSet).toBeNull()
+    expect(sent).toHaveLength(1)
+  })
+
+  it('still accepts a different text as nickname within the 1.5s window', async () => {
+    let nameSet: string | null = null
+    const sent: string[] = []
+    let clock = 1_000_000
+
+    const handler = makeOnboardingHandler({
+      isKnownUser: () => false,
+      setUserName: async (_chat, name) => { nameSet = name },
+      sendMessage: async (_chat, text) => { sent.push(text) },
+      log: () => {},
+      now: () => clock,
+    })
+
+    await handler.handle({ userId: 'u1', chatId: 'c1', text: '你好' })
+    clock += 100
+    const r2 = await handler.handle({ userId: 'u1', chatId: 'c1', text: 'Nate' })
+    expect(r2).toBe(true)
+    expect(nameSet).toBe('Nate')
+  })
 })
