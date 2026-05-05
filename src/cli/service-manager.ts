@@ -350,12 +350,23 @@ function powershellInstallCommands(opts: { taskName: string; execPath: string; e
   const args = psQuote(opts.execArgs)
   const usr = psQuote(opts.userName)
   const triggerEnabled = opts.autoStart ? '$true' : '$false'
+  // AllowHardTerminate is set by property assignment after the cmdlet
+  // returns, NOT as a cmdlet parameter. v0.5.1 shipped
+  // `-AllowHardTerminate $true` here, which throws at runtime —
+  // `New-ScheduledTaskSettingsSet` has no such parameter (its inverse
+  // switch is `-DisallowHardTerminate`, default $false). The MSFT_TaskSettings3
+  // CIM object the cmdlet returns DOES expose AllowHardTerminate as a
+  // writable bool, so we set it post-hoc. v0.5.2 + powershell-validator.ts
+  // pin this with a real PowerShell parameter-binding check, so the next
+  // bogus-parameter regression fails CI on windows-latest instead of a
+  // user's machine.
   const register = `
 $action    = New-ScheduledTaskAction    -Execute '${exe}' -Argument '${args}'
 $trigger   = New-ScheduledTaskTrigger   -AtLogOn -User '${usr}'
 $trigger.Enabled = ${triggerEnabled}
 $principal = New-ScheduledTaskPrincipal -UserId '${usr}' -LogonType Interactive -RunLevel Limited
-$settings  = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowHardTerminate $true
+$settings  = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
+$settings.AllowHardTerminate = $true
 Register-ScheduledTask -TaskName '${tn}' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
 `.trim()
   return [
