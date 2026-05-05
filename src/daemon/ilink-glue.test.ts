@@ -3,7 +3,18 @@ import { makeIlinkAdapter, loadAllAccounts, type Account } from './ilink-glue'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { openTestDb } from '../lib/db'
+import { openTestDb, type Db } from '../lib/db'
+import { makeConversationStore, type ConversationStore } from '../core/conversation-store'
+
+// Test factory: every makeIlinkAdapter call now requires a conversationStore
+// (PR5 Task 21 — nameStore deprecation). We co-locate db + store creation
+// here so individual tests stay terse. Each call returns a fresh in-memory
+// SQLite db, so call sites stay independent.
+function newAdapterDeps(): { db: Db; conversationStore: ConversationStore } {
+  const db = openTestDb()
+  const conversationStore = makeConversationStore(db)
+  return { db, conversationStore }
+}
 
 describe('loadAllAccounts', () => {
   it('returns empty array when accounts/ dir does not exist', async () => {
@@ -60,7 +71,7 @@ describe('makeIlinkAdapter (composed)', () => {
   const acct: Account = { id: 'A1', botId: 'b', userId: 'ubot', baseUrl: 'https://x', token: 'T', syncBuf: '' }
 
   it('exposes all IlinkAdapter methods', () => {
-    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], db: openTestDb() })
+    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], ...newAdapterDeps() })
     expect(typeof a.sendMessage).toBe('function')
     expect(typeof a.sendFile).toBe('function')
     expect(typeof a.editMessage).toBe('function')
@@ -79,31 +90,32 @@ describe('makeIlinkAdapter (composed)', () => {
     expect(a.projects).toBeDefined()
   })
 
-  it('setUserName persists to user_names.json', async () => {
-    const stateDir = newStateDir()
-    const a = makeIlinkAdapter({ stateDir, accounts: [acct], db: openTestDb() })
+  it('setUserName persists through conversationStore (PR5 Task 21)', async () => {
+    // Pre-PR5 this test asserted on user_names.json file contents; the
+    // standalone nameStore was retired and the adapter now delegates
+    // to conversations.last_user_name. We reuse the same conversationStore
+    // instance to verify the write reached the shared SQLite row.
+    const deps = newAdapterDeps()
+    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], ...deps })
     await a.setUserName('chat-1', '小白')
     await a.flush()
-    // second instance reads the persisted file
-    const { readFileSync } = await import('node:fs')
-    const names = JSON.parse(readFileSync(join(stateDir, 'user_names.json'), 'utf8'))
-    expect(names['chat-1']).toBe('小白')
+    expect(deps.conversationStore.getIdentity('chat-1')?.last_user_name).toBe('小白')
   })
 
   it('resolveUserName returns name after setUserName', async () => {
-    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], db: openTestDb() })
+    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], ...newAdapterDeps() })
     await a.setUserName('chat-2', '测试用户')
     expect(a.resolveUserName('chat-2')).toBe('测试用户')
     expect(a.resolveUserName('chat-unknown')).toBeUndefined()
   })
 
   it('lastActiveChatId returns null when no activity recorded', () => {
-    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], db: openTestDb() })
+    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], ...newAdapterDeps() })
     expect(a.lastActiveChatId()).toBeNull()
   })
 
   it('markChatActive updates lastActiveChatId', () => {
-    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], db: openTestDb() })
+    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], ...newAdapterDeps() })
     expect(a.lastActiveChatId()).toBeNull()
     a.markChatActive('chat-99')
     expect(a.lastActiveChatId()).toBe('chat-99')
@@ -113,7 +125,7 @@ describe('makeIlinkAdapter (composed)', () => {
 
   it('captureContextToken persists per-chat ilink context_token', async () => {
     const stateDir = newStateDir()
-    const a = makeIlinkAdapter({ stateDir, accounts: [acct], db: openTestDb() })
+    const a = makeIlinkAdapter({ stateDir, accounts: [acct], ...newAdapterDeps() })
     a.captureContextToken('chat-7', 'tok-xyz')
     await a.flush()
     const { readFileSync } = await import('node:fs')
@@ -123,7 +135,7 @@ describe('makeIlinkAdapter (composed)', () => {
 
   it('captureContextToken is a no-op when token is empty/undefined', async () => {
     const stateDir = newStateDir()
-    const a = makeIlinkAdapter({ stateDir, accounts: [acct], db: openTestDb() })
+    const a = makeIlinkAdapter({ stateDir, accounts: [acct], ...newAdapterDeps() })
     a.captureContextToken('chat-8', undefined)
     a.captureContextToken('chat-8', '')
     await a.flush()
@@ -136,27 +148,27 @@ describe('makeIlinkAdapter (composed)', () => {
   })
 
   it('loadProjects returns {projects: {}, current: null} when projects.json missing', () => {
-    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], db: openTestDb() })
+    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], ...newAdapterDeps() })
     const snap = a.loadProjects()
     expect(snap.projects).toEqual({})
     expect(snap.current).toBeNull()
   })
 
   it('handlePermissionReply returns false for non-permission text', () => {
-    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], db: openTestDb() })
+    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], ...newAdapterDeps() })
     expect(a.handlePermissionReply('hello world')).toBe(false)
     expect(a.handlePermissionReply('y')).toBe(false)
     expect(a.handlePermissionReply('n abc')).toBe(false)
   })
 
   it('handlePermissionReply returns false when hash not registered', () => {
-    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], db: openTestDb() })
+    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], ...newAdapterDeps() })
     // Valid format but no pending entry registered
     expect(a.handlePermissionReply('y abc12')).toBe(false)
   })
 
   it('handlePermissionReply consumes a registered permission entry', async () => {
-    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], db: openTestDb() })
+    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], ...newAdapterDeps() })
     // Register a pending hash without the askUser network call
     // We test the internal wiring: askUser registers + handlePermissionReply consumes.
     // Use askUser with very long timeout — manually consume via handlePermissionReply.
@@ -170,7 +182,7 @@ describe('makeIlinkAdapter (composed)', () => {
   })
 
   it('handlePermissionReply handles deny decision', async () => {
-    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], db: openTestDb() })
+    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], ...newAdapterDeps() })
     const p = a.askUser('chat-1', 'test prompt', 'zz999', 60_000)
     const consumed = a.handlePermissionReply('n zz999')
     expect(consumed).toBe(true)
@@ -182,7 +194,7 @@ describe('makeIlinkAdapter (composed)', () => {
   it('askUser times out after given ms and returns timeout', async () => {
     vi.useFakeTimers()
     try {
-      const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], db: openTestDb() })
+      const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], ...newAdapterDeps() })
       // askUser registers pending + best-effort sends (send will fail silently — no real ilink).
       // We use vi.advanceTimersByTimeAsync which processes all timers+microtasks iteratively,
       // including the send-retry timeouts (1s each, 3 attempts max) and the sweep timer.
@@ -197,12 +209,12 @@ describe('makeIlinkAdapter (composed)', () => {
   })
 
   it('projects.list() returns empty array when projects.json missing', () => {
-    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], db: openTestDb() })
+    const a = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], ...newAdapterDeps() })
     expect(a.projects.list()).toEqual([])
   })
 
   it('voice.configStatus returns configured:false when voice-config.json absent', () => {
-    const adapter = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], db: openTestDb() })
+    const adapter = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], ...newAdapterDeps() })
     expect(adapter.voice.configStatus()).toEqual({ configured: false })
   })
 
@@ -216,7 +228,7 @@ describe('makeIlinkAdapter (composed)', () => {
       default_voice: 'default',
       saved_at: '2026-04-22T00:00:00Z',
     })
-    const adapter = makeIlinkAdapter({ stateDir, accounts: [acct], db: openTestDb() })
+    const adapter = makeIlinkAdapter({ stateDir, accounts: [acct], ...newAdapterDeps() })
     const status = adapter.voice.configStatus()
     expect(status).toMatchObject({
       configured: true, provider: 'http_tts',
@@ -228,20 +240,20 @@ describe('makeIlinkAdapter (composed)', () => {
   })
 
   it('voice.saveConfig rejects http_tts without base_url', async () => {
-    const adapter = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], db: openTestDb() })
+    const adapter = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], ...newAdapterDeps() })
     const r = await adapter.voice.saveConfig({ provider: 'http_tts', model: 'm' })
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.reason).toMatch(/invalid|base_url/i)
   })
 
   it('voice.saveConfig rejects qwen without api_key', async () => {
-    const adapter = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], db: openTestDb() })
+    const adapter = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], ...newAdapterDeps() })
     const r = await adapter.voice.saveConfig({ provider: 'qwen' })
     expect(r.ok).toBe(false)
   })
 
   it('voice.replyVoice returns not_configured when no config', async () => {
-    const adapter = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], db: openTestDb() })
+    const adapter = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], ...newAdapterDeps() })
     const r = await adapter.voice.replyVoice('chat-1', 'hello')
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.reason).toBe('not_configured')
@@ -258,7 +270,7 @@ describe('makeIlinkAdapter (composed)', () => {
       default_voice: 'default',
       saved_at: '2026-05-01T00:00:00Z',
     })
-    const adapter = makeIlinkAdapter({ stateDir, accounts: [acct], db: openTestDb() })
+    const adapter = makeIlinkAdapter({ stateDir, accounts: [acct], ...newAdapterDeps() })
     const r = await adapter.voice.replyVoice('stranger@chat', 'hello')
     expect(r.ok).toBe(false)
     if (!r.ok) {
@@ -268,7 +280,7 @@ describe('makeIlinkAdapter (composed)', () => {
   })
 
   it('sendFile throws actionable error for unknown chat_id (preflight before CDN upload)', async () => {
-    const adapter = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], db: openTestDb() })
+    const adapter = makeIlinkAdapter({ stateDir: newStateDir(), accounts: [acct], ...newAdapterDeps() })
     // Use a real tmp file so assertSendable passes — error must come from
     // the routing preflight, not the file-existence check.
     const { mkdtempSync, writeFileSync } = await import('node:fs')
@@ -281,7 +293,7 @@ describe('makeIlinkAdapter (composed)', () => {
 
   it('companion.enable creates config + returns welcome on first call (no personas)', async () => {
     const stateDir = mkdtempSync(join(tmpdir(), 'wcc-comp-'))
-    const adapter = makeIlinkAdapter({ stateDir, accounts: [acct], db: openTestDb() })
+    const adapter = makeIlinkAdapter({ stateDir, accounts: [acct], ...newAdapterDeps() })
     const r = await adapter.companion.enable()
     expect(r.ok).toBe(true)
     if (!('already_configured' in r)) {
@@ -297,7 +309,7 @@ describe('makeIlinkAdapter (composed)', () => {
 
   it('companion.enable is idempotent', async () => {
     const stateDir = mkdtempSync(join(tmpdir(), 'wcc-comp-'))
-    const adapter = makeIlinkAdapter({ stateDir, accounts: [acct], db: openTestDb() })
+    const adapter = makeIlinkAdapter({ stateDir, accounts: [acct], ...newAdapterDeps() })
     await adapter.companion.enable()
     const r2 = await adapter.companion.enable()
     expect('already_configured' in r2 ? r2.already_configured : false).toBe(true)
@@ -305,7 +317,7 @@ describe('makeIlinkAdapter (composed)', () => {
 
   it('companion.disable flips enabled=false', async () => {
     const stateDir = mkdtempSync(join(tmpdir(), 'wcc-comp-'))
-    const adapter = makeIlinkAdapter({ stateDir, accounts: [acct], db: openTestDb() })
+    const adapter = makeIlinkAdapter({ stateDir, accounts: [acct], ...newAdapterDeps() })
     await adapter.companion.enable()
     const r = await adapter.companion.disable()
     expect(r).toEqual({ ok: true, enabled: false })
@@ -314,7 +326,7 @@ describe('makeIlinkAdapter (composed)', () => {
 
   it('companion.status returns minimal v2 shape (enabled/tz/chat_id/snooze)', async () => {
     const stateDir = mkdtempSync(join(tmpdir(), 'wcc-comp-'))
-    const adapter = makeIlinkAdapter({ stateDir, accounts: [acct], db: openTestDb() })
+    const adapter = makeIlinkAdapter({ stateDir, accounts: [acct], ...newAdapterDeps() })
     await adapter.companion.enable()
     const s = adapter.companion.status()
     expect(s.enabled).toBe(true)
@@ -328,7 +340,7 @@ describe('makeIlinkAdapter (composed)', () => {
 
   it('companion.snooze writes snooze_until in future', async () => {
     const stateDir = mkdtempSync(join(tmpdir(), 'wcc-comp-'))
-    const adapter = makeIlinkAdapter({ stateDir, accounts: [acct], db: openTestDb() })
+    const adapter = makeIlinkAdapter({ stateDir, accounts: [acct], ...newAdapterDeps() })
     await adapter.companion.enable()
     const before = Date.now()
     const r = await adapter.companion.snooze(60)

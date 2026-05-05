@@ -179,6 +179,47 @@ describe('ConversationStore', () => {
       expect(s2.get('chat-1')?.mode).toEqual({ kind: 'parallel' })
     })
   })
+
+  // PR5 Task 21 — nameStore deprecation. The legacy user_names.json
+  // is now backfilled into conversations.last_user_name on first boot
+  // so the IlinkAdapter's resolveUserName can read from a single source.
+  describe('user_names.json backfill', () => {
+    it('populates last_user_name from a legacy user_names.json', () => {
+      const file = join(dir, 'user_names.json')
+      writeFileSync(file, JSON.stringify({ c1: '张三', c2: 'Alice' }))
+      const s = makeConversationStore(db, { migrateFromUserNamesFile: file })
+      expect(s.getIdentity('c1')?.last_user_name).toBe('张三')
+      expect(s.getIdentity('c2')?.last_user_name).toBe('Alice')
+    })
+
+    it('renames source file to .migrated after import', () => {
+      const file = join(dir, 'user_names.json')
+      writeFileSync(file, JSON.stringify({ c1: 'A' }))
+      makeConversationStore(db, { migrateFromUserNamesFile: file })
+      expect(existsSync(file)).toBe(false)
+      expect(existsSync(`${file}.migrated`)).toBe(true)
+    })
+
+    it('silently skips a missing user_names.json (no throw)', () => {
+      // Construction must not throw when the file is absent.
+      const s = makeConversationStore(db, {
+        migrateFromUserNamesFile: join(dir, 'definitely-missing.json'),
+      })
+      expect(s.all()).toEqual({})
+    })
+
+    it('preserves an existing last_user_name when backfill races mw-identity', () => {
+      // Pre-seed a row with a fresher name (simulates mw-identity populating
+      // it on a live inbound before backfill runs).
+      const s0 = makeConversationStore(db)
+      s0.upsertIdentity('c1', { userName: '新名字' })
+
+      const file = join(dir, 'user_names.json')
+      writeFileSync(file, JSON.stringify({ c1: '旧名字' }))
+      const s = makeConversationStore(db, { migrateFromUserNamesFile: file })
+      expect(s.getIdentity('c1')?.last_user_name).toBe('新名字')
+    })
+  })
 })
 
 describe('modeRequiresParticipantPrefix (RFC 03 review #5)', () => {

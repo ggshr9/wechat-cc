@@ -50,6 +50,14 @@ export interface ConversationStore {
 
 export interface ConversationStoreOpts {
   migrateFromFile?: string
+  /**
+   * Backfill `last_user_name` from a legacy `user_names.json` (chatId → name).
+   * Renames the source file to `*.migrated` after a successful import — same
+   * convention as `migrateFromFile`. Replaces the standalone nameStore that
+   * PR5 deprecated; the IlinkAdapter's setUserName/resolveUserName now
+   * delegate to ConversationStore.
+   */
+  migrateFromUserNamesFile?: string
 }
 
 interface LegacyShape {
@@ -97,6 +105,7 @@ function modeColumns(mode: Mode): { kind: string; provider: string | null; prima
 
 export function makeConversationStore(db: Db, opts: ConversationStoreOpts = {}): ConversationStore {
   if (opts.migrateFromFile) maybeImportLegacy(db, opts.migrateFromFile)
+  if (opts.migrateFromUserNamesFile) maybeBackfillUserNames(db, opts.migrateFromUserNamesFile)
 
   const stmtGet = db.query<Row, [string]>(
     'SELECT chat_id, mode_kind, mode_provider, mode_primary, user_id, account_id, last_user_name FROM conversations WHERE chat_id = ?',
@@ -178,6 +187,35 @@ export function makeConversationStore(db: Db, opts: ConversationStoreOpts = {}):
       return row ?? null
     },
   }
+}
+
+function maybeBackfillUserNames(db: Db, file: string): void {
+  if (!existsSync(file)) return
+  let parsed: Record<string, unknown> | null = null
+  try {
+    parsed = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+  } catch {
+    return  // preserve corrupt file for forensic debugging
+  }
+  if (!parsed || typeof parsed !== 'object') return
+  // INSERT OR IGNORE semantics on COALESCE: don't overwrite an existing
+  // row's last_user_name — mw-identity may already have populated a fresher
+  // value for live chats by the time backfill runs (cold start: identical;
+  // warm start race: mw-identity wins).
+  const insert = db.prepare(
+    `INSERT INTO conversations (chat_id, mode_kind, mode_provider, mode_primary, last_user_name, updated_at)
+     VALUES (?, 'solo', 'claude', NULL, ?, ?)
+     ON CONFLICT(chat_id) DO UPDATE SET
+       last_user_name = COALESCE(last_user_name, excluded.last_user_name)`,
+  )
+  const now = new Date().toISOString()
+  db.transaction(() => {
+    for (const [chatId, name] of Object.entries(parsed!)) {
+      if (typeof name !== 'string' || !name) continue
+      insert.run(chatId, name, now)
+    }
+  })()
+  renameMigrated(file)
 }
 
 function maybeImportLegacy(db: Db, file: string): void {

@@ -13,6 +13,7 @@ import { PendingPermissions } from '../pending-permissions'
 import { unknownChatIdError } from '../../lib/send-reply'
 import { makeAccountChatIndex, type AccountChatIndex } from '../account-chat-index'
 import type { Db } from '../../lib/db'
+import type { ConversationStore } from '../../core/conversation-store'
 
 export interface Account {
   id: string
@@ -29,9 +30,16 @@ export interface IlinkContext {
   projectsFile: string
 
   ctxStore: StateStore
-  nameStore: StateStore
   acctStore: StateStore
   sessionState: SessionStateStore
+  /**
+   * Single source of truth for per-chat nicknames + identity (PR5 Task 21).
+   * Replaces the standalone nameStore (user_names.json) — IlinkAdapter's
+   * setUserName / resolveUserName now delegate here. Caller-injected so
+   * the daemon shares one ConversationStore across bootstrap, internal-api,
+   * and the ilink adapter.
+   */
+  conversationStore: ConversationStore
 
   /** In-memory `accountId → Set<chatId>` populated by transport.markChatActive
    *  on every inbound. Queried by onAccountExpired (PR4 Task 15) to fan out
@@ -65,12 +73,16 @@ export interface IlinkContext {
   assertChatRoutable(chatId: string): void
 }
 
-export function makeIlinkContext(opts: { stateDir: string; accounts: Account[]; db: Db }): IlinkContext {
-  const { stateDir, accounts, db } = opts
+export function makeIlinkContext(opts: {
+  stateDir: string
+  accounts: Account[]
+  db: Db
+  conversationStore: ConversationStore
+}): IlinkContext {
+  const { stateDir, accounts, db, conversationStore } = opts
   mkdirSync(stateDir, { recursive: true })
 
   const ctxStore = makeStateStore(join(stateDir, 'context_tokens.json'), { debounceMs: 500 })
-  const nameStore = makeStateStore(join(stateDir, 'user_names.json'), { debounceMs: 500 })
   const acctStore = makeStateStore(join(stateDir, 'user_account_ids.json'), { debounceMs: 500 })
   const sessionState = makeSessionStateStore(db, { migrateFromFile: join(stateDir, 'session-state.json') })
   const accountChatIndex = makeAccountChatIndex()
@@ -98,9 +110,9 @@ export function makeIlinkContext(opts: { stateDir: string; accounts: Account[]; 
     accounts,
     projectsFile: join(stateDir, 'projects.json'),
     ctxStore,
-    nameStore,
     acctStore,
     sessionState,
+    conversationStore,
     accountChatIndex,
     pending,
     sweepTimer,

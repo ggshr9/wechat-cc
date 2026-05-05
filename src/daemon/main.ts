@@ -32,9 +32,17 @@ export async function bootDaemon(opts: BootDaemonOpts): Promise<DaemonHandle> {
   const accounts = await loadAllAccounts(stateDir)
   if (accounts.length === 0) { releaseInstanceLock(PID_PATH); throw new Error('[wechat-cc] no accounts bound. Run `wechat-cc setup` first.') }
   const db = openDb({ path: join(stateDir, 'wechat-cc.db') })
-  const ilink = makeIlinkAdapter({ stateDir, accounts, db })
+  // ConversationStore must be constructed BEFORE the ilink adapter —
+  // PR5 Task 21 routes the adapter's setUserName/resolveUserName through
+  // it, replacing the deprecated user_names.json store. Both legacy
+  // conversations.json and user_names.json are backfilled here on first
+  // boot and renamed to *.migrated when done.
+  const conversationStore = makeConversationStore(db, {
+    migrateFromFile: join(stateDir, 'conversations.json'),
+    migrateFromUserNamesFile: join(stateDir, 'user_names.json'),
+  })
+  const ilink = makeIlinkAdapter({ stateDir, accounts, db, conversationStore })
   const memoryFS = makeMemoryFS({ rootDir: join(stateDir, 'memory') })
-  const conversationStore = makeConversationStore(db, { migrateFromFile: join(stateDir, 'conversations.json') })
   const lc = new LifecycleSet((tag, line) => log(tag, line))
   let shuttingDown = false; let didStartup = false
   let pollingLcRef: { reconcile(): Promise<void> } | null = null
