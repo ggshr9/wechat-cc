@@ -11,10 +11,12 @@ function setup(opts: {
   registered?: ProviderId[]
   defaultProviderId?: ProviderId
   initialMode?: Mode
+  initialUserName?: string
 } = {}) {
   const registered = opts.registered ?? ['claude', 'codex']
   const set = vi.fn<(chatId: string, mode: Mode) => void>()
   let stored: Mode | null = opts.initialMode ?? null
+  let storedName: { chat: string; name: string } | null = null
   const sentMessages: Array<[string, string]> = []
   const sendMessage = vi.fn(async (chatId: string, text: string) => {
     sentMessages.push([chatId, text])
@@ -35,9 +37,11 @@ function setup(opts: {
     },
     defaultProviderId: opts.defaultProviderId ?? 'claude',
     sendMessage: sendMessage as unknown as Parameters<typeof makeModeCommands>[0]['sendMessage'],
+    setUserName: vi.fn(async (chat: string, name: string) => { storedName = { chat, name } }),
+    getUserName: vi.fn(() => opts.initialUserName ?? null),
     log: () => {},
   })
-  return { cmds, set, sendMessage, sentMessages, getStored: () => stored }
+  return { cmds, set, sendMessage, sentMessages, getStored: () => stored, getStoredName: () => storedName }
 }
 
 describe('makeModeCommands', () => {
@@ -128,6 +132,8 @@ describe('makeModeCommands', () => {
       },
       defaultProviderId: 'claude',
       sendMessage: sendMessage as unknown as Parameters<typeof makeModeCommands>[0]['sendMessage'],
+      setUserName: async () => {},
+      getUserName: () => null,
       log: () => {},
     })
     await cmds.handle(inbound('/both'))
@@ -166,6 +172,8 @@ describe('makeModeCommands', () => {
       },
       defaultProviderId: 'claude',
       sendMessage: sendMessage as unknown as Parameters<typeof makeModeCommands>[0]['sendMessage'],
+      setUserName: async () => {},
+      getUserName: () => null,
       log: () => {},
     })
     await cmds.handle(inbound('/chat'))
@@ -206,6 +214,8 @@ describe('makeModeCommands', () => {
       },
       defaultProviderId: 'claude',
       sendMessage: sendMessage as unknown as Parameters<typeof makeModeCommands>[0]['sendMessage'],
+      setUserName: async () => {},
+      getUserName: () => null,
       log: () => {},
     })
     await cmds.handle(inbound('/stop'))
@@ -231,6 +241,8 @@ describe('makeModeCommands', () => {
       },
       defaultProviderId: 'claude',
       sendMessage: sendMessage as unknown as Parameters<typeof makeModeCommands>[0]['sendMessage'],
+      setUserName: async () => {},
+      getUserName: () => null,
       log: () => {},
     })
     await cmds.handle(inbound('/stop'))
@@ -312,6 +324,8 @@ describe('makeModeCommands', () => {
       },
       defaultProviderId: 'claude',
       sendMessage: sendMessage as unknown as Parameters<typeof makeModeCommands>[0]['sendMessage'],
+      setUserName: async () => {},
+      getUserName: () => null,
       log: () => {},
     })
     await cmds.handle(inbound('/cc + codex'))
@@ -324,5 +338,29 @@ describe('makeModeCommands', () => {
     const consumed = await cmds.handle(inbound('/health'))
     expect(consumed).toBe(false)
     expect(sendMessage).not.toHaveBeenCalled()
+  })
+
+  // ── /name <nick> — user self-rename (PR2 #17) ────────────────────────
+
+  it('/name <nick> sets the nickname and confirms', async () => {
+    const { cmds, sentMessages, getStoredName } = setup()
+    const consumed = await cmds.handle(inbound('/name Nate'))
+    expect(consumed).toBe(true)
+    expect(getStoredName()).toEqual({ chat: 'chat-1', name: 'Nate' })
+    expect(sentMessages[0]?.[1]).toContain('Nate')
+  })
+
+  it('/name accepts multi-word nicknames', async () => {
+    const { cmds, getStoredName } = setup()
+    await cmds.handle(inbound('/name 张 三'))
+    expect(getStoredName()).toEqual({ chat: 'chat-1', name: '张 三' })
+  })
+
+  it('/name with empty arg replies usage', async () => {
+    const { cmds, sentMessages, getStoredName } = setup()
+    const consumed = await cmds.handle(inbound('/name'))
+    expect(consumed).toBe(true)
+    expect(getStoredName()).toBeNull()
+    expect(sentMessages[0]?.[1]).toMatch(/用法|usage/i)
   })
 })

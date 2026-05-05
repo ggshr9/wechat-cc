@@ -31,6 +31,10 @@ export interface ModeCommandsDeps {
   /** Default provider id, surfaced by /mode + /solo for status messages. */
   defaultProviderId: ProviderId
   sendMessage(chatId: string, text: string): Promise<{ msgId: string; error?: string }>
+  /** Persist a per-chat nickname. Used by /name. */
+  setUserName(chatId: string, name: string): Promise<void>
+  /** Lookup current nickname for this chat (null if none). Used by /whoami. */
+  getUserName(chatId: string): string | null
   log: (tag: string, line: string) => void
 }
 
@@ -188,6 +192,18 @@ export function makeModeCommands(deps: ModeCommandsDeps): ModeCommands {
         const suffix = wasInFlight ? '；已中止 in-flight chatroom（最多多收到 1 个 turn 的输出后停止）' : ''
         await reply(msg.chatId, `✅ 已退出当前模式，恢复默认 (solo · ${dn})${suffix}。`)
         deps.log('MODE_CMD', `chat=${msg.chatId} → /stop reset to default${wasInFlight ? ' + cancel in-flight' : ''}`)
+        return true
+      }
+
+      // /name <nick> — user renames themselves in this chat
+      if (slashWord.toLowerCase() === 'name') {
+        if (!tail) {
+          await reply(msg.chatId, '❓ 用法：/name <昵称>。例：/name 丸子')
+          return true
+        }
+        await deps.setUserName(msg.chatId, tail)
+        await reply(msg.chatId, `✅ 好的，以后叫你 ${tail}。`)
+        deps.log('MODE_CMD', `chat=${msg.chatId} → setUserName "${tail}"`)
         return true
       }
 

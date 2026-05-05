@@ -61,6 +61,8 @@ export function buildPipelineDeps(opts: PipelineDepsOpts, refs: PipelineDepsRefs
     registry: boot.registry,
     defaultProviderId: boot.defaultProviderId,
     sendMessage: (cid, txt) => ilink.sendMessage(cid, txt),
+    setUserName: (cid, name) => ilink.setUserName(cid, name),
+    getUserName: (cid) => ilink.resolveUserName(cid) ?? null,
     log,
   })
 
