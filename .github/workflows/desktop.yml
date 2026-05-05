@@ -171,18 +171,57 @@ jobs:
       - name: Compile sidecar (Windows)
         if: matrix.os == 'windows-latest'
         shell: bash
-        # --windows-hide-console: ScheduledTask launches the binary at
-        # logon (or via Start-ScheduledTask). Without this flag, a
-        # console window pops up and stays open for the daemon's
-        # lifetime — users see a CMD they didn't open, can accidentally
-        # close it (kills the daemon), and the wizard's whole "background
-        # service" promise falls apart. The daemon already dual-writes
-        # logs to <stateDir>/channel.log, so losing stderr is fine.
+        # --windows-hide-console is supposed to ship a GUI-subsystem PE
+        # so ScheduledTask doesn't pop a console alongside the daemon
+        # (users see a CMD they didn't open, can accidentally close it,
+        # the wizard's "background service" promise falls apart). Daemon
+        # dual-writes logs to <stateDir>/channel.log so losing stderr is
+        # fine.
+        #
+        # **Bun 1.3.x bug**: `--windows-hide-console` is documented in
+        # `bun build --help` and accepted silently, but the resulting
+        # binary still ships PE subsystem=3 (CONSOLE). Verified locally
+        # 2026-05-05 against bun 1.3.13 + on the windows-latest runner.
+        # The post-process step below flips the byte by hand.
+        # See "Hide console" step.
         run: |
           mkdir -p apps/desktop/src-tauri/binaries
           bun build --compile --windows-hide-console --target=${{ matrix.bun_target }} cli.ts \
             --outfile apps/desktop/src-tauri/binaries/wechat-cc-cli-${{ matrix.rust_triple }}.exe
           ls -lh apps/desktop/src-tauri/binaries/
+
+      # PE-subsystem flip — workaround for the Bun bug noted above.
+      # IMAGE_DOS_HEADER.e_lfanew (offset 0x3c) → IMAGE_NT_HEADERS at
+      # peOff. IMAGE_OPTIONAL_HEADER.Subsystem lives at peOff+0x5c
+      # (a UInt16; PE32 and PE32+ both keep it at the same offset since
+      # the optional header layout is identical up through the data
+      # directories). We assert the byte is 3 (IMAGE_SUBSYSTEM_WINDOWS_CUI)
+      # before flipping to 2 (IMAGE_SUBSYSTEM_WINDOWS_GUI) — read-after-
+      # write verifies the flip persisted. Either invariant failing
+      # fails the build loudly so a future Bun fix doesn't silently
+      # double-flip.
+      - name: Hide console on Windows sidecar (workaround for Bun --windows-hide-console no-op)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $path = 'apps/desktop/src-tauri/binaries/wechat-cc-cli-${{ matrix.rust_triple }}.exe'
+          $bytes = [System.IO.File]::ReadAllBytes($path)
+          $peOff = [BitConverter]::ToInt32($bytes, 0x3c)
+          $before = [BitConverter]::ToUInt16($bytes, $peOff + 0x5c)
+          if ($before -ne 3) {
+            Write-Error "expected PE subsystem=3 (CONSOLE) before flip, got $before — Bun may have fixed --windows-hide-console; remove this workaround"
+            exit 1
+          }
+          $bytes[$peOff + 0x5c] = 2
+          $bytes[$peOff + 0x5d] = 0
+          [System.IO.File]::WriteAllBytes($path, $bytes)
+          $verify = [System.IO.File]::ReadAllBytes($path)
+          $after = [BitConverter]::ToUInt16($verify, $peOff + 0x5c)
+          if ($after -ne 2) {
+            Write-Error "PE subsystem flip failed: still $after after write"
+            exit 1
+          }
+          Write-Output "PE subsystem flipped: $before -> $after (now GUI/hidden)"
 
       - name: Tauri build
         working-directory: apps/desktop

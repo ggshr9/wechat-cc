@@ -43,6 +43,7 @@ import { loadAgentConfig } from '../../lib/agent-config'
 import { wechatStdioMcpSpec, delegateStdioMcpSpec, type McpStdioSpec } from './mcp-specs'
 import { claudeSessionJsonlPath, codexSessionJsonlPaths } from './session-paths'
 import { buildDelegateDispatch, type DelegateDispatch } from './delegate'
+import { makeSendAssistantText } from './fallback-reply'
 
 /**
  * Locate a working Claude Code binary. The SDK's own native-binary detection
@@ -307,9 +308,13 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     // routeInbound used to take when the agent didn't call a reply tool.
     // main.ts injects a real ilink.sendMessage closure; bootstrap.ts only
     // wires the structural piece.
-    sendAssistantText: deps.ilink.sendMessage
-      ? async (chatId, text) => { await deps.ilink.sendMessage(chatId, text) }
-      : undefined,
+    //
+    // v0.5.3 — extracted to fallback-reply.ts so the failure paths log
+    // [FALLBACK_REPLY_FAIL] / success path logs [FALLBACK_REPLY_SENT].
+    // The previous `await ilink.sendMessage()` discard masked the
+    // {msgId, error?} envelope; an ilink RETRY_FAIL was invisible to the
+    // dashboard logs panel + the inbound flow.
+    sendAssistantText: makeSendAssistantText({ sendMessage: deps.ilink.sendMessage, log: deps.log }),
     log: deps.log,
   })
 

@@ -1,6 +1,6 @@
 [package]
 name = "wechat_cc_desktop"
-version = "0.5.1"
+version = "0.5.3"
 description = "wechat-cc desktop installer"
 authors = ["wechat-cc"]
 edition = "2021"
