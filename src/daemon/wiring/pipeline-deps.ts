@@ -70,6 +70,10 @@ export function buildPipelineDeps(opts: PipelineDepsOpts, refs: PipelineDepsRefs
     isKnownUser: (uid) => ilink.resolveUserName(uid) !== undefined,
     setUserName: (cid, name) => ilink.setUserName(cid, name),
     sendMessage: async (cid, txt) => { await ilink.sendMessage(cid, txt) },
+    // TODO PR2 Task 8: wire botName from boot.coordinator.getMode + botNameForMode;
+    // wire dispatchInbound via Ref<InboundPipeline> set by wiring/index.ts
+    botName: () => 'cc',                          // STUB
+    dispatchInbound: async () => {},              // STUB
     log,
   })
 
