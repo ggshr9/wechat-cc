@@ -363,4 +363,37 @@ describe('makeModeCommands', () => {
     expect(getStoredName()).toBeNull()
     expect(sentMessages[0]?.[1]).toMatch(/用法|usage/i)
   })
+
+  // ── /whoami — identity dump (PR2 #17) ────────────────────────────────
+
+  it('/whoami dumps nickname + WeChat identity + bot name + chat id', async () => {
+    const { cmds, sentMessages } = setup({ initialUserName: 'Nate', defaultProviderId: 'claude' })
+    const consumed = await cmds.handle({
+      chatId: 'chat1234567890',
+      userId: 'wxid_abc123def',
+      userName: '张三',
+      accountId: '8ca10d158998-im-bot',
+      text: '/whoami',
+      msgType: 'text',
+      createTimeMs: 0,
+    })
+    expect(consumed).toBe(true)
+    const reply = sentMessages[0]?.[1] ?? ''
+    expect(reply).toContain('Nate')
+    expect(reply).toContain('张三')
+    expect(reply).toContain('wxid_abc123')   // userId truncated prefix visible
+    expect(reply).toContain('8ca10d158998')  // accountId truncated prefix visible
+    expect(reply).toContain('cc')            // bot name from solo+claude default
+    expect(reply).toContain('chat12345')     // chatId truncated prefix visible
+  })
+
+  it('/whoami without nickname hints at /name', async () => {
+    const { cmds, sentMessages } = setup()  // no initialUserName → null
+    await cmds.handle({
+      chatId: 'c1', userId: 'u1', userName: undefined,
+      accountId: 'a1', text: '/whoami',
+      msgType: 'text', createTimeMs: 0,
+    })
+    expect(sentMessages[0]?.[1]).toMatch(/还没.*昵称|尚未.*告诉|\/name/)
+  })
 })
