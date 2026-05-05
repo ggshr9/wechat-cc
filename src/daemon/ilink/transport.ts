@@ -22,7 +22,14 @@ export interface TransportMethods {
   lastActiveChatId(): string | null
 }
 
-export function makeTransport(ctx: IlinkContext): TransportMethods {
+export interface TransportOpts {
+  /** Fires once per account on errcode=-14 transition (idempotent via
+   *  sessionState.markExpired's "already expired" dedup). PR4 #18 wires
+   *  this to in-chat fan-out + desktop notification. */
+  onAccountExpired?: (accountId: string, reason: string) => void
+}
+
+export function makeTransport(ctx: IlinkContext, opts: TransportOpts = {}): TransportMethods {
   const { accounts, acctStore, ctxStore, typingTickets, typingTTLMs, sessionState, lastActiveRef } = ctx
 
   return {
@@ -65,9 +72,11 @@ export function makeTransport(ctx: IlinkContext): TransportMethods {
     async getUpdatesForLoop(accountId, baseUrl, token, syncBuf) {
       const resp = await ilinkGetUpdates(baseUrl, token, syncBuf)
       if (resp.errcode === -14 || resp.ret === -14) {
-        const transitioned = sessionState.markExpired(accountId, `ilink/getupdates errcode=-14: ${resp.errmsg ?? ''}`)
+        const reason = `ilink/getupdates errcode=-14: ${resp.errmsg ?? ''} (likely rebound elsewhere)`
+        const transitioned = sessionState.markExpired(accountId, reason)
         if (transitioned) {
           log('SESSION_EXPIRED', `${accountId} — marked expired (visible via /health; cleanup with 清理 ${accountId})`)
+          opts.onAccountExpired?.(accountId, reason)
         }
         return { expired: true }
       }
