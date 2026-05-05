@@ -98,7 +98,7 @@ export function makeIlinkAdapter(opts: {
   conversationStore: ConversationStore
 }): IlinkAdapter {
   const ctx = makeIlinkContext(opts)
-  const { stateDir, accounts, ctxStore, conversationStore, acctStore, sessionState, pending, sweepTimer, projectsFile, resolveAccount, assertChatRoutable, accountChatIndex } = ctx
+  const { stateDir, accounts, ctxStore, conversationStore, acctStore, sessionState, pending, sweepTimer, projectsFile, resolveAccount, assertChatRoutable } = ctx
 
   const voice = makeVoice(ctx)
   const companion = makeCompanion(ctx)
@@ -109,13 +109,16 @@ export function makeIlinkAdapter(opts: {
   // sends will mostly fail; per-chat failures are logged and swallowed.
   // Desktop badge + dashboard signal (PR4 Task 16) cover the case where
   // no chat has messaged since boot.
+  //
+  // PR5 Task 23: chat lookup migrated from in-memory accountChatIndex to
+  // `WHERE account_id = ?` SQL — populated by mw-identity on every inbound.
   const expiredNotifyText = `⚠️ 这个 WeChat 账号的绑定已被替换 —— 你或其他人在别处重新扫码绑了同一个账号到 wechat-cc / OpenClaw。
 本机的旧 session 已失效，不会再收到新消息。
 要继续在这台机用，到桌面 dashboard 重新扫一次码。`
 
   const transport = makeTransport(ctx, {
     onAccountExpired: (accountId, _reason) => {
-      const chats = accountChatIndex.chatsFor(accountId)
+      const chats = conversationStore.chatsForAccount(accountId)
       for (const chatId of chats) {
         sendReplyOnce(chatId, expiredNotifyText, stateDir).then(r => {
           if (!r.ok) log('EXPIRED_NOTIFY', `chat=${chatId} acct=${accountId} send failed: ${r.error}`)

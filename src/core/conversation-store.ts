@@ -46,6 +46,10 @@ export interface ConversationStore {
 
   /** Read identity columns for a chat. Null if no row exists. */
   getIdentity(chatId: string): ConversationIdentity | null
+
+  /** All chat IDs whose row carries this account_id. Used to fan out
+   *  account-expired notifications without an in-memory side index. */
+  chatsForAccount(accountId: string): readonly string[]
 }
 
 export interface ConversationStoreOpts {
@@ -123,6 +127,10 @@ export function makeConversationStore(db: Db, opts: ConversationStoreOpts = {}):
     'SELECT user_id, account_id, last_user_name FROM conversations WHERE chat_id = ?',
   )
 
+  const stmtChatsForAccount = db.query<{ chat_id: string }, [string]>(
+    'SELECT chat_id FROM conversations WHERE account_id = ?',
+  )
+
   // Upsert identity. INSERT path uses default mode (solo+claude) so the
   // row satisfies the NOT NULL CHECK on mode_kind. UPDATE path COALESCEs
   // each identity column with excluded so undefined args (mapped to NULL
@@ -185,6 +193,11 @@ export function makeConversationStore(db: Db, opts: ConversationStoreOpts = {}):
     getIdentity(chatId) {
       const row = stmtGetIdentity.get(chatId)
       return row ?? null
+    },
+
+    chatsForAccount(accountId) {
+      if (!accountId) return []
+      return stmtChatsForAccount.all(accountId).map(r => r.chat_id)
     },
   }
 }

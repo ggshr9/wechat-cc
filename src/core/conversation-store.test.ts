@@ -220,6 +220,24 @@ describe('ConversationStore', () => {
       expect(s.getIdentity('c1')?.last_user_name).toBe('新名字')
     })
   })
+
+  describe('chatsForAccount (PR5 Task 23 — replaces in-memory accountChatIndex)', () => {
+    it('returns chats whose account_id matches', () => {
+      const store = makeConversationStore(openTestDb())
+      store.upsertIdentity('c1', { accountId: 'a1' })
+      store.upsertIdentity('c2', { accountId: 'a1' })
+      store.upsertIdentity('c3', { accountId: 'a2' })
+      expect([...store.chatsForAccount('a1')].sort()).toEqual(['c1', 'c2'])
+      expect(store.chatsForAccount('a2')).toEqual(['c3'])
+      expect(store.chatsForAccount('unknown')).toEqual([])
+    })
+
+    it('ignores empty accountId', () => {
+      const store = makeConversationStore(openTestDb())
+      store.upsertIdentity('c1', { accountId: 'a1' })
+      expect(store.chatsForAccount('')).toEqual([])
+    })
+  })
 })
 
 describe('modeRequiresParticipantPrefix (RFC 03 review #5)', () => {
