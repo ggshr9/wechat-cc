@@ -267,7 +267,13 @@ export function isServiceInstalled(plan: ServicePlan): boolean {
   if (plan.serviceFile) return existsSync(plan.serviceFile)
   if (plan.kind === 'scheduled-task') {
     const cmd = psCmd(`if (Get-ScheduledTask -TaskName '${psQuote(plan.serviceName)}' -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }`)
-    const r = spawnSync(cmd[0]!, cmd.slice(1), { encoding: 'utf8' })
+    // windowsHide: a subsystem=2 (GUI) parent spawning a subsystem=3 console
+    // child gets a fresh console window allocated unless this flag is set
+    // (Node sets STARTF_USESHOWWINDOW + SW_HIDE). Without it, the dashboard's
+    // 5-second doctor poll flashes a powershell window every 5s. Verified
+    // in v0.5.3 testing: 5+ flickering windows per tick. See
+    // docs/releases/2026-05-05-v0.5.4.md.
+    const r = spawnSync(cmd[0]!, cmd.slice(1), { encoding: 'utf8', windowsHide: true })
     return (r.status ?? 1) === 0
   }
   return false
@@ -379,7 +385,7 @@ function runCommands(commands: string[][]): void {
   for (const command of commands) {
     const [cmd, ...args] = command
     if (!cmd) continue
-    const r = spawnSync(cmd, args, { stdio: 'inherit' })
+    const r = spawnSync(cmd, args, { stdio: 'inherit', windowsHide: true })
     if ((r.status ?? 1) !== 0) throw new Error(`${cmd} ${args.join(' ')} failed with exit ${r.status ?? 1}`)
   }
 }
@@ -390,7 +396,7 @@ function tryRunCommands(commands: string[][]): { ok: true } | { ok: false; exitC
   for (const command of commands) {
     const [cmd, ...args] = command
     if (!cmd) continue
-    const r = spawnSync(cmd, args, { stdio: 'inherit' })
+    const r = spawnSync(cmd, args, { stdio: 'inherit', windowsHide: true })
     const code = r.status ?? 1
     if (code !== 0) return { ok: false, exitCode: code, command }
   }

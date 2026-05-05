@@ -281,7 +281,7 @@ export async function buildVoiceItemFromWav(
     '-b:a', '32k',
     '-codec:a', 'libmp3lame',
     mp3Path,
-  ], { stdio: ['ignore', 'pipe', 'pipe'] })
+  ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
   if (r.status !== 0) {
     const stderr = r.stderr?.toString().slice(0, 300) ?? '(no stderr)'
     throw new Error(`ffmpeg WAV→MP3 transcode failed (exit ${r.status}): ${stderr}`)

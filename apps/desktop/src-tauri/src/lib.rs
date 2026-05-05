@@ -143,11 +143,23 @@ fn emit_log(app: &AppHandle, line: &str) {
 // Win11 reparents schtasks-spawned processes under svchost so PID/parent
 // chains break — command-line is the reliable signal. Returns None on
 // non-Windows (the dashboard skips its pre/post check there). See PR3 #19.
+//
+// CREATE_NO_WINDOW (v0.5.4): the Tauri GUI is subsystem=2 (no console).
+// `std::process::Command::new("powershell.exe")` defaults to inheriting
+// the parent's console — but with no console to inherit, Windows
+// allocates a fresh console window for the powershell child. Setting
+// CREATE_NO_WINDOW (0x08000000) tells CreateProcess not to allocate
+// any console at all. Without this, every "重启 daemon" click pops a
+// PowerShell window. spawnSync from the Bun-compiled sidecar already
+// gets this for free (Bun's compile sets the equivalent), but raw
+// `std::process::Command` doesn't, so we set it explicitly here.
 #[tauri::command]
 fn wechat_daemon_pid() -> Option<u32> {
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         use std::process::Command;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let output = Command::new("powershell.exe")
             .args([
                 "-NoProfile",
@@ -155,6 +167,7 @@ fn wechat_daemon_pid() -> Option<u32> {
                 "-Command",
                 "$p = Get-CimInstance Win32_Process -Filter \"Name = 'bun.exe' OR Name = 'node.exe'\" | Where-Object { $_.CommandLine -match 'wechat-cc' } | Select-Object -First 1; if ($p) { $p.ProcessId }",
             ])
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .ok()?;
         let s = String::from_utf8(output.stdout).ok()?;

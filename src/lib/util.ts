@@ -28,7 +28,10 @@ export function findOnPath(cmd: string): string | null {
   if (!cmd) return null
   const finder = platform() === 'win32' ? 'where' : 'which'
   try {
-    const r = spawnSync(finder, [cmd], { stdio: 'pipe' })
+    // windowsHide: doctor calls findOnPath × 4-5 every 5s (bun, git, claude,
+    // codex, wsl) — without this flag and with a subsystem=2 daemon parent,
+    // each call flashes a console window. See docs/releases/2026-05-05-v0.5.4.md.
+    const r = spawnSync(finder, [cmd], { stdio: 'pipe', windowsHide: true })
     if (r.status === 0) {
       const out = r.stdout?.toString() ?? ''
       const first = out.split(/\r?\n/)[0]?.trim()

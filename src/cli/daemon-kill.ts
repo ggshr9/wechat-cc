@@ -63,7 +63,7 @@ export function defaultKillDeps(): KillDeps {
           // `ps` doesn't ship with Windows. tasklist's CSV output is
           // `"image","pid","session","#","mem"`. We use the image name as
           // a stand-in for cmdline — DAEMON_CMDLINE_RE accepts it.
-          const r = spawnSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8' })
+          const r = spawnSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true })
           if (r.status !== 0 || !r.stdout) return null
           const head = r.stdout.split('\n')[0] ?? ''
           if (head.startsWith('INFO:') || !head) return null
@@ -71,7 +71,7 @@ export function defaultKillDeps(): KillDeps {
           return m ? m[1]! : null
         }
         // POSIX path — `ps -o args=` works on macOS + Linux.
-        const r = spawnSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf8' })
+        const r = spawnSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf8', windowsHide: true })
         const out = r.stdout?.trim() ?? ''
         return r.status === 0 && out.length > 0 ? out : null
       } catch { return null }
