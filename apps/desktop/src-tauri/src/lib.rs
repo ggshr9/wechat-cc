@@ -139,6 +139,37 @@ fn emit_log(app: &AppHandle, line: &str) {
     let _ = app.emit("wechat-cc:log", line);
 }
 
+// Returns the daemon's pid by matching command-line on bun.exe / node.exe.
+// Win11 reparents schtasks-spawned processes under svchost so PID/parent
+// chains break — command-line is the reliable signal. Returns None on
+// non-Windows (the dashboard skips its pre/post check there). See PR3 #19.
+#[tauri::command]
+fn wechat_daemon_pid() -> Option<u32> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        let output = Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$p = Get-CimInstance Win32_Process -Filter \"Name = 'bun.exe' OR Name = 'node.exe'\" | Where-Object { $_.CommandLine -match 'wechat-cc' } | Select-Object -First 1; if ($p) { $p.ProcessId }",
+            ])
+            .output()
+            .ok()?;
+        let s = String::from_utf8(output.stdout).ok()?;
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        trimmed.parse::<u32>().ok()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -148,7 +179,8 @@ pub fn run() {
             wechat_cli_json_via_file,
             wechat_cli_text,
             save_text_file,
-            render_qr_svg
+            render_qr_svg,
+            wechat_daemon_pid
         ])
         .run(tauri::generate_context!())
         .expect("error while running wechat-cc desktop");
