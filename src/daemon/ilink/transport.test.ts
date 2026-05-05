@@ -16,7 +16,8 @@ vi.mock('../../lib/ilink', () => ({
 import { makeTransport } from './transport'
 import { ilinkGetUpdates } from '../../lib/ilink'
 import type { IlinkContext } from './context'
-import { makeAccountChatIndex } from '../account-chat-index'
+import { makeConversationStore } from '../../core/conversation-store'
+import { openTestDb } from '../../lib/db'
 
 function makeStubCtx(): IlinkContext {
   // Minimal context shape — only fields read by getUpdatesForLoop matter
@@ -27,8 +28,8 @@ function makeStubCtx(): IlinkContext {
     accounts: [],
     projectsFile: '/tmp/projects.json',
     ctxStore: { get: () => undefined, set: () => {}, all: () => ({}), flush: async () => {} } as never,
-    nameStore: { get: () => undefined, set: () => {}, all: () => ({}), flush: async () => {} } as never,
     acctStore: { get: () => undefined, set: () => {}, all: () => ({}), flush: async () => {} } as never,
+    conversationStore: makeConversationStore(openTestDb()),
     sessionState: {
       markExpired: (id: string, reason: string) => {
         if (transitions.has(id)) return false  // already expired
@@ -43,7 +44,6 @@ function makeStubCtx(): IlinkContext {
     typingTickets: new Map(),
     typingTTLMs: 60_000,
     lastActiveRef: { current: null },
-    accountChatIndex: makeAccountChatIndex(),
     resolveAccount: () => { throw new Error('stub') },
     assertChatRoutable: () => {},
   }

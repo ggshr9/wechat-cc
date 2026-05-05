@@ -18,6 +18,12 @@ import { existsSync, readFileSync } from 'node:fs'
 import { renameMigrated, type Db } from '../lib/db'
 import type { Mode, PersistedConversation } from './conversation'
 
+export interface ConversationIdentity {
+  user_id: string | null
+  account_id: string | null
+  last_user_name: string | null
+}
+
 export interface ConversationStore {
   /** Get the persisted mode for a chat, or null if none set. */
   get(chatId: string): PersistedConversation | null
@@ -29,10 +35,33 @@ export interface ConversationStore {
   all(): Record<string, PersistedConversation>
   /** No-op for SQLite-backed stores; retained so callers using the JSON-era API still compile. */
   flush(): Promise<void>
+
+  /**
+   * Upsert WeChat identity for a chat. Merge semantics: undefined fields
+   * preserve the existing value; null fields explicitly clear it.
+   * If the chat has no row yet, inserts with default mode `solo+claude`
+   * (the daemon default for the vast majority of installations).
+   */
+  upsertIdentity(chatId: string, ids: { userId?: string; accountId?: string; userName?: string }): void
+
+  /** Read identity columns for a chat. Null if no row exists. */
+  getIdentity(chatId: string): ConversationIdentity | null
+
+  /** All chat IDs whose row carries this account_id. Used to fan out
+   *  account-expired notifications without an in-memory side index. */
+  chatsForAccount(accountId: string): readonly string[]
 }
 
 export interface ConversationStoreOpts {
   migrateFromFile?: string
+  /**
+   * Backfill `last_user_name` from a legacy `user_names.json` (chatId → name).
+   * Renames the source file to `*.migrated` after a successful import — same
+   * convention as `migrateFromFile`. Replaces the standalone nameStore that
+   * PR5 deprecated; the IlinkAdapter's setUserName/resolveUserName now
+   * delegate to ConversationStore.
+   */
+  migrateFromUserNamesFile?: string
 }
 
 interface LegacyShape {
@@ -45,6 +74,9 @@ interface Row {
   mode_kind: string
   mode_provider: string | null
   mode_primary: string | null
+  user_id: string | null
+  account_id: string | null
+  last_user_name: string | null
 }
 
 function rowToMode(r: Row): Mode | null {
@@ -77,9 +109,10 @@ function modeColumns(mode: Mode): { kind: string; provider: string | null; prima
 
 export function makeConversationStore(db: Db, opts: ConversationStoreOpts = {}): ConversationStore {
   if (opts.migrateFromFile) maybeImportLegacy(db, opts.migrateFromFile)
+  if (opts.migrateFromUserNamesFile) maybeBackfillUserNames(db, opts.migrateFromUserNamesFile)
 
   const stmtGet = db.query<Row, [string]>(
-    'SELECT chat_id, mode_kind, mode_provider, mode_primary FROM conversations WHERE chat_id = ?',
+    'SELECT chat_id, mode_kind, mode_provider, mode_primary, user_id, account_id, last_user_name FROM conversations WHERE chat_id = ?',
   )
   const stmtUpsert = db.query<unknown, [string, string, string | null, string | null, string]>(
     'INSERT INTO conversations(chat_id, mode_kind, mode_provider, mode_primary, updated_at) VALUES (?, ?, ?, ?, ?) ' +
@@ -87,7 +120,32 @@ export function makeConversationStore(db: Db, opts: ConversationStoreOpts = {}):
   )
   const stmtDelete = db.query<unknown, [string]>('DELETE FROM conversations WHERE chat_id = ?')
   const stmtAll = db.query<Row, []>(
-    'SELECT chat_id, mode_kind, mode_provider, mode_primary FROM conversations',
+    'SELECT chat_id, mode_kind, mode_provider, mode_primary, user_id, account_id, last_user_name FROM conversations',
+  )
+
+  const stmtGetIdentity = db.query<ConversationIdentity, [string]>(
+    'SELECT user_id, account_id, last_user_name FROM conversations WHERE chat_id = ?',
+  )
+
+  const stmtChatsForAccount = db.query<{ chat_id: string }, [string]>(
+    'SELECT chat_id FROM conversations WHERE account_id = ?',
+  )
+
+  // Upsert identity. INSERT path uses default mode (solo+claude) so the
+  // row satisfies the NOT NULL CHECK on mode_kind. UPDATE path COALESCEs
+  // each identity column with excluded so undefined args (mapped to NULL
+  // at the call site) preserve, and defined args overwrite. Mode columns
+  // are NEVER touched in the UPDATE branch — preserves any existing
+  // /cc /codex selection set via the regular set() method.
+  const stmtUpsertIdentity = db.query<unknown, [string, string | null, string | null, string | null, string]>(
+    `INSERT INTO conversations
+       (chat_id, mode_kind, mode_provider, mode_primary, user_id, account_id, last_user_name, updated_at)
+     VALUES (?, 'solo', 'claude', NULL, ?, ?, ?, ?)
+     ON CONFLICT(chat_id) DO UPDATE SET
+       user_id        = COALESCE(excluded.user_id, user_id),
+       account_id     = COALESCE(excluded.account_id, account_id),
+       last_user_name = COALESCE(excluded.last_user_name, last_user_name),
+       updated_at     = excluded.updated_at`,
   )
 
   return {
@@ -117,7 +175,60 @@ export function makeConversationStore(db: Db, opts: ConversationStoreOpts = {}):
     },
 
     async flush() { /* SQLite writes are immediate */ },
+
+    upsertIdentity(chatId, ids) {
+      // Map undefined → null so the SQL gets a deterministic value; COALESCE
+      // in the UPDATE branch then preserves prior values for NULLs. (For the
+      // INSERT branch, NULL is the correct stored value when the field is
+      // truly absent.)
+      stmtUpsertIdentity.run(
+        chatId,
+        ids.userId ?? null,
+        ids.accountId ?? null,
+        ids.userName ?? null,
+        new Date().toISOString(),
+      )
+    },
+
+    getIdentity(chatId) {
+      const row = stmtGetIdentity.get(chatId)
+      return row ?? null
+    },
+
+    chatsForAccount(accountId) {
+      if (!accountId) return []
+      return stmtChatsForAccount.all(accountId).map(r => r.chat_id)
+    },
   }
+}
+
+function maybeBackfillUserNames(db: Db, file: string): void {
+  if (!existsSync(file)) return
+  let parsed: Record<string, unknown> | null = null
+  try {
+    parsed = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+  } catch {
+    return  // preserve corrupt file for forensic debugging
+  }
+  if (!parsed || typeof parsed !== 'object') return
+  // INSERT OR IGNORE semantics on COALESCE: don't overwrite an existing
+  // row's last_user_name — mw-identity may already have populated a fresher
+  // value for live chats by the time backfill runs (cold start: identical;
+  // warm start race: mw-identity wins).
+  const insert = db.prepare(
+    `INSERT INTO conversations (chat_id, mode_kind, mode_provider, mode_primary, last_user_name, updated_at)
+     VALUES (?, 'solo', 'claude', NULL, ?, ?)
+     ON CONFLICT(chat_id) DO UPDATE SET
+       last_user_name = COALESCE(last_user_name, excluded.last_user_name)`,
+  )
+  const now = new Date().toISOString()
+  db.transaction(() => {
+    for (const [chatId, name] of Object.entries(parsed!)) {
+      if (typeof name !== 'string' || !name) continue
+      insert.run(chatId, name, now)
+    }
+  })()
+  renameMigrated(file)
 }
 
 function maybeImportLegacy(db: Db, file: string): void {

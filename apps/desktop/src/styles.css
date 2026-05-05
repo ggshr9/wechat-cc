@@ -228,6 +228,13 @@ input { font: inherit; color: inherit; }
   font-size: 11px; color: var(--ink-3);
 }
 
+/* Dim secondary text — e.g. truncated wxid next to display name in the
+   conversations table (PR5 Task 22). */
+.dim {
+  color: var(--ink-3);
+  font-size: 0.85em;
+}
+
 /* ─── mode dropdown (replaces read-only pill — same palette) ──────────── */
 /* Inherits the per-mode background/color from the badge tone classes so  */
 /* switching modes visually snaps to the new mode's colour immediately.   */

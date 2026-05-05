@@ -22,6 +22,13 @@ function modeToShorthand(mode) {
   return "cc"
 }
 
+// Truncate long opaque ids (wxid_xxxx, gh_xxxx) so the table stays scannable.
+// Full value is preserved in `title` attributes for hover-to-reveal.
+function truncate(s, n) {
+  if (!s) return ""
+  return s.length > n ? `${s.slice(0, n)}…` : s
+}
+
 export function renderConversations(report, deps) {
   const tbody = document.getElementById("conversations-body")
   const meta = document.getElementById("conversations-meta")
@@ -36,10 +43,19 @@ export function renderConversations(report, deps) {
   tbody.innerHTML = rows.map(row => {
     const conv = conversations.find(c => c.chat_id === row.chatId)
     const currentShorthand = conv ? modeToShorthand(conv.mode) : "cc"
+    // PR5 Task 22: primary column is the human user (name + truncated wxid);
+    // chatId moves to the row's title attribute for debugging.
+    const userIdShort = truncate(row.userId || "", 10)
+    const userCell = row.userName
+      ? `${escapeHtml(row.userName)} <span class="dim" title="${escapeHtml(row.userId || "")}">(${escapeHtml(userIdShort)})</span>`
+      : `<span class="dim" title="${escapeHtml(row.userId || "")}">(等待识别) ${escapeHtml(userIdShort)}</span>`
+    const acctCell = row.accountId
+      ? `<span title="${escapeHtml(row.accountId)}">${escapeHtml(truncate(row.accountId, 12))}</span>`
+      : `<span class="dim">--</span>`
     return `
-    <tr>
-      <td class="name">${escapeHtml(row.name)}</td>
-      <td class="id">${escapeHtml(row.chatId)}</td>
+    <tr title="chat: ${escapeHtml(row.chatId)}">
+      <td class="name">${userCell}</td>
+      <td class="id">${acctCell}</td>
       <td>
         <select class="mode-select mode-${row.badge.tone}" data-chat-id="${escapeHtml(row.chatId)}" data-current="${escapeHtml(currentShorthand)}">
           <option value="cc"${currentShorthand === "cc" ? " selected" : ""}>/cc (Claude solo)</option>

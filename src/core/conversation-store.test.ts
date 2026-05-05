@@ -80,6 +80,50 @@ describe('ConversationStore', () => {
     expect(Object.keys(snap)).toEqual(['chat-1'])
   })
 
+  describe('identity (PR5 Task 19)', () => {
+    it('upsertIdentity + getIdentity round-trip', () => {
+      const s = makeConversationStore(db)
+      s.upsertIdentity('c1', { userId: 'u1', accountId: 'a1', userName: '张三' })
+      expect(s.getIdentity('c1')).toEqual({
+        user_id: 'u1',
+        account_id: 'a1',
+        last_user_name: '张三',
+      })
+    })
+
+    it('upsertIdentity preserves existing mode (does not clobber set())', () => {
+      const s = makeConversationStore(db)
+      s.set('c1', { kind: 'solo', provider: 'codex' })
+      s.upsertIdentity('c1', { userId: 'u1', accountId: 'a1' })
+      expect(s.get('c1')?.mode).toEqual({ kind: 'solo', provider: 'codex' })
+      expect(s.getIdentity('c1')?.user_id).toBe('u1')
+    })
+
+    it('upsertIdentity merges — undefined args preserve, defined overwrite', () => {
+      const s = makeConversationStore(db)
+      s.upsertIdentity('c1', { userId: 'u1', accountId: 'a1', userName: '张三' })
+      // Second call: only userName changes; userId/accountId omitted should preserve
+      s.upsertIdentity('c1', { userName: '张三 (renamed)' })
+      expect(s.getIdentity('c1')).toEqual({
+        user_id: 'u1',
+        account_id: 'a1',
+        last_user_name: '张三 (renamed)',
+      })
+    })
+
+    it('getIdentity returns null for unknown chat', () => {
+      const s = makeConversationStore(db)
+      expect(s.getIdentity('c-unknown')).toBeNull()
+    })
+
+    it('upsertIdentity for new chat inserts a row with default mode (solo+claude)', () => {
+      const s = makeConversationStore(db)
+      s.upsertIdentity('c1', { userId: 'u1' })
+      // The row exists and has the default mode — get() should return it
+      expect(s.get('c1')?.mode).toEqual({ kind: 'solo', provider: 'claude' })
+    })
+  })
+
   describe('legacy file migration', () => {
     it('imports a v1 conversations.json and renames it .migrated', () => {
       const file = join(dir, 'conversations.json')
@@ -133,6 +177,65 @@ describe('ConversationStore', () => {
       makeConversationStore(db, { migrateFromFile: file })
       const s2 = makeConversationStore(db, { migrateFromFile: file })
       expect(s2.get('chat-1')?.mode).toEqual({ kind: 'parallel' })
+    })
+  })
+
+  // PR5 Task 21 — nameStore deprecation. The legacy user_names.json
+  // is now backfilled into conversations.last_user_name on first boot
+  // so the IlinkAdapter's resolveUserName can read from a single source.
+  describe('user_names.json backfill', () => {
+    it('populates last_user_name from a legacy user_names.json', () => {
+      const file = join(dir, 'user_names.json')
+      writeFileSync(file, JSON.stringify({ c1: '张三', c2: 'Alice' }))
+      const s = makeConversationStore(db, { migrateFromUserNamesFile: file })
+      expect(s.getIdentity('c1')?.last_user_name).toBe('张三')
+      expect(s.getIdentity('c2')?.last_user_name).toBe('Alice')
+    })
+
+    it('renames source file to .migrated after import', () => {
+      const file = join(dir, 'user_names.json')
+      writeFileSync(file, JSON.stringify({ c1: 'A' }))
+      makeConversationStore(db, { migrateFromUserNamesFile: file })
+      expect(existsSync(file)).toBe(false)
+      expect(existsSync(`${file}.migrated`)).toBe(true)
+    })
+
+    it('silently skips a missing user_names.json (no throw)', () => {
+      // Construction must not throw when the file is absent.
+      const s = makeConversationStore(db, {
+        migrateFromUserNamesFile: join(dir, 'definitely-missing.json'),
+      })
+      expect(s.all()).toEqual({})
+    })
+
+    it('preserves an existing last_user_name when backfill races mw-identity', () => {
+      // Pre-seed a row with a fresher name (simulates mw-identity populating
+      // it on a live inbound before backfill runs).
+      const s0 = makeConversationStore(db)
+      s0.upsertIdentity('c1', { userName: '新名字' })
+
+      const file = join(dir, 'user_names.json')
+      writeFileSync(file, JSON.stringify({ c1: '旧名字' }))
+      const s = makeConversationStore(db, { migrateFromUserNamesFile: file })
+      expect(s.getIdentity('c1')?.last_user_name).toBe('新名字')
+    })
+  })
+
+  describe('chatsForAccount (PR5 Task 23 — replaces in-memory accountChatIndex)', () => {
+    it('returns chats whose account_id matches', () => {
+      const store = makeConversationStore(openTestDb())
+      store.upsertIdentity('c1', { accountId: 'a1' })
+      store.upsertIdentity('c2', { accountId: 'a1' })
+      store.upsertIdentity('c3', { accountId: 'a2' })
+      expect([...store.chatsForAccount('a1')].sort()).toEqual(['c1', 'c2'])
+      expect(store.chatsForAccount('a2')).toEqual(['c3'])
+      expect(store.chatsForAccount('unknown')).toEqual([])
+    })
+
+    it('ignores empty accountId', () => {
+      const store = makeConversationStore(openTestDb())
+      store.upsertIdentity('c1', { accountId: 'a1' })
+      expect(store.chatsForAccount('')).toEqual([])
     })
   })
 })

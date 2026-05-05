@@ -224,10 +224,9 @@ export function modeBadge(mode) {
 
 // View-model for the dashboard's per-chat mode table.
 // items — output of `wechat-cc conversations list --json`'s `conversations`
-// userNames — same map the accounts table uses (keyed by chatId here, since
-//   conversations.json is keyed by chat_id and user_names.json is also
-//   keyed by the chat_id-bearing wechat user). The CLI already joins, so
-//   we pass through `user_name` straight.
+//   envelope. PR5 (Task 22) added user_id/account_id alongside user_name
+//   sourced from conversationStore.getIdentity; the table renders those
+//   as primary columns so chatId can drop to a row tooltip.
 // Returns an array sorted by `tone` then chat_id (deterministic for tests).
 export function conversationRows(items) {
   if (!Array.isArray(items)) return []
@@ -236,6 +235,9 @@ export function conversationRows(items) {
     return {
       chatId: it.chat_id,
       name: it.user_name || it.chat_id,
+      userId: it.user_id ?? null,
+      accountId: it.account_id ?? null,
+      userName: it.user_name ?? null,
       badge,
     }
   }).sort((a, b) => {

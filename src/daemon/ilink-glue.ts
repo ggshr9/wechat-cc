@@ -34,6 +34,7 @@ import { makeVoice } from './ilink/voice'
 import { makeCompanion } from './ilink/companion'
 import { makeTransport } from './ilink/transport'
 import type { Db } from '../lib/db'
+import type { ConversationStore } from '../core/conversation-store'
 
 export type { Account } from './ilink/context'
 /** Alias for Account — used in polling-lifecycle public API. */
@@ -90,9 +91,14 @@ export async function loadAllAccounts(stateDir: string): Promise<Account[]> {
   return out
 }
 
-export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[]; db: Db }): IlinkAdapter {
+export function makeIlinkAdapter(opts: {
+  stateDir: string
+  accounts: Account[]
+  db: Db
+  conversationStore: ConversationStore
+}): IlinkAdapter {
   const ctx = makeIlinkContext(opts)
-  const { stateDir, accounts, ctxStore, nameStore, acctStore, sessionState, pending, sweepTimer, projectsFile, resolveAccount, assertChatRoutable, accountChatIndex } = ctx
+  const { stateDir, accounts, ctxStore, conversationStore, acctStore, sessionState, pending, sweepTimer, projectsFile, resolveAccount, assertChatRoutable } = ctx
 
   const voice = makeVoice(ctx)
   const companion = makeCompanion(ctx)
@@ -103,13 +109,16 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[]; 
   // sends will mostly fail; per-chat failures are logged and swallowed.
   // Desktop badge + dashboard signal (PR4 Task 16) cover the case where
   // no chat has messaged since boot.
+  //
+  // PR5 Task 23: chat lookup migrated from in-memory accountChatIndex to
+  // `WHERE account_id = ?` SQL — populated by mw-identity on every inbound.
   const expiredNotifyText = `⚠️ 这个 WeChat 账号的绑定已被替换 —— 你或其他人在别处重新扫码绑了同一个账号到 wechat-cc / OpenClaw。
 本机的旧 session 已失效，不会再收到新消息。
 要继续在这台机用，到桌面 dashboard 重新扫一次码。`
 
   const transport = makeTransport(ctx, {
     onAccountExpired: (accountId, _reason) => {
-      const chats = accountChatIndex.chatsFor(accountId)
+      const chats = conversationStore.chatsForAccount(accountId)
       for (const chatId of chats) {
         sendReplyOnce(chatId, expiredNotifyText, stateDir).then(r => {
           if (!r.ok) log('EXPIRED_NOTIFY', `chat=${chatId} acct=${accountId} send failed: ${r.error}`)
@@ -183,11 +192,14 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[]; 
     },
 
     async setUserName(chatId, name) {
-      nameStore.set(chatId, name)
+      // Single source of truth: conversations.last_user_name (PR5 Task 21).
+      // The standalone user_names.json store was retired; existing files
+      // are backfilled into the conversations table on first daemon boot.
+      conversationStore.upsertIdentity(chatId, { userName: name })
     },
 
     resolveUserName(chatId) {
-      return nameStore.get(chatId)
+      return conversationStore.getIdentity(chatId)?.last_user_name ?? undefined
     },
 
     projects: {
@@ -273,9 +285,11 @@ export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[]; 
 
     async flush() {
       clearInterval(sweepTimer)
+      // conversationStore.flush() is intentionally omitted — its SQLite
+      // writes are immediate, and the store is owned by the daemon caller
+      // (main.ts), not the adapter. The adapter only borrows it.
       await Promise.all([
         ctxStore.flush(),
-        nameStore.flush(),
         acctStore.flush(),
         sessionState.flush(),
       ])

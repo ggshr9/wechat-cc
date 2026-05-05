@@ -7,8 +7,8 @@
  *      construction.
  *   2. The SQLite db has the expected rows for each store (counts +
  *      sample reads through the public API).
- *   3. The 7 schema tables all exist (PRAGMA user_version = 8 — v8
- *      adds a CHECK on events.kind without changing the table set).
+ *   3. The 7 schema tables all exist (PRAGMA user_version = 9 — v9
+ *      adds identity columns to conversations without changing the table set).
  *   4. Re-constructing the same stores against the same db is a no-op
  *      (idempotent — the rename leaves no source to re-import).
  *
@@ -61,13 +61,21 @@ describe('full state-dir migration — upgrading-user smoke', () => {
     rmSync(stateDir, { recursive: true, force: true })
   })
 
-  it('opens a fresh db with PRAGMA user_version = 8 and the 7 tables', () => {
+  it('opens a fresh db with PRAGMA user_version = 9 and the 7 tables', () => {
     const v = (db.query('PRAGMA user_version').get() as { user_version: number }).user_version
-    expect(v).toBe(8)
+    expect(v).toBe(9)
     const tables = db.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as Array<{ name: string }>
     expect(tables.map(t => t.name)).toEqual([
       'activity', 'conversations', 'events', 'milestones', 'observations', 'session_state', 'sessions',
     ])
+  })
+
+  it('conversations table has user_id, account_id, last_user_name columns (v9)', () => {
+    const cols = db.query("PRAGMA table_info('conversations')").all() as Array<{ name: string }>
+    const names = cols.map(c => c.name)
+    expect(names).toContain('user_id')
+    expect(names).toContain('account_id')
+    expect(names).toContain('last_user_name')
   })
 
   it('migrates session_state.json + sessions.json + conversations.json on first store construction', () => {
