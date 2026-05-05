@@ -16,6 +16,7 @@ vi.mock('../../lib/ilink', () => ({
 import { makeTransport } from './transport'
 import { ilinkGetUpdates } from '../../lib/ilink'
 import type { IlinkContext } from './context'
+import { makeAccountChatIndex } from '../account-chat-index'
 
 function makeStubCtx(): IlinkContext {
   // Minimal context shape — only fields read by getUpdatesForLoop matter
@@ -42,6 +43,7 @@ function makeStubCtx(): IlinkContext {
     typingTickets: new Map(),
     typingTTLMs: 60_000,
     lastActiveRef: { current: null },
+    accountChatIndex: makeAccountChatIndex(),
     resolveAccount: () => { throw new Error('stub') },
     assertChatRoutable: () => {},
   }
