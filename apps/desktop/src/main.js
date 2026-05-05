@@ -85,6 +85,12 @@ const deps = {
     setMode("wizard")
     showStep("service")
   },
+  // Dashboard's expired-account 重新扫码 button routes here. The
+  // wizard's bind/QR step is named "wechat" (see wizard.js STEP_ORDER).
+  routeToWizardBind: () => {
+    setMode("wizard")
+    showStep("wechat")
+  },
 }
 
 // Live status line for the network guard toggle. Pulls fresh probe
@@ -153,9 +159,36 @@ function wireDoctorSubscribers() {
   doctorPoller.subscribe(report => updateFooterStatus(report.checks.daemon))
   doctorPoller.subscribe(renderDashboardIfActive)
   doctorPoller.subscribe(renderRestartButton)
+  doctorPoller.subscribe(checkExpiredDiff)
   conversationsPoller.subscribe(report => {
     if (state.mode === "dashboard") renderConversations(report, { invoke })
   })
+}
+
+// Per-poll diff detector — fires an OS notification when a bot transitions
+// into the expiredBots list since the last tick. First poll's expired set
+// is the baseline (lastExpiredIds starts empty, but we populate from the
+// first report without firing) so already-expired-on-startup accounts don't
+// spam a notification on every dashboard restart. Only NEWLY-expired
+// accounts (those that appeared between two consecutive polls) trigger.
+let lastExpiredIds = null
+function checkExpiredDiff(report) {
+  const currentIds = new Set((report.expiredBots || []).map(b => b.botId))
+  if (lastExpiredIds === null) {
+    // Baseline pass — record but don't notify.
+    lastExpiredIds = currentIds
+    return
+  }
+  for (const id of currentIds) {
+    if (!lastExpiredIds.has(id)) {
+      const shortId = id.replace(/-im-bot$/, "").slice(0, 12)
+      invoke("notify_user", {
+        title: `wechat-cc: 账号 ${shortId} 已失效`,
+        body: "绑定被另一处替换。点击打开 dashboard 重新扫码。",
+      }).catch(err => console.warn("notify_user failed:", err))
+    }
+  }
+  lastExpiredIds = currentIds
 }
 
 function renderDashboardIfActive(report) {

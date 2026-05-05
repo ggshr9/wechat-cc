@@ -11,6 +11,7 @@ import { makeStateStore, type StateStore } from '../state-store'
 import { makeSessionStateStore, type SessionStateStore } from '../session-state'
 import { PendingPermissions } from '../pending-permissions'
 import { unknownChatIdError } from '../../lib/send-reply'
+import { makeAccountChatIndex, type AccountChatIndex } from '../account-chat-index'
 import type { Db } from '../../lib/db'
 
 export interface Account {
@@ -31,6 +32,11 @@ export interface IlinkContext {
   nameStore: StateStore
   acctStore: StateStore
   sessionState: SessionStateStore
+
+  /** In-memory `accountId → Set<chatId>` populated by transport.markChatActive
+   *  on every inbound. Queried by onAccountExpired (PR4 Task 15) to fan out
+   *  in-chat notifications when an account is rebound elsewhere. */
+  accountChatIndex: AccountChatIndex
 
   pending: PendingPermissions
   sweepTimer: ReturnType<typeof setInterval>
@@ -67,6 +73,7 @@ export function makeIlinkContext(opts: { stateDir: string; accounts: Account[]; 
   const nameStore = makeStateStore(join(stateDir, 'user_names.json'), { debounceMs: 500 })
   const acctStore = makeStateStore(join(stateDir, 'user_account_ids.json'), { debounceMs: 500 })
   const sessionState = makeSessionStateStore(db, { migrateFromFile: join(stateDir, 'session-state.json') })
+  const accountChatIndex = makeAccountChatIndex()
 
   const pending = new PendingPermissions()
   const sweepTimer = setInterval(() => { pending.sweep() }, 30_000)
@@ -94,6 +101,7 @@ export function makeIlinkContext(opts: { stateDir: string; accounts: Account[]; 
     nameStore,
     acctStore,
     sessionState,
+    accountChatIndex,
     pending,
     sweepTimer,
     typingTickets,
