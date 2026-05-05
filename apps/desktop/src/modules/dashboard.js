@@ -136,6 +136,11 @@ export async function restartDaemon(deps) {
       return
     }
   }
+
+  // Capture pid BEFORE the stop step. May be null on non-Windows.
+  let beforePid = null
+  try { beforePid = await deps.invoke("wechat_daemon_pid") } catch { /* not registered */ }
+
   setPending("停止…")
   try {
     await deps.invoke("wechat_cli_json", { args: ["service", "stop", "--json"] })
@@ -147,7 +152,32 @@ export async function restartDaemon(deps) {
     setPending(`启动失败：${deps.formatInvokeError(err)}`)
     return
   }
+
+  // Wait 2s for the new daemon to register, then verify pid changed.
+  // Skip pid verification entirely on non-Windows (where the command
+  // returns null) — fall through to the existing OK message.
+  await new Promise(r => setTimeout(r, 2000))
+  let afterPid = null
+  try { afterPid = await deps.invoke("wechat_daemon_pid") } catch { /* not registered */ }
+
   await deps.doctorPoller.refresh()
+
+  if (beforePid !== null && afterPid !== null && beforePid === afterPid) {
+    // pid didn't change — Stop-Process likely got Access Denied
+    setPending("未能重启 daemon — pid 没换。可能是权限问题（dashboard 不是管理员启动）。试试：彻底关闭 → 右键以管理员身份打开。")
+    return
+  }
+  if (beforePid !== null && afterPid === null) {
+    setPending(`daemon 没起来 — 看 install-progress 或 logs 排查 (was pid ${beforePid})`)
+    return
+  }
+  if (beforePid !== null && afterPid !== null) {
+    setPending(`已重启 (pid ${beforePid} → ${afterPid})`)
+    setTimeout(() => setPending(""), 3000)
+    return
+  }
+
+  // Non-Windows or daemon wasn't running before — existing path
   setPending("已重启")
   setTimeout(() => setPending(""), 2000)
 }
