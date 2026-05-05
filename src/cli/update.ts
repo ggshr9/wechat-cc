@@ -272,14 +272,14 @@ export function defaultUpdateDeps(repoRoot: string, stateDir: string): UpdateDep
     repoRoot,
     stateDir,
     runGit(args) {
-      const r = spawnSync('git', args, { cwd: repoRoot, encoding: 'utf8' })
+      const r = spawnSync('git', args, { cwd: repoRoot, encoding: 'utf8', windowsHide: true })
       return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', code: r.status ?? 1 }
     },
     bun: {
       path: bunPath,
       install: () => {
         if (!bunPath) return { stdout: '', stderr: 'bun not on PATH', code: 127 }
-        const r = spawnSync(bunPath, ['install', '--frozen-lockfile'], { cwd: repoRoot, encoding: 'utf8' })
+        const r = spawnSync(bunPath, ['install', '--frozen-lockfile'], { cwd: repoRoot, encoding: 'utf8', windowsHide: true })
         return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', code: r.status ?? 1 }
       },
     },

@@ -61,7 +61,7 @@ function matchLinuxComm(pid: number): boolean {
 // and look "alive". tasklist's /FO CSV output is `"image","pid",...`.
 function matchWindowsImage(pid: number): boolean {
   try {
-    const r = spawnSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8' })
+    const r = spawnSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true })
     if (r.status !== 0 || !r.stdout) return false
     const head = r.stdout.split('\n')[0]
     if (!head) return false

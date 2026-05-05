@@ -71,7 +71,7 @@ exit 0
 `
   const utf16 = Buffer.from(validator, 'utf16le')
   const b64 = utf16.toString('base64')
-  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', b64], { encoding: 'utf8' })
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', b64], { encoding: 'utf8', windowsHide: true })
   if (r.status === 0) return null
   if (r.error) return { kind: 'spawn', message: r.error.message }
   const output = ((r.stdout ?? '') + (r.stderr ?? '')).trim()
