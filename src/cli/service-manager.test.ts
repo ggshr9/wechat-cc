@@ -252,4 +252,37 @@ describe('service-manager', () => {
       expect(decoded.length).toBeGreaterThan(0)
     }
   })
+
+  it('Win32 stopCommands include Stop-ScheduledTask + cmdline match + Wait + force-kill + ready-poll', () => {
+    const plan = buildServicePlan({
+      platform: 'win32',
+      homeDir: 'C:\\Users\\bob',
+      cwd: 'C:\\app',
+      bunPath: 'C:\\bun.exe',
+      windowsUser: 'bob',
+    })
+    expect(plan.stopCommands).toHaveLength(1)
+    const decoded = decodePsScript(plan.stopCommands[0]!)
+
+    expect(decoded).toContain('Stop-ScheduledTask')
+    expect(decoded).toMatch(/Get-CimInstance\s+Win32_Process/)
+    expect(decoded).toMatch(/CommandLine\s*-match\s*'wechat-cc'/)
+    expect(decoded).toContain('WaitForExit(5000)')
+    expect(decoded).toMatch(/Stop-Process\s+-Id\s+\$p\.ProcessId\s+-Force/)
+    expect(decoded).toMatch(/State\s+-eq\s+'Running'/)  // the poll loop's exit predicate
+  })
+
+  it('Win32 install task settings include -AllowHardTerminate $true', () => {
+    const plan = buildServicePlan({
+      platform: 'win32',
+      homeDir: 'C:\\Users\\bob',
+      cwd: 'C:\\app',
+      bunPath: 'C:\\bun.exe',
+      windowsUser: 'bob',
+    })
+    // installCommands[0] is Register-ScheduledTask; AllowHardTerminate lives
+    // inside New-ScheduledTaskSettingsSet in that same script
+    const decoded = decodePsScript(plan.installCommands[0]!)
+    expect(decoded).toMatch(/AllowHardTerminate\s+\$true/)
+  })
 })

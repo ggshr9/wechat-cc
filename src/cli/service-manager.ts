@@ -115,7 +115,7 @@ export function buildServicePlan(input: ServicePlanInput): ServicePlan {
       fileContent: null,
       installCommands: powershellInstallCommands({ taskName: serviceName, execPath: command, execArgs: cmdArgs, userName: winUser, autoStart }),
       startCommands: [psCmd(`Start-ScheduledTask -TaskName '${psQuote(serviceName)}'`)],
-      stopCommands: [psCmd(`Stop-ScheduledTask -TaskName '${psQuote(serviceName)}'`)],
+      stopCommands: [psCmd(buildWindowsStopScript(serviceName))],
       uninstallCommands: [psCmd(`Unregister-ScheduledTask -TaskName '${psQuote(serviceName)}' -Confirm:$false`)],
     }
   }
@@ -313,6 +313,37 @@ function psCmd(script: string): string[] {
  * Each command is its own PS invocation so the install-progress.json
  * trail shows distinct phases ("(2/2) 启动 ScheduledTask" etc).
  */
+function buildWindowsStopScript(taskName: string): string {
+  const tn = psQuote(taskName)
+  return `
+$task = '${tn}'
+Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
+
+# Match daemon by command-line because Win11 reparents schtasks-spawned
+# processes under svchost — PID / parent-PID chains break, command-line
+# is the reliable signal. See PR3 #19 / docs/plans/2026-05-04-v0.6-five-pr-bundle.md
+$procs = Get-CimInstance Win32_Process -Filter "Name = 'bun.exe' OR Name = 'node.exe'" |
+  Where-Object { $_.CommandLine -match 'wechat-cc' }
+foreach ($p in $procs) {
+  try {
+    $h = Get-Process -Id $p.ProcessId -ErrorAction Stop
+    if (-not $h.WaitForExit(5000)) {
+      Stop-Process -Id $p.ProcessId -Force
+      $h.WaitForExit(3000) | Out-Null
+    }
+  } catch { }
+}
+
+# Poll until Task Scheduler flips back to Ready before the next Start.
+# Without this, Start-ScheduledTask races the Running→Ready transition
+# and emits "The task is currently running" for several seconds.
+$deadline = (Get-Date).AddSeconds(5)
+while ((Get-Date) -lt $deadline -and (Get-ScheduledTask -TaskName $task).State -eq 'Running') {
+  Start-Sleep -Milliseconds 200
+}
+`.trim()
+}
+
 function powershellInstallCommands(opts: { taskName: string; execPath: string; execArgs: string; userName: string; autoStart: boolean }): string[][] {
   const tn = psQuote(opts.taskName)
   const exe = psQuote(opts.execPath)
@@ -324,7 +355,7 @@ $action    = New-ScheduledTaskAction    -Execute '${exe}' -Argument '${args}'
 $trigger   = New-ScheduledTaskTrigger   -AtLogOn -User '${usr}'
 $trigger.Enabled = ${triggerEnabled}
 $principal = New-ScheduledTaskPrincipal -UserId '${usr}' -LogonType Interactive -RunLevel Limited
-$settings  = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
+$settings  = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowHardTerminate $true
 Register-ScheduledTask -TaskName '${tn}' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
 `.trim()
   return [
