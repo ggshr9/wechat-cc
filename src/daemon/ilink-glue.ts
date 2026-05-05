@@ -17,6 +17,7 @@ import { buildMediaItemFromFile, assertSendable } from './media'
 import { ilinkSendMessage } from '../lib/ilink'
 import type { SessionStateStore } from './session-state'
 import { sendReplyOnce } from '../lib/send-reply'
+import { log } from '../lib/log'
 import {
   addProject,
   listProjects,
@@ -91,11 +92,32 @@ export async function loadAllAccounts(stateDir: string): Promise<Account[]> {
 
 export function makeIlinkAdapter(opts: { stateDir: string; accounts: Account[]; db: Db }): IlinkAdapter {
   const ctx = makeIlinkContext(opts)
-  const { stateDir, accounts, ctxStore, nameStore, acctStore, sessionState, pending, sweepTimer, projectsFile, resolveAccount, assertChatRoutable } = ctx
+  const { stateDir, accounts, ctxStore, nameStore, acctStore, sessionState, pending, sweepTimer, projectsFile, resolveAccount, assertChatRoutable, accountChatIndex } = ctx
 
   const voice = makeVoice(ctx)
   const companion = makeCompanion(ctx)
-  const transport = makeTransport(ctx)
+
+  // PR4 Task 15 — when ilink rejects an account with errcode=-14 ("rebound
+  // elsewhere"), fan out a 3-line user-facing notification to every chat
+  // that ever messaged through this account. The session is dead so the
+  // sends will mostly fail; per-chat failures are logged and swallowed.
+  // Desktop badge + dashboard signal (PR4 Task 16) cover the case where
+  // no chat has messaged since boot.
+  const expiredNotifyText = `⚠️ 这个 WeChat 账号的绑定已被替换 —— 你或其他人在别处重新扫码绑了同一个账号到 wechat-cc / OpenClaw。
+本机的旧 session 已失效，不会再收到新消息。
+要继续在这台机用，到桌面 dashboard 重新扫一次码。`
+
+  const transport = makeTransport(ctx, {
+    onAccountExpired: (accountId, _reason) => {
+      const chats = accountChatIndex.chatsFor(accountId)
+      for (const chatId of chats) {
+        sendReplyOnce(chatId, expiredNotifyText, stateDir).then(r => {
+          if (!r.ok) log('EXPIRED_NOTIFY', `chat=${chatId} acct=${accountId} send failed: ${r.error}`)
+        }).catch(err => log('EXPIRED_NOTIFY', `chat=${chatId} acct=${accountId} threw: ${err instanceof Error ? err.message : err}`))
+      }
+      log('EXPIRED_NOTIFY', `acct=${accountId} fan-out to ${chats.length} chat(s)`)
+    },
+  })
 
   const adapter: IlinkAdapter = {
     async sendMessage(chatId, text) {

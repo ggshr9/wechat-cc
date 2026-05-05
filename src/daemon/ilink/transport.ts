@@ -30,7 +30,7 @@ export interface TransportOpts {
 }
 
 export function makeTransport(ctx: IlinkContext, opts: TransportOpts = {}): TransportMethods {
-  const { accounts, acctStore, ctxStore, typingTickets, typingTTLMs, sessionState, lastActiveRef } = ctx
+  const { accounts, acctStore, ctxStore, typingTickets, typingTTLMs, sessionState, lastActiveRef, accountChatIndex } = ctx
 
   return {
     async sendTyping(chatId, accountId) {
@@ -90,8 +90,14 @@ export function makeTransport(ctx: IlinkContext, opts: TransportOpts = {}): Tran
     // replies to a dead session.
     markChatActive(chatId, accountId) {
       lastActiveRef.current = chatId
-      if (accountId && acctStore.get(chatId) !== accountId) {
-        acctStore.set(chatId, accountId)
+      if (accountId) {
+        // Record into the in-memory index so onAccountExpired can fan out
+        // notifications to every chat that ever messaged through this account.
+        // PR4 Task 15 — replaced by SQL once PR5 lands account_id on conversations.
+        accountChatIndex.record(accountId, chatId)
+        if (acctStore.get(chatId) !== accountId) {
+          acctStore.set(chatId, accountId)
+        }
       }
     },
 
