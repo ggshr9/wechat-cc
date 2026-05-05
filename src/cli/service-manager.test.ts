@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildServicePlan, installService } from './service-manager'
+import { validatePowerShellScript } from './powershell-validator'
 
 describe('service-manager', () => {
   it('builds a macOS LaunchAgent plan', () => {
@@ -280,9 +281,76 @@ describe('service-manager', () => {
       bunPath: 'C:\\bun.exe',
       windowsUser: 'bob',
     })
-    // installCommands[0] is Register-ScheduledTask; AllowHardTerminate lives
-    // inside New-ScheduledTaskSettingsSet in that same script
+    // installCommands[0] is Register-ScheduledTask; AllowHardTerminate is set
+    // by property assignment after the cmdlet returns — `-AllowHardTerminate`
+    // is NOT a real `New-ScheduledTaskSettingsSet` parameter (the inverse
+    // switch `-DisallowHardTerminate` is). v0.5.1 shipped the broken cmdlet
+    // form because the test was a substring grep; v0.5.2 enforces both the
+    // property-assignment shape (here) and real-PowerShell binding (the
+    // win32-only describe block below).
     const decoded = decodePsScript(plan.installCommands[0]!)
-    expect(decoded).toMatch(/AllowHardTerminate\s+\$true/)
+    expect(decoded).toMatch(/\$settings\.AllowHardTerminate\s*=\s*\$true/)
+  })
+
+  // Win-only end-to-end check: every generated install/start/stop/uninstall
+  // PowerShell script is parsed by powershell.exe and every cmdlet call's
+  // parameters are bound against the real cmdlet's parameter set. The grep
+  // assertions above prove "we wrote what we meant to write"; this proves
+  // "PowerShell will accept what we wrote". Without it, every Win11
+  // regression we shipped between v0.4.0 and v0.5.1 looked green in CI and
+  // crashed on a real user's machine.
+  describe.runIf(process.platform === 'win32')('Win32 generated PowerShell scripts bind to real cmdlets', () => {
+    function decodePsScript(cmd: string[]): string {
+      const idx = cmd.indexOf('-EncodedCommand')
+      if (idx < 0 || !cmd[idx + 1]) return ''
+      return Buffer.from(cmd[idx + 1]!, 'base64').toString('utf16le')
+    }
+
+    function checkAllPlanCommands(plan: ReturnType<typeof buildServicePlan>) {
+      const all = [
+        ...plan.installCommands,
+        ...plan.startCommands,
+        ...plan.stopCommands,
+        ...plan.uninstallCommands,
+      ]
+      expect(all.length).toBeGreaterThan(0)
+      for (const cmd of all) {
+        const script = decodePsScript(cmd)
+        expect(script.length).toBeGreaterThan(0)
+        const err = validatePowerShellScript(script)
+        // Inline the script in the failure message so a regression like the
+        // -AllowHardTerminate one points directly at the bad cmdlet line.
+        if (err) {
+          throw new Error(`${err.kind}: ${err.message}\n--- script ---\n${script}\n---`)
+        }
+      }
+    }
+
+    // Each plan generates 6 scripts (Register, Start, Stop, Unregister, +
+    // any helpers). Each validation spawns powershell.exe (cold-start ~1-2s
+    // on Win11). 60s timeout is comfortable margin even on slow CI.
+    const TIMEOUT_MS = 60_000
+
+    it('autoStart=true plan: every script binds', () => {
+      checkAllPlanCommands(buildServicePlan({
+        platform: 'win32', homeDir: 'C:\\Users\\bob', cwd: 'C:\\app',
+        bunPath: 'C:\\bun.exe', windowsUser: 'bob', autoStart: true,
+      }))
+    }, TIMEOUT_MS)
+
+    it('autoStart=false plan: every script binds', () => {
+      checkAllPlanCommands(buildServicePlan({
+        platform: 'win32', homeDir: 'C:\\Users\\bob', cwd: 'C:\\app',
+        bunPath: 'C:\\bun.exe', windowsUser: 'bob', autoStart: false,
+      }))
+    }, TIMEOUT_MS)
+
+    it('binaryPath plan (compiled-CLI install): every script binds', () => {
+      checkAllPlanCommands(buildServicePlan({
+        platform: 'win32', homeDir: 'C:\\Users\\bob', cwd: 'C:\\app',
+        bunPath: 'C:\\bun.exe', binaryPath: 'D:\\wechat-cc\\wechat-cc-cli.exe',
+        windowsUser: 'bob',
+      }))
+    }, TIMEOUT_MS)
   })
 })
