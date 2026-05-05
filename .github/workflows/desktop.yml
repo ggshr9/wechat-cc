@@ -111,8 +111,11 @@ jobs:
         # fight Git Bash quoting on the Windows runner — verified locally,
         # not worth a Windows-specific shim port for this Tier-1 smoke.
         shell: bash
+        # `bun --bun` forces Bun's runtime for the test process so vitest can
+        # resolve `bun:sqlite` (used by src/lib/db.ts via doctor.ts since v0.5.1).
+        # `bun x vitest` alone spawns workers via Node, which can't import bun:*.
         run: |
-          bun x vitest run \
+          bun --bun vitest run \
             cli.test.ts \
             agent-config.test.ts \
             doctor.test.ts \
