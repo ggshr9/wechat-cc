@@ -8,17 +8,28 @@
  * reaches Claude:
  *
  *   1. inbound from unknown user → bot replies with greeting + ask for name
- *   2. user's reply → validated, persisted to user_names.json, confirmation sent
+ *   2. user's reply → validated, persisted to user_names.json, ack reply +
+ *      original first message re-dispatched through the normal pipeline so
+ *      the provider answers it
  *   3. subsequent messages route normally to Claude
  *
  * State is in-memory only — daemon restart resets the awaiting set, but the
  * user simply re-sends their nickname. No persistent corruption surface.
  */
 
+import type { InboundMsg } from '../core/prompt-format'
+
 export interface OnboardingDeps {
   isKnownUser(userId: string): boolean
   setUserName(chatId: string, name: string): Promise<void>
   sendMessage(chatId: string, text: string): Promise<void>
+  /** Bot's user-facing self-name for the greeting (mode-aware in production). */
+  botName(chatId: string): string
+  /** Re-dispatch the user's first message through the normal pipeline AFTER
+   *  the nickname is captured so the provider answers it. Fire-and-forget
+   *  from onboarding's POV — failures are logged here, recovery is the
+   *  pipeline's job. */
+  dispatchInbound(msg: InboundMsg): Promise<void>
   log(tag: string, line: string): void
   now?: () => number
 }
@@ -29,7 +40,7 @@ export interface OnboardingHandler {
    * (caller MUST NOT route to Claude). Returns false to continue normal
    * routing (already-known user, or user out of awaiting window).
    */
-  handle(msg: { userId: string; chatId: string; text: string }): Promise<boolean>
+  handle(msg: InboundMsg): Promise<boolean>
 }
 
 const NICKNAME_MAX_LEN = 24
@@ -39,7 +50,7 @@ const AWAIT_TIMEOUT_MS = 30 * 60_000  // 30 min
 const DEDUP_WINDOW_MS = 1500  // ilink re-delivery / user double-tap window — see #16
 
 export function makeOnboardingHandler(deps: OnboardingDeps): OnboardingHandler {
-  const awaiting = new Map<string, { since: number; triggerText: string }>()
+  const awaiting = new Map<string, { since: number; triggerText: string; fromMessage: InboundMsg }>()
   const now = deps.now ?? (() => Date.now())
 
   return {
@@ -72,18 +83,30 @@ export function makeOnboardingHandler(deps: OnboardingDeps): OnboardingHandler {
           return true
         }
         await deps.setUserName(msg.chatId, proposed)
+        const stored = awaiting.get(msg.chatId)!
         awaiting.delete(msg.chatId)
         deps.log('ONBOARDING', `name set chat=${msg.chatId} → "${proposed}"`)
-        await deps.sendMessage(msg.chatId, `好的，${proposed}。我会记住的。有什么需要？`)
+
+        // Ack reply that quotes the original trigger.
+        await deps.sendMessage(
+          msg.chatId,
+          `好的 ${proposed}, 刚才你说「${stored.triggerText}」, 回答下：`,
+        )
+
+        // Re-dispatch the original first message through the normal pipeline
+        // (fire-and-forget; nickname is already persisted, so onboarding succeeded).
+        void deps.dispatchInbound(stored.fromMessage).catch(err => {
+          deps.log('ONBOARDING', `echo dispatch failed chat=${msg.chatId}: ${err}`)
+        })
         return true
       }
 
       // First contact (or stale awaiting state past timeout): greet + start the clock.
-      awaiting.set(msg.chatId, { since: now(), triggerText: msg.text })
+      awaiting.set(msg.chatId, { since: now(), triggerText: msg.text, fromMessage: msg })
       deps.log('ONBOARDING', `start chat=${msg.chatId} userId=${msg.userId}`)
       await deps.sendMessage(
         msg.chatId,
-        '你好！我是 wechat-cc bridge。第一次见面，请告诉我你的昵称（中文 / 英文都行，比如「丸子」「Alice」）。'
+        `你好呀！我是 ${deps.botName(msg.chatId)}，先问一下我应该怎么称呼你？比如「Nate」「丸子」（中文 / 英文都行）。`,
       )
       return true
     },
