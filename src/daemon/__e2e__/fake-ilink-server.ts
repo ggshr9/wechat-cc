@@ -41,6 +41,13 @@ export async function startFakeIlink(): Promise<FakeIlinkHandle> {
 
   const server = Bun.serve({
     port: 0,  // random
+    // Bind explicitly to IPv4 loopback. Bun.serve's default hostname is
+    // "localhost" which on this machine resolves only to ::1 — but our
+    // baseUrl below (and ilinkPost in src/lib/ilink.ts) hits 127.0.0.1,
+    // so without this fetch hangs until timeout with the cryptic
+    // "Unable to connect" error. (Bun 1.3.x; see test reproduction in
+    // commit log for v0.6 PR1.)
+    hostname: '127.0.0.1',
     async fetch(req) {
       const url = new URL(req.url)
       const body = req.method === 'POST' ? await req.json().catch(() => ({})) as Record<string, unknown> : {}
