@@ -38,15 +38,22 @@ export function renderDashboard(report) {
       const badge = row.expired
         ? `<span class="badge expired"><span class="b-dot"></span>Expired</span>`
         : `<span class="badge"><span class="b-dot"></span>Active</span>`
+      // Expired rows get a primary 重新扫码 affordance next to the (now
+      // ghost) delete button — clicking 重新扫码 routes back into the
+      // wizard's bind/QR step so the user can pair the same WeChat
+      // account again. Non-expired rows keep the original danger-style
+      // delete-only layout.
+      const actCell = row.expired
+        ? `<button class="btn primary" data-action="rebind">重新扫码</button>
+           <button class="btn ghost" data-action="ask-delete">删除</button>`
+        : `<button class="btn danger" data-action="ask-delete">删除</button>`
       return `
         <tr data-bot-id="${escapeHtml(row.id)}" data-name="${escapeHtml(row.name)}">
           <td class="name">${escapeHtml(row.name)}</td>
           <td class="id">${escapeHtml(row.id)}</td>
           <td>${badge}</td>
           <td class="exp">${escapeHtml(expCell)}</td>
-          <td class="act">
-            <button class="btn danger" data-action="ask-delete">删除</button>
-          </td>
+          <td class="act">${actCell}</td>
         </tr>
       `
     }).join("")
@@ -190,6 +197,18 @@ export async function handleAccountRowClick(deps, ev) {
   const row = btn.closest("tr[data-bot-id]")
   if (!row) return false
   const action = btn.dataset.action
+  if (action === "rebind") {
+    // Route to wizard bind step. Preferred: deps.routeToWizardBind (lands
+    // on the QR/扫码 panel directly). Fallback: routeToWizardService —
+    // not perfect targeting but at least pulls the user out of the
+    // dashboard into the setup flow rather than no-op'ing the click.
+    if (typeof deps.routeToWizardBind === "function") {
+      deps.routeToWizardBind()
+    } else if (typeof deps.routeToWizardService === "function") {
+      deps.routeToWizardService()
+    }
+    return true
+  }
   if (action === "ask-delete") {
     const actCell = row.querySelector("td.act")
     actCell.innerHTML = `

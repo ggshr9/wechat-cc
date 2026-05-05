@@ -170,17 +170,35 @@ fn wechat_daemon_pid() -> Option<u32> {
     }
 }
 
+// OS-level notification — fires from JS (`invoke("notify_user", ...)`) when
+// the doctor-poller diff detects a newly-expired account. Uses
+// tauri-plugin-notification's native bridge (NSUserNotification on macOS,
+// the WinRT toast API on Windows, libnotify on Linux). Errors propagate to
+// JS as a string so the renderer can console.warn() them; no fallback.
+#[tauri::command]
+fn notify_user(app: AppHandle, title: String, body: String) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+    app.notification()
+        .builder()
+        .title(&title)
+        .body(&body)
+        .show()
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             wechat_cli_json,
             wechat_cli_json_via_file,
             wechat_cli_text,
             save_text_file,
             render_qr_svg,
-            wechat_daemon_pid
+            wechat_daemon_pid,
+            notify_user
         ])
         .run(tauri::generate_context!())
         .expect("error while running wechat-cc desktop");
