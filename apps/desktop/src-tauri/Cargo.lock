@@ -4802,7 +4802,7 @@ dependencies = [
 
 [[package]]
 name = "wechat_cc_desktop"
-version = "0.5.1"
+version = "0.5.5"
 dependencies = [
  "qrcode",
  "serde",
