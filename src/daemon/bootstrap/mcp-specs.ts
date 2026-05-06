@@ -18,6 +18,7 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ProviderId } from '../../core/conversation'
+import { isCompiledBundle } from '../../lib/runtime-info'
 
 export interface McpStdioSpec {
   command: string
@@ -30,11 +31,32 @@ export interface McpSpecDeps {
   tokenFilePath: string
 }
 
-function mcpServerScriptPath(name: 'wechat' | 'delegate'): string {
-  // Resolve relative to this file's location.
-  // src/daemon/bootstrap/mcp-specs.ts → ../../mcp-servers/<name>/main.ts
+// Two spawn shapes — picked at runtime by `mcpServerArgs()`:
+//
+//   Source mode      → args = ['/abs/path/to/src/mcp-servers/<name>/main.ts']
+//                      The daemon is `bun <main.ts>`, so process.execPath
+//                      is bun and it runs the .ts file directly.
+//
+//   Compiled binary  → args = ['mcp-server', '<name>']
+//                      process.execPath is wechat-cc-cli and the binary
+//                      doesn't ship the .ts source on disk, so we re-
+//                      invoke ourselves with the hidden `mcp-server`
+//                      subcommand, which dynamic-imports the bundled
+//                      entrypoint and runs the stdio server in-process.
+//
+// Bug history: through v0.5.4 this always returned the script-path form.
+// In compiled-binary mode `import.meta.url` resolved to `/$bunfs/...`,
+// then `path.join(.., '..', '..', ...)` collapsed the prefix and produced
+// a literal `/mcp-servers/<name>/main.ts` — a non-existent absolute path.
+// The spawn invoked `wechat-cc-cli /mcp-servers/wechat/main.ts`; citty
+// didn't recognise the arg, printed help, exited 0. The Claude SDK saw
+// no MCP protocol bytes on stdio, no `mcp__wechat__*` tools registered,
+// every turn fell into FALLBACK_REPLY, and reply chunks never went through
+// the proper outbound recording path. Fixed in v0.5.5.
+function mcpServerArgs(name: 'wechat' | 'delegate'): string[] {
+  if (isCompiledBundle()) return ['mcp-server', name]
   const here = dirname(fileURLToPath(import.meta.url))
-  return join(here, '..', '..', 'mcp-servers', name, 'main.ts')
+  return [join(here, '..', '..', 'mcp-servers', name, 'main.ts')]
 }
 
 export function wechatStdioMcpSpec(
@@ -42,8 +64,8 @@ export function wechatStdioMcpSpec(
   participantTag?: ProviderId,
 ): McpStdioSpec {
   return {
-    command: process.execPath,  // bun or node — whichever is running the daemon
-    args: [mcpServerScriptPath('wechat')],
+    command: process.execPath,  // bun (source) or wechat-cc-cli (compiled)
+    args: mcpServerArgs('wechat'),
     env: {
       WECHAT_INTERNAL_API: internalApi.baseUrl,
       WECHAT_INTERNAL_TOKEN_FILE: internalApi.tokenFilePath,
@@ -58,7 +80,7 @@ export function delegateStdioMcpSpec(
 ): McpStdioSpec {
   return {
     command: process.execPath,
-    args: [mcpServerScriptPath('delegate')],
+    args: mcpServerArgs('delegate'),
     env: {
       WECHAT_INTERNAL_API: internalApi.baseUrl,
       WECHAT_INTERNAL_TOKEN_FILE: internalApi.tokenFilePath,

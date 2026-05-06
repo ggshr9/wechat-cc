@@ -1335,6 +1335,42 @@ const modeCmd = defineCommand({
   subCommands: { set: modeSetCmd },
 })
 
+// Hidden — used only by the daemon to spawn its own stdio MCP children
+// when running from the compiled binary. The compiled binary doesn't ship
+// `src/mcp-servers/<name>/main.ts` as files on disk, so the daemon's old
+// strategy of passing a script path to `process.execPath` failed silently
+// (see src/daemon/bootstrap/mcp-specs.ts for the full bug story). Now the
+// daemon emits `args: ['mcp-server', '<name>']` and we dynamic-import the
+// matching bundled entrypoint here. The MCP server module connects to
+// stdio at top level; control returns once the transport is attached, but
+// the process stays alive on stdin's pending reader until Claude SDK
+// closes its end. Source mode skips this path entirely (mcp-specs uses
+// the .ts script path directly).
+const mcpServerCmd = defineCommand({
+  meta: {
+    name: 'mcp-server',
+    description: 'Internal — run a stdio MCP server entrypoint (wechat | delegate). Spawned by the daemon when running from the compiled binary.',
+  },
+  args: {
+    name: {
+      type: 'positional',
+      required: true,
+      description: 'Server name (wechat | delegate)',
+      valueHint: 'name',
+    },
+  },
+  async run({ args }) {
+    if (args.name === 'wechat') {
+      await import('./src/mcp-servers/wechat/main')
+    } else if (args.name === 'delegate') {
+      await import('./src/mcp-servers/delegate/main')
+    } else {
+      console.error(`mcp-server: unknown name "${args.name}" (expected wechat | delegate)`)
+      process.exit(2)
+    }
+  },
+})
+
 // Subcommands literal first → both `cittyRoot.subCommands` and
 // `MIGRATED_COMMANDS` derive from this single source of truth. Adding a new
 // citty subcommand only requires touching this object — the dispatch set
@@ -1373,6 +1409,7 @@ const SUBCOMMANDS = {
   update: updateCmd,
   'install-progress': installProgressCmd,
   mode: modeCmd,
+  'mcp-server': mcpServerCmd,
 } as const
 
 export const cittyRoot = defineCommand({
