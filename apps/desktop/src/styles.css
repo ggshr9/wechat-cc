@@ -980,6 +980,11 @@ input { font: inherit; color: inherit; }
   min-height: 0;
   overflow-y: auto;
 }
+/* Cards must keep their natural height — without this the flex column
+   shrinks every card proportionally when their combined intrinsic height
+   exceeds the viewport, and `.card { overflow: hidden }` then silently
+   clips the inner table rows. The dash-body is the scroll container. */
+.dash-body > .card { flex-shrink: 0; }
 
 /* hero card */
 .hero-card {

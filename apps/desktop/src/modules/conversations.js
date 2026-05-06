@@ -62,8 +62,8 @@ export function renderConversations(report, deps) {
           <option value="codex"${currentShorthand === "codex" ? " selected" : ""}>/codex (Codex solo)</option>
           <option value="both"${currentShorthand === "both" ? " selected" : ""}>/both (Parallel)</option>
           <option value="chat"${currentShorthand === "chat" ? " selected" : ""}>/chat (Chatroom)</option>
-        </select>
-        <span class="mode-detail">${escapeHtml(row.badge.detail)}</span>
+        </select>${row.badge.tone === "solo" ? "" : `
+        <span class="mode-detail">${escapeHtml(row.badge.detail)}</span>`}
       </td>
     </tr>
   `
