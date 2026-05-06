@@ -40,6 +40,15 @@ const dryRun = process.env.WECHAT_CC_DRY_RUN === '1'
 // Real-mode (dryRun=false) still hits the CLI — state is only consulted when
 // DRY_RUN=1 AND the relevant field is non-empty (observations, milestones,
 // sessions) or set (qrScanComplete, qrScanFails, envCheck).
+type DaemonMode = { kind: string; provider?: string; primary?: string; secondary?: string; providers?: string[] }
+type DaemonConversation = {
+  chat_id: string
+  user_id?: string | null
+  account_id?: string | null
+  user_name?: string | null
+  mode: DaemonMode
+}
+
 const __mockState: {
   chats: Array<{ id: string; name: string; last_active: number; mode?: { kind: string; provider?: string } }>
   observations: Array<{ id: string; body: string; tone: string; archived: boolean }>
@@ -50,7 +59,11 @@ const __mockState: {
   envCheck?: { binary_missing?: string }
   installProgress: { step: number; total: number; label: string; ts: number } | null
   installSimulationStep: number
-} = { chats: [], observations: [], milestones: [], sessions: [], installProgress: null, installSimulationStep: 0 }
+  // dry-run mode keeps an in-memory mirror of the daemon's `conversations list`
+  // shape so dropdown writes (mode set) stay consistent with subsequent
+  // poller reads. Lazily seeded from the real CLI on first read.
+  conversations: DaemonConversation[] | null
+} = { chats: [], observations: [], milestones: [], sessions: [], installProgress: null, installSimulationStep: 0, conversations: null }
 
 const POLYFILL = `<script>
 window.__TAURI__ = window.__TAURI__ ?? { core: {
@@ -329,7 +342,36 @@ Bun.serve({
             return Response.json({ result: { ...__mockState.installProgress } })
           }
 
-          // Intercept mode set in DRY_RUN — update mock chat mode + return ok.
+          // Intercept conversations list in DRY_RUN. First call lazy-seeds
+          // from the real daemon (so manual testers see real data); subsequent
+          // calls return the in-memory mirror that mode set keeps updated.
+          // Without this, dropdown clicks update __mockState but the next
+          // 10s poll round-trips to the real daemon and renders stale data
+          // — visible as "切了 codex 又切回 claude" revert.
+          if (
+            dryRun &&
+            body.command === 'wechat_cli_json' &&
+            cliArgs[0] === 'conversations' &&
+            cliArgs[1] === 'list'
+          ) {
+            if (__mockState.conversations === null) {
+              const r = await runCli(cliArgs)
+              if (r.code !== 0) {
+                __mockState.conversations = []
+              } else {
+                try {
+                  const parsed = JSON.parse(r.stdout.trim()) as { conversations?: DaemonConversation[] }
+                  __mockState.conversations = parsed.conversations ?? []
+                } catch {
+                  __mockState.conversations = []
+                }
+              }
+            }
+            return Response.json({ result: { ok: true, conversations: __mockState.conversations } })
+          }
+
+          // Intercept mode set in DRY_RUN — update the mirror so the next
+          // conversations list read is consistent with this write.
           // Frontend calls: ["mode", "set", <chatId>, <mode>, "--json"]
           if (
             dryRun &&
@@ -339,18 +381,17 @@ Bun.serve({
           ) {
             const chatId = cliArgs[2]
             const modeArg = cliArgs[3]
-            // Map shorthand to mode shape (mirrors cli.ts modeShorthand mapping)
-            const SHORTHAND: Record<string, { kind: string; provider?: string }> = {
+            const SHORTHAND: Record<string, DaemonMode> = {
               cc:    { kind: 'solo', provider: 'claude' },
               codex: { kind: 'solo', provider: 'codex' },
               solo:  { kind: 'solo', provider: 'claude' },
-              both:  { kind: 'parallel' },
-              chat:  { kind: 'chatroom' },
+              both:  { kind: 'parallel', providers: ['claude', 'codex'] },
+              chat:  { kind: 'chatroom', providers: ['claude', 'codex'] },
             }
-            const mode = modeArg ? (SHORTHAND[modeArg] ?? (() => { try { return JSON.parse(modeArg) } catch { return null } })()) : null
-            if (mode && chatId) {
-              __mockState.chats = __mockState.chats.map(c =>
-                c.id === chatId ? { ...c, mode } : c
+            const mode = modeArg ? (SHORTHAND[modeArg] ?? (() => { try { return JSON.parse(modeArg) as DaemonMode } catch { return null } })()) : null
+            if (mode && chatId && __mockState.conversations) {
+              __mockState.conversations = __mockState.conversations.map(c =>
+                c.chat_id === chatId ? { ...c, mode } : c
               )
             }
             return Response.json({ result: { ok: true } })
