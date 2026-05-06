@@ -4,6 +4,46 @@ import { findCodexBinary } from './find-codex-binary'
 const HOME = '/home/u'
 
 describe('findCodexBinary', () => {
+  it('prefers wechat-cc-bundled JS shim over PATH/nvm (version-matched)', () => {
+    const fs = new Set([
+      '/home/u/.claude/plugins/local/wechat/node_modules/@openai/codex/bin/codex.js',
+      '/usr/bin/codex',  // older system codex — should NOT win
+    ])
+    const result = findCodexBinary({
+      exists: (p) => fs.has(p),
+      readdir: () => [],
+      pathEnv: '/usr/bin',
+      homeDir: HOME,
+      platform: 'linux',
+    })
+    expect(result).toBe('/home/u/.claude/plugins/local/wechat/node_modules/@openai/codex/bin/codex.js')
+  })
+
+  it('honours WECHAT_CC_ROOT when set (alternative source location)', () => {
+    const fs = new Set(['/opt/wechat-cc/node_modules/@openai/codex/bin/codex.js'])
+    const result = findCodexBinary({
+      exists: (p) => fs.has(p),
+      readdir: () => [],
+      pathEnv: '/usr/bin',
+      homeDir: HOME,
+      platform: 'linux',
+      wechatCcRoot: '/opt/wechat-cc',
+    })
+    expect(result).toBe('/opt/wechat-cc/node_modules/@openai/codex/bin/codex.js')
+  })
+
+  it('falls through to PATH when wechat-cc bundled shim is missing', () => {
+    const fs = new Set(['/usr/bin/codex'])
+    const result = findCodexBinary({
+      exists: (p) => fs.has(p),
+      readdir: () => [],
+      pathEnv: '/usr/bin',
+      homeDir: HOME,
+      platform: 'linux',
+    })
+    expect(result).toBe('/usr/bin/codex')
+  })
+
   it('returns the first PATH entry that has an executable named "codex"', () => {
     const fs = new Set([
       '/usr/local/bin/codex',

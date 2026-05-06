@@ -40,6 +40,20 @@ export interface FindCodexBinaryDeps {
   homeDir?: string
   /** Defaults to `process.platform`. */
   platform?: NodeJS.Platform
+  /** Defaults to `process.env.WECHAT_CC_ROOT`. */
+  wechatCcRoot?: string | undefined
+}
+
+// Common on-disk locations of wechat-cc's own source clone — the README
+// recommends `~/.claude/plugins/local/wechat/` for the desktop installer;
+// `~/.local/share/wechat-cc/` is the alternative the docs mention. Anything
+// else can be set via `WECHAT_CC_ROOT`.
+function wechatCcSourceProbeRoots(homeDir: string, override?: string): string[] {
+  const roots: string[] = []
+  if (override) roots.push(override)
+  roots.push(join(homeDir, '.claude', 'plugins', 'local', 'wechat'))
+  roots.push(join(homeDir, '.local', 'share', 'wechat-cc'))
+  return roots
 }
 
 export function findCodexBinary(deps: FindCodexBinaryDeps = {}): string | null {
@@ -48,10 +62,22 @@ export function findCodexBinary(deps: FindCodexBinaryDeps = {}): string | null {
   const pathEnv = deps.pathEnv ?? (process.env.PATH ?? '')
   const homeDir = deps.homeDir ?? homedir()
   const platform = deps.platform ?? process.platform
+  const wechatCcRoot = 'wechatCcRoot' in deps ? deps.wechatCcRoot : process.env.WECHAT_CC_ROOT
   const exe = platform === 'win32' ? 'codex.exe' : 'codex'
   const sep = platform === 'win32' ? ';' : ':'
 
-  // 1. PATH lookup — covers system-wide installs (`/usr/local/bin`,
+  // 1. wechat-cc's bundled, SDK-version-matched JS shim (highest priority).
+  // The Codex wire protocol changes across versions: a globally-installed
+  // codex 0.125.0 paired with SDK 0.128.0 silently emits events the SDK
+  // doesn't decode, so dispatch returns empty `assistantText` and no reply
+  // gets sent. Preferring our own `node_modules/@openai/codex/bin/codex.js`
+  // pins the codex CLI version to the SDK we ship with.
+  for (const root of wechatCcSourceProbeRoots(homeDir, wechatCcRoot)) {
+    const shim = join(root, 'node_modules', '@openai', 'codex', 'bin', 'codex.js')
+    if (exists(shim)) return shim
+  }
+
+  // 2. PATH lookup — covers system-wide installs (`/usr/local/bin`,
   // `/usr/bin`, `~/.local/bin` for npm-prefix-set-to-home), and any shell
   // that has nvm sourced before launching the daemon.
   for (const dir of pathEnv.split(sep)) {
@@ -60,7 +86,7 @@ export function findCodexBinary(deps: FindCodexBinaryDeps = {}): string | null {
     if (exists(candidate)) return candidate
   }
 
-  // 2. nvm fallback — `systemctl --user` services don't source ~/.bashrc
+  // 3. nvm fallback — `systemctl --user` services don't source ~/.bashrc
   // / ~/.zshrc, so NVM's PATH entries (which install codex into the
   // active node version's `bin/`) are missing. Walk `~/.nvm/versions/node`
   // newest-first so the most recently installed version wins. This covers

@@ -84,6 +84,17 @@ export interface CodexAgentProviderOptions {
    * Costs ~ N tokens once per thread. Skipped when undefined / empty.
    */
   appendInstructions?: string
+  /**
+   * v0.5.7 — when true, sets the codex CLI's
+   * `dangerously_bypass_approvals_and_sandbox=true` config (equivalent to the
+   * `--dangerously-bypass-approvals-and-sandbox` CLI flag). Without this,
+   * codex 0.128.0 refuses MCP tool calls with `"user cancelled MCP tool
+   * call"` even under `approval_policy="never"` + `sandbox="danger-full-access"`,
+   * because MCP approval has its own gate that only the bypass key opens.
+   * The daemon flips this on whenever the operator passed `--dangerously` so
+   * codex can actually call `mcp__wechat__reply` headlessly.
+   */
+  dangerouslyBypassApprovalsAndSandbox?: boolean
   /** Test-only: inject a mock Codex factory. Production omits this. */
   codexFactory?: CodexFactory
 }
@@ -93,16 +104,21 @@ export function createCodexAgentProvider(opts: CodexAgentProviderOptions = {}): 
 
   return {
     async spawn(project: AgentProject, spawnOpts?: { resumeSessionId?: string }): Promise<AgentSession> {
-      const codex = factory({
-        ...(opts.codexPathOverride ? { codexPathOverride: opts.codexPathOverride } : {}),
+      const config: Record<string, unknown> = {}
+      if (opts.mcpServers) {
         // Cast through `unknown` because CodexConfigValue forbids undefined
         // and our optional fields (args?, env?) carry that variance through
         // the index signature even when always populated. SDK serialiser
         // (flattenConfigOverrides at dist/index.js:297) skips undefined
         // children so this is safe at runtime.
-        ...(opts.mcpServers
-          ? { config: { mcp_servers: opts.mcpServers as unknown as Record<string, never> } }
-          : {}),
+        config.mcp_servers = opts.mcpServers as unknown as Record<string, never>
+      }
+      if (opts.dangerouslyBypassApprovalsAndSandbox) {
+        config.dangerously_bypass_approvals_and_sandbox = true
+      }
+      const codex = factory({
+        ...(opts.codexPathOverride ? { codexPathOverride: opts.codexPathOverride } : {}),
+        ...(Object.keys(config).length > 0 ? { config: config as never } : {}),
       })
       const threadOptions = {
         workingDirectory: project.path,

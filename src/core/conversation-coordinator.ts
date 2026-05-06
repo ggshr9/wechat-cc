@@ -19,7 +19,7 @@ import type { ConversationStore } from './conversation-store'
 import type { ProviderRegistry } from './provider-registry'
 import type { Mode, ProviderId } from './conversation'
 import type { InboundMsg } from './prompt-format'
-import { parseAddressing, wrapChatroomTurn, maxRoundsSuffix } from './chatroom-protocol'
+import { evaluateRound as evaluateModeratorRound, type ModeratorDecision } from './chatroom-moderator'
 import { assertSupported, UnsupportedCombinationError, type PermissionMode } from './capability-matrix'
 
 export class ModeNotImplementedError extends Error {
@@ -71,6 +71,18 @@ export interface ConversationCoordinatorDeps {
    * (third arg is optional in the daemon's real `log` impl too).
    */
   log: (tag: string, line: string, fields?: Record<string, unknown>) => void
+  /**
+   * One-shot Claude Haiku eval used by the chatroom moderator (v0.5.8).
+   * Bootstrap wires this to `query()` from `@anthropic-ai/claude-agent-sdk`
+   * with model='claude-haiku-4-5' + maxTurns=1. Test stubs return mock
+   * decisions directly. Each /chat dispatch calls this 3-5×.
+   *
+   * Optional so existing test fixtures (most don't exercise /chat) don't
+   * have to provide a stub. If the chatroom path runs without it, the
+   * moderator fallback always picks alternation + a generic prompt — the
+   * loop still functions, just without LLM-quality routing decisions.
+   */
+  haikuEval?: (prompt: string) => Promise<string>
 }
 
 export interface ConversationCoordinator {
@@ -180,29 +192,28 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
   }
 
   /**
-   * RFC 03 §4.4 chatroom mode: two agents take turns; routing is by
-   * @-tag in their assistant text. Loop terminates naturally when no
-   * one @'s the peer (pending queue empties) or hits MAX_ROUNDS.
+   * RFC 03 §4.4 chatroom mode (v0.5.8 rewrite — moderator-driven).
    *
-   * Sequence per turn:
-   *   1. Pop the next pending {from, text}.
-   *   2. Wrap with chatroom envelope (round counter + protocol reminder).
-   *   3. Dispatch to the speaker's session. SDK conversation history
-   *      accumulates as usual — fine because the envelope makes each
-   *      turn's role clear.
-   *   4. Parse assistantText for @-tag segments:
-   *        - addressee=null or 'user' → forward to user (prefixed)
-   *        - addressee=peer → enqueue for peer's next turn
-   *        - addressee=anything else → treat as user (unknown peer
-   *          shouldn't silently disappear)
-   *   5. If reply tool was called (agent ignored the "don't use reply"
-   *      hint), text already went out via internal-api. We still parse
-   *      assistantText for routing (separate channel).
-   *   6. Switch speaker, increment rounds, repeat.
+   * Through v0.5.7 the chatroom was self-routing via @-tags in speakers'
+   * outputs. That fought the model's training prior toward "give the
+   * user a complete answer", so both agents typically @user'd directly
+   * and /chat looked indistinguishable from /both. Now a separate
+   * claude-haiku-4-5 moderator (one-shot eval per round) decides who
+   * speaks next and crafts a targeted prompt — same architecture as
+   * AutoGen's GroupChatManager, CrewAI hierarchical mode, and Anthropic's
+   * orchestrator-worker pattern.
    *
-   * Speaker rotation: starts with last-addressed (from previous turn or
-   * previous chat session); falls back to parallelProviders[0]. Updated
-   * each round to the current peer (i.e. flip-flop between the two).
+   * Sequence per round:
+   *   1. moderator.evaluateRound(...) → {action, speaker, prompt}
+   *   2. If action='end' → break.
+   *   3. Else dispatch the prompt to the picked speaker's session.
+   *   4. Stream their output to user with [Display] prefix and append
+   *      to history.
+   *   5. Loop until end / max_rounds / abort.
+   *
+   * Costs ~3-5 haiku evals per /chat (~$0.01-0.05), latency overhead
+   * ~5-10s. The trade is worth it for actual back-and-forth instead of
+   * /both-with-extra-steps.
    */
   async function dispatchChatroom(
     msg: InboundMsg,
@@ -212,134 +223,113 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
       throw new Error(`chatroom mode requires exactly 2 parallel providers; got ${parallelProviders.length}`)
     }
     const [providerA, providerB] = parallelProviders as [ProviderId, ProviderId]
-    const peerOf = (p: ProviderId): ProviderId => p === providerA ? providerB : providerA
-
-    // Pick first speaker: last-spoke for this chat (from a previous
-    // chatroom session) or default to providerA.
-    let speaker = lastChatroomSpeaker.get(msg.chatId) ?? providerA
-    let peer = peerOf(speaker)
-
-    interface PendingTurn { from: 'user' | ProviderId; text: string }
-    const pending: PendingTurn[] = [{ from: 'user', text: deps.format(msg) }]
-    let round = 0
 
     // RFC 03 review #11 — per-chat AbortController so /stop can preempt
     // an in-flight loop. Concurrent dispatches for the same chat will
-    // overwrite the slot — only the latest is cancellable. The
-    // overwritten controller's owner runs to completion (acceptable;
-    // dispatch promises serialise via main.ts await chain anyway).
+    // overwrite the slot — only the latest is cancellable.
     const aborter = new AbortController()
     inFlightAborters.set(msg.chatId, aborter)
 
-    deps.log('COORDINATOR', `chatroom chat=${msg.chatId} → start speaker=${speaker} peer=${peer} max=${chatroomMaxRounds}`)
+    const userMessage = deps.format(msg)
+    const history: Array<{ speaker: ProviderId; text: string }> = []
+
+    deps.log('COORDINATOR', `chatroom chat=${msg.chatId} → start participants=${providerA},${providerB} max=${chatroomMaxRounds}`)
 
     try {
-    while (pending.length > 0) {
-      // Check abort BEFORE starting a turn. Mid-turn abort is not
-      // supported (we'd have to wire AbortSignal through to AgentSession
-      // which neither SDK uniformly accepts). Per-turn check is the
-      // pragmatic granularity — at most one extra LLM call after /stop.
+    for (let round = 1; round <= chatroomMaxRounds; round++) {
       if (aborter.signal.aborted) {
-        deps.log('COORDINATOR_CHATROOM', `chat=${msg.chatId} aborted at round ${round} (pending=${pending.length})`)
+        deps.log('COORDINATOR_CHATROOM', `chat=${msg.chatId} aborted at round ${round}`)
         await deps.sendAssistantText?.(msg.chatId, '⏸ chatroom 已收到 /stop，提前终止本轮（已派出的 turn 无法撤回）。')
         break
       }
-      round += 1
-      const forced = round >= chatroomMaxRounds
-      const turn = pending.shift()!
-      const wrapped = wrapChatroomTurn({
-        speaker, peer, round, maxRounds: chatroomMaxRounds,
-        sender: turn.from,
-        inner: turn.text,
+
+      // Moderator picks who speaks next + crafts their prompt.
+      // Without a haikuEval dep we always hit the fallback (forced
+      // alternation, generic prompt) — keeps the loop functional but
+      // loses the targeted-prompt benefit. Bootstrap wires the real one.
+      const haikuEval = deps.haikuEval ?? (async () => {
+        throw new Error('haikuEval not wired')
       })
+      let decision: ModeratorDecision
+      try {
+        decision = await evaluateModeratorRound(
+          {
+            userMessage,
+            history,
+            round,
+            maxRounds: chatroomMaxRounds,
+            participants: [providerA, providerB],
+          },
+          { haikuEval, log: deps.log },
+        )
+      } catch (err) {
+        // evaluateRound has its own fallbacks; if even those throw we
+        // bail to user-facing error rather than silently hanging.
+        const reason = err instanceof Error ? err.message : String(err)
+        deps.log('COORDINATOR_CHATROOM', `moderator threw: ${reason}; ending chatroom`)
+        await deps.sendAssistantText?.(msg.chatId, `[chatroom] 主持人调用失败：${reason}`)
+        break
+      }
+
+      if (decision.action === 'end') {
+        deps.log('COORDINATOR_CHATROOM', `chat=${msg.chatId} round=${round} moderator end (${decision.reasoning ?? '—'})`)
+        break
+      }
+
+      const { speaker, prompt } = decision
+      const isFinalRound = round === chatroomMaxRounds
+      deps.log('COORDINATOR_CHATROOM', `round=${round} speaker=${speaker} final=${isFinalRound} (mod: ${decision.reasoning ?? '—'})`)
+
+      // Belt-and-suspenders coda. The moderator's instructions already tell
+      // it to append "use plain text, don't call reply tool" to every
+      // generated prompt, but we re-append unconditionally here so even a
+      // moderator that forgets (or a fallback decision that didn't run
+      // through MODERATOR_INSTRUCTIONS) still pins the speaker to plain
+      // text. Mixing reply-tool turns with plain-text turns produced the
+      // visual inconsistency users flagged on 2026-05-06.
+      const dispatchedPrompt = prompt.includes('不要调 reply 工具')
+        ? prompt
+        : `${prompt}\n\n[chatroom 模式]：请用纯文本回复，不要调 reply 工具。daemon 会自动加 [Display] 前缀转发给用户。`
 
       let result: { assistantText: string[]; replyToolCalled: boolean }
       try {
         const handle = await deps.manager.acquire(proj.alias, proj.path, speaker)
-        result = await handle.dispatch(wrapped)
+        result = await handle.dispatch(dispatchedPrompt)
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err)
         deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} threw: ${reason}`)
-        // Surface to user so they know something went wrong, then end loop.
         const dn = deps.registry.get(speaker)?.opts.displayName ?? speaker
         await deps.sendAssistantText?.(msg.chatId, `[${dn}] (chatroom error: ${reason})`)
         break
       }
 
-      // Track last-spoke for next chat session's initial speaker.
       lastChatroomSpeaker.set(msg.chatId, speaker)
 
-      // RFC 03 P5 review #1 — if the agent disregarded the "don't use
-      // reply tool in chatroom" hint and called reply anyway, the text
-      // already went to user via internal-api (with [Display] prefix
-      // from maybePrefix). To avoid sending the SAME text TWICE, skip
-      // assistantText parsing/forwarding entirely — accept that this
-      // turn produced no peer-routable output. Loop terminates if no
-      // pending. (Mirrors the parallel-mode `if (replyToolCalled) continue`
-      // guard at the parallel-dispatch path.)
+      // If the speaker called the reply tool despite chatroom mode, the
+      // text already went out via internal-api with the [Display] prefix.
+      // Skip our own forwarding (would double-send) but still record
+      // their output in history so the next moderator round sees it.
       if (result.replyToolCalled) {
-        deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} replyToolCalled=true; skipping assistantText routing (would double-send to user)`)
-        if (forced) {
-          const dropped = pending.length
-          pending.length = 0
-          deps.log('COORDINATOR_CHATROOM', `chat=${msg.chatId} max_rounds reached on round ${round}${dropped > 0 ? `; dropped ${dropped} queued relay(s)` : ''}`)
-        }
-        if (pending.length > 0) {
-          speaker = peer
-          peer = peerOf(speaker)
-        }
+        deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} replyToolCalled — skipping our forward`)
+        history.push({ speaker, text: result.assistantText.join('\n').trim() || '(reply tool used)' })
         continue
       }
 
       const allText = result.assistantText.join('\n').trim()
-      const segments = allText.length > 0 ? parseAddressing(allText) : []
-
+      if (allText.length === 0) {
+        deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} produced no assistant text — ending`)
+        break
+      }
       const dn = deps.registry.get(speaker)?.opts.displayName ?? speaker
-      for (const seg of segments) {
-        const target = seg.addressee
-        if (target === peer) {
-          // Inter-agent — enqueue for peer's next turn (unless we've
-          // hit the round cap, in which case route to user instead so
-          // the would-be relay isn't lost). Only the would-be-relay
-          // segment gets the max_rounds suffix; co-emitted @user
-          // segments below stay clean (they're naturally user-facing).
-          if (forced) {
-            await deps.sendAssistantText?.(msg.chatId, `[${dn}] @${peer} ${seg.body}${maxRoundsSuffix()}`)
-          } else {
-            pending.push({ from: speaker, text: `@${peer} ${seg.body}` })
-          }
-        } else {
-          // user-facing (null, 'user', or unknown peer treated as user) — no suffix.
-          await deps.sendAssistantText?.(msg.chatId, `[${dn}] ${seg.body}`)
-        }
-      }
-
-      // If the speaker emitted nothing, log once and move on. The peer
-      // gets nothing to react to → loop will terminate next iteration.
-      if (segments.length === 0) {
-        deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} produced no assistant text (replyToolCalled=${result.replyToolCalled})`)
-      }
-
-      if (forced) {
-        // Cap reached: drop any queued relays (defensive — we shouldn't
-        // have enqueued any since the for-loop above routes to user when
-        // forced) and log so it's grep-able from channel.log.
-        const dropped = pending.length
-        pending.length = 0
-        deps.log('COORDINATOR_CHATROOM', `chat=${msg.chatId} max_rounds reached on round ${round}${dropped > 0 ? `; dropped ${dropped} queued relay(s)` : ''}`)
-      }
-
-      // Flip speaker for next iteration (only if we have more pending).
-      if (pending.length > 0) {
-        speaker = peer
-        peer = peerOf(speaker)
-      }
+      // Final-round prefix marks the synthesis turn so users can tell
+      // "this is the resolution" from "this is mid-debate".
+      const prefix = isFinalRound ? `[${dn} · 终局]` : `[${dn}]`
+      await deps.sendAssistantText?.(msg.chatId, `${prefix} ${allText}`)
+      history.push({ speaker, text: allText })
     }
 
-    deps.log('COORDINATOR', `chatroom chat=${msg.chatId} → done after ${round} round(s)`)
+    deps.log('COORDINATOR', `chatroom chat=${msg.chatId} → done after ${history.length} turn(s)`)
     } finally {
-      // Clean up our slot — but only if it's still us. A concurrent
-      // dispatch on the same chat could have replaced it; don't stomp.
       if (inFlightAborters.get(msg.chatId) === aborter) {
         inFlightAborters.delete(msg.chatId)
       }

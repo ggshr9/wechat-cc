@@ -267,7 +267,13 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
         // hangs; `never` is the only viable headless setting.
         // Use the capability matrix as the single source of truth for the policy.
         approvalPolicy: lookup('solo', 'codex', permissionMode).approvalPolicy ?? 'never',
-        sandboxMode: 'workspace-write',
+        // v0.5.7 — when daemon runs --dangerously, mirror the same posture
+        // for codex: bypass MCP approval (else codex 0.128 cancels every
+        // mcp__wechat__reply with "user cancelled MCP tool call") and remove
+        // the workspace-write sandbox so the bypass is actually honoured.
+        // Without this combination the user sees "no reply" silently.
+        sandboxMode: permissionMode === 'dangerously' ? 'danger-full-access' : 'workspace-write',
+        dangerouslyBypassApprovalsAndSandbox: permissionMode === 'dangerously',
         // RFC 03 P5 review #4: Codex SDK has no system prompt slot, so we
         // inject the channel rules into the first user message of each
         // session. Without this, Codex doesn't know to use `reply` tool
@@ -331,6 +337,39 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     // dashboard logs panel + the inbound flow.
     sendAssistantText: makeSendAssistantText({ sendMessage: deps.ilink.sendMessage, log: deps.log }),
     log: deps.log,
+    // v0.5.8 — chatroom moderator. One-shot haiku-4-5 eval per round.
+    // Lazy-import the SDK so unit tests for createCoordinator don't have
+    // to mock @anthropic-ai/claude-agent-sdk; production calls do exactly
+    // one query() per moderator turn (3-5× per /chat dispatch).
+    //
+    // pathToClaudeCodeExecutable: the SDK tries to locate its bundled
+    // claude CLI via moduleRequire.resolve('./cli.js') — which fails in
+    // bun-compiled binaries (import.meta.url is /$bunfs/...). Same trap
+    // as the codex SDK; same fix: hand it the real binary path the
+    // claude provider already discovered. Without this the moderator
+    // throws "Native CLI binary for linux-x64 not found" every round
+    // and we silently fall back to alternation + generic prompts.
+    haikuEval: async (prompt) => {
+      const { query } = await import('@anthropic-ai/claude-agent-sdk')
+      const q = query({
+        prompt,
+        options: {
+          model: 'claude-haiku-4-5',
+          maxTurns: 1,
+          ...(claudeBin ? { pathToClaudeCodeExecutable: claudeBin } : {}),
+        },
+      })
+      let text = ''
+      for await (const raw of q as AsyncGenerator<import('@anthropic-ai/claude-agent-sdk').SDKMessage>) {
+        const msg = raw as unknown as { type: string; message?: { content?: unknown } }
+        if (msg.type === 'assistant' && Array.isArray(msg.message?.content)) {
+          for (const part of msg.message.content as Array<{ type?: string; text?: string }>) {
+            if (part.type === 'text' && typeof part.text === 'string') text += part.text
+          }
+        }
+      }
+      return text
+    },
   })
 
   // RFC 03 P4 — bare delegate providers + one-shot dispatcher.

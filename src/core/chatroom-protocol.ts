@@ -94,12 +94,22 @@ export function wrapChatroomTurn(args: {
   const isFirstRound = args.round === 1
   const protocol = isFirstRound
     ? `你在 chatroom 模式（RFC 03 §4.4）和 ${peerName} 协作回答用户消息。
-- 默认 / @user 前缀 → 给用户的回复（用户看见，带 [Display] 前缀）
-- @${peerName} 前缀 → 给 ${peerName} 的话（用户也看见，但视为内部讨论；${peerName} 下一轮会接到）
-- 觉得讨论充分了，直接 @user 给最终答复 — 自然终止
+
+协议：
+- 默认 / @user 前缀的行 → 给用户（用户看见，带 [Display] 前缀）
+- @${peerName} 前缀的行 → 给 ${peerName}，下一轮他接到（用户也能看见，视为内部讨论）
+- chatroom 模式下不要调 reply 工具，直接纯文本输出
 - 当前第 ${args.round}/${args.maxRounds} 轮（max ${args.maxRounds}），耗尽后强制结束
-- chatroom 模式下不要调 reply 工具，直接文本输出（reply 工具会绕开协议直发用户）`
-    : `[chatroom round ${args.round}/${args.maxRounds} — 协议同上轮，简记: @user 给用户 / @${peerName} 给 ${peerName} / 不调 reply]`
+
+**重要：round 1 不要直接给用户最终答复**——chatroom 的卖点是至少一来一回的协作，光自己 @user 答完就和 /both 没区别了，那是用户没要的。
+
+round 1 标准做法：
+- 简短说出你的初步看法 / 给出你的初稿（用户能看见这个思考过程）
+- 然后用 \`@${peerName}\` 把球抛给对方，让他点评、补充或反驳
+- ${peerName} 在 round 2 综合双方意见后 @user 给最终答复（如果同意你）；不同意就继续辩
+
+例外：消息是问候 / 寒暄 / 明显不需要协作的（"你好" "在吗"），可以直接 @user 简短回应并说明这种问题不需要走 chatroom。`
+    : `[chatroom round ${args.round}/${args.maxRounds} — 协议同 round 1（@user 给用户 / @${peerName} 给 peer / 不调 reply）。${args.sender === args.peer ? `已经互相 @ 过一轮，现在轮到你回应——同意就 @user 给最终答复，要继续辩就 @${peerName}` : ''}]`
 
   const senderHeader = args.sender === 'user'
     ? '[user originated]'
