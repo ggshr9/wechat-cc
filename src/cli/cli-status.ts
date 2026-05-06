@@ -35,6 +35,10 @@ function printAccounts(): void {
     console.log('Could not read accounts directory.')
     return
   }
+  // Hide v0.5.6 dedupe-archived dirs from the user-facing listing.
+  // They live on disk for the audit trail; for everyday `list` output
+  // we show only the active set.
+  dirs = dirs.filter(id => !id.includes('.superseded.'))
   if (dirs.length === 0) {
     console.log('No bound accounts. Run `wechat-cc setup` to scan QR and bind.')
     return

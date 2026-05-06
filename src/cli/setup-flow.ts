@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { ILINK_APP_ID, ILINK_BASE_URL, ILINK_BOT_TYPE } from '../lib/config'
+import { dedupeAccountsByUserId } from '../lib/dedupe-accounts'
 
 const ILINK_CLIENT_VERSION = '131335'
 const SETUP_QR_EXPIRES_MS = 480_000
@@ -146,6 +147,19 @@ export function persistConfirmedAccount(opts: {
       writeFileSync(tmpAccess, JSON.stringify(access, null, 2) + '\n', { mode: 0o600 })
       renameSync(tmpAccess, accessFile)
     }
+  }
+
+  // v0.5.6: archive any older bot dirs that share this scan's userId.
+  // ilink invalidates the previous bot server-side when a user re-scans, so
+  // their local account dirs would otherwise pile up and the daemon would
+  // poll dead sessions. We force-keep the just-written `accountId` regardless
+  // of mtime ordering (filesystem timestamps may not have advanced enough on
+  // fast SSDs to make the new dir provably newest).
+  if (status.ilink_user_id) {
+    dedupeAccountsByUserId(
+      accountsDir,
+      { keepUserId: status.ilink_user_id, keepBotId: status.ilink_bot_id },
+    )
   }
 
   return { accountId, userId: status.ilink_user_id ?? '' }

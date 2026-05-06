@@ -357,6 +357,11 @@ export function readAccounts(stateDir: string): BoundAccount[] {
   if (!existsSync(dir)) return []
   const out: BoundAccount[] = []
   for (const id of safeReaddir(dir)) {
+    // v0.5.6 — skip dedupe-archived dirs (`<botId>.superseded.<iso>`).
+    // The dashboard reads doctor output for the bound-accounts table,
+    // so excluding here is what makes superseded bots disappear from
+    // the user's view without losing the audit trail on disk.
+    if (id.includes('.superseded.')) continue
     try {
       const account = JSON.parse(readFileSync(join(dir, id, 'account.json'), 'utf8')) as {
         botId?: string

@@ -78,6 +78,10 @@ export async function loadAllAccounts(stateDir: string): Promise<Account[]> {
   if (!existsSync(dir)) return []
   const out: Account[] = []
   for (const id of readdirSync(dir)) {
+    // v0.5.6 — skip dedupe-archived dirs. The archiver renames any
+    // duplicate-userId account dir to `<botId>.superseded.<iso>` so the
+    // poll loop ignores it without losing the audit trail.
+    if (id.includes('.superseded.')) continue
     const acctDir = join(dir, id)
     const metaPath = join(acctDir, 'account.json')
     const tokenPath = join(acctDir, 'token')

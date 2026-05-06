@@ -6,6 +6,7 @@ import { acquireInstanceLock, releaseInstanceLock } from './single-instance'
 import { openDb } from '../lib/db'
 import { LifecycleSet, wireRef } from '../lib/lifecycle'
 import { log } from '../lib/log'
+import { dedupeAccountsByUserId } from '../lib/dedupe-accounts'
 import { buildBootstrap } from './bootstrap'
 import { makeMemoryFS } from './memory/fs-api'
 import { makeConversationStore } from '../core/conversation-store'
@@ -29,6 +30,12 @@ export async function bootDaemon(opts: BootDaemonOpts): Promise<DaemonHandle> {
   const PID_PATH = join(stateDir, 'server.pid')
   const lock = acquireInstanceLock(PID_PATH)
   if (!lock.ok) throw new Error(`[wechat-cc] ${lock.reason} (pid=${lock.pid})`)
+  // v0.5.6: collapse duplicate ilink bot bindings to one per wechat userId
+  // BEFORE loading accounts. ilink only allows one active bot per user — when
+  // the user re-scans, the old bot's session is invalidated server-side. The
+  // dedupe archives stale dirs to `<botId>.superseded.<iso>` and loadAllAccounts
+  // skips that infix. Idempotent on already-clean state.
+  dedupeAccountsByUserId(join(stateDir, 'accounts'), {}, { log: (t, l) => log(t, l) })
   const accounts = await loadAllAccounts(stateDir)
   if (accounts.length === 0) { releaseInstanceLock(PID_PATH); throw new Error('[wechat-cc] no accounts bound. Run `wechat-cc setup` first.') }
   const db = openDb({ path: join(stateDir, 'wechat-cc.db') })

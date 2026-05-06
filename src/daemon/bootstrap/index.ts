@@ -44,6 +44,7 @@ import { wechatStdioMcpSpec, delegateStdioMcpSpec, type McpStdioSpec } from './m
 import { claudeSessionJsonlPath, codexSessionJsonlPaths } from './session-paths'
 import { buildDelegateDispatch, type DelegateDispatch } from './delegate'
 import { makeSendAssistantText } from './fallback-reply'
+import { findCodexBinary } from '../../lib/find-codex-binary'
 
 /**
  * Locate a working Claude Code binary. The SDK's own native-binary detection
@@ -244,38 +245,52 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
       canResume: (cwd, sid) => existsSync(claudeSessionJsonlPath(HOME, cwd, sid)),
     },
   )
-  registry.register(
-    'codex',
-    createCodexAgentProvider({
-      ...(process.env.CODEX_MODEL || configuredAgent.model
-        ? { model: process.env.CODEX_MODEL ?? configuredAgent.model }
-        : {}),
-      // RFC 03 §10 risk: daemon mode safe defaults — no user in the loop
-      // for individual tool approvals. Spike 3 confirms `on-request` likely
-      // hangs; `never` is the only viable headless setting.
-      // Use the capability matrix as the single source of truth for the policy.
-      approvalPolicy: lookup('solo', 'codex', permissionMode).approvalPolicy ?? 'never',
-      sandboxMode: 'workspace-write',
-      // RFC 03 P5 review #4: Codex SDK has no system prompt slot, so we
-      // inject the channel rules into the first user message of each
-      // session. Without this, Codex doesn't know to use `reply` tool
-      // and falls into the FALLBACK_REPLY anomaly path on every turn.
-      appendInstructions: buildSystemPrompt({
-        providerId: 'codex',
-        peerProviderId: 'claude',
-        companionEnabled: deps.ilink.companion.status().enabled,
-        delegateAvailable: !!delegateStdioForCodex,
+  // Conditional codex registration (v0.5.6) — find a real codex CLI on disk.
+  // The Codex SDK's internal `findCodexPath()` uses moduleRequire.resolve()
+  // which can't see real node_modules from inside the bun-compiled bundle
+  // (its `import.meta.url` is `/$bunfs/...`), so we MUST pass `codexPathOverride`.
+  // When no codex is on disk we just don't register the provider — setMode
+  // codex then 4xx's at validateMode (visible in dashboard as a red dropdown
+  // border + revert) instead of silently swallowing dispatch errors per turn.
+  const codexBinary = findCodexBinary()
+  if (codexBinary) {
+    deps.log('BOOT', `codex binary: ${codexBinary}`)
+    registry.register(
+      'codex',
+      createCodexAgentProvider({
+        codexPathOverride: codexBinary,
+        ...(process.env.CODEX_MODEL || configuredAgent.model
+          ? { model: process.env.CODEX_MODEL ?? configuredAgent.model }
+          : {}),
+        // RFC 03 §10 risk: daemon mode safe defaults — no user in the loop
+        // for individual tool approvals. Spike 3 confirms `on-request` likely
+        // hangs; `never` is the only viable headless setting.
+        // Use the capability matrix as the single source of truth for the policy.
+        approvalPolicy: lookup('solo', 'codex', permissionMode).approvalPolicy ?? 'never',
+        sandboxMode: 'workspace-write',
+        // RFC 03 P5 review #4: Codex SDK has no system prompt slot, so we
+        // inject the channel rules into the first user message of each
+        // session. Without this, Codex doesn't know to use `reply` tool
+        // and falls into the FALLBACK_REPLY anomaly path on every turn.
+        appendInstructions: buildSystemPrompt({
+          providerId: 'codex',
+          peerProviderId: 'claude',
+          companionEnabled: deps.ilink.companion.status().enabled,
+          delegateAvailable: !!delegateStdioForCodex,
+        }),
+        mcpServers: {
+          ...(wechatStdioForCodex ? { wechat: wechatStdioForCodex } : {}),
+          ...(delegateStdioForCodex ? { delegate: delegateStdioForCodex } : {}),
+        },
       }),
-      mcpServers: {
-        ...(wechatStdioForCodex ? { wechat: wechatStdioForCodex } : {}),
-        ...(delegateStdioForCodex ? { delegate: delegateStdioForCodex } : {}),
+      {
+        displayName: 'Codex',
+        canResume: (_cwd, sid) => codexSessionJsonlPaths(HOME, sid).some(p => existsSync(p)),
       },
-    }),
-    {
-      displayName: 'Codex',
-      canResume: (_cwd, sid) => codexSessionJsonlPaths(HOME, sid).some(p => existsSync(p)),
-    },
-  )
+    )
+  } else {
+    deps.log('BOOT', 'codex binary not found in PATH or ~/.nvm — codex provider not registered. Install `npm i -g @openai/codex` to enable /codex /both /chat modes.')
+  }
 
   const sessionManager = new SessionManager({
     maxConcurrent: 6,

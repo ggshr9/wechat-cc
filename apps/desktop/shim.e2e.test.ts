@@ -88,7 +88,6 @@ describe('apps/desktop shim — HTML structure', () => {
       'checks',                      // wizard env-check list
       'hero-card', 'hero-headline',  // dashboard hero
       'accounts-body',               // bound-accounts table
-      'config-table',                // configuration table
       'update-card', 'update-headline', 'update-body',  // update card
       'update-check-btn', 'update-apply-btn',           // update buttons
       'memory-sidebar', 'memory-rendered',              // memory pane
