@@ -1,14 +1,14 @@
 // Dashboard module. Owns the overview pane: daemon hero, bound-accounts
-// table (incl. inline two-step delete confirm), config table, footer pid
-// indicator, and the smart restart-daemon button.
+// table (incl. inline two-step delete confirm), footer pid indicator,
+// and the smart restart-daemon button.
 //
 // Owns: #hero-card, #hero-headline, #hero-meta, #accounts-body,
-//       #accounts-meta, #config-table, #dash-pending, #dash-restart,
+//       #accounts-meta, #dash-pending, #dash-restart,
 //       #dash-refresh, #dash-rail-clock (rail-foot wall clock)
 // Subscribes to: doctorPoller (renderDashboard + renderRestartButton fire
 // on every successful poll automatically).
 
-import { dashboardHero, accountRows, configRows, formatRelativeTime, escapeHtml, restartButtonState, deleteAccountConfirmCopy } from "../view.js"
+import { dashboardHero, accountRows, formatRelativeTime, escapeHtml, restartButtonState, deleteAccountConfirmCopy } from "../view.js"
 
 export function renderDashboard(report) {
   const hero = dashboardHero(report.checks.daemon, report.checks.accounts.count)
@@ -64,10 +64,6 @@ export function renderDashboard(report) {
     : `${accounts.length} 个 · ${report.checks.access.allowFromCount} 用户允许`
   document.getElementById("accounts-meta").textContent = meta
 
-  const cfg = document.getElementById("config-table")
-  cfg.innerHTML = configRows(report, report.stateDir).map(([k, v]) => `
-    <tr><td class="k">${escapeHtml(k)}</td><td class="v">${escapeHtml(v)}</td></tr>
-  `).join("")
 }
 
 // Mutate the dashboard's restart + stop buttons to reflect daemon+service

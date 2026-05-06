@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   doctorRows, pollAdvance, daemonStatusLine, escapeHtml,
-  initialMode, dashboardHero, accountRows, configRows, formatRelativeTime,
+  initialMode, dashboardHero, accountRows, formatRelativeTime,
   updateProbeLine, updateApplyLine, restartButtonState, deleteAccountConfirmCopy,
   UPDATE_REASON_COPY, modeBadge, conversationRows,
 // @ts-expect-error — vanilla JS sibling module; covered at runtime.
@@ -305,13 +305,6 @@ describe('formatRelativeTime', () => {
   })
   it('>= 24h → days', () => {
     expect(formatRelativeTime('2026-04-23T12:00:00Z', NOW)).toBe('3 天前')
-  })
-})
-
-describe('configRows', () => {
-  it('returns the four config rows in stable order', () => {
-    const rows = configRows(fakeReport(), '~/.claude/channels/wechat')
-    expect(rows.map((r: [string, string, string]) => r[0])).toEqual(['Provider', 'Provider binary', 'Allowlist', 'State directory'])
   })
 })
 

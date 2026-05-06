@@ -407,15 +407,3 @@ export function updateApplyLine(result) {
   return frameApply(result.reason, result.message, result.details)
 }
 
-// Configuration table rows shown on the dashboard.
-export function configRows(report, stateDir) {
-  const provider = report.checks.provider
-  const access = report.checks.access
-  const providerLabel = provider.provider + (report.checks.provider.model ? ` (${report.checks.provider.model})` : "")
-  return [
-    ["Provider", providerLabel, "ok"],
-    ["Provider binary", provider.binaryPath || "missing", provider.ok ? "ok" : "bad"],
-    ["Allowlist", `${access.allowFromCount} 个用户 · ${access.dmPolicy}`, access.ok ? "ok" : "warn"],
-    ["State directory", stateDir, "ok"],
-  ]
-}
