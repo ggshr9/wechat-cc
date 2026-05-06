@@ -35,7 +35,7 @@ export function renderConversations(report, deps) {
   if (!tbody) return
   const rows = conversationRows(report?.conversations || [])
   if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="3" style="padding: 16px; text-align: center; color: var(--ink-3);">暂无会话 — 用户首次发消息后会出现。</td></tr>`
+    tbody.innerHTML = `<tr><td colspan="2" style="padding: 16px; text-align: center; color: var(--ink-3);">暂无会话 — 用户首次发消息后会出现。</td></tr>`
     if (meta) meta.textContent = "0 个会话"
     return
   }
@@ -43,19 +43,16 @@ export function renderConversations(report, deps) {
   tbody.innerHTML = rows.map(row => {
     const conv = conversations.find(c => c.chat_id === row.chatId)
     const currentShorthand = conv ? modeToShorthand(conv.mode) : "cc"
-    // PR5 Task 22: primary column is the human user (name + truncated wxid);
-    // chatId moves to the row's title attribute for debugging.
+    // 用户列 = 显示名 + 截短 wxid（hover 看完整）。账号列在 v0.5.6 删了：
+    // 1-用户-1-bot 是常规设置，bot 路由对人来说是冗余信息。需要查 bot 账号
+    // 时去上方"绑定账号"卡片看（按显示名排列，更友好）。
     const userIdShort = truncate(row.userId || "", 10)
     const userCell = row.userName
       ? `${escapeHtml(row.userName)} <span class="dim" title="${escapeHtml(row.userId || "")}">(${escapeHtml(userIdShort)})</span>`
       : `<span class="dim" title="${escapeHtml(row.userId || "")}">(等待识别) ${escapeHtml(userIdShort)}</span>`
-    const acctCell = row.accountId
-      ? `<span title="${escapeHtml(row.accountId)}">${escapeHtml(truncate(row.accountId, 12))}</span>`
-      : `<span class="dim">--</span>`
     return `
     <tr title="chat: ${escapeHtml(row.chatId)}">
       <td class="name">${userCell}</td>
-      <td class="id">${acctCell}</td>
       <td>
         <select class="mode-select mode-${row.badge.tone}" data-chat-id="${escapeHtml(row.chatId)}" data-current="${escapeHtml(currentShorthand)}">
           <option value="cc"${currentShorthand === "cc" ? " selected" : ""}>/cc (Claude solo)</option>
