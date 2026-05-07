@@ -164,3 +164,47 @@ export const VoiceSaveConfigResponse = z.union([
   z.object({ ok: z.literal(true), tested_ms: z.number(), provider: z.string(), default_voice: z.string() }),
   z.object({ ok: z.literal(false), reason: z.string(), detail: z.string().optional() }),
 ])
+
+// ── GET /v1/companion/status ─────────────────────────────────────────────────
+// Pinned to WechatCompanionDep.status() return shape.
+
+export const CompanionStatusResponse = z.object({
+  enabled: z.boolean(),
+  timezone: z.string(),
+  default_chat_id: z.string().nullable(),
+  snooze_until: z.string().nullable(),
+})
+
+// ── POST /v1/companion/enable ────────────────────────────────────────────────
+// Pinned to WechatCompanionDep.enable() return shape (two ok=true variants).
+// Union includes forward-compat ok=false branch.
+
+export const CompanionEnableResponse = z.union([
+  z.object({
+    ok: z.literal(true),
+    state_dir: z.string(),
+    welcome_message: z.string(),
+    cost_estimate_note: z.string(),
+  }),
+  z.object({ ok: z.literal(true), already_configured: z.literal(true) }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+])
+
+// ── POST /v1/companion/disable ───────────────────────────────────────────────
+// Pinned to WechatCompanionDep.disable() return shape + forward-compat error.
+
+export const CompanionDisableResponse = z.union([
+  z.object({ ok: z.literal(true), enabled: z.literal(false) }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+])
+
+// ── POST /v1/companion/snooze ────────────────────────────────────────────────
+
+export const CompanionSnoozeRequest = z.object({
+  minutes: z.number().int().min(1).max(1440),
+})
+// Pinned to WechatCompanionDep.snooze() return shape + forward-compat error.
+export const CompanionSnoozeResponse = z.union([
+  z.object({ ok: z.literal(true), until: z.string() }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+])

@@ -13,6 +13,10 @@ import {
   ShareResurfaceRequest, ShareResurfaceResponse,
   VoiceStatusResponse,
   VoiceSaveConfigRequest, VoiceSaveConfigResponse,
+  CompanionStatusResponse,
+  CompanionEnableResponse,
+  CompanionDisableResponse,
+  CompanionSnoozeRequest, CompanionSnoozeResponse,
 } from './schema'
 
 // ── health ──────────────────────────────────────────────────────────────────
@@ -285,5 +289,85 @@ describe('VoiceSaveConfigResponse', () => {
     expect(VoiceSaveConfigResponse.safeParse({
       ok: false, reason: 'unexpected_error', detail: 'ECONNREFUSED',
     }).success).toBe(true)
+  })
+})
+
+// ── GET /v1/companion/status ─────────────────────────────────────────────────
+
+describe('CompanionStatusResponse', () => {
+  it('accepts enabled=false with nulls', () => {
+    expect(CompanionStatusResponse.safeParse({
+      enabled: false,
+      timezone: 'Asia/Shanghai',
+      default_chat_id: null,
+      snooze_until: null,
+    }).success).toBe(true)
+  })
+  it('accepts enabled=true with snooze', () => {
+    expect(CompanionStatusResponse.safeParse({
+      enabled: true,
+      timezone: 'Asia/Shanghai',
+      default_chat_id: 'abc123',
+      snooze_until: '2026-05-07T12:00:00Z',
+    }).success).toBe(true)
+  })
+})
+
+// ── POST /v1/companion/enable ────────────────────────────────────────────────
+
+describe('CompanionEnableResponse', () => {
+  it('accepts ok=true with new config fields', () => {
+    expect(CompanionEnableResponse.safeParse({
+      ok: true,
+      state_dir: '/home/.companion',
+      welcome_message: 'Welcome!',
+      cost_estimate_note: 'costs ~$0.01/day',
+    }).success).toBe(true)
+  })
+  it('accepts ok=true already_configured', () => {
+    expect(CompanionEnableResponse.safeParse({ ok: true, already_configured: true }).success).toBe(true)
+  })
+  it('accepts ok=false with error (forward-compat)', () => {
+    expect(CompanionEnableResponse.safeParse({ ok: false, error: 'failed' }).success).toBe(true)
+  })
+})
+
+// ── POST /v1/companion/disable ───────────────────────────────────────────────
+
+describe('CompanionDisableResponse', () => {
+  it('accepts ok=true enabled=false', () => {
+    expect(CompanionDisableResponse.safeParse({ ok: true, enabled: false }).success).toBe(true)
+  })
+  it('accepts ok=false with error (forward-compat)', () => {
+    expect(CompanionDisableResponse.safeParse({ ok: false, error: 'failed' }).success).toBe(true)
+  })
+})
+
+// ── POST /v1/companion/snooze ────────────────────────────────────────────────
+
+describe('CompanionSnoozeRequest', () => {
+  it('accepts 1 minute', () => {
+    expect(CompanionSnoozeRequest.safeParse({ minutes: 1 }).success).toBe(true)
+  })
+  it('accepts 1440 minutes (24h)', () => {
+    expect(CompanionSnoozeRequest.safeParse({ minutes: 1440 }).success).toBe(true)
+  })
+  it('rejects 0 minutes', () => {
+    expect(CompanionSnoozeRequest.safeParse({ minutes: 0 }).success).toBe(false)
+  })
+  it('rejects > 1440 minutes', () => {
+    expect(CompanionSnoozeRequest.safeParse({ minutes: 1441 }).success).toBe(false)
+  })
+  it('rejects non-integer', () => {
+    expect(CompanionSnoozeRequest.safeParse({ minutes: 1.5 }).success).toBe(false)
+  })
+})
+
+describe('CompanionSnoozeResponse', () => {
+  it('accepts ok=true with until timestamp', () => {
+    expect(CompanionSnoozeResponse.safeParse({ ok: true, until: '2026-05-07T12:00:00Z' }).success).toBe(true)
+  })
+  it('accepts ok=false with error (forward-compat)', () => {
+    expect(CompanionSnoozeResponse.safeParse({ ok: false, error: 'failed' }).success).toBe(true)
   })
 })
