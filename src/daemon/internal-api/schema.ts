@@ -310,3 +310,133 @@ export const ConversationSetModeResponse = z.union([
   z.object({ ok: z.literal(true) }),
   z.object({ error: z.string() }),
 ])
+
+// ── Inferred TS type aliases ────────────────────────────────────────────
+// Convention: <Schema>T is z.infer<typeof <Schema>>. JSDoc consumers and
+// handler signatures import these aliases.
+
+export type HealthResponseT = z.infer<typeof HealthResponse>
+
+export type MemoryReadRequestT = z.infer<typeof MemoryReadRequest>
+export type MemoryReadResponseT = z.infer<typeof MemoryReadResponse>
+export type MemoryWriteRequestT = z.infer<typeof MemoryWriteRequest>
+export type MemoryWriteResponseT = z.infer<typeof MemoryWriteResponse>
+export type MemoryListQueryT = z.infer<typeof MemoryListQuery>
+export type MemoryListResponseT = z.infer<typeof MemoryListResponse>
+
+export type ProjectsListResponseT = z.infer<typeof ProjectsListResponse>
+export type ProjectsSwitchRequestT = z.infer<typeof ProjectsSwitchRequest>
+export type ProjectsSwitchResponseT = z.infer<typeof ProjectsSwitchResponse>
+export type ProjectsAddRequestT = z.infer<typeof ProjectsAddRequest>
+export type ProjectsAddResponseT = z.infer<typeof ProjectsAddResponse>
+export type ProjectsRemoveRequestT = z.infer<typeof ProjectsRemoveRequest>
+export type ProjectsRemoveResponseT = z.infer<typeof ProjectsRemoveResponse>
+
+export type UserSetNameRequestT = z.infer<typeof UserSetNameRequest>
+export type UserSetNameResponseT = z.infer<typeof UserSetNameResponse>
+
+export type SharePageRequestT = z.infer<typeof SharePageRequest>
+export type SharePageResponseT = z.infer<typeof SharePageResponse>
+export type ShareResurfaceRequestT = z.infer<typeof ShareResurfaceRequest>
+export type ShareResurfaceResponseT = z.infer<typeof ShareResurfaceResponse>
+
+export type VoiceStatusResponseT = z.infer<typeof VoiceStatusResponse>
+export type VoiceSaveConfigRequestT = z.infer<typeof VoiceSaveConfigRequest>
+export type VoiceSaveConfigResponseT = z.infer<typeof VoiceSaveConfigResponse>
+
+export type CompanionStatusResponseT = z.infer<typeof CompanionStatusResponse>
+export type CompanionEnableResponseT = z.infer<typeof CompanionEnableResponse>
+export type CompanionDisableResponseT = z.infer<typeof CompanionDisableResponse>
+export type CompanionSnoozeRequestT = z.infer<typeof CompanionSnoozeRequest>
+export type CompanionSnoozeResponseT = z.infer<typeof CompanionSnoozeResponse>
+
+export type WechatReplyRequestT = z.infer<typeof WechatReplyRequest>
+export type WechatReplyResponseT = z.infer<typeof WechatReplyResponse>
+export type WechatReplyVoiceRequestT = z.infer<typeof WechatReplyVoiceRequest>
+export type WechatReplyVoiceResponseT = z.infer<typeof WechatReplyVoiceResponse>
+export type WechatSendFileRequestT = z.infer<typeof WechatSendFileRequest>
+export type WechatSendFileResponseT = z.infer<typeof WechatSendFileResponse>
+export type WechatEditMessageRequestT = z.infer<typeof WechatEditMessageRequest>
+export type WechatEditMessageResponseT = z.infer<typeof WechatEditMessageResponse>
+export type WechatBroadcastRequestT = z.infer<typeof WechatBroadcastRequest>
+export type WechatBroadcastResponseT = z.infer<typeof WechatBroadcastResponse>
+
+export type DelegateRequestT = z.infer<typeof DelegateRequest>
+export type DelegateResponseT = z.infer<typeof DelegateResponse>
+
+export type ConversationSetModeRequestT = z.infer<typeof ConversationSetModeRequest>
+export type ConversationSetModeResponseT = z.infer<typeof ConversationSetModeResponse>
+
+// ── Lookup tables ───────────────────────────────────────────────────────
+// REQUEST_SCHEMAS includes both POST body schemas (most routes) and GET
+// query schemas (e.g. /v1/memory/list?dir=...). The validation step in
+// index.ts uses these to parse the appropriate input before dispatch.
+//
+// RESPONSE_SCHEMAS is type-only documentation — runtime validation of
+// handler return values is intentionally NOT performed. Future dev-mode
+// assertion is a possible follow-up.
+
+export const REQUEST_SCHEMAS: Record<string, z.ZodTypeAny | undefined> = {
+  // memory
+  'POST /v1/memory/read': MemoryReadRequest,
+  'POST /v1/memory/write': MemoryWriteRequest,
+  'GET /v1/memory/list': MemoryListQuery,
+
+  // projects
+  'POST /v1/projects/switch': ProjectsSwitchRequest,
+  'POST /v1/projects/add': ProjectsAddRequest,
+  'POST /v1/projects/remove': ProjectsRemoveRequest,
+
+  // user
+  'POST /v1/user/set_name': UserSetNameRequest,
+
+  // share
+  'POST /v1/share/page': SharePageRequest,
+  'POST /v1/share/resurface': ShareResurfaceRequest,
+
+  // voice
+  'POST /v1/voice/save_config': VoiceSaveConfigRequest,
+
+  // companion
+  'POST /v1/companion/snooze': CompanionSnoozeRequest,
+
+  // wechat
+  'POST /v1/wechat/reply': WechatReplyRequest,
+  'POST /v1/wechat/reply_voice': WechatReplyVoiceRequest,
+  'POST /v1/wechat/send_file': WechatSendFileRequest,
+  'POST /v1/wechat/edit_message': WechatEditMessageRequest,
+  'POST /v1/wechat/broadcast': WechatBroadcastRequest,
+
+  // delegate
+  'POST /v1/delegate': DelegateRequest,
+
+  // conversation
+  'POST /v1/conversation/set-mode': ConversationSetModeRequest,
+}
+
+export const RESPONSE_SCHEMAS: Record<string, z.ZodTypeAny | undefined> = {
+  'GET /v1/health': HealthResponse,
+  'POST /v1/memory/read': MemoryReadResponse,
+  'POST /v1/memory/write': MemoryWriteResponse,
+  'GET /v1/memory/list': MemoryListResponse,
+  'GET /v1/projects/list': ProjectsListResponse,
+  'POST /v1/projects/switch': ProjectsSwitchResponse,
+  'POST /v1/projects/add': ProjectsAddResponse,
+  'POST /v1/projects/remove': ProjectsRemoveResponse,
+  'POST /v1/user/set_name': UserSetNameResponse,
+  'POST /v1/share/page': SharePageResponse,
+  'POST /v1/share/resurface': ShareResurfaceResponse,
+  'GET /v1/voice/status': VoiceStatusResponse,
+  'POST /v1/voice/save_config': VoiceSaveConfigResponse,
+  'GET /v1/companion/status': CompanionStatusResponse,
+  'POST /v1/companion/enable': CompanionEnableResponse,
+  'POST /v1/companion/disable': CompanionDisableResponse,
+  'POST /v1/companion/snooze': CompanionSnoozeResponse,
+  'POST /v1/wechat/reply': WechatReplyResponse,
+  'POST /v1/wechat/reply_voice': WechatReplyVoiceResponse,
+  'POST /v1/wechat/send_file': WechatSendFileResponse,
+  'POST /v1/wechat/edit_message': WechatEditMessageResponse,
+  'POST /v1/wechat/broadcast': WechatBroadcastResponse,
+  'POST /v1/delegate': DelegateResponse,
+  'POST /v1/conversation/set-mode': ConversationSetModeResponse,
+}

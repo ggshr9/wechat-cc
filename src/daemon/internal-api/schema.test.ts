@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { REQUEST_SCHEMAS, RESPONSE_SCHEMAS } from './schema'
 import {
   HealthResponse,
   MemoryReadRequest, MemoryReadResponse,
@@ -569,5 +570,16 @@ describe('ConversationSetModeResponse', () => {
   })
   it('accepts error string', () => {
     expect(ConversationSetModeResponse.safeParse({ error: 'chat not found' }).success).toBe(true)
+  })
+})
+
+// ── schema lookup tables ─────────────────────────────────────────────────────
+
+describe('schema lookup tables', () => {
+  it('REQUEST_SCHEMAS has 18 entries (POST body + 1 GET query)', () => {
+    expect(Object.keys(REQUEST_SCHEMAS).length).toBe(18)
+  })
+  it('RESPONSE_SCHEMAS has 24 entries (one per route)', () => {
+    expect(Object.keys(RESPONSE_SCHEMAS).length).toBe(24)
   })
 })
