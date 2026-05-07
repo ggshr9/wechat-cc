@@ -16,6 +16,10 @@ import {
   MemoryListOutput,
   MemoryReadOutput,
   MemoryWriteOutput,
+  EventsListOutput,
+  ObservationsListOutput,
+  ObservationsArchiveOutput,
+  MilestonesListOutput,
 } from './schema'
 
 describe('DoctorOutput', () => {
@@ -410,5 +414,104 @@ describe('MemoryWriteOutput', () => {
   })
   it('rejects unknown discriminator', () => {
     expect(MemoryWriteOutput.safeParse({ ok: 'maybe' }).success).toBe(false)
+  })
+})
+
+// ── wechat-cc events list --json ──────────────────────────────────────────────
+
+describe('EventsListOutput', () => {
+  it('accepts ok:true with a populated events array', () => {
+    expect(EventsListOutput.safeParse({
+      ok: true,
+      events: [
+        {
+          id: 'evt_abc123',
+          ts: '2026-05-07T10:00:00.000Z',
+          kind: 'cron_eval_pushed',
+          trigger: 'daily-checkin',
+          reasoning: 'User seemed stressed; sending supportive message.',
+          push_text: 'Hey, just checking in on you!',
+          jsonl_session_id: 'sess_xyz',
+        },
+        {
+          id: 'evt_def456',
+          ts: '2026-05-07T09:00:00.000Z',
+          kind: 'observation_written',
+          trigger: 'weekly-introspect',
+          reasoning: 'Observed a shift in mood.',
+          observation_id: 'obs_999',
+        },
+      ],
+    }).success).toBe(true)
+  })
+  it('accepts ok:true with an empty events array', () => {
+    expect(EventsListOutput.safeParse({ ok: true, events: [] }).success).toBe(true)
+  })
+  it('rejects when ok is missing', () => {
+    expect(EventsListOutput.safeParse({ events: [] }).success).toBe(false)
+  })
+})
+
+// ── wechat-cc observations list --json ───────────────────────────────────────
+
+describe('ObservationsListOutput', () => {
+  it('accepts ok:true with a populated observations array', () => {
+    expect(ObservationsListOutput.safeParse({
+      ok: true,
+      observations: [
+        {
+          id: 'obs_abc123',
+          ts: '2026-05-07T10:00:00.000Z',
+          body: 'User mentioned feeling overwhelmed with work.',
+          tone: 'concern',
+          archived: false,
+          event_id: 'evt_xyz',
+        },
+      ],
+    }).success).toBe(true)
+  })
+  it('accepts ok:true with an empty observations array', () => {
+    expect(ObservationsListOutput.safeParse({ ok: true, observations: [] }).success).toBe(true)
+  })
+  it('rejects when ok is missing', () => {
+    expect(ObservationsListOutput.safeParse({ observations: [] }).success).toBe(false)
+  })
+})
+
+// ── wechat-cc observations archive --json ────────────────────────────────────
+
+describe('ObservationsArchiveOutput', () => {
+  it('accepts ok:true with archived id', () => {
+    expect(ObservationsArchiveOutput.safeParse({ ok: true, archived: 'obs_abc123' }).success).toBe(true)
+  })
+  it('rejects when archived field is missing', () => {
+    expect(ObservationsArchiveOutput.safeParse({ ok: true }).success).toBe(false)
+  })
+  it('rejects when ok is missing', () => {
+    expect(ObservationsArchiveOutput.safeParse({ archived: 'obs_abc123' }).success).toBe(false)
+  })
+})
+
+// ── wechat-cc milestones list --json ─────────────────────────────────────────
+
+describe('MilestonesListOutput', () => {
+  it('accepts ok:true with a populated milestones array', () => {
+    expect(MilestonesListOutput.safeParse({
+      ok: true,
+      milestones: [
+        {
+          id: 'ms_first_message',
+          ts: '2026-05-01T08:00:00.000Z',
+          body: 'Sent first message to this contact.',
+          event_id: 'evt_abc',
+        },
+      ],
+    }).success).toBe(true)
+  })
+  it('accepts ok:true with an empty milestones array', () => {
+    expect(MilestonesListOutput.safeParse({ ok: true, milestones: [] }).success).toBe(true)
+  })
+  it('rejects when ok is missing', () => {
+    expect(MilestonesListOutput.safeParse({ milestones: [] }).success).toBe(false)
   })
 })

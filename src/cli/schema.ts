@@ -343,3 +343,83 @@ export const MemoryWriteOutput = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(false), error: z.string() }),
 ])
 export type MemoryWriteOutputT = z.infer<typeof MemoryWriteOutput>
+
+// ── wechat-cc events list --json ──────────────────────────────────────────────
+// Emits { ok: true, events: EventRecord[] }.
+// EventRecord fields: id, ts, kind (EventKind), trigger, reasoning,
+// plus optional push_text, observation_id, milestone_id, jsonl_session_id.
+
+const EventKind = z.enum([
+  'cron_eval_pushed',
+  'cron_eval_skipped',
+  'cron_eval_failed',
+  'observation_written',
+  'milestone',
+])
+
+const EventEntry = z.object({
+  id: z.string(),
+  ts: z.string(),
+  kind: EventKind,
+  trigger: z.string(),
+  reasoning: z.string(),
+  push_text: z.string().optional(),
+  observation_id: z.string().optional(),
+  milestone_id: z.string().optional(),
+  jsonl_session_id: z.string().optional(),
+})
+
+export const EventsListOutput = z.object({
+  ok: z.literal(true),
+  events: z.array(EventEntry),
+})
+export type EventsListOutputT = z.infer<typeof EventsListOutput>
+
+// ── wechat-cc observations list --json ───────────────────────────────────────
+// Emits { ok: true, observations: ObservationRecord[] } (active or archived).
+// ObservationRecord fields: id, ts, body, plus optional tone, archived flag,
+// archived_at, event_id.
+
+const ObservationTone = z.enum(['concern', 'curious', 'proud', 'playful', 'quiet'])
+
+const ObservationEntry = z.object({
+  id: z.string(),
+  ts: z.string(),
+  body: z.string(),
+  tone: ObservationTone.optional(),
+  archived: z.boolean(),
+  archived_at: z.string().optional(),
+  event_id: z.string().optional(),
+})
+
+export const ObservationsListOutput = z.object({
+  ok: z.literal(true),
+  observations: z.array(ObservationEntry),
+})
+export type ObservationsListOutputT = z.infer<typeof ObservationsListOutput>
+
+// ── wechat-cc observations archive --json ────────────────────────────────────
+// Emits { ok: true, archived: <obs-id> } — scalar, not an array.
+
+export const ObservationsArchiveOutput = z.object({
+  ok: z.literal(true),
+  archived: z.string(),
+})
+export type ObservationsArchiveOutputT = z.infer<typeof ObservationsArchiveOutput>
+
+// ── wechat-cc milestones list --json ─────────────────────────────────────────
+// Emits { ok: true, milestones: MilestoneRecord[] } (id-deduped).
+// MilestoneRecord fields: id, ts, body, plus optional event_id.
+
+const MilestoneEntry = z.object({
+  id: z.string(),
+  ts: z.string(),
+  body: z.string(),
+  event_id: z.string().optional(),
+})
+
+export const MilestonesListOutput = z.object({
+  ok: z.literal(true),
+  milestones: z.array(MilestoneEntry),
+})
+export type MilestonesListOutputT = z.infer<typeof MilestonesListOutput>
