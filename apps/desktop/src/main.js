@@ -1,3 +1,13 @@
+// @ts-check
+/// <reference lib="dom" />
+/** @typedef {import('../../../src/cli/schema').GuardStatusOutputT} GuardStatus */
+/** @typedef {import('../../../src/cli/schema').ProviderShowOutputT} ProviderConfig */
+/** @typedef {import('../../../src/cli/schema').GuardEnableOutputT} GuardEnable */
+/** @typedef {import('../../../src/cli/schema').GuardDisableOutputT} GuardDisable */
+/** @typedef {import('../../../src/cli/schema').AvatarInfoOutputT} AvatarInfo */
+/** @typedef {import('../../../src/cli/schema').AvatarSetOutputT} AvatarSet */
+/** @typedef {import('../../../src/cli/schema').AvatarRemoveOutputT} AvatarRemove */
+
 // main.js — boot, mode router, and event-listener wiring. Per-feature logic
 // lives in modules/ (wizard, qr, service, dashboard, memory, update). The
 // doctor lifecycle is owned by doctor-poller.js; main.js just wires its
@@ -18,20 +28,22 @@ import { loadSessionsList, openProjectDetail, closeProjectDetail, toggleFavorite
 import { loadUpdateProbe, applyUpdate } from "./modules/update.js"
 
 const state = {
-  setup: null,
-  currentBaseUrl: null,
+  setup: /** @type {unknown} */ (null),
+  currentBaseUrl: /** @type {string | null} */ (null),
   selectedProvider: "claude",
   unattended: true,
   autoStart: false,
-  qrTimer: null,
+  qrTimer: /** @type {ReturnType<typeof setTimeout> | null} */ (null),
   qrErrors: 0,
-  clockTimer: null,
+  clockTimer: /** @type {ReturnType<typeof setInterval> | null} */ (null),
   mode: "loading",
   currentStep: "doctor",
   updateProbed: false,
 }
 
-const mock = !window.__TAURI__?.core?.invoke
+// window.__TAURI__ is injected by the Tauri runtime and not part of the
+// standard Window type. Cast to any to access optional Tauri fields.
+const mock = !(/** @type {any} */ (window).__TAURI__?.core?.invoke)
 
 // macOS uses titleBarStyle: "Overlay" — window content extends under the
 // traffic-light area. CSS reads data-platform to add top padding on the rail
@@ -44,10 +56,14 @@ if (/Mac/i.test(navigator.platform || navigator.userAgent || "")) {
 // disable + replace label text with "已刷新" → revert after 1.2s. Stops users
 // from double-clicking and confirms the click without leaving stale text
 // behind (the prior overview-only `setPending("已刷新")` never cleared).
+/**
+ * @param {HTMLButtonElement | null | undefined} button
+ * @param {() => Promise<unknown> | unknown} fn
+ */
 async function withRefreshFeedback(button, fn) {
   if (!button) return await fn()
   const labelNode = Array.from(button.childNodes).find(
-    n => n.nodeType === Node.TEXT_NODE && n.textContent.trim().length > 0,
+    n => n.nodeType === Node.TEXT_NODE && n.textContent !== null && n.textContent.trim().length > 0,
   )
   const original = labelNode ? labelNode.textContent : null
   button.disabled = true
@@ -64,6 +80,10 @@ async function withRefreshFeedback(button, fn) {
 
 // `state` carried through ipcInvoke for the mock path so dev-mode mocks can
 // react to selectedProvider/unattended/autoStart toggles in real time.
+/**
+ * @param {string} cmd
+ * @param {Record<string, unknown>} args
+ */
 const invoke = (cmd, args) => ipcInvoke(cmd, args, state)
 
 const doctorPoller = createDoctorPoller({ invoke, intervalMs: 5000 })
@@ -105,7 +125,7 @@ async function refreshGuardStatus() {
   if (!el || !toggle) return
   el.textContent = "查询中…"
   try {
-    const r = await invoke("wechat_cli_json", { args: ["guard", "status", "--json"] })
+    const r = /** @type {GuardStatus} */ (await invoke("wechat_cli_json", { args: ["guard", "status", "--json"] }))
     if (r.enabled) toggle.classList.add("on")
     else toggle.classList.remove("on")
     toggle.setAttribute("aria-pressed", r.enabled ? "true" : "false")
@@ -119,12 +139,13 @@ async function refreshGuardStatus() {
     el.textContent = `${ipPart} · ${probePart}`
     el.dataset.state = r.reachable ? "ok" : "down"
   } catch (err) {
-    el.textContent = `查询失败：${err?.message || err}`
+    el.textContent = `查询失败：${/** @type {any} */ (err)?.message || err}`
   }
 }
 
 // ─── mode router ──────────────────────────────────────────────────────
 
+/** @param {string} mode */
 function setMode(mode) {
   state.mode = mode
   document.documentElement.dataset.mode = mode
@@ -144,6 +165,7 @@ function setMode(mode) {
   }
 }
 
+/** @param {string} name */
 function showStep(name) {
   wizardShowStep(state, name)
   // Service step has the guard toggle — refresh status when entering so
@@ -171,9 +193,11 @@ function wireDoctorSubscribers() {
 // first report without firing) so already-expired-on-startup accounts don't
 // spam a notification on every dashboard restart. Only NEWLY-expired
 // accounts (those that appeared between two consecutive polls) trigger.
+/** @type {Set<string> | null} */
 let lastExpiredIds = null
+/** @param {any} report */
 function checkExpiredDiff(report) {
-  const currentIds = new Set((report.expiredBots || []).map(b => b.botId))
+  const currentIds = new Set(/** @type {string[]} */ ((report.expiredBots || []).map(/** @param {any} b */ b => b.botId)))
   if (lastExpiredIds === null) {
     // Baseline pass — record but don't notify.
     lastExpiredIds = currentIds
@@ -191,6 +215,7 @@ function checkExpiredDiff(report) {
   lastExpiredIds = currentIds
 }
 
+/** @param {any} report */
 function renderDashboardIfActive(report) {
   if (state.mode !== "dashboard") return
   renderDashboard(report)
@@ -198,13 +223,16 @@ function renderDashboardIfActive(report) {
 
 // ─── agent picker ────────────────────────────────────────────────────
 
+/** @param {string} provider */
 function applyProviderUI(provider) {
   state.selectedProvider = provider
-  document.querySelectorAll(".agent[data-provider]").forEach(btn =>
-    btn.classList.toggle("selected", btn.dataset.provider === provider)
-  )
+  document.querySelectorAll(".agent[data-provider]").forEach(btn => {
+    const el = /** @type {HTMLElement} */ (btn)
+    el.classList.toggle("selected", el.dataset.provider === provider)
+  })
 }
 
+/** @param {string} provider */
 async function commitProvider(provider) {
   applyProviderUI(provider)
   const args = ["provider", "set", provider, "--unattended", state.unattended ? "true" : "false"]
@@ -213,7 +241,7 @@ async function commitProvider(provider) {
 }
 
 async function loadAgentConfig() {
-  const config = await invoke("wechat_cli_json", { args: ["provider", "show", "--json"] })
+  const config = /** @type {ProviderConfig} */ (await invoke("wechat_cli_json", { args: ["provider", "show", "--json"] }))
   const provider = config.provider === "codex" ? "codex" : "claude"
   state.unattended = config.dangerouslySkipPermissions !== false
   state.autoStart = config.autoStart === true
@@ -222,6 +250,10 @@ async function loadAgentConfig() {
   setToggle("autostart-toggle", state.autoStart)
 }
 
+/**
+ * @param {string} id
+ * @param {boolean} on
+ */
 function setToggle(id, on) {
   const el = document.getElementById(id)
   if (!el) return
@@ -231,12 +263,15 @@ function setToggle(id, on) {
 
 // ─── pane switching ──────────────────────────────────────────────────
 
+/** @param {string} name */
 function switchPane(name) {
-  document.querySelectorAll(".dash-nav-link[data-pane]").forEach(el =>
-    el.classList.toggle("active", el.dataset.pane === name && !el.classList.contains("disabled"))
-  )
+  document.querySelectorAll(".dash-nav-link[data-pane]").forEach(el => {
+    const htmlEl = /** @type {HTMLElement} */ (el)
+    htmlEl.classList.toggle("active", htmlEl.dataset.pane === name && !htmlEl.classList.contains("disabled"))
+  })
   document.querySelectorAll(".dash-pane[data-pane]").forEach(el => {
-    el.hidden = el.dataset.pane !== name
+    const htmlEl = /** @type {HTMLElement} */ (el)
+    htmlEl.hidden = htmlEl.dataset.pane !== name
   })
   // Logs pane gets a 10s auto-refresh tick while active; stop it on
   // pane switch so we don't burn CPU tailing log files no one is reading.
@@ -249,7 +284,8 @@ function switchPane(name) {
   if (name === "memory") {
     loadMemoryPane(deps).catch(err => {
       console.error("memory load failed", err)
-      document.getElementById("memory-rendered").innerHTML =
+      const mr = document.getElementById("memory-rendered")
+      if (mr) mr.innerHTML =
         `<p class="empty-state">加载失败：${formatInvokeError(err)}</p>`
     })
     loadMemoryTopZone(deps).catch(err => console.error("memory top zone failed", err))
@@ -266,9 +302,10 @@ function switchPane(name) {
 // ─── DOM event wiring ────────────────────────────────────────────────
 
 function wireEvents() {
-  document.querySelectorAll(".steps .step").forEach(btn =>
-    btn.addEventListener("click", () => showStep(btn.dataset.step))
-  )
+  document.querySelectorAll(".steps .step").forEach(btn => {
+    const el = /** @type {HTMLElement} */ (btn)
+    el.addEventListener("click", () => showStep(el.dataset.step ?? ""))
+  })
   // Single delegated handler for any [data-copy] button — used by the
   // doctor row fix-hints (`复制` button next to npm install commands).
   // Delegated so newly-rendered rows stay live without re-binding.
@@ -282,55 +319,59 @@ function wireEvents() {
       setTimeout(() => { t.textContent = orig }, 1200)
     } catch { /* clipboard denied → silent; the command is visible in the code block */ }
   })
-  document.getElementById("continue-provider").addEventListener("click", () => showStep("provider"))
-  document.getElementById("continue-wechat").addEventListener("click", () => showStep("wechat"))
-  document.getElementById("continue-service").addEventListener("click", () => showStep("service"))
-  document.getElementById("qr-refresh").addEventListener("click", () => refreshQr({ invoke, mock }, state))
-  document.getElementById("service-install").addEventListener("click", () => serviceAction(deps, state, "install"))
+  document.getElementById("continue-provider")?.addEventListener("click", () => showStep("provider"))
+  document.getElementById("continue-wechat")?.addEventListener("click", () => showStep("wechat"))
+  document.getElementById("continue-service")?.addEventListener("click", () => showStep("service"))
+  document.getElementById("qr-refresh")?.addEventListener("click", () => refreshQr({ invoke, mock }, state))
+  document.getElementById("service-install")?.addEventListener("click", () => serviceAction(deps, state, "install"))
   document.getElementById("post-stop-kill")?.addEventListener("click", () => forceKillDaemon(deps))
-  document.getElementById("enter-dashboard").addEventListener("click", () => setMode("dashboard"))
-  document.getElementById("copy-diagnostics").addEventListener("click", async () => {
+  document.getElementById("enter-dashboard")?.addEventListener("click", () => setMode("dashboard"))
+  document.getElementById("copy-diagnostics")?.addEventListener("click", async () => {
     await navigator.clipboard?.writeText(JSON.stringify(doctorPoller.current, null, 2))
   })
 
-  document.querySelectorAll(".agent[data-provider]").forEach(btn =>
-    btn.addEventListener("click", () => commitProvider(btn.dataset.provider))
-  )
+  document.querySelectorAll(".agent[data-provider]").forEach(btn => {
+    const el = /** @type {HTMLElement} */ (btn)
+    el.addEventListener("click", () => commitProvider(el.dataset.provider ?? ""))
+  })
 
   document.querySelectorAll("[data-toggle]").forEach(t => {
-    t.addEventListener("click", async () => {
-      t.classList.toggle("on")
-      const on = t.classList.contains("on")
-      t.setAttribute("aria-pressed", on ? "true" : "false")
-      if (t.id === "unattended-toggle") state.unattended = on
-      if (t.id === "autostart-toggle") state.autoStart = on
-      if (t.id === "guard-toggle") {
+    const el = /** @type {HTMLElement} */ (t)
+    el.addEventListener("click", async () => {
+      el.classList.toggle("on")
+      const on = el.classList.contains("on")
+      el.setAttribute("aria-pressed", on ? "true" : "false")
+      if (el.id === "unattended-toggle") state.unattended = on
+      if (el.id === "autostart-toggle") state.autoStart = on
+      if (el.id === "guard-toggle") {
         // Persist immediately — guard config lives in its own JSON.
         // The daemon's scheduler reads loadGuardConfig() each tick so
         // the change takes effect on the next 30s poll. Refresh
         // doctor too so the status line picks up the new probe.
         try {
-          await invoke("wechat_cli_json", { args: ["guard", on ? "enable" : "disable", "--json"] })
+          /** @type {GuardEnable | GuardDisable} */
+          const _guardResult = await invoke("wechat_cli_json", { args: ["guard", on ? "enable" : "disable", "--json"] })
+          void _guardResult
           refreshGuardStatus()
         } catch { /* best-effort — toggle stays in the UI either way */ }
       }
     })
   })
 
-  document.getElementById("qr-raw-toggle").addEventListener("click", () => {
-    document.getElementById("qr-raw").classList.toggle("show")
+  document.getElementById("qr-raw-toggle")?.addEventListener("click", () => {
+    document.getElementById("qr-raw")?.classList.toggle("show")
   })
-  document.getElementById("service-plan-toggle").addEventListener("click", () => {
-    document.getElementById("service-plan").classList.toggle("show")
+  document.getElementById("service-plan-toggle")?.addEventListener("click", () => {
+    document.getElementById("service-plan")?.classList.toggle("show")
   })
 
-  document.getElementById("dash-refresh").addEventListener("click", (e) =>
-    withRefreshFeedback(e.currentTarget, () => doctorPoller.refresh()),
+  document.getElementById("dash-refresh")?.addEventListener("click", (e) =>
+    withRefreshFeedback(/** @type {HTMLButtonElement} */ (e.currentTarget), () => doctorPoller.refresh()),
   )
-  document.getElementById("dash-stop").addEventListener("click", () => stopDaemon(deps))
-  document.getElementById("dash-restart").addEventListener("click", () => restartDaemon(deps))
+  document.getElementById("dash-stop")?.addEventListener("click", () => stopDaemon(deps))
+  document.getElementById("dash-restart")?.addEventListener("click", () => restartDaemon(deps))
   document.getElementById("memory-refresh")?.addEventListener("click", (e) =>
-    withRefreshFeedback(e.currentTarget, async () => {
+    withRefreshFeedback(/** @type {HTMLButtonElement} */ (e.currentTarget), async () => {
       await loadMemoryPane(deps)
       await loadMemoryTopZone(deps)
     }),
@@ -339,7 +380,7 @@ function wireEvents() {
 
   // Memory top zone — handle archive button clicks via delegation
   document.getElementById("memory-observations")?.addEventListener("click", async (e) => {
-    const archiveBtn = e.target.closest("[data-action='archive-observation']")
+    const archiveBtn = /** @type {HTMLElement | null} */ (e.target instanceof HTMLElement ? e.target.closest("[data-action='archive-observation']") : null)
     if (archiveBtn) {
       e.stopPropagation()
       await archiveObservation(deps, archiveBtn.dataset.id)
@@ -359,20 +400,20 @@ function wireEvents() {
 
   // Memory decisions — click row to expand reasoning (CSS handles the visual via .expanded class)
   document.getElementById("memory-decisions-body")?.addEventListener("click", (e) => {
-    const row = e.target.closest("[data-action='toggle-decision']")
+    const row = /** @type {HTMLElement | null} */ (e.target instanceof HTMLElement ? e.target.closest("[data-action='toggle-decision']") : null)
     if (row) row.classList.toggle("expanded")
   })
   document.getElementById("logs-refresh")?.addEventListener("click", (e) =>
-    withRefreshFeedback(e.currentTarget, () => loadLogsPane(deps)),
+    withRefreshFeedback(/** @type {HTMLButtonElement} */ (e.currentTarget), () => loadLogsPane(deps)),
   )
   document.getElementById("sessions-refresh")?.addEventListener("click", (e) =>
-    withRefreshFeedback(e.currentTarget, () => loadSessionsList(deps)),
+    withRefreshFeedback(/** @type {HTMLButtonElement} */ (e.currentTarget), () => loadSessionsList(deps)),
   )
   // Sessions — list-row clicks. closest('[data-action]') routes to the
   // innermost match: clicking the star toggles favorite (and stops there);
   // clicking anywhere else on the row opens the detail.
   document.getElementById("sessions-body")?.addEventListener("click", (e) => {
-    const actionEl = e.target.closest("[data-action]")
+    const actionEl = /** @type {HTMLElement | null} */ (e.target instanceof HTMLElement ? e.target.closest("[data-action]") : null)
     if (!actionEl) return
     const action = actionEl.dataset.action
     const alias = actionEl.dataset.alias
@@ -401,7 +442,7 @@ function wireEvents() {
   document.getElementById("update-check-btn")?.addEventListener("click", () => loadUpdateProbe(deps))
   document.getElementById("update-apply-btn")?.addEventListener("click", () => applyUpdate(deps))
 
-  document.getElementById("accounts-body").addEventListener("click", ev => handleAccountRowClick(deps, ev))
+  document.getElementById("accounts-body")?.addEventListener("click", ev => handleAccountRowClick(deps, ev))
 
   document.querySelectorAll("[data-action='open-wizard']").forEach(btn =>
     btn.addEventListener("click", () => setMode("wizard"))
@@ -411,34 +452,35 @@ function wireEvents() {
   )
 
   document.querySelectorAll(".dash-nav-link[data-pane]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      if (btn.classList.contains("disabled")) return
-      switchPane(btn.dataset.pane)
+    const el = /** @type {HTMLElement} */ (btn)
+    el.addEventListener("click", () => {
+      if (el.classList.contains("disabled")) return
+      switchPane(el.dataset.pane ?? "")
     })
   })
 
   // ─── Lightbox for chat-bubble image / file attachments + avatar edit ─
   document.body.addEventListener("click", (ev) => {
-    const avatar = ev.target.closest(".wechat-avatar[data-avatar-key]")
+    const avatar = /** @type {HTMLElement | null} */ (ev.target instanceof HTMLElement ? ev.target.closest(".wechat-avatar[data-avatar-key]") : null)
     if (avatar) {
       ev.preventDefault()
       openAvatarModal(deps, avatar.dataset.avatarKey)
       return
     }
-    const img = ev.target.closest(".wechat-image")
+    const img = /** @type {HTMLImageElement | null} */ (ev.target instanceof HTMLElement ? ev.target.closest(".wechat-image") : null)
     if (img) {
       ev.preventDefault()
       openImageLightbox(img.src)
       return
     }
-    const fileCard = ev.target.closest(".wechat-file-card")
+    const fileCard = /** @type {HTMLElement | null} */ (ev.target instanceof HTMLElement ? ev.target.closest(".wechat-file-card") : null)
     if (fileCard) {
       ev.preventDefault()
       openFileLightbox(fileCard.dataset.path, fileCard.dataset.name, fileCard.dataset.ext)
       return
     }
-    const lightbox = ev.target.closest("#lightbox")
-    if (lightbox && !ev.target.closest(".lightbox-body")) {
+    const lightbox = ev.target instanceof HTMLElement ? ev.target.closest("#lightbox") : null
+    if (lightbox && !(ev.target instanceof HTMLElement ? ev.target.closest(".lightbox-body") : null)) {
       closeLightbox()
     }
   })
@@ -447,6 +489,7 @@ function wireEvents() {
   })
 }
 
+/** @param {string} src */
 function openImageLightbox(src) {
   const lb = document.getElementById("lightbox")
   const body = document.getElementById("lightbox-body")
@@ -456,6 +499,11 @@ function openImageLightbox(src) {
   lb.setAttribute("aria-hidden", "false")
 }
 
+/**
+ * @param {string | undefined} path
+ * @param {string | undefined} name
+ * @param {string | undefined} ext
+ */
 async function openFileLightbox(path, name, ext) {
   const lb = document.getElementById("lightbox")
   const body = document.getElementById("lightbox-body")
@@ -471,10 +519,10 @@ async function openFileLightbox(path, name, ext) {
   `
   lb.hidden = false
   lb.setAttribute("aria-hidden", "false")
-  const content = body.querySelector(".lightbox-file-content")
+  const content = /** @type {HTMLElement} */ (body.querySelector(".lightbox-file-content"))
 
   try {
-    const url = "/attachment?path=" + encodeURIComponent(path)
+    const url = "/attachment?path=" + encodeURIComponent(path ?? "")
     const r = await fetch(url)
     if (!r.ok) {
       content.classList.add("is-empty")
@@ -499,7 +547,7 @@ async function openFileLightbox(path, name, ext) {
     }
   } catch (err) {
     content.classList.add("is-empty")
-    content.textContent = "读取失败：" + (err?.message || String(err))
+    content.textContent = "读取失败：" + (/** @type {any} */ (err)?.message || String(err))
   }
 }
 
@@ -511,15 +559,20 @@ async function openFileLightbox(path, name, ext) {
 // it's sent to the daemon CLI as base64. Reload reopens the chat to
 // pick up the new avatar.
 
+/**
+ * @param {typeof deps} deps
+ * @param {string | undefined} key
+ */
 async function openAvatarModal(deps, key) {
   const lb = document.getElementById("lightbox")
   const body = document.getElementById("lightbox-body")
   if (!lb || !body) return
   const titleSubject = key === "claude" ? "Claude" : (extractContactNameFromOpenChat() || "联系人")
   // Look up current avatar (if any) for the preview slot.
+  /** @type {AvatarInfo | null} */
   let info = null
   try {
-    info = await deps.invoke("wechat_cli_json", { args: ["avatar", "info", key, "--json"] })
+    info = /** @type {AvatarInfo} */ (await deps.invoke("wechat_cli_json", { args: ["avatar", "info", key, "--json"] }))
   } catch { /* ignore — preview falls back */ }
   const previewHtml = info?.exists
     ? `<img src="/attachment?path=${encodeURIComponent(info.path)}&v=${Date.now()}"/>`
@@ -543,9 +596,9 @@ async function openAvatarModal(deps, key) {
   lb.hidden = false
   lb.setAttribute("aria-hidden", "false")
 
-  const input = body.querySelector("#avatar-modal-input")
-  const drop = body.querySelector("#avatar-modal-drop")
-  const preview = body.querySelector("#avatar-modal-preview")
+  const input = /** @type {HTMLInputElement} */ (body.querySelector("#avatar-modal-input"))
+  const drop = /** @type {HTMLElement} */ (body.querySelector("#avatar-modal-drop"))
+  const preview = /** @type {HTMLElement} */ (body.querySelector("#avatar-modal-preview"))
 
   drop.addEventListener("click", () => input.click())
   input.addEventListener("change", () => handleAvatarFile(deps, key, input.files?.[0], preview))
@@ -556,21 +609,27 @@ async function openAvatarModal(deps, key) {
     e.preventDefault(); drop.classList.remove("is-dragover")
   }))
   drop.addEventListener("drop", e => {
-    const file = e.dataTransfer?.files?.[0]
+    const file = /** @type {DragEvent} */ (e).dataTransfer?.files?.[0]
     if (file) handleAvatarFile(deps, key, file, preview)
   })
-  body.querySelector("#avatar-modal-cancel").addEventListener("click", closeLightbox)
-  body.querySelector("#avatar-modal-remove").addEventListener("click", async () => {
+  body.querySelector("#avatar-modal-cancel")?.addEventListener("click", closeLightbox)
+  body.querySelector("#avatar-modal-remove")?.addEventListener("click", async () => {
     try {
-      await deps.invoke("wechat_cli_json", { args: ["avatar", "remove", key, "--json"] })
+      /** @type {AvatarRemove} */ (await deps.invoke("wechat_cli_json", { args: ["avatar", "remove", key, "--json"] }))
       closeLightbox()
       reopenCurrentSession(deps)
     } catch (err) {
-      preview.innerHTML = `<span style="font-size:11px; color:var(--ink-3); padding:4px;">${escapeHtml(err?.message || String(err))}</span>`
+      preview.innerHTML = `<span style="font-size:11px; color:var(--ink-3); padding:4px;">${escapeHtml(/** @type {any} */ (err)?.message || String(err))}</span>`
     }
   })
 }
 
+/**
+ * @param {typeof deps} deps
+ * @param {string | undefined} key
+ * @param {File | undefined} file
+ * @param {HTMLElement} previewEl
+ */
 async function handleAvatarFile(deps, key, file, previewEl) {
   if (!file) return
   if (!/^image\/(png|jpe?g|webp)$/.test(file.type)) {
@@ -583,15 +642,21 @@ async function handleAvatarFile(deps, key, file, previewEl) {
   }
   try {
     const base64 = await imageToResizedPngBase64(file, 80)
-    await deps.invoke("wechat_cli_json", { args: ["avatar", "set", key, "--base64", base64, "--json"] })
+    const _avatarSetResult = /** @type {AvatarSet} */ (await deps.invoke("wechat_cli_json", { args: ["avatar", "set", key, "--base64", base64, "--json"] }))
+    void _avatarSetResult
     closeLightbox()
     reopenCurrentSession(deps)
   } catch (err) {
-    previewEl.innerHTML = `<span style="font-size:11px; color:var(--red); padding:4px;">${escapeHtml(err?.message || String(err))}</span>`
+    previewEl.innerHTML = `<span style="font-size:11px; color:var(--red); padding:4px;">${escapeHtml(/** @type {any} */ (err)?.message || String(err))}</span>`
   }
 }
 
-// Read a File / Blob → draw onto canvas square-cropped + resized → PNG base64
+/**
+ * Read a File / Blob → draw onto canvas square-cropped + resized → PNG base64
+ * @param {Blob} blob
+ * @param {number} size
+ * @returns {Promise<string>}
+ */
 function imageToResizedPngBase64(blob, size) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(blob)
@@ -601,6 +666,7 @@ function imageToResizedPngBase64(blob, size) {
         const canvas = document.createElement("canvas")
         canvas.width = size; canvas.height = size
         const ctx = canvas.getContext("2d")
+        if (!ctx) { reject(new Error("canvas 2d context unavailable")); return }
         // Square-crop from center (cover behavior)
         const sw = img.naturalWidth, sh = img.naturalHeight
         const side = Math.min(sw, sh)
@@ -621,6 +687,7 @@ function extractContactNameFromOpenChat() {
   return document.querySelector(".phone-title-name")?.textContent?.trim() || null
 }
 
+/** @param {typeof deps} deps */
 function reopenCurrentSession(deps) {
   const detail = document.getElementById("sessions-detail")
   const alias = detail?.dataset.alias
@@ -639,6 +706,7 @@ function closeLightbox() {
   lb.setAttribute("aria-hidden", "true")
 }
 
+/** @param {string | null | undefined} s */
 function escapeHtml(s) {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;")
 }
@@ -646,10 +714,13 @@ function escapeHtml(s) {
 // ─── boot ────────────────────────────────────────────────────────────
 
 function showDevBannerIfShim() {
-  if (!window.__WECHAT_CC_SHIM__) return
+  // window.__WECHAT_CC_SHIM__ and __WECHAT_CC_DRY_RUN__ are injected by the
+  // dev shim and not part of the standard Window type.
+  const w = /** @type {any} */ (window)
+  if (!w.__WECHAT_CC_SHIM__) return
   const banner = document.getElementById("dev-banner")
   if (!banner) return
-  banner.innerHTML = window.__WECHAT_CC_DRY_RUN__
+  banner.innerHTML = w.__WECHAT_CC_DRY_RUN__
     ? `<b>演示模式 (DRY_RUN)</b> · service install / stop / start 不会真实生效，但能演练交互流程`
     : `<b>开发 shim 模式</b> · 操作走真实 CLI（未启用 DRY_RUN）`
   banner.hidden = false
