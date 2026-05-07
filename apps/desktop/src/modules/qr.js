@@ -1,3 +1,12 @@
+// @ts-check
+/// <reference lib="dom" />
+/** @typedef {import('../../../../src/cli/schema').SetupQrJsonOutputT} SetupQrJson */
+/** @typedef {import('../../../../src/cli/schema').SetupPollOutputT} SetupPoll */
+/**
+ * @typedef {{ invoke: (cmd: string, args: Record<string, unknown>) => Promise<unknown>, mock: boolean }} Deps
+ * @typedef {{ setup: SetupQrJson | null, currentBaseUrl: string | null, qrTimer: ReturnType<typeof setInterval> | null, qrErrors: number }} QrState
+ */
+
 // QR / setup-poll module. Owns the wizard's bind-WeChat screen lifecycle:
 // fetch a QR payload via `setup --qr-json`, render it via the qrcode_svg
 // command (or the test-shim's placeholder), poll setup-poll every 2s
@@ -13,64 +22,93 @@ import { pollAdvance, escapeHtml } from "../view.js"
 const POLL_INTERVAL_MS = 2000
 const MAX_POLL_ERRORS = 5
 
+/**
+ * @param {Deps} deps
+ * @param {QrState} state
+ */
 export async function refreshQr(deps, state) {
-  clearInterval(state.qrTimer)
+  if (state.qrTimer != null) clearInterval(state.qrTimer)
   sessionStorage.removeItem("qrPollCount")
   state.qrErrors = 0
-  const qr = await deps.invoke("wechat_cli_json", { args: ["setup", "--qr-json"] })
+  const qr = /** @type {SetupQrJson} */ (await deps.invoke("wechat_cli_json", { args: ["setup", "--qr-json"] }))
   state.setup = qr
   state.currentBaseUrl = null
-  await renderQrInto(deps, document.getElementById("qr-box"), qr.qrcode_img_content)
-  document.getElementById("qr-title").textContent = "等待扫码"
-  document.getElementById("qr-message").textContent = "用微信扫描二维码。"
-  document.getElementById("qr-poll").hidden = false
-  document.getElementById("qr-ttl").textContent = qr.expires_in_ms
+  const qrBox = /** @type {HTMLElement} */ (document.getElementById("qr-box"))
+  await renderQrInto(deps, qrBox, qr.qrcode_img_content)
+  const titleEl = document.getElementById("qr-title")
+  const messageEl = document.getElementById("qr-message")
+  const pollEl = document.getElementById("qr-poll")
+  const ttlEl = document.getElementById("qr-ttl")
+  const rawEl = document.getElementById("qr-raw")
+  const continueBtn = /** @type {HTMLButtonElement | null} */ (document.getElementById("continue-service"))
+  if (titleEl) titleEl.textContent = "等待扫码"
+  if (messageEl) messageEl.textContent = "用微信扫描二维码。"
+  if (pollEl) pollEl.hidden = false
+  if (ttlEl) ttlEl.textContent = qr.expires_in_ms
     ? `${Math.floor(qr.expires_in_ms / 1000)}s ttl`
     : "scan now"
-  document.getElementById("qr-raw").textContent = JSON.stringify(qr, null, 2)
-  document.getElementById("continue-service").disabled = true
+  if (rawEl) rawEl.textContent = JSON.stringify(qr, null, 2)
+  if (continueBtn) continueBtn.disabled = true
   state.qrTimer = setInterval(() => pollQr(deps, state), POLL_INTERVAL_MS)
 }
 
+/**
+ * @param {Deps} deps
+ * @param {HTMLElement} box
+ * @param {string} text
+ */
 async function renderQrInto(deps, box, text) {
   if (deps.mock) { box.textContent = text; return }
   try {
-    const svg = await deps.invoke("render_qr_svg", { text })
+    const svg = /** @type {string} */ (await deps.invoke("render_qr_svg", { text }))
     box.innerHTML = svg
   } catch (err) {
     box.textContent = `${text}\n\n(渲染失败: ${err})`
   }
 }
 
+/**
+ * @param {Deps} deps
+ * @param {QrState} state
+ */
 async function pollQr(deps, state) {
   if (!state.setup) return
   const args = ["setup-poll", "--qrcode", state.setup.qrcode, "--json"]
   if (state.currentBaseUrl) args.splice(3, 0, "--base-url", state.currentBaseUrl)
   let result
   try {
-    result = await deps.invoke("wechat_cli_json", { args })
+    result = /** @type {SetupPoll} */ (await deps.invoke("wechat_cli_json", { args }))
     state.qrErrors = 0
   } catch (err) {
     state.qrErrors = (state.qrErrors || 0) + 1
-    document.getElementById("qr-raw").textContent = `轮询失败 (${state.qrErrors}/${MAX_POLL_ERRORS}):\n${err}`
+    const rawEl = document.getElementById("qr-raw")
+    if (rawEl) rawEl.textContent = `轮询失败 (${state.qrErrors}/${MAX_POLL_ERRORS}):\n${err}`
     if (state.qrErrors >= MAX_POLL_ERRORS) {
-      clearInterval(state.qrTimer)
-      document.getElementById("qr-title").textContent = "轮询暂停"
-      document.getElementById("qr-message").textContent = "请点「生成二维码」重试。"
-      document.getElementById("qr-poll").hidden = true
+      if (state.qrTimer != null) clearInterval(state.qrTimer)
+      const titleEl = document.getElementById("qr-title")
+      const messageEl = document.getElementById("qr-message")
+      const pollEl = document.getElementById("qr-poll")
+      if (titleEl) titleEl.textContent = "轮询暂停"
+      if (messageEl) messageEl.textContent = "请点「生成二维码」重试。"
+      if (pollEl) pollEl.hidden = true
     }
     return
   }
-  document.getElementById("qr-raw").textContent = JSON.stringify(result, null, 2)
+  const rawEl2 = document.getElementById("qr-raw")
+  if (rawEl2) rawEl2.textContent = JSON.stringify(result, null, 2)
   const advance = pollAdvance(state, result)
   if (advance.stopTimer) {
-    clearInterval(state.qrTimer)
-    document.getElementById("qr-poll").hidden = true
+    if (state.qrTimer != null) clearInterval(state.qrTimer)
+    const pollEl = document.getElementById("qr-poll")
+    if (pollEl) pollEl.hidden = true
   }
   if (advance.currentBaseUrl !== undefined) state.currentBaseUrl = advance.currentBaseUrl
-  if (advance.qrTitle !== undefined) document.getElementById("qr-title").textContent = advance.qrTitle
-  if (advance.qrMessage !== undefined) document.getElementById("qr-message").textContent = advance.qrMessage
-  if (advance.continueEnabled !== undefined) document.getElementById("continue-service").disabled = !advance.continueEnabled
+  if (advance.qrTitle !== undefined) { const el = document.getElementById("qr-title"); if (el) el.textContent = advance.qrTitle }
+  if (advance.qrMessage !== undefined) { const el = document.getElementById("qr-message"); if (el) el.textContent = advance.qrMessage }
+  if (advance.continueEnabled !== undefined) {
+    const btn = /** @type {HTMLButtonElement | null} */ (document.getElementById("continue-service"))
+    if (btn) btn.disabled = !advance.continueEnabled
+  }
   // After confirmed binding, hide the QR + TTL — leaving the code on screen
   // is confusing (user already scanned, the code is now invalid) and the
   // primary CTA in the header ("继续") tells them what to do next.

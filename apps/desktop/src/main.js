@@ -7,6 +7,7 @@
 /** @typedef {import('../../../src/cli/schema').AvatarInfoOutputT} AvatarInfo */
 /** @typedef {import('../../../src/cli/schema').AvatarSetOutputT} AvatarSet */
 /** @typedef {import('../../../src/cli/schema').AvatarRemoveOutputT} AvatarRemove */
+/** @typedef {import('../../../src/cli/schema').SetupQrJsonOutputT} SetupQrJson */
 
 // main.js — boot, mode router, and event-listener wiring. Per-feature logic
 // lives in modules/ (wizard, qr, service, dashboard, memory, update). The
@@ -28,7 +29,7 @@ import { loadSessionsList, openProjectDetail, closeProjectDetail, toggleFavorite
 import { loadUpdateProbe, applyUpdate } from "./modules/update.js"
 
 const state = {
-  setup: /** @type {unknown} */ (null),
+  setup: /** @type {SetupQrJson | null} */ (null),
   currentBaseUrl: /** @type {string | null} */ (null),
   selectedProvider: "claude",
   unattended: true,
