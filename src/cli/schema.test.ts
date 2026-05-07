@@ -10,6 +10,9 @@ import {
   ServiceStopOutput,
   ServiceUninstallOutput,
   InstallProgressOutput,
+  AccountRemoveOutput,
+  DaemonKillOutput,
+  ProviderShowOutput,
 } from './schema'
 
 describe('DoctorOutput', () => {
@@ -286,5 +289,60 @@ describe('InstallProgressOutput', () => {
   })
   it('rejects empty payload (no install in flight yields {}, not this schema)', () => {
     expect(InstallProgressOutput.safeParse({}).success).toBe(false)
+  })
+})
+
+describe('AccountRemoveOutput', () => {
+  it('accepts success branch', () => {
+    expect(AccountRemoveOutput.safeParse({
+      ok: true,
+      botId: 'abc123-im-bot',
+      removed: ['accounts/abc123-im-bot/', 'context_tokens.json[user-1]'],
+      warnings: [],
+      restartRequired: true,
+    }).success).toBe(true)
+  })
+  it('accepts error branch', () => {
+    expect(AccountRemoveOutput.safeParse({
+      ok: false,
+      error: 'invalid bot id: ../evil',
+    }).success).toBe(true)
+  })
+  it('rejects unknown discriminator', () => {
+    expect(AccountRemoveOutput.safeParse({ ok: 'maybe' }).success).toBe(false)
+  })
+})
+
+describe('DaemonKillOutput', () => {
+  it('accepts killed=true branch', () => {
+    expect(DaemonKillOutput.safeParse({
+      killed: true,
+      pid: 12345,
+      message: 'killed (SIGTERM)',
+    }).success).toBe(true)
+  })
+  it('accepts killed=false branch', () => {
+    expect(DaemonKillOutput.safeParse({
+      killed: false,
+      pid: 99999,
+      message: 'pid 99999 not found',
+    }).success).toBe(true)
+  })
+  it('rejects unknown discriminator', () => {
+    expect(DaemonKillOutput.safeParse({ killed: 'yes' }).success).toBe(false)
+  })
+})
+
+describe('ProviderShowOutput', () => {
+  it('accepts a full provider config', () => {
+    expect(ProviderShowOutput.safeParse({
+      provider: 'codex',
+      model: 'codex-mini-latest',
+      dangerouslySkipPermissions: false,
+      autoStart: true,
+    }).success).toBe(true)
+  })
+  it('rejects empty payload', () => {
+    expect(ProviderShowOutput.safeParse({}).success).toBe(false)
   })
 })

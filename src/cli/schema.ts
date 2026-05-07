@@ -253,3 +253,37 @@ export const InstallProgressOutput = z.object({
   ts: z.number(),
 })
 export type InstallProgressOutputT = z.infer<typeof InstallProgressOutput>
+
+// ── wechat-cc account remove <bot-id> --json ─────────────────────────────────
+// Success: { ok: true, ...RemoveAccountResult, restartRequired: true }
+// (removeAccount() throws on invalid botId — ok: false arm handles rethrown error)
+
+export const AccountRemoveOutput = z.discriminatedUnion('ok', [
+  z.object({
+    ok: z.literal(true),
+    botId: z.string(),
+    removed: z.array(z.string()),
+    warnings: z.array(z.string()),
+    restartRequired: z.literal(true),
+  }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+])
+export type AccountRemoveOutputT = z.infer<typeof AccountRemoveOutput>
+
+// ── wechat-cc daemon kill <pid> --json ────────────────────────────────────────
+// Emits KillResult directly (no ok wrapper): { killed, pid, message }.
+// Discriminated union on `killed` covers the success and failure branches
+// that killDaemonByPid returns (process exits non-zero when killed=false).
+
+export const DaemonKillOutput = z.discriminatedUnion('killed', [
+  z.object({ killed: z.literal(true), pid: z.number(), message: z.string() }),
+  z.object({ killed: z.literal(false), pid: z.number(), message: z.string() }),
+])
+export type DaemonKillOutputT = z.infer<typeof DaemonKillOutput>
+
+// ── wechat-cc provider show --json ───────────────────────────────────────────
+// Emits loadAgentConfig() verbatim — same shape as AgentConfigSchema.
+// Always succeeds when reached (loadAgentConfig falls back to defaults).
+
+export const ProviderShowOutput = AgentConfigSchema
+export type ProviderShowOutputT = z.infer<typeof ProviderShowOutput>
