@@ -462,15 +462,24 @@ const sessionsReadJsonlCmd = defineCommand({
       else console.log('no such alias')
       return
     }
-    // v0.5.11 — session-store is per-(alias, provider). When the most-
-    // recent provider for this alias is codex, the session_id is a codex
-    // thread id and the rollout file lives under ~/.codex/sessions/, not
-    // under ~/.claude/projects/. Reading codex jsonls is a v0.6 task; for
-    // now report a clean error so the dashboard renders something
-    // intelligible instead of "jsonl missing".
-    if (rec.provider && rec.provider !== 'claude') {
-      if (args.json) emitJson({ ok: false, error: `session was last touched by ${rec.provider}; jsonl viewer only supports claude sessions today`, provider: rec.provider }, outFile)
-      else console.log(`session was last touched by ${rec.provider}; cannot read`)
+    // v0.5.12 — codex sessions: read codex's rollout jsonl (sharded by
+    // date under ~/.codex/sessions/<YYYY>/<MM>/<DD>/) and convert events
+    // into claude-shape turns so the dashboard's existing renderer works
+    // unchanged. Skipping is no longer the right answer; users who tested
+    // /chat or /codex want to see their conversation just like with claude.
+    if (rec.provider === 'codex') {
+      const { findCodexRollout, readCodexJsonlAsClaudeTurns } = await import('./src/daemon/sessions/codex-jsonl')
+      const { homedir } = await import('node:os')
+      const codexRoot = join(homedir(), '.codex', 'sessions')
+      const path = findCodexRollout(codexRoot, rec.session_id)
+      if (!path) {
+        if (args.json) emitJson({ ok: false, error: 'codex rollout not found', codex_root: codexRoot }, outFile)
+        else console.log('codex rollout not found')
+        return
+      }
+      const turns = readCodexJsonlAsClaudeTurns(path)
+      if (args.json) emitJson({ ok: true, alias: args.alias, session_id: rec.session_id, provider: 'codex', turns }, outFile)
+      else console.log(`${turns.length} turns (codex)`)
       return
     }
     const { resolveProjectJsonlPath } = await import('./src/daemon/sessions/path-resolver')
