@@ -33,6 +33,7 @@ import {
   type InternalApiDelegateDep,
 } from './types'
 import { makeMaybePrefix, makeRoutes } from './routes'
+import { REQUEST_SCHEMAS } from './schema'
 
 export type {
   InternalApi,
@@ -120,6 +121,25 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
       } catch (err) {
         return send(res, 400, { error: 'malformed_json', detail: errMsg(err) })
       }
+    }
+
+    const key = `${method} ${url.pathname}`
+    const reqSchema = REQUEST_SCHEMAS[key]
+    if (reqSchema) {
+      const input = method === 'POST'
+        ? body
+        : Object.fromEntries(url.searchParams.entries())
+      const parsed = reqSchema.safeParse(input)
+      if (!parsed.success) {
+        deps.log?.('INTERNAL_API', `400 ${key} schema mismatch`, {
+          path: key,
+          issues: parsed.error.issues,
+        })
+        return send(res, 400, { error: 'invalid_request', detail: parsed.error.flatten() })
+      }
+      if (method === 'POST') body = parsed.data
+      // GET: handler still reads from url.searchParams (legacy contract);
+      // schema validation just gatekeeps.
     }
 
     try {
