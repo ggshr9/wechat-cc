@@ -455,14 +455,30 @@ const sessionsReadJsonlCmd = defineCommand({
     const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
     const rec = store.get(args.alias)
     if (!rec) {
-      console.log(args.json ? JSON.stringify({ ok: false, error: 'no such alias' }, null, 2) : 'no such alias')
+      // v0.5.11 — error paths must also honour --out-file. Without this,
+      // the dashboard's via-file shim path reads ENOENT instead of an
+      // error envelope.
+      if (args.json) emitJson({ ok: false, error: 'no such alias' }, outFile)
+      else console.log('no such alias')
+      return
+    }
+    // v0.5.11 — session-store is per-(alias, provider). When the most-
+    // recent provider for this alias is codex, the session_id is a codex
+    // thread id and the rollout file lives under ~/.codex/sessions/, not
+    // under ~/.claude/projects/. Reading codex jsonls is a v0.6 task; for
+    // now report a clean error so the dashboard renders something
+    // intelligible instead of "jsonl missing".
+    if (rec.provider && rec.provider !== 'claude') {
+      if (args.json) emitJson({ ok: false, error: `session was last touched by ${rec.provider}; jsonl viewer only supports claude sessions today`, provider: rec.provider }, outFile)
+      else console.log(`session was last touched by ${rec.provider}; cannot read`)
       return
     }
     const { resolveProjectJsonlPath } = await import('./src/daemon/sessions/path-resolver')
     const path = resolveProjectJsonlPath(args.alias, rec.session_id)
     const { existsSync, readFileSync } = await import('node:fs')
     if (!existsSync(path)) {
-      console.log(args.json ? JSON.stringify({ ok: false, error: 'jsonl missing' }, null, 2) : 'jsonl missing')
+      if (args.json) emitJson({ ok: false, error: 'jsonl missing', path }, outFile)
+      else console.log('jsonl missing')
       return
     }
     const lines = readFileSync(path, 'utf8').split('\n').filter(l => l.length > 0)
