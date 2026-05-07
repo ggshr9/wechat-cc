@@ -287,3 +287,59 @@ export type DaemonKillOutputT = z.infer<typeof DaemonKillOutput>
 
 export const ProviderShowOutput = AgentConfigSchema
 export type ProviderShowOutputT = z.infer<typeof ProviderShowOutput>
+
+// ── wechat-cc memory list --json ─────────────────────────────────────────────
+// Emits listAllMemory() verbatim: MemoryUserEntry[] (may be empty array).
+// Each entry has userId, fileCount, totalBytes, and files[].
+// files[] items have name, path (relative to user dir), size (bytes), mtime (ISO).
+
+const MemoryFileEntry = z.object({
+  name: z.string(),
+  path: z.string(),
+  size: z.number(),
+  mtime: z.string(),
+})
+
+const MemoryUserEntry = z.object({
+  userId: z.string(),
+  fileCount: z.number(),
+  totalBytes: z.number(),
+  files: z.array(MemoryFileEntry),
+})
+
+export const MemoryListOutput = z.array(MemoryUserEntry)
+export type MemoryListOutputT = z.infer<typeof MemoryListOutput>
+
+// ── wechat-cc memory read <user-id> <path> --json ────────────────────────────
+// Success: { ok: true, userId, path, content }
+// Error  : { ok: false, error } — emitted on stdout (exit 0) so GUI callers
+//          can read structured failure rather than crash on non-zero exit.
+
+export const MemoryReadOutput = z.discriminatedUnion('ok', [
+  z.object({
+    ok: z.literal(true),
+    userId: z.string(),
+    path: z.string(),
+    content: z.string(),
+  }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+])
+export type MemoryReadOutputT = z.infer<typeof MemoryReadOutput>
+
+// ── wechat-cc memory write <user-id> <path> --body-base64 <b64> --json ───────
+// Success: { ok: true, userId, path, bytesWritten, created }
+//   (spreads writeMemoryFile() result { bytesWritten, created } + positional args)
+// Error  : { ok: false, error } — emitted on stdout (exit 0) so GUI callers
+//          can read structured failure rather than crash on non-zero exit.
+
+export const MemoryWriteOutput = z.discriminatedUnion('ok', [
+  z.object({
+    ok: z.literal(true),
+    userId: z.string(),
+    path: z.string(),
+    bytesWritten: z.number(),
+    created: z.boolean(),
+  }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+])
+export type MemoryWriteOutputT = z.infer<typeof MemoryWriteOutput>

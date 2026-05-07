@@ -13,6 +13,9 @@ import {
   AccountRemoveOutput,
   DaemonKillOutput,
   ProviderShowOutput,
+  MemoryListOutput,
+  MemoryReadOutput,
+  MemoryWriteOutput,
 } from './schema'
 
 describe('DoctorOutput', () => {
@@ -344,5 +347,68 @@ describe('ProviderShowOutput', () => {
   })
   it('rejects empty payload', () => {
     expect(ProviderShowOutput.safeParse({}).success).toBe(false)
+  })
+})
+
+describe('MemoryListOutput', () => {
+  it('accepts an empty array (no memory files)', () => {
+    expect(MemoryListOutput.safeParse([]).success).toBe(true)
+  })
+  it('accepts an array with one user entry', () => {
+    expect(MemoryListOutput.safeParse([
+      {
+        userId: 'o9cq80abc@im.wechat',
+        fileCount: 2,
+        totalBytes: 512,
+        files: [
+          { name: 'notes.md', path: 'notes.md', size: 256, mtime: '2026-05-01T10:00:00.000Z' },
+          { name: 'context.md', path: 'sub/context.md', size: 256, mtime: '2026-05-02T11:00:00.000Z' },
+        ],
+      },
+    ]).success).toBe(true)
+  })
+  it('rejects a non-array (e.g. plain object)', () => {
+    expect(MemoryListOutput.safeParse({ userId: 'u1' }).success).toBe(false)
+  })
+})
+
+describe('MemoryReadOutput', () => {
+  it('accepts ok:true branch with userId, path, content', () => {
+    expect(MemoryReadOutput.safeParse({
+      ok: true,
+      userId: 'o9cq80abc@im.wechat',
+      path: 'notes.md',
+      content: '# My notes\nHello world',
+    }).success).toBe(true)
+  })
+  it('accepts ok:false branch with error', () => {
+    expect(MemoryReadOutput.safeParse({
+      ok: false,
+      error: 'file not found: o9cq80abc@im.wechat/notes.md',
+    }).success).toBe(true)
+  })
+  it('rejects unknown discriminator', () => {
+    expect(MemoryReadOutput.safeParse({ ok: 'maybe' }).success).toBe(false)
+  })
+})
+
+describe('MemoryWriteOutput', () => {
+  it('accepts ok:true branch with userId, path, bytesWritten, created', () => {
+    expect(MemoryWriteOutput.safeParse({
+      ok: true,
+      userId: 'o9cq80abc@im.wechat',
+      path: 'notes.md',
+      bytesWritten: 256,
+      created: true,
+    }).success).toBe(true)
+  })
+  it('accepts ok:false branch with error', () => {
+    expect(MemoryWriteOutput.safeParse({
+      ok: false,
+      error: 'body too large: 102401B exceeds 102400B',
+    }).success).toBe(true)
+  })
+  it('rejects unknown discriminator', () => {
+    expect(MemoryWriteOutput.safeParse({ ok: 'maybe' }).success).toBe(false)
   })
 })
