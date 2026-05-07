@@ -4,6 +4,11 @@ import {
   MemoryReadRequest, MemoryReadResponse,
   MemoryWriteRequest, MemoryWriteResponse,
   MemoryListQuery, MemoryListResponse,
+  ProjectsListResponse,
+  ProjectsSwitchRequest, ProjectsSwitchResponse,
+  ProjectsAddRequest, ProjectsAddResponse,
+  ProjectsRemoveRequest, ProjectsRemoveResponse,
+  UserSetNameRequest, UserSetNameResponse,
 } from './schema'
 
 // ── health ──────────────────────────────────────────────────────────────────
@@ -77,5 +82,96 @@ describe('MemoryListResponse', () => {
   })
   it('accepts error variant', () => {
     expect(MemoryListResponse.safeParse({ error: 'EBADF' }).success).toBe(true)
+  })
+})
+
+// ── GET /v1/projects/list ────────────────────────────────────────────────────
+
+describe('ProjectsListResponse', () => {
+  it('accepts an empty array', () => {
+    expect(ProjectsListResponse.safeParse([]).success).toBe(true)
+  })
+  it('accepts an array with items', () => {
+    expect(ProjectsListResponse.safeParse([{ alias: 'foo', path: '/tmp', current: false }]).success).toBe(true)
+  })
+})
+
+// ── POST /v1/projects/switch ─────────────────────────────────────────────────
+
+describe('ProjectsSwitchRequest', () => {
+  it('accepts { alias }', () => {
+    expect(ProjectsSwitchRequest.safeParse({ alias: 'foo' }).success).toBe(true)
+  })
+  it('rejects missing alias', () => {
+    expect(ProjectsSwitchRequest.safeParse({}).success).toBe(false)
+  })
+})
+
+describe('ProjectsSwitchResponse', () => {
+  it('accepts ok=true with path', () => {
+    expect(ProjectsSwitchResponse.safeParse({ ok: true, path: '/tmp/proj' }).success).toBe(true)
+  })
+  it('accepts ok=false with reason', () => {
+    expect(ProjectsSwitchResponse.safeParse({ ok: false, reason: 'not found' }).success).toBe(true)
+  })
+})
+
+// ── POST /v1/projects/add ────────────────────────────────────────────────────
+
+describe('ProjectsAddRequest', () => {
+  it('accepts { alias, path }', () => {
+    expect(ProjectsAddRequest.safeParse({ alias: 'foo', path: '/tmp' }).success).toBe(true)
+  })
+  it('rejects missing path', () => {
+    expect(ProjectsAddRequest.safeParse({ alias: 'foo' }).success).toBe(false)
+  })
+})
+
+describe('ProjectsAddResponse', () => {
+  it('accepts ok=true', () => {
+    expect(ProjectsAddResponse.safeParse({ ok: true }).success).toBe(true)
+  })
+  it('accepts ok=false with error', () => {
+    expect(ProjectsAddResponse.safeParse({ ok: false, error: 'duplicate' }).success).toBe(true)
+  })
+})
+
+// ── POST /v1/projects/remove ─────────────────────────────────────────────────
+
+describe('ProjectsRemoveRequest', () => {
+  it('accepts { alias }', () => {
+    expect(ProjectsRemoveRequest.safeParse({ alias: 'foo' }).success).toBe(true)
+  })
+  it('rejects missing alias', () => {
+    expect(ProjectsRemoveRequest.safeParse({}).success).toBe(false)
+  })
+})
+
+describe('ProjectsRemoveResponse', () => {
+  it('accepts ok=true', () => {
+    expect(ProjectsRemoveResponse.safeParse({ ok: true }).success).toBe(true)
+  })
+  it('accepts ok=false with error', () => {
+    expect(ProjectsRemoveResponse.safeParse({ ok: false, error: 'not found' }).success).toBe(true)
+  })
+})
+
+// ── POST /v1/user/set_name ───────────────────────────────────────────────────
+
+describe('UserSetNameRequest', () => {
+  it('accepts snake_case chat_id', () => {
+    expect(UserSetNameRequest.safeParse({ chat_id: 'abc', name: 'Alice' }).success).toBe(true)
+  })
+  it('rejects camelCase chatId (missing chat_id)', () => {
+    expect(UserSetNameRequest.safeParse({ chatId: 'abc', name: 'Alice' }).success).toBe(false)
+  })
+})
+
+describe('UserSetNameResponse', () => {
+  it('accepts ok=true', () => {
+    expect(UserSetNameResponse.safeParse({ ok: true }).success).toBe(true)
+  })
+  it('accepts ok=false with error', () => {
+    expect(UserSetNameResponse.safeParse({ ok: false, error: 'failed' }).success).toBe(true)
   })
 })

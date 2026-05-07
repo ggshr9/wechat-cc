@@ -51,3 +51,58 @@ export const MemoryListResponse = z.union([
   z.object({ files: z.array(z.string()) }),
   z.object({ error: z.string() }),
 ])
+
+// ── GET /v1/projects/list ────────────────────────────────────────────────────
+// Legacy wire shape: array returned directly (not wrapped).
+// Element shape from WechatProjectsDep.list() in wechat-tool-deps.ts.
+
+const ProjectListItem = z.object({
+  alias: z.string(),
+  path: z.string(),
+  current: z.boolean(),
+})
+export const ProjectsListResponse = z.array(ProjectListItem)
+
+// ── POST /v1/projects/switch ─────────────────────────────────────────────────
+
+export const ProjectsSwitchRequest = z.object({
+  alias: z.string(),
+})
+// Shape from WechatProjectsDep.switchTo: {ok:true,path} | {ok:false,reason}
+export const ProjectsSwitchResponse = z.union([
+  z.object({ ok: z.literal(true), path: z.string() }),
+  z.object({ ok: z.literal(false), reason: z.string() }),
+])
+
+// ── POST /v1/projects/add ────────────────────────────────────────────────────
+
+export const ProjectsAddRequest = z.object({
+  alias: z.string(),
+  path: z.string(),
+})
+export const ProjectsAddResponse = z.union([
+  z.object({ ok: z.literal(true) }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+])
+
+// ── POST /v1/projects/remove ─────────────────────────────────────────────────
+
+export const ProjectsRemoveRequest = z.object({
+  alias: z.string(),
+})
+export const ProjectsRemoveResponse = z.union([
+  z.object({ ok: z.literal(true) }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+])
+
+// ── POST /v1/user/set_name ───────────────────────────────────────────────────
+// chat_id is snake_case — intentional; preserved from legacy wire shape.
+
+export const UserSetNameRequest = z.object({
+  chat_id: z.string(),
+  name: z.string(),
+})
+export const UserSetNameResponse = z.union([
+  z.object({ ok: z.literal(true) }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+])
