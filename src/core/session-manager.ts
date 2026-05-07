@@ -1,5 +1,5 @@
 import type { ProviderId, SessionStore } from './session-store'
-import type { AgentResult, AgentSession } from './agent-provider'
+import type { AgentEvent, AgentSession } from './agent-provider'
 import type { ProviderRegistry } from './provider-registry'
 
 export interface SessionManagerOptions {
@@ -27,10 +27,8 @@ export interface SessionHandle {
   readonly path: string
   readonly providerId: ProviderId
   lastUsedAt: number
-  dispatch(text: string): Promise<{ assistantText: string[]; replyToolCalled: boolean }>
+  dispatch(text: string): AsyncIterable<AgentEvent>
   close(): Promise<void>
-  onAssistantText(cb: (text: string) => void): () => void
-  onResult(cb: (r: { session_id: string; num_turns: number; duration_ms: number }) => void): () => void
 }
 
 interface Internal {
@@ -111,23 +109,14 @@ export class SessionManager {
       path,
       providerId,
       lastUsedAt: Date.now(),
-      async dispatch(text: string) {
-        const result = await session.dispatch(text)
+      dispatch(text: string): AsyncIterable<AgentEvent> {
         handle.lastUsedAt = Date.now()
-        return result
+        return session.dispatch(text)
       },
       async close() {
         await session.close()
       },
-      onAssistantText(cb) { return session.onAssistantText(cb) },
-      onResult(cb) { return session.onResult(cb) },
     }
-
-    session.onResult((r: AgentResult) => {
-      if (r.session_id && this.opts.sessionStore) {
-        this.opts.sessionStore.set(alias, r.session_id, providerId)
-      }
-    })
 
     this.sessions.set(key(providerId, alias), { handle, session })
     await this.enforceCapacity()
