@@ -9,26 +9,22 @@ describe('groupProjectsByRecency', () => {
 
   it('< 24 hr → 今天 group', () => {
     const groups = groupProjectsByRecency([proj('a', 1), proj('b', 22)])
-    // @ts-expect-error untyped .js return value; will be fixed when sessions.js gets // @ts-check
     expect(groups['今天']).toHaveLength(2)
   })
 
   it('< 7 days → 7 天内', () => {
     const groups = groupProjectsByRecency([proj('a', 30), proj('b', 5 * 24)])
-    // @ts-expect-error untyped .js return value; will be fixed when sessions.js gets // @ts-check
     expect(groups['7 天内']).toHaveLength(2)
   })
 
   it('> 7 days → 更早', () => {
     const groups = groupProjectsByRecency([proj('a', 10 * 24)])
-    // @ts-expect-error untyped .js return value; will be fixed when sessions.js gets // @ts-check
     expect(groups['更早']).toHaveLength(1)
   })
 
   it('skips grouping when total < skipGroupingThreshold (single 全部 bucket)', () => {
     const groups = groupProjectsByRecency([proj('a', 1), proj('b', 100)], { skipGroupingThreshold: 5 })
     expect(Object.keys(groups)).toEqual(['全部'])
-    // @ts-expect-error untyped .js return value; will be fixed when sessions.js gets // @ts-check
     expect(groups['全部']).toHaveLength(2)
   })
 })

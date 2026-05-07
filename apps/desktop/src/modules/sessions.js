@@ -1,3 +1,16 @@
+// @ts-check
+/// <reference lib="dom" />
+/** @typedef {import('../../../../src/cli/schema').SessionsListProjectsOutputT} SessionsListProjects */
+/** @typedef {import('../../../../src/cli/schema').SessionsReadJsonlOutputT} SessionsReadJsonl */
+/** @typedef {import('../../../../src/cli/schema').SessionsDeleteOutputT} SessionsDelete */
+/** @typedef {import('../../../../src/cli/schema').SessionsSearchOutputT} SessionsSearch */
+/** @typedef {import('../../../../src/cli/schema').AvatarInfoOutputT} AvatarInfo */
+/**
+ * @typedef {{ alias: string, session_id: string, last_used_at: string, summary?: string|null, summary_updated_at?: string|null }} ProjectEntry
+ * @typedef {{ invoke: (cmd: string, args: Record<string, unknown>) => Promise<unknown> }} Deps
+ * @typedef {{ alias: string, turn_index: number, snippet?: string, turn?: unknown, session_has_reply_tool?: boolean, session_id?: string, [key: string]: unknown }} SearchHit
+ */
+
 // Pure helpers + render functions for the sessions pane.
 //
 // Drill-down (open detail), search, favorite/export/delete actions are
@@ -25,10 +38,12 @@ function readSessionsDetailMode() {
   } catch { return 'compact' }
 }
 
+/** @param {'compact'|'detailed'} mode */
 function writeSessionsDetailMode(mode) {
   try { localStorage.setItem(MODE_STORAGE_KEY, mode) } catch { /* fall through */ }
 }
 
+/** @param {'compact'|'detailed'} mode */
 function applyModeToToggle(mode) {
   const compactBtn = document.getElementById('sessions-mode-compact')
   const detailedBtn = document.getElementById('sessions-mode-detailed')
@@ -41,10 +56,13 @@ function applyModeToToggle(mode) {
  * the wechat-cc-specific <wechat ...>...</wechat> envelope that wraps every
  * inbound. Falls back to raw text content if envelope absent (forward
  * compat). Returns null for non-user turns or when extraction yields empty.
+ * @param {unknown} turn
+ * @returns {string|null}
  */
 export function extractUserText(turn) {
-  if (!turn || turn.type !== 'user') return null
-  const content = turn.message?.content
+  const t = /** @type {any} */ (turn)
+  if (!t || t.type !== 'user') return null
+  const content = t.message?.content
   let raw = ''
   if (typeof content === 'string') raw = content
   else if (Array.isArray(content)) {
@@ -57,7 +75,7 @@ export function extractUserText(turn) {
   // Try to strip the <wechat ...> envelope — wechat-cc wraps every inbound
   // with metadata so the SDK has chat_id / user / msg_type context.
   const m = raw.match(/<wechat\b[^>]*>([\s\S]*?)<\/wechat>/)
-  const text = (m ? m[1] : raw).trim()
+  const text = (m ? (m[1] ?? '') : raw).trim()
   return text || null
 }
 
@@ -77,10 +95,14 @@ export function extractUserText(turn) {
  * to suppress the per-turn text fallback for sessions that use the tool.
  *
  * Returns string[] (one per reply).
+ * @param {unknown} turn
+ * @param {{ sessionHasReplyTool?: boolean }} [opts]
+ * @returns {string[]}
  */
 export function extractClaudeReplies(turn, opts = {}) {
-  if (!turn || turn.type !== 'assistant') return []
-  const content = turn.message?.content
+  const t = /** @type {any} */ (turn)
+  if (!t || t.type !== 'assistant') return []
+  const content = t.message?.content
   if (!Array.isArray(content)) return []
 
   const replies = []
@@ -112,10 +134,12 @@ export function extractClaudeReplies(turn, opts = {}) {
  *
  * Unknown `[kind:path]` patterns are left in the text so future
  * attachment kinds don't disappear silently.
+ * @param {unknown} turn
  */
 export function extractWechatMeta(turn) {
-  if (!turn || turn.type !== 'user') return null
-  const content = turn.message?.content
+  const t = /** @type {any} */ (turn)
+  if (!t || t.type !== 'user') return null
+  const content = t.message?.content
   let raw = ''
   if (typeof content === 'string') raw = content
   else if (Array.isArray(content)) {
@@ -134,7 +158,7 @@ export function extractWechatMeta(turn) {
   const chatIdMatch = attrs.match(/\bchat_id="([^"]*)"/)
   const tsMatch = attrs.match(/\bts="([^"]*)"/)
   const quoteMatch = attrs.match(/\bquote_to="([^"]*)"/)
-  const tsNum = tsMatch ? Number(tsMatch[1]) : NaN
+  const tsNum = tsMatch ? Number(tsMatch[1] ?? '') : NaN
 
   // Split body lines: separate `[kind:path] caption` lines (recognized
   // attachment kinds only), the `[引用]` quote marker, and narrative
@@ -147,23 +171,24 @@ export function extractWechatMeta(turn) {
     const trimmed = line.trim()
     if (trimmed === '[引用]') { hasQuotePrefix = true; continue }
     const m = line.match(/^\s*\[([a-z]+):([^\]]+)\](?:\s+(.*))?$/i)
-    if (m && KNOWN.has(m[1].toLowerCase())) {
+    const mKind = m?.[1], mPath = m?.[2], mCaption = m?.[3]
+    if (m && mKind && KNOWN.has(mKind.toLowerCase())) {
       attachments.push({
-        kind: m[1].toLowerCase(),
-        path: m[2],
-        caption: m[3] ? m[3].trim() : null,
+        kind: mKind.toLowerCase(),
+        path: mPath ?? '',
+        caption: mCaption ? mCaption.trim() : null,
       })
     } else {
       textLines.push(line)
     }
   }
   return {
-    user: userMatch ? userMatch[1] : null,
-    chatId: chatIdMatch ? chatIdMatch[1] : null,
+    user: userMatch ? (userMatch[1] ?? null) : null,
+    chatId: chatIdMatch ? (chatIdMatch[1] ?? null) : null,
     ts: Number.isFinite(tsNum) ? tsNum : null,
     text: textLines.join('\n').trim(),
     attachments,
-    quoteTo: quoteMatch ? quoteMatch[1] : null,
+    quoteTo: quoteMatch ? (quoteMatch[1] ?? null) : null,
     hasQuotePrefix,
   }
 }
@@ -173,16 +198,19 @@ export function extractWechatMeta(turn) {
  * in the envelope. Queue-operation turns have ISO timestamps. Other
  * types (assistant, attachment, system) return null and the caller
  * inherits from the preceding ts when needed.
+ * @param {unknown} turn
+ * @returns {number|null}
  */
 export function extractTurnTimestamp(turn) {
   if (!turn || typeof turn !== 'object') return null
-  if (turn.type === 'user') {
+  const u = /** @type {any} */ (turn)
+  if (u.type === 'user') {
     const meta = extractWechatMeta(turn)
     return meta?.ts ?? null
   }
-  if (turn.type === 'queue-operation' && typeof turn.timestamp === 'string') {
-    const t = Date.parse(turn.timestamp)
-    return Number.isFinite(t) ? t : null
+  if (u.type === 'queue-operation' && typeof u.timestamp === 'string') {
+    const ts = Date.parse(u.timestamp)
+    return Number.isFinite(ts) ? ts : null
   }
   return null
 }
@@ -195,11 +223,14 @@ const WEEKDAYS_CN = ['周日', '周一', '周二', '周三', '周四', '周五',
  *   yesterday    → "昨天 22:16"                (24-hour)
  *   within 7d    → "周三 22:16"                (24-hour)
  *   older        → "2026-04-15 22:16"          (full date + 24-hour)
+ * @param {number} ms
+ * @param {number} [nowMs]
+ * @returns {string}
  */
 export function formatChatTimestamp(ms, nowMs = Date.now()) {
   const d = new Date(ms)
   const now = new Date(nowMs)
-  const dayKey = (x) => `${x.getFullYear()}-${x.getMonth()}-${x.getDate()}`
+  const dayKey = (/** @type {Date} */ x) => `${x.getFullYear()}-${x.getMonth()}-${x.getDate()}`
   const sameDay = dayKey(d) === dayKey(now)
   if (sameDay) return formatTime12(d)
 
@@ -209,11 +240,12 @@ export function formatChatTimestamp(ms, nowMs = Date.now()) {
 
   // Within last 7 days (exclusive of today/yesterday already handled)
   const ageMs = nowMs - ms
-  if (ageMs >= 0 && ageMs < 7 * 86400_000) return `${WEEKDAYS_CN[d.getDay()]} ${formatTime24(d)}`
+  if (ageMs >= 0 && ageMs < 7 * 86400_000) return `${WEEKDAYS_CN[d.getDay()] ?? ''} ${formatTime24(d)}`
 
   return `${formatDateYMD(d)} ${formatTime24(d)}`
 }
 
+/** @param {Date} d */
 function formatTime12(d) {
   const h = d.getHours()
   const ampm = h < 12 ? '上午' : '下午'
@@ -221,10 +253,12 @@ function formatTime12(d) {
   return `${ampm} ${h12}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
+/** @param {Date} d */
 function formatTime24(d) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
+/** @param {Date} d */
 function formatDateYMD(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
@@ -234,12 +268,15 @@ function formatDateYMD(d) {
  * `user` attribute on the first inbound user-turn envelope. Used by the
  * iPhone-frame title bar so the chat reads as "you and <contact>", not
  * the dev alias / session id.
+ * @param {unknown[]} turns
+ * @returns {string|null}
  */
 export function extractSessionContact(turns) {
   if (!Array.isArray(turns)) return null
-  for (const t of turns) {
+  for (const turn of turns) {
+    const t = /** @type {any} */ (turn)
     if (!t || t.type !== 'user') continue
-    const meta = extractWechatMeta(t)
+    const meta = extractWechatMeta(turn)
     if (meta?.user) return meta.user
   }
   return null
@@ -250,12 +287,15 @@ export function extractSessionContact(turns) {
  * inbound user-turn envelope. Used as the key for custom-avatar
  * storage so the same contact stays linked to their picture even if
  * the displayed user name changes.
+ * @param {unknown[]} turns
+ * @returns {string|null}
  */
 export function extractSessionChatId(turns) {
   if (!Array.isArray(turns)) return null
-  for (const t of turns) {
+  for (const turn of turns) {
+    const t = /** @type {any} */ (turn)
     if (!t || t.type !== 'user') continue
-    const meta = extractWechatMeta(t)
+    const meta = extractWechatMeta(turn)
     if (meta?.chatId) return meta.chatId
   }
   return null
@@ -264,6 +304,8 @@ export function extractSessionChatId(turns) {
 /**
  * Default-avatar initial — first non-whitespace char of the name,
  * uppercased for Latin scripts so "alice" → "A". CJK passes through.
+ * @param {string|null|undefined} name
+ * @returns {string}
  */
 export function avatarInitial(name) {
   if (!name) return '?'
@@ -278,6 +320,8 @@ export function avatarInitial(name) {
  * yields the same color, so a contact's avatar stays consistent across
  * reloads. 35% saturation + 50% lightness keeps it muted (matches
  * WeChat's tone — not loud).
+ * @param {string|null|undefined} seed
+ * @returns {string}
  */
 export function avatarColor(seed) {
   const s = String(seed || '?')
@@ -291,10 +335,13 @@ export function avatarColor(seed) {
  * used to gate the text-fallback in extractClaudeReplies. Once Claude has
  * the reply tool available, plain-text assistant content is wrap-up
  * status, not user-facing reply.
+ * @param {unknown[]} turns
+ * @returns {boolean}
  */
 export function sessionHasReplyTool(turns) {
   if (!Array.isArray(turns)) return false
-  for (const t of turns) {
+  for (const turn of turns) {
+    const t = /** @type {any} */ (turn)
     if (!t || t.type !== 'assistant') continue
     const content = t.message?.content
     if (!Array.isArray(content)) continue
@@ -307,27 +354,43 @@ export function sessionHasReplyTool(turns) {
   return false
 }
 
+/**
+ * @param {ProjectEntry[]} projects
+ * @param {{ skipGroupingThreshold?: number }} [opts]
+ * @returns {Record<string, ProjectEntry[]>}
+ */
 export function groupProjectsByRecency(projects, opts = {}) {
   const skipThresh = opts.skipGroupingThreshold ?? 0
   if (projects.length < skipThresh) {
     return { '全部': [...projects].sort(byRecencyDesc) }
   }
+  /** @type {Record<string, ProjectEntry[]>} */
   const buckets = { '今天': [], '7 天内': [], '更早': [] }
   const now = Date.now()
+  const bToday = buckets['今天'], bWeek = buckets['7 天内'], bOld = buckets['更早']
   for (const p of projects) {
     const age = now - new Date(p.last_used_at).getTime()
-    if (age < TODAY_MS) buckets['今天'].push(p)
-    else if (age < WEEK_MS) buckets['7 天内'].push(p)
-    else buckets['更早'].push(p)
+    if (age < TODAY_MS) bToday?.push(p)
+    else if (age < WEEK_MS) bWeek?.push(p)
+    else bOld?.push(p)
   }
-  for (const k of Object.keys(buckets)) buckets[k].sort(byRecencyDesc)
+  for (const k of Object.keys(buckets)) buckets[k]?.sort(byRecencyDesc)
   return buckets
 }
 
+/**
+ * @param {ProjectEntry} a
+ * @param {ProjectEntry} b
+ */
 function byRecencyDesc(a, b) {
   return a.last_used_at < b.last_used_at ? 1 : -1
 }
 
+/**
+ * @param {ProjectEntry} p
+ * @param {{ isFavorite?: boolean }} [opts]
+ * @returns {string}
+ */
 export function projectRow(p, opts = {}) {
   // Empty placeholder is just an em-dash — .summary.empty class greys it
   // out via CSS. v0.4.1's summarizer fills this in within ~30s of the next
@@ -358,6 +421,7 @@ export function readFavorites() {
   } catch { return new Set() }
 }
 
+/** @param {string} alias */
 export function toggleFavorite(alias) {
   const favs = readFavorites()
   if (favs.has(alias)) favs.delete(alias)
@@ -365,6 +429,7 @@ export function toggleFavorite(alias) {
   localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify([...favs]))
 }
 
+/** @param {Deps} deps */
 export async function loadSessionsList(deps) {
   const body = document.getElementById("sessions-body")
   const empty = document.getElementById("sessions-empty")
@@ -372,7 +437,7 @@ export async function loadSessionsList(deps) {
   if (!body) return
 
   try {
-    const resp = await deps.invoke("wechat_cli_json", { args: ["sessions", "list-projects", "--json"] })
+    const resp = /** @type {SessionsListProjects} */ (await deps.invoke("wechat_cli_json", { args: ["sessions", "list-projects", "--json"] }))
     const projects = resp.projects || []
 
     if (projects.length === 0) {
@@ -399,10 +464,16 @@ export async function loadSessionsList(deps) {
         </div>
       `).join("")
   } catch (err) {
-    body.innerHTML = `<p class="empty-state">读取失败：${escapeHtml(String(err.message || err))}</p>`
+    const msg = err instanceof Error ? err.message : String(err)
+    body.innerHTML = `<p class="empty-state">读取失败：${escapeHtml(msg)}</p>`
   }
 }
 
+/**
+ * @param {Deps} deps
+ * @param {string} alias
+ * @param {{ focusTurn?: number|null, preserveScroll?: { wasAtBottom: boolean, scrollTop: number }|null }} [opts]
+ */
 export async function openProjectDetail(deps, alias, opts = {}) {
   const { focusTurn = null } = opts
   const detail = document.getElementById("sessions-detail")
@@ -422,7 +493,7 @@ export async function openProjectDetail(deps, alias, opts = {}) {
   if (!opts.preserveScroll) startDetailAutoRefresh(deps)
 
   try {
-    const resp = await deps.invoke("wechat_cli_json_via_file", { args: ["sessions", "read-jsonl", alias, "--json"] })
+    const resp = /** @type {SessionsReadJsonl} */ (await deps.invoke("wechat_cli_json_via_file", { args: ["sessions", "read-jsonl", alias, "--json"] }))
     if (!resp.ok) {
       jsonlBox.innerHTML = `<p class="empty-state">${escapeHtml(resp.error || '读取失败')}</p>`
       meta.textContent = alias
@@ -452,8 +523,8 @@ export async function openProjectDetail(deps, alias, opts = {}) {
       if (claudeInfo?.exists) claudeAvatarSrc = `/attachment?path=${encodeURIComponent(claudeInfo.path)}&v=${Date.now()}`
     }
     const renderer = mode === 'detailed'
-      ? (turn) => turnHtml(turn)
-      : (turn) => turnHtmlCompact(turn, { sessionHasReplyTool: hasReplyTool, contactAvatarSrc, claudeAvatarSrc, contactKey })
+      ? (/** @type {unknown} */ turn) => turnHtml(turn)
+      : (/** @type {unknown} */ turn) => turnHtmlCompact(turn, { sessionHasReplyTool: hasReplyTool, contactAvatarSrc, claudeAvatarSrc, contactKey })
     // Walk turns once: insert a centered time-separator before any
     // visible turn whose ts is ≥5 min after the previous visible one
     // (or the first visible one). Hidden turns (queue-operation, etc.)
@@ -462,6 +533,7 @@ export async function openProjectDetail(deps, alias, opts = {}) {
     // message. Compact mode only.
     const TIME_GAP_MS = 5 * 60_000
     const renderNow = Date.now()
+    /** @type {number|null} */
     let lastTs = null
     const innerTurns = resp.turns
       .map((turn, idx) => {
@@ -524,7 +596,8 @@ export async function openProjectDetail(deps, alias, opts = {}) {
     // Wire scrollbar-fade — show during scroll, hide after idle (iOS feel).
     attachScrollbarFade(scrollContainer)
   } catch (err) {
-    jsonlBox.innerHTML = `<p class="empty-state">读取失败：${escapeHtml(String(err.message || err))}</p>`
+    const msg = err instanceof Error ? err.message : String(err)
+    jsonlBox.innerHTML = `<p class="empty-state">读取失败：${escapeHtml(msg)}</p>`
   }
 }
 
@@ -532,13 +605,15 @@ export async function openProjectDetail(deps, alias, opts = {}) {
 // actively scrolling, removes it ~700ms after the last scroll event.
 // CSS pairs this with thin/transparent scrollbar styling so the bar
 // only appears while in motion (matches iOS behavior).
+/** @param {Element|null} el */
 function attachScrollbarFade(el) {
-  if (!el || el.dataset.scrollFadeAttached === '1') return
+  if (!el || !(el instanceof HTMLElement) || el.dataset.scrollFadeAttached === '1') return
   el.dataset.scrollFadeAttached = '1'
+  /** @type {ReturnType<typeof setTimeout>|null} */
   let timer = null
   el.addEventListener('scroll', () => {
     el.classList.add('is-scrolling')
-    clearTimeout(timer)
+    if (timer !== null) clearTimeout(timer)
     timer = setTimeout(() => el.classList.remove('is-scrolling'), 700)
   })
 }
@@ -556,8 +631,13 @@ export function closeProjectDetail() {
 // near-real-time feel when the WeChat user sends a new message. Clears
 // itself when the detail closes, the user changes panes, or a new
 // detail is opened (which will start its own timer).
+/** @type {ReturnType<typeof setInterval>|null} */
 let detailAutoTimer = null
 
+/**
+ * @param {Deps} deps
+ * @param {number} [intervalMs]
+ */
 export function startDetailAutoRefresh(deps, intervalMs = 4000) {
   stopDetailAutoRefresh()
   detailAutoTimer = setInterval(async () => {
@@ -569,7 +649,8 @@ export function startDetailAutoRefresh(deps, intervalMs = 4000) {
     const alias = detail.dataset.alias
     if (!alias) return
     // Capture scroll state so the re-render preserves user position.
-    const chat = document.querySelector('.phone-chat')
+    const chatEl = document.querySelector('.phone-chat')
+    const chat = chatEl instanceof HTMLElement ? chatEl : null
     const wasAtBottom = chat
       ? (chat.scrollTop + chat.clientHeight >= chat.scrollHeight - 6)
       : true
@@ -595,19 +676,21 @@ export function stopDetailAutoRefresh() {
 // SDK turn types we know about: queue-operation, last-prompt (silent),
 // attachment, tool_result, system. Unknown shapes fall through to a
 // compact [type] label so the viewer never throws.
+/** @param {unknown} turn @returns {string} */
 export function turnHtml(turn) {
   if (!turn || typeof turn !== 'object') return ''
+  const t = /** @type {any} */ (turn)
 
   // Skip silent SDK lifecycle events that don't carry user-visible content.
-  if (turn.type === 'queue-operation' || turn.type === 'last-prompt') {
+  if (t.type === 'queue-operation' || t.type === 'last-prompt') {
     return ''
   }
 
   // user/assistant: extract text from message.content (always array in real
   // jsonls; tolerate string for forward compat).
-  if (turn.type === 'user' || turn.type === 'assistant') {
-    const role = turn.type
-    const content = turn.message?.content
+  if (t.type === 'user' || t.type === 'assistant') {
+    const role = t.type
+    const content = t.message?.content
     if (typeof content === 'string') {
       return `<div class="jsonl-turn" data-role="${role}">${escapeHtml(content)}</div>`
     }
@@ -618,20 +701,20 @@ export function turnHtml(turn) {
   }
 
   // Attachment: render compact label with file name if present.
-  if (turn.type === 'attachment') {
-    const att = turn.attachment || {}
+  if (t.type === 'attachment') {
+    const att = t.attachment || {}
     const name = att.path || att.name || 'attachment'
     return `<div class="jsonl-turn" data-role="attachment">📎 ${escapeHtml(name)}</div>`
   }
 
   // tool_result: render body if present, else label.
-  if (turn.type === 'tool_result') {
-    const body = typeof turn.content === 'string' ? turn.content : JSON.stringify(turn.content || '').slice(0, 300)
+  if (t.type === 'tool_result') {
+    const body = typeof t.content === 'string' ? t.content : JSON.stringify(t.content || '').slice(0, 300)
     return `<div class="jsonl-turn" data-role="tool_result">↳ ${escapeHtml(body)}</div>`
   }
 
   // Fallback: compact type label so unknown SDK shapes don't break the view.
-  return `<div class="jsonl-turn" data-role="other">[${escapeHtml(turn.type || 'unknown')}]</div>`
+  return `<div class="jsonl-turn" data-role="other">[${escapeHtml(t.type || 'unknown')}]</div>`
 }
 
 /**
@@ -652,11 +735,15 @@ export function turnHtml(turn) {
  *
  * `opts.sessionHasReplyTool` precomputed once per session — gates the
  * text fallback so wrap-up "已回复。" status isn't rendered.
+ * @param {unknown} turn
+ * @param {{ sessionHasReplyTool?: boolean, contactAvatarSrc?: string|null, claudeAvatarSrc?: string|null, contactKey?: string|null }} [opts]
+ * @returns {string}
  */
 export function turnHtmlCompact(turn, opts = {}) {
   if (!turn || typeof turn !== 'object') return ''
+  const tc = /** @type {any} */ (turn)
 
-  if (turn.type === 'user') {
+  if (tc.type === 'user') {
     const meta = extractWechatMeta(turn)
     if (!meta) return ''
     const hasContent = !!meta.text || (meta.attachments && meta.attachments.length > 0)
@@ -688,7 +775,7 @@ export function turnHtmlCompact(turn, opts = {}) {
     return out.join('')
   }
 
-  if (turn.type === 'assistant') {
+  if (tc.type === 'assistant') {
     const replies = extractClaudeReplies(turn, { sessionHasReplyTool: !!opts.sessionHasReplyTool })
     if (replies.length === 0) return ''
     return replies
@@ -713,6 +800,8 @@ export function turnHtmlCompact(turn, opts = {}) {
  * contact name, scrollable chat area, disabled input bar — all together
  * make the bubbles feel like they're inside a real iOS WeChat instead
  * of floating in a wide desktop pane.
+ * @param {{ contactName: string|null|undefined, chatContent: string }} arg0
+ * @returns {string}
  */
 function phoneFrameHtml({ contactName, chatContent }) {
   const name = contactName ? escapeHtml(contactName) : '—'
@@ -775,6 +864,10 @@ function phoneFrameHtml({ contactName, chatContent }) {
   `
 }
 
+/**
+ * @param {{ avatarText: string, avatarColor?: string|null, avatarClass?: string|null, avatarSrc?: string|null, avatarKey?: string|null }} arg0
+ * @returns {string}
+ */
 function avatarHtml({ avatarText, avatarColor: bg, avatarClass, avatarSrc, avatarKey }) {
   // `avatarKey` is what the click handler uses to know which avatar to
   // edit ("claude" or a chat_id). Passed as data-avatar-key.
@@ -789,6 +882,10 @@ function avatarHtml({ avatarText, avatarColor: bg, avatarClass, avatarSrc, avata
   return `<div class="wechat-avatar${cls}"${style}${dataKey} title="点击修改头像">${escapeHtml(avatarText)}</div>`
 }
 
+/**
+ * @param {{ side: string, role: string, avatarText: string, avatarColor?: string|null, avatarClass?: string|null, avatarSrc?: string|null, avatarKey?: string|null, text: string, quotePrefix?: boolean }} arg0
+ * @returns {string}
+ */
 function wechatRow({ side, role, avatarText, avatarColor, avatarClass, avatarSrc, avatarKey, text, quotePrefix }) {
   const textHtml = text ? `<div class="wechat-bubble">${escapeHtml(text)}</div>` : ''
   // Quote ref renders AFTER the bubble as a small grey card (matches
@@ -801,6 +898,10 @@ function wechatRow({ side, role, avatarText, avatarColor, avatarClass, avatarSrc
     `</div>`
 }
 
+/**
+ * @param {{ side: string, role: string, avatarText: string, avatarColor?: string|null, avatarClass?: string|null, avatarSrc?: string|null, avatarKey?: string|null, attachment: { kind: string, path: string, caption: string|null } }} arg0
+ * @returns {string}
+ */
 function wechatAttachmentRow({ side, role, avatarText, avatarColor, avatarClass, avatarSrc, avatarKey, attachment }) {
   let inner = ''
   if (attachment.kind === 'image') {
@@ -819,6 +920,10 @@ function wechatAttachmentRow({ side, role, avatarText, avatarColor, avatarClass,
     `</div>`
 }
 
+/**
+ * @param {{ kind: string, path: string, caption: string|null }} attachment
+ * @returns {string}
+ */
 function fileCard(attachment) {
   const path = String(attachment.path || '')
   const slash = path.lastIndexOf('/')
@@ -837,6 +942,7 @@ function fileCard(attachment) {
 
 // File-icon tone keyed by extension — matches WeChat's family-by-color
 // convention loosely. Unknown extensions get a neutral slate.
+/** @param {string} ext @returns {string} */
 function fileIconTone(ext) {
   const e = ext.toLowerCase()
   if (e === 'pdf') return '#D9433A'
@@ -851,10 +957,13 @@ function fileIconTone(ext) {
  * Look up an avatar's existence + absolute path via the daemon CLI.
  * Returns null on any failure so the caller falls back to the default
  * letter avatar without crashing the chat.
+ * @param {Deps} deps
+ * @param {string} key
+ * @returns {Promise<{ exists: boolean, path: string }|null>}
  */
 export async function avatarInfo(deps, key) {
   try {
-    const r = await deps.invoke("wechat_cli_json", { args: ["avatar", "info", key, "--json"] })
+    const r = /** @type {AvatarInfo} */ (await deps.invoke("wechat_cli_json", { args: ["avatar", "info", key, "--json"] }))
     if (r && r.ok) return { exists: !!r.exists, path: String(r.path || '') }
     return null
   } catch { return null }
@@ -864,9 +973,10 @@ export async function avatarInfo(deps, key) {
 // asset protocol does this via convertFileSrc; in the dev shim we route
 // through a /attachment endpoint. Keep both paths stub-tolerant — if
 // neither is available, the <img> fails gracefully (broken icon).
+/** @param {string} path @returns {string} */
 function attachmentUrl(path) {
   const safePath = String(path || '')
-  const conv = typeof window !== 'undefined' && window.__TAURI__?.core?.convertFileSrc
+  const conv = typeof window !== 'undefined' && (/** @type {any} */ (window)).__TAURI__?.core?.convertFileSrc
   if (typeof conv === 'function') {
     try { return conv(safePath) } catch { /* fall through */ }
   }
@@ -877,6 +987,10 @@ function attachmentUrl(path) {
 // segmented buttons. Persists the choice, then re-renders whatever's
 // currently visible: detail (re-fetches jsonl), search results
 // (re-renders rows from the existing hits), or just updates the toggle UI.
+/**
+ * @param {Deps} deps
+ * @param {'compact'|'detailed'} mode
+ */
 export function setSessionsDetailMode(deps, mode) {
   writeSessionsDetailMode(mode)
   applyModeToToggle(mode)
@@ -886,34 +1000,40 @@ export function setSessionsDetailMode(deps, mode) {
     openProjectDetail(deps, alias)
     return
   }
-  const searchInput = document.getElementById('sessions-search')
+  const searchInput = /** @type {HTMLInputElement|null} */ (document.getElementById('sessions-search'))
   if (searchInput?.value && searchInput.value.trim().length >= 2) {
     runSearch(deps, searchInput.value)
   }
 }
 
+/**
+ * @param {unknown} part
+ * @param {string} role
+ * @returns {string}
+ */
 function renderPart(part, role) {
   if (!part || typeof part !== 'object') return ''
-  if (part.type === 'text') {
-    const text = part.text || ''
+  const p = /** @type {any} */ (part)
+  if (p.type === 'text') {
+    const text = p.text || ''
     if (!text.trim()) return ''
     return `<div class="jsonl-turn" data-role="${role}">${escapeHtml(text)}</div>`
   }
-  if (part.type === 'thinking') {
-    const thinking = part.thinking || ''
+  if (p.type === 'thinking') {
+    const thinking = p.thinking || ''
     if (!thinking.trim()) return ''
     // Thinking gets its own visual treatment — italics + muted to hint
     // that this is internal reasoning, not user-facing assistant output.
     return `<div class="jsonl-turn" data-role="thinking"><em>${escapeHtml(thinking)}</em></div>`
   }
-  if (part.type === 'tool_use') {
-    const name = part.name || '?'
+  if (p.type === 'tool_use') {
+    const name = p.name || '?'
     return `<div class="jsonl-turn" data-role="tool_use">⚙ ${escapeHtml(name)}</div>`
   }
-  if (part.type === 'tool_result') {
-    const body = typeof part.content === 'string' ? part.content
-      : Array.isArray(part.content) ? part.content.map(c => c.text || '').filter(Boolean).join('\n')
-      : JSON.stringify(part.content || '').slice(0, 300)
+  if (p.type === 'tool_result') {
+    const body = typeof p.content === 'string' ? p.content
+      : Array.isArray(p.content) ? p.content.map((/** @type {any} */ c) => c.text || '').filter(Boolean).join('\n')
+      : JSON.stringify(p.content || '').slice(0, 300)
     return `<div class="jsonl-turn" data-role="tool_result">↳ ${escapeHtml(body)}</div>`
   }
   return ''
@@ -927,6 +1047,11 @@ function renderPart(part, role) {
  * for developer debugging.
  *
  * Pure function so it's unit-testable without DOM / Tauri.
+ * @param {string|null|undefined} alias
+ * @param {string|null|undefined} sessionId
+ * @param {unknown[]} turns
+ * @param {'compact'|'detailed'} mode
+ * @returns {string}
  */
 export function buildExportMarkdown(alias, sessionId, turns, mode) {
   const safeAlias = String(alias ?? '')
@@ -945,13 +1070,14 @@ export function buildExportMarkdown(alias, sessionId, turns, mode) {
   // plain paragraph for Claude — keeps copy-paste readable.
   const hasReplyTool = sessionHasReplyTool(turnList)
   const lines = []
-  for (const t of turnList) {
-    if (!t || typeof t !== 'object') continue
+  for (const item of turnList) {
+    if (!item || typeof item !== 'object') continue
+    const t = /** @type {any} */ (item)
     if (t.type === 'user') {
-      const text = extractUserText(t)
+      const text = extractUserText(item)
       if (text) lines.push(text.split('\n').map(l => `> ${l}`).join('\n'))
     } else if (t.type === 'assistant') {
-      const replies = extractClaudeReplies(t, { sessionHasReplyTool: hasReplyTool })
+      const replies = extractClaudeReplies(item, { sessionHasReplyTool: hasReplyTool })
       for (const r of replies) lines.push(r)
     }
   }
@@ -959,6 +1085,7 @@ export function buildExportMarkdown(alias, sessionId, turns, mode) {
   return header + lines.join('\n\n') + '\n'
 }
 
+/** @param {Deps} deps */
 export async function exportProjectMarkdown(deps) {
   const detail = document.getElementById("sessions-detail")
   const alias = detail?.dataset.alias
@@ -966,7 +1093,7 @@ export async function exportProjectMarkdown(deps) {
   try {
     // via_file path: CLI dumps JSON to a temp file and Rust reads it back.
     // Plain stdout truncates at MB-scale for bun --compile binaries.
-    const resp = await deps.invoke("wechat_cli_json_via_file", { args: ["sessions", "read-jsonl", alias, "--json"] })
+    const resp = /** @type {SessionsReadJsonl} */ (await deps.invoke("wechat_cli_json_via_file", { args: ["sessions", "read-jsonl", alias, "--json"] }))
     if (!resp.ok) {
       alert(`导出失败：${resp.error || '未知错误'}`)
       return
@@ -980,7 +1107,7 @@ export async function exportProjectMarkdown(deps) {
     // WKWebView too. Use a direct save_text_file Tauri command instead;
     // writes to ~/Downloads/<filename>.md and returns the absolute path.
     const filename = `${alias}-session.md`
-    if (window.__TAURI__?.core?.invoke) {
+    if ((/** @type {any} */ (window)).__TAURI__?.core?.invoke) {
       const path = await deps.invoke("save_text_file", { filename, content: md })
       alert(`已导出：${path}`)
     } else {
@@ -995,16 +1122,19 @@ export async function exportProjectMarkdown(deps) {
     }
   } catch (err) {
     console.error("export failed", err)
-    alert(`导出失败：${err?.message || err}`)
+    alert(`导出失败：${err instanceof Error ? err.message : String(err)}`)
   }
 }
 
 // Two-step inline confirm state (§1.3 #8 绝不弹窗). First click on the
 // delete button arms; second click within 3s commits. Module-scoped so
 // re-rendering the detail pane doesn't lose the armed state.
+/** @type {string|null} */
 let pendingDeleteAlias = null
+/** @type {ReturnType<typeof setTimeout>|null} */
 let pendingDeleteTimer = null
 
+/** @param {Deps} deps */
 export async function deleteProject(deps) {
   const detail = document.getElementById("sessions-detail")
   const alias = detail?.dataset.alias
@@ -1016,13 +1146,13 @@ export async function deleteProject(deps) {
   // changes + 3s revert timer); second click within 3s commits.
   if (pendingDeleteAlias === alias) {
     // Confirm: actually delete.
-    clearTimeout(pendingDeleteTimer)
+    if (pendingDeleteTimer !== null) clearTimeout(pendingDeleteTimer)
     pendingDeleteAlias = null
     pendingDeleteTimer = null
     btn.textContent = '删除'
     btn.classList.remove('is-confirming')
     try {
-      await deps.invoke("wechat_cli_json", { args: ["sessions", "delete", alias, "--json"] })
+      await /** @type {Promise<SessionsDelete>} */ (deps.invoke("wechat_cli_json", { args: ["sessions", "delete", alias, "--json"] }))
       closeProjectDetail()
       await loadSessionsList(deps)
     } catch (err) {
@@ -1046,15 +1176,20 @@ export async function deleteProject(deps) {
 // (10s) because sessions list-projects is heavier (reads sessions.json +
 // fires lazy summarizer) and last_used_at doesn't change as fast as a tail
 // log. main.js stops the tick on pane switch, same as the logs pattern.
+/** @type {ReturnType<typeof setInterval>|null} */
 let sessionsAutoTimer = null
 
+/**
+ * @param {Deps} deps
+ * @param {number} [intervalMs]
+ */
 export function startSessionsAutoRefresh(deps, intervalMs = 30000) {
   if (sessionsAutoTimer) return
   sessionsAutoTimer = setInterval(() => {
     // Skip refresh when the search input has a query — would clobber the
     // user's hits with the unfiltered project list.
-    const input = document.getElementById("sessions-search")
-    if (input?.value?.trim().length >= 2) return
+    const input = /** @type {HTMLInputElement|null} */ (document.getElementById("sessions-search"))
+    if ((input?.value?.trim().length ?? 0) >= 2) return
     // Skip refresh when the drill-down detail is open — the user is reading
     // a transcript, not the list.
     const detail = document.getElementById("sessions-detail")
@@ -1070,17 +1205,23 @@ export function stopSessionsAutoRefresh() {
   }
 }
 
+/** @type {ReturnType<typeof setTimeout>|null} */
 let searchTimer = null
 
+/** @param {Deps} deps */
 export function wireSearch(deps) {
-  const input = document.getElementById("sessions-search")
+  const input = /** @type {HTMLInputElement|null} */ (document.getElementById("sessions-search"))
   if (!input) return
   input.addEventListener("input", () => {
-    clearTimeout(searchTimer)
+    if (searchTimer !== null) clearTimeout(searchTimer)
     searchTimer = setTimeout(() => runSearch(deps, input.value), 250)
   })
 }
 
+/**
+ * @param {Deps} deps
+ * @param {string} query
+ */
 async function runSearch(deps, query) {
   const trimmed = (query || '').trim()
   if (trimmed.length < 2) {
@@ -1091,10 +1232,10 @@ async function runSearch(deps, query) {
   if (!body) return
   body.innerHTML = `<p class="empty-state">搜索中…</p>`
   try {
-    const resp = await deps.invoke("wechat_cli_json", { args: ["sessions", "search", trimmed, "--json"] })
+    const resp = /** @type {SessionsSearch} */ (await deps.invoke("wechat_cli_json", { args: ["sessions", "search", trimmed, "--json"] }))
     const hits = resp.hits || []
     const mode = readSessionsDetailMode()
-    const rows = hits.map(h => searchHitRow(h, { mode })).filter(s => s)
+    const rows = hits.map(h => searchHitRow(/** @type {SearchHit} */ (h), { mode })).filter(s => s)
     if (rows.length === 0) {
       const note = mode === 'compact' && hits.length > 0
         ? `没找到「${escapeHtml(trimmed)}」的对话——切到「完整」可看 ${hits.length} 条底层匹配。`
@@ -1104,7 +1245,8 @@ async function runSearch(deps, query) {
     }
     body.innerHTML = rows.join("")
   } catch (err) {
-    body.innerHTML = `<p class="empty-state">搜索失败：${escapeHtml(String(err.message || err))}</p>`
+    const msg = err instanceof Error ? err.message : String(err)
+    body.innerHTML = `<p class="empty-state">搜索失败：${escapeHtml(msg)}</p>`
   }
 }
 
@@ -1121,6 +1263,9 @@ async function runSearch(deps, query) {
  * Returns '' when the hit's turn projects to nothing in compact mode —
  * the caller filters empty rows so noise-only hits disappear from the
  * results list.
+ * @param {SearchHit} h
+ * @param {{ mode?: 'compact'|'detailed' }} [opts]
+ * @returns {string}
  */
 export function searchHitRow(h, opts = {}) {
   const mode = opts.mode === 'compact' ? 'compact' : 'detailed'
@@ -1128,9 +1273,10 @@ export function searchHitRow(h, opts = {}) {
 
   if (mode === 'compact') {
     if (!h.turn || typeof h.turn !== 'object') return ''
-    if (h.turn.type === 'user') {
+    const ht = /** @type {any} */ (h.turn)
+    if (ht.type === 'user') {
       snippetText = extractUserText(h.turn) || ''
-    } else if (h.turn.type === 'assistant') {
+    } else if (ht.type === 'assistant') {
       const replies = extractClaudeReplies(h.turn, { sessionHasReplyTool: !!h.session_has_reply_tool })
       snippetText = replies.join(' / ')
     } else {

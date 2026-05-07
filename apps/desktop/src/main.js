@@ -418,11 +418,12 @@ function wireEvents() {
     const action = actionEl.dataset.action
     const alias = actionEl.dataset.alias
     if (action === 'toggle-favorite') {
-      toggleFavorite(alias)
+      if (alias) toggleFavorite(alias)
       loadSessionsList(deps)
       return
     }
     if (action === 'open-project') {
+      if (!alias) return
       const turnIdx = actionEl.dataset.turnIndex
       const opts = turnIdx !== undefined ? { focusTurn: Number(turnIdx) } : {}
       openProjectDetail(deps, alias, opts)
