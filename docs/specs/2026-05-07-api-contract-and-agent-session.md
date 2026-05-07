@@ -1,29 +1,33 @@
 # Spec · Daemon API contract + AgentSession unification
 
-**Status**: Draft · 2026-05-07
+**Status**: Draft · 2026-05-07 (revised — added P1.A after discovering desktop ↔ daemon path)
 **Author**: GSR + Claude Opus 4.7 (brainstorming session)
-**Implementation**: Two independent PRs (PR-A = P1, PR-B = P2)
+**Implementation**: Three independent PRs — PR-A1 (P1.A · CLI JSON), PR-A2 (P1.B · internal-api), PR-B (P2 · AgentSession)
 **Predecessor context**: Architecture review identified P1/P2 as highest-priority cleanup items in the `v0.5.x` codebase
 
 ---
 
 ## TL;DR
 
-Two surgical interface changes that close concrete architectural gaps surfaced during the 2026-05-07 architecture review:
+Three surgical interface changes that close concrete architectural gaps surfaced during the 2026-05-07 architecture review:
 
-1. **P1 — Daemon ↔ Desktop API contract**: `internal-api`'s 24 routes get zod schemas as the single source of truth. The 3 desktop API consumer files (`conversations-poller.js`, `doctor-poller.js`, `ipc.js`) opt into static type checking via `// @ts-check` + JSDoc imports. Daemon schema drift now fails CI before reaching users' machines.
+1. **P1.A — CLI JSON contract** *(addresses the original "desktop schema drift" risk)*: ~30 CLI subcommands that emit `--json` get zod schemas in `src/cli/schema.ts`. Each subcommand calls `Schema.parse(payload)` before printing — daemon-side drift fails CI tests immediately. Desktop call sites import the inferred types via JSDoc. Renames the original "desktop schema drift" architectural concern to its actual surface: the CLI subprocess output format, not internal-api HTTP routes.
 
-2. **P2 — `AgentSession` interface unification**: Replace the dual return-value-plus-callback shape with a single `AsyncIterable<AgentEvent>`. Both providers (Claude, Codex) already iterate SDK events internally; this just exposes that stream rather than translating it twice. Drops the leaky `replyToolCalled` field — consumers derive it by observing `tool_call` events.
+2. **P1.B — internal-api zod schemas**: The HTTP `internal-api`'s 24 routes get zod schemas in `src/daemon/internal-api/schema.ts`. Validation injected at request entry. Tightens MCP server / delegate-mcp client contract (the actual current consumers of internal-api). Type-only — no runtime validation on the consumer side.
 
-Both PRs are big-bang single-commit-tree changes (no coexistence/shim layer) but independent — order does not matter.
+3. **P2 — `AgentSession` interface unification**: Replace the dual return-value-plus-callback shape with a single `AsyncIterable<AgentEvent>`. Both providers (Claude, Codex) already iterate SDK events internally; this just exposes that stream rather than translating it twice. Drops the leaky `replyToolCalled` field — consumers derive it by observing `tool_call` events.
+
+All three PRs are big-bang single-commit-tree changes (no coexistence/shim layer) and independent — order does not matter, though P1.A is recommended first because it directly closes the user-reported risk surface.
 
 ---
 
 ## Context
 
-The current architecture has two paper cuts the project keeps stepping on:
+The current architecture has paper cuts the project keeps stepping on:
 
-**P1 motivation**: `apps/desktop/src/` is plain JavaScript loaded directly by Tauri's webview. The pollers and IPC client call the daemon's HTTP `internal-api` routes, but no shared schema exists between the two layers. When daemon route shapes change, desktop silently breaks at runtime in a packaged build. The 2026-05-04 v0.6 PR5 dashboard rewrite touched several routes and only caught the schema mismatch via manual click-through — a near-miss.
+**P1.A motivation** (CLI JSON contract): `apps/desktop/src/` is plain JavaScript loaded directly by Tauri's webview. ~25 desktop call sites use `invoke("wechat_cli_json", { args: [...] })` to spawn the bundled `wechat-cc` CLI subprocess and parse its stdout JSON. The CLI subcommands (`doctor`, `conversations list`, `sessions read-jsonl`, `memory list`, `provider show`, `service status`, etc.) print JSON in a free-form structure with no shared contract. When a CLI subcommand's output shape changes, desktop silently breaks at runtime in a packaged build — observed in the 2026-05-04 v0.6 PR5 dashboard rewrite (caught via manual click-through, not CI). The architecture review initially framed this as an "internal-api schema" problem; investigating the actual call paths showed the contract surface is the CLI's `--json` output, not internal-api HTTP.
+
+**P1.B motivation** (internal-api zod schemas): `internal-api`'s actual current consumers are the wechat-mcp stdio subprocess and the delegate-mcp dispatch path — both invoke routes via HTTP + bearer token. No schema, runtime body parsing is hand-rolled `typeof` ladders in each handler. Adding zod schemas tightens the MCP-client contract and cleans up the validation boilerplate. Lower urgency than P1.A but parallel mechanical work.
 
 **P2 motivation**: `AgentSession.dispatch()` returns `Promise<{ assistantText[]; replyToolCalled }>` AND exposes `onAssistantText` / `onResult` listener registration. Same data, two paths. The `replyToolCalled` field is a leaky abstraction (it encodes "did the agent call the wechat-mcp reply tool family?" — a wechat-channel concept) up into the provider interface. Coordinator dispatch logic (`solo`, `parallel`, `chatroom`) all hand-roll fallback semantics around this field. Mature SDKs in this space (Anthropic's own, Vercel AI SDK, LangGraph) ship a single async iterator instead.
 
@@ -31,12 +35,20 @@ The current architecture has two paper cuts the project keeps stepping on:
 
 ## Scope
 
-**In**:
+**In — P1.A (CLI JSON contract)**:
+- New file `src/cli/schema.ts` with zod schemas for ~30 `--json`-emitting CLI subcommands (every subcommand listed in `cli.ts` help text, even ones desktop doesn't currently call — CLI is also a user-facing scripting surface)
+- Each subcommand handler imports its `OutputSchema` and calls `Schema.parse(payload)` before `console.log(JSON.stringify(payload))`
+- `tsconfig.json` includes specific desktop `.js` files that consume CLI JSON; `allowJs: true`
+- `// @ts-check` directives + JSDoc imports in those desktop files (10+ files: `doctor-poller.js`, `conversations-poller.js`, `main.js`, `modules/*.js` for any module that calls `invoke("wechat_cli_json", ...)`)
+- New tests asserting each subcommand's output parses against its schema
+
+**In — P1.B (internal-api zod schemas)**:
 - New file `src/daemon/internal-api/schema.ts` with zod schemas for all 24 routes
 - Validation step injected in `src/daemon/internal-api/index.ts`
 - Tightened handler parameter types in `src/daemon/internal-api/routes.ts`
-- `tsconfig.json` includes 3 specific `apps/desktop/src/*.js` files; `allowJs: true`
-- `// @ts-check` directives + JSDoc imports in those 3 files
+- Type-only consumer adoption (no runtime validation) — there's no current desktop consumer of internal-api; future MCP-server-side adoption left as opportunistic follow-up
+
+**In — P2 (AgentSession unification)**:
 - `AgentEvent` discriminated union + new `AgentSession` shape in `src/core/agent-provider.ts`
 - Rewrite of `src/core/claude-agent-provider.ts` to yield events instead of accumulating
 - Rewrite of `src/core/codex-agent-provider.ts` similarly
@@ -46,15 +58,175 @@ The current architecture has two paper cuts the project keeps stepping on:
 
 **Out**:
 - Frontend toolchain introduction (vite/esbuild) — separate P0.5 spec when it happens
-- Other 14 desktop `.js` files — wait for toolchain
+- Desktop `.js` files that don't call the CLI — left untouched
 - `routes.ts` decomposition into per-route files
+- `cli.ts` decomposition into per-subcommand files (currently a single ~700-line file with inline subcommand handlers — also a future refactor)
 - AgentSession `cancel()` / `abort()` API (still via `close()`)
 - OpenAPI / tRPC / additional contract layers — zod is sufficient
 - Provider behavior changes (reply-tool detection logic, error handling philosophy unchanged)
+- MCP-server-side schema adoption (P1.B's MCP client side stays as-is; consumer adoption is a follow-up if/when MCP server contracts get refactored)
 
 ---
 
-## P1 Design — Daemon API contract
+## P1.A Design — CLI JSON contract
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────┐
+│ src/cli/schema.ts                           │  ← single source of truth
+│   - ~30 OutputSchemas (zod)                 │
+│   - one <Schema>T type alias per schema     │
+└──────────────┬──────────────────────────────┘
+               │
+       ┌───────┴────────────────┐
+       ↓                        ↓
+┌──────────────────────┐  ┌────────────────────────────┐
+│ cli.ts + src/cli/*   │  │ apps/desktop/src/*.js +    │
+│   ↳ producer-side    │  │   modules/*.js (~10 files) │
+│     Schema.parse()   │  │   // @ts-check + JSDoc     │
+│     before stdout    │  │   types only, no runtime   │
+└──────────────────────┘  └────────────────────────────┘
+```
+
+### Components
+
+#### `src/cli/schema.ts` (new)
+
+Single file with one zod schema per `--json`-emitting CLI subcommand, plus inferred type aliases (same `<Schema>` value + `<Schema>T` type pattern as P1.B):
+
+```ts
+import { z } from 'zod'
+
+// wechat-cc doctor --json
+export const DoctorOutput = z.object({
+  ok: z.boolean(),
+  daemon_pid: z.number().optional(),
+  // ... fields the actual cli.ts doctor handler emits
+})
+export type DoctorOutputT = z.infer<typeof DoctorOutput>
+
+// wechat-cc conversations list --json
+// Existing handler emits: { ok: true, conversations: [...] }
+export const ConversationsListOutput = z.object({
+  ok: z.literal(true),
+  conversations: z.array(z.object({
+    chatId: z.string(),
+    mode: z.unknown(), // or refined Mode union from src/core/conversation
+    last_user_name: z.string().optional(),
+    user_id: z.string().optional(),
+    account_id: z.string().optional(),
+  })),
+})
+export type ConversationsListOutputT = z.infer<typeof ConversationsListOutput>
+
+// ... ~30 more schemas
+```
+
+Most CLI commands emit `{ ok: false, error: "..." }` on failure — express success/failure shapes via `z.discriminatedUnion('ok', [...])`:
+
+```ts
+export const UpdateOutput = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), pulled: z.boolean(), version: z.string() }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+])
+```
+
+**Subcommand enumeration** (from `cli.ts` help text + grep on `console.log(JSON.stringify(`):
+
+`doctor`, `setup`, `setup-poll`, `setup-status`, `service status/install/start/stop/uninstall`, `account remove`, `daemon kill`, `memory list/read/write`, `events list`, `observations list/archive`, `milestones list`, `sessions list-projects/read-jsonl/delete/search`, `demo seed/unseed`, `reply`, `logs`, `update [--check]`, `provider show`, `conversations list`, `guard status/enable/disable`, `avatar info/set/remove`, `install-progress`.
+
+Roughly 30 subcommand variants. Wide scope per the design decision — even subcommands desktop doesn't currently call get schemas, because operators run them from the shell + scripts pipe to jq. CLI is itself a user-facing scripting surface.
+
+#### CLI subcommand handlers (modified — `cli.ts` + `src/cli/*.ts`)
+
+Each `--json` emit site imports its `OutputSchema` and calls `parse` before printing:
+
+```ts
+import { DoctorOutput } from '../src/cli/schema'
+
+// in cli.ts's doctor subcommand:
+const report = collectDoctorReport(...)
+if (args.json) {
+  const validated = DoctorOutput.parse(report)
+  console.log(JSON.stringify(validated, null, 2))
+} else {
+  printHumanReadable(report)
+}
+```
+
+`parse` (not `safeParse`) is intentional — a schema mismatch is a programming error in the daemon, not user input. Throw, exit non-zero, fail tests loudly.
+
+For commands using `--json` for both success and failure JSON output, the schema is a discriminated union and parses both paths.
+
+#### `tsconfig.json` (modified)
+
+```diff
+   "compilerOptions": {
+     ...
++    "allowJs": true
+   },
+   "include": [
+     "**/*.ts",
+     "src/**/*.ts",
+-    "types/**/*.d.ts"
++    "types/**/*.d.ts",
++    "apps/desktop/src/conversations-poller.js",
++    "apps/desktop/src/doctor-poller.js",
++    "apps/desktop/src/main.js",
++    "apps/desktop/src/modules/service.js",
++    "apps/desktop/src/modules/sessions.js",
++    "apps/desktop/src/modules/update.js",
++    "apps/desktop/src/modules/memory.js",
++    "apps/desktop/src/modules/qr.js"
+   ],
+```
+
+The exact desktop file list is whatever calls `invoke("wechat_cli_json", { args: [...] })` — implementation discovers via `grep -rn 'wechat_cli_json' apps/desktop/src/`. Per-file `// @ts-check` keeps untouched files unaffected.
+
+#### Desktop `.js` consumer files (modified)
+
+Each file that calls the CLI gets a `// @ts-check` directive + JSDoc type aliases:
+
+```js
+// @ts-check
+/** @typedef {import('../../../src/cli/schema').DoctorOutputT} DoctorOutput */
+/** @typedef {import('../../../src/cli/schema').ConversationsListOutputT} ConversationsList */
+
+/** @returns {Promise<ConversationsList>} */
+async function refreshConversations() {
+  const report = await invoke("wechat_cli_json", { args: ["conversations", "list", "--json"] })
+  return report
+}
+```
+
+Same JSDoc convention as P1.B — `@typedef` aliases at the top, then `@returns`/`@param` per function. The `@typedef`'d type names are local aliases; they let downstream code use short names.
+
+### Migration sequence (single PR)
+
+1. Enumerate all `--json` subcommands (grep + read `cli.ts` help output).
+2. Write `src/cli/schema.ts` with all ~30 schemas + `<Schema>T` type aliases.
+3. Write `src/cli/schema.test.ts` with round-trip parse tests (valid + invalid fixture per schema).
+4. For each subcommand handler in `cli.ts` and `src/cli/*.ts`: import its schema, add `Schema.parse(payload)` line before `console.log(JSON.stringify(...))`.
+5. Run existing CLI command tests — they pass if schemas match reality. Fix any drifts.
+6. Modify `tsconfig.json` (`allowJs` + desktop file include paths).
+7. Add `// @ts-check` + JSDoc to ~10 desktop consumer files.
+8. Run `bun run typecheck` — should pass.
+9. Run Playwright + shim e2e — desktop UI exercises every CLI subcommand path.
+
+### Tests
+
+**New**:
+- `src/cli/schema.test.ts` — for each of ~30 schemas: valid + invalid fixture parse (~60 tests).
+- For any subcommand currently lacking a test: smoke test that runs the subcommand and confirms `Schema.parse(parsedOutput)` doesn't throw.
+
+**Modified**: existing CLI subcommand tests already do `JSON.parse(consoleSpy.mock.calls[0][0])`. The producer-side `Schema.parse` runs implicitly during the test. Add an explicit `expect(() => OutputSchema.parse(parsed)).not.toThrow()` only where the existing test doesn't already assert structural shape.
+
+**Unchanged**: Playwright + shim e2e — they invoke the real CLI; the JSON shapes match because the schema describes what the CLI emits.
+
+---
+
+## P1.B Design — internal-api zod schemas
 
 ### Architecture
 
@@ -66,15 +238,15 @@ The current architecture has two paper cuts the project keeps stepping on:
 │   - REQUEST_SCHEMAS lookup table    │
 └──────────────┬──────────────────────┘
                │
-       ┌───────┴────────┐
-       ↓                ↓
-┌──────────────┐  ┌────────────────────────────┐
-│ index.ts     │  │ apps/desktop/src/*.js      │
-│  validates   │  │   (3 files, // @ts-check)  │
-│  POST body   │  │   import types via JSDoc   │
-│  before      │  │   z.infer<typeof X>        │
-│  handler     │  │                            │
-└──────────────┘  └────────────────────────────┘
+               ↓
+┌──────────────────────────────────┐
+│ src/daemon/internal-api/index.ts │
+│   validates POST body /          │
+│   GET query before handler runs  │
+└──────────────────────────────────┘
+        consumed via HTTP by:
+   wechat-mcp stdio child + delegate-mcp dispatch
+   (NOT desktop — desktop talks to CLI, see P1.A)
 ```
 
 ### Components
@@ -94,13 +266,13 @@ export const HealthResponse = z.object({
 
 // POST /v1/memory/read
 export const MemoryReadRequest = z.object({
-  chatId: z.string(),
-  name: z.string(),
+  path: z.string(),
 })
-export const MemoryReadResponse = z.object({
-  exists: z.boolean(),
-  content: z.string().optional(),
-})
+export const MemoryReadResponse = z.union([
+  z.object({ exists: z.literal(false) }),
+  z.object({ exists: z.literal(true), content: z.string() }),
+  z.object({ error: z.string() }),
+])
 
 // ... 22 more routes ...
 
@@ -129,13 +301,14 @@ export const RESPONSE_SCHEMAS: Record<string, z.ZodTypeAny | undefined> = {
 GET routes that read query parameters get a `QuerySchema` instead of (or in addition to) request body schemas:
 
 ```ts
-// GET /v1/memory/list?chatId=...
+// GET /v1/memory/list?dir=...
 export const MemoryListQuery = z.object({
-  chatId: z.string(),
+  dir: z.string().optional(),
 })
-export const MemoryListResponse = z.object({
-  files: z.array(z.object({ name: z.string(), updatedAt: z.string() })),
-})
+export const MemoryListResponse = z.union([
+  z.object({ files: z.array(z.string()) }),
+  z.object({ error: z.string() }),
+])
 ```
 
 GET routes with no query parameters (e.g. `/v1/health`) only get a `Response` schema.
@@ -182,76 +355,14 @@ Each handler signature gets explicit body type via `z.infer`:
 
 The handler **logic** does not change. This is purely tightening the type signature so internal type errors surface during `bun run typecheck`.
 
-#### `tsconfig.json` (modified)
-
-```diff
-   "compilerOptions": {
-     "target": "ESNext",
-     "module": "ESNext",
-     "moduleResolution": "bundler",
-     "strict": true,
-     "noUncheckedIndexedAccess": true,
-     "skipLibCheck": true,
-     "types": ["bun"],
-     "lib": ["ESNext"],
-     "esModuleInterop": true,
-     "allowImportingTsExtensions": true,
-     "noEmit": true,
-     "verbatimModuleSyntax": true,
-     "resolveJsonModule": true,
-+    "allowJs": true
-   },
-   "include": [
-     "**/*.ts",
-     "src/**/*.ts",
--    "types/**/*.d.ts"
-+    "types/**/*.d.ts",
-+    "apps/desktop/src/conversations-poller.js",
-+    "apps/desktop/src/doctor-poller.js",
-+    "apps/desktop/src/ipc.js"
-   ],
-```
-
-`allowJs: true` is required because we're adding `.js` files to `include`. We do NOT enable `checkJs` globally; type checking is opt-in per file via `// @ts-check` so other desktop `.js` files (still ~14 of them) are unaffected.
-
-#### `apps/desktop/src/{conversations-poller,doctor-poller,ipc}.js` (modified)
-
-Top of each file:
-
-```js
-// @ts-check
-/** @typedef {import('../../../src/daemon/internal-api/schema').ConversationsListResponseT} ConversationsList */
-/** @typedef {import('../../../src/daemon/internal-api/schema').MemoryListResponseT} MemoryList */
-```
-
-JSDoc's `import('...').TypeName` syntax requires importing a named export that is itself a TypeScript type — hence the `*T` aliases in `schema.ts`. JSDoc does NOT support generic instantiation inside the import (e.g., `z.infer<typeof X>` would not parse), which is why we pre-compute the inferred types in the schema file rather than at the use site.
-
-Then per-function:
-
-```js
-/**
- * @param {string} chatId
- * @returns {Promise<MemoryList>}
- */
-export async function loadMemoryList(chatId) {
-  const res = await fetch(`${baseUrl}/v1/memory/list?chatId=${encodeURIComponent(chatId)}`, ...)
-  return res.json()
-}
-```
-
-The `@typedef` aliases are declared once per file so the rest of the file uses short names.
-
 ### Migration sequence (single PR)
 
-1. Write `schema.ts` with all 24 schemas + lookup tables.
+1. Write `schema.ts` with all 24 schemas + `<Schema>T` type aliases + `REQUEST_SCHEMAS`/`RESPONSE_SCHEMAS` lookup tables.
 2. Write `schema.test.ts` with round-trip parse tests for each schema (valid + invalid fixture each).
-3. Modify `index.ts` to call validation step.
+3. Modify `index.ts` to call the validation step before route dispatch.
 4. Modify `routes.ts` handler signatures to use `z.infer` types.
-5. Modify `tsconfig.json` (`allowJs` + 3 include paths).
-6. Add `// @ts-check` + JSDoc to 3 desktop files.
-7. Verify `bun run typecheck` passes.
-8. Verify existing route handler tests pass unchanged.
-9. Verify `apps/desktop/shim.e2e.test.ts` + Playwright still pass.
+5. Verify existing route handler tests pass unchanged (no behavior change).
+6. Verify `bun run typecheck` passes.
 
 ### Tests
 
@@ -264,8 +375,6 @@ The `@typedef` aliases are declared once per file so the rest of the file uses s
   - "GET with malformed query returns 400"
 
 **Unchanged**: All 24 route handler tests in `routes.test.ts` (handler logic is not changing).
-
-**Unchanged**: `apps/desktop/shim.e2e.test.ts` and Playwright suites.
 
 ---
 
@@ -607,13 +716,21 @@ All other coordinator logic — capability matrix gating, fallback degradation, 
 
 ## Risks
 
-### P1
+### P1.A
 
-1. **`@typedef` import path verbosity in JSDoc**: `import('../../../src/daemon/internal-api/schema').ConversationsListResponse` is ugly. Mitigation: declare each type alias once at the top of each desktop file; downstream usage stays clean.
+1. **Schema must match every code path that writes JSON**: a CLI subcommand might have multiple `--json` print sites (e.g., success branch vs error branch). All must parse against the same union schema. Mitigation: enumerate via grep `console.log(JSON.stringify(...)`; one schema test per print-site shape.
 
-2. **Schema/handler return-shape drift**: response schemas are declared but not actively asserted against handler return values. Mitigation: declared as type-only contracts (caught by `tsc` if the handler return type doesn't match `z.infer`); optionally add a dev-mode `.parse()` assertion as a follow-up.
+2. **`Schema.parse` overhead on hot paths**: most CLI commands run once per shell invocation, so parse cost is negligible. Mitigation: not relevant — but if a command becomes a hot loop, switch its `parse` to `safeParse` + log on failure.
 
-3. **`allowJs` ripple effects**: enabling `allowJs` widens what TypeScript considers part of the project. Mitigation: explicit `include` list — only the 3 named files are compiled, not all `.js` in the repo. Verified by inspecting `tsc --listFiles`.
+3. **`@typedef` import path verbosity in JSDoc**: `import('../../../src/cli/schema').DoctorOutputT` is ugly. Mitigation: declare each type alias once at the top of each desktop file; downstream usage stays clean.
+
+4. **`allowJs` ripple effects**: enabling `allowJs` widens what TypeScript considers part of the project. Mitigation: explicit `include` list — only the named files are compiled, not all `.js` in the repo. Verified by inspecting `tsc --listFiles`.
+
+### P1.B
+
+1. **Schema/handler return-shape drift**: response schemas are declared but not actively asserted against handler return values (in contrast to P1.A which asserts producer-side). Mitigation: type-only contracts caught by `tsc` if the handler return type doesn't match `z.infer`; optional dev-mode `.parse()` assertion is a possible follow-up.
+
+2. **MCP server clients (wechat-mcp, delegate-mcp) don't currently use the schemas**: the server-side validates incoming bodies, but clients still hand-craft request payloads. Mitigation: out of scope for this PR; client-side schema adoption is opportunistic when MCP server contracts are next refactored.
 
 ### P2
 
@@ -629,23 +746,32 @@ All other coordinator logic — capability matrix gating, fallback degradation, 
 
 ## Non-goals (explicit)
 
-1. **Frontend toolchain introduction** — out of scope. Z option's whole point.
-2. **Routes file decomposition** — `routes.ts` remains a single object literal. Splitting into per-route files is a separate refactor.
-3. **OpenAPI / tRPC / contract spec layer** — zod is the contract.
-4. **AgentSession streaming-text events at sub-message granularity** — events are emitted at SDK message boundaries (full text per assistant block), not per token. Sub-message streaming is a future API contract change if dashboard ever needs it.
-5. **`AgentSession.cancel()` / explicit per-dispatch abort** — `close()` covers session shutdown; per-dispatch abort is a future API addition only if needed.
-6. **`replyToolCalled` for non-wechat tool families** — `isReplyToolCall` is hardcoded to `server === 'wechat'`. If the channel ever ships another MCP server with reply-like semantics, this gets a list parameter.
+1. **Frontend toolchain introduction** — out of scope. Z option's whole point: desktop stays `.js`, no vite/esbuild.
+2. **`routes.ts` decomposition** — remains a single object literal. Splitting into per-route files is a separate refactor.
+3. **`cli.ts` decomposition** — currently a ~700-line file with inline subcommand handlers. Splitting into per-subcommand files is a separate refactor; P1.A only adds schema imports and parse calls.
+4. **MCP server client-side schema adoption** — P1.B's wechat-mcp / delegate-mcp clients keep hand-crafting requests. Adoption is a follow-up.
+5. **OpenAPI / tRPC / contract spec layer** — zod is the contract.
+6. **AgentSession streaming-text events at sub-message granularity** — events are emitted at SDK message boundaries (full text per assistant block), not per token. Sub-message streaming is a future API contract change if dashboard ever needs it.
+7. **`AgentSession.cancel()` / explicit per-dispatch abort** — `close()` covers session shutdown; per-dispatch abort is a future API addition only if needed.
+8. **`replyToolCalled` for non-wechat tool families** — `isReplyToolCall` is hardcoded to `server === 'wechat'`. If the channel ever ships another MCP server with reply-like semantics, this gets a list parameter.
 
 ---
 
 ## Open questions / future work
 
-- **P1 follow-up**: dev-mode response parse assertion to catch schema/handler drift even when handler types match `z.infer` formally but actual return value diverges.
-- **P2 follow-up**: should `init` and `error` events surface to dashboard via internal-api? Currently consumed only by `collectTurn`. Decision deferred until dashboard has a reason to render them.
-- **Both**: when frontend toolchain (vite/esbuild) lands, B-mid (.js + JSDoc) graduates to full `.ts`. The `// @ts-check` markers become redundant; the schema imports become regular TS imports. No behavior change.
+- **P1.A follow-up**: schema reuse across CLI and HTTP — some commands (`memory list/read/write`) have analogous internal-api routes; could share core type aliases. Decision deferred — P1.A and P1.B intentionally have separate schema files for now.
+- **P1.B follow-up**: dev-mode `.parse()` assertion on handler return values to catch shape drift even when types align formally but runtime returns diverge.
+- **P2 follow-up**: should `init` and `error` events surface to dashboard? Currently consumed only by `collectTurn`. Decision deferred until dashboard has a reason to render them.
+- **All three**: when frontend toolchain (vite/esbuild) lands, the JSDoc desktop files graduate to full `.ts`. The `// @ts-check` markers become redundant; the schema imports become regular TS imports. No behavior change.
 
 ---
 
 ## Implementation order
 
-PR-A (P1) and PR-B (P2) are fully independent — no shared files, no shared tests. Can be implemented in either order, or in parallel by separate agents/sessions. Recommend P1 first only because its CI signal (typed failure on schema mismatch) provides immediate user-facing risk reduction; P2 is internal cleanup.
+Three independent PRs — no shared files, no shared tests. Can be implemented in any order or in parallel by separate sessions/agents.
+
+| PR | Surface | Why this priority |
+|---|---|---|
+| **PR-A1 (P1.A · CLI JSON)** | recommended first | Closes the actual user-reported "desktop schema drift" risk. Producer-side validation gives immediate CI-level safety. |
+| **PR-A2 (P1.B · internal-api)** | next | MCP-server contract tightening; lower direct user impact but parallel mechanical work. |
+| **PR-B (P2 · AgentSession)** | last | Internal cleanup; no user-visible behavior change. Largest test fixture rewrite (`conversation-coordinator.test.ts`). |
