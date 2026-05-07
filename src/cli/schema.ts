@@ -61,6 +61,11 @@ const AgentProviderKind = z.enum(['claude', 'codex'])
 
 const DmPolicy = z.enum(['allowlist', 'disabled'])
 
+const AccessSnapshot = z.object({
+  dmPolicy: DmPolicy,
+  allowFrom: z.array(z.string()),
+})
+
 // ── wechat-cc doctor --json ───────────────────────────────────────────────────
 
 export const DoctorOutput = z.object({
@@ -94,3 +99,54 @@ export const DoctorOutput = z.object({
   nextActions: z.array(z.string()),
 })
 export type DoctorOutputT = z.infer<typeof DoctorOutput>
+
+// ── wechat-cc setup-poll --json ───────────────────────────────────────────────
+// Mirrors the SetupPollResult discriminated union from src/cli/setup-flow.ts.
+
+const SetupPollStatusSimple = z.object({
+  status: z.enum(['wait', 'scaned', 'expired']),
+})
+
+const SetupPollStatusRedirect = z.object({
+  status: z.literal('scaned_but_redirect'),
+  baseUrl: z.string(),
+})
+
+const SetupPollStatusConfirmed = z.object({
+  status: z.literal('confirmed'),
+  accountId: z.string(),
+  userId: z.string(),
+})
+
+export const SetupPollOutput = z.discriminatedUnion('status', [
+  SetupPollStatusSimple,
+  SetupPollStatusRedirect,
+  SetupPollStatusConfirmed,
+])
+export type SetupPollOutputT = z.infer<typeof SetupPollOutput>
+
+// ── wechat-cc setup-status --json ────────────────────────────────────────────
+// Mirrors the return value of setupStatus() from src/cli/doctor.ts.
+
+export const SetupStatusOutput = z.object({
+  stateDir: z.string(),
+  bound: z.boolean(),
+  accounts: z.array(BoundAccount),
+  access: AccessSnapshot,
+  provider: AgentProviderKind,
+  model: z.string().optional(),
+  daemon: DaemonSnapshot,
+  service: ServiceSnapshot,
+})
+export type SetupStatusOutputT = z.infer<typeof SetupStatusOutput>
+
+// ── wechat-cc setup --qr-json ─────────────────────────────────────────────────
+// Output of `requestSetupQrCode()` (src/cli/setup-flow.ts).
+// Consumed by apps/desktop/src/modules/qr.js via `invoke("wechat_cli_json", { args: ["setup", "--qr-json"] })`.
+
+export const SetupQrJsonOutput = z.object({
+  qrcode: z.string(),
+  qrcode_img_content: z.string(),
+  expires_in_ms: z.number(),
+})
+export type SetupQrJsonOutputT = z.infer<typeof SetupQrJsonOutput>

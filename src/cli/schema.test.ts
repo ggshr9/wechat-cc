@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { DoctorOutput } from './schema'
+import {
+  DoctorOutput,
+  SetupPollOutput,
+  SetupStatusOutput,
+  SetupQrJsonOutput,
+} from './schema'
 
 describe('DoctorOutput', () => {
   it('accepts a minimal valid report', () => {
@@ -80,5 +85,68 @@ describe('DoctorOutput', () => {
       nextActions: [],
     }
     expect(DoctorOutput.safeParse(sample).success).toBe(false)
+  })
+})
+
+describe('SetupPollOutput', () => {
+  it('accepts wait status', () => {
+    expect(SetupPollOutput.safeParse({ status: 'wait' }).success).toBe(true)
+  })
+  it('accepts scaned status', () => {
+    expect(SetupPollOutput.safeParse({ status: 'scaned' }).success).toBe(true)
+  })
+  it('accepts expired status', () => {
+    expect(SetupPollOutput.safeParse({ status: 'expired' }).success).toBe(true)
+  })
+  it('accepts scaned_but_redirect with baseUrl', () => {
+    expect(SetupPollOutput.safeParse({ status: 'scaned_but_redirect', baseUrl: 'https://alt.example.com' }).success).toBe(true)
+  })
+  it('accepts confirmed with accountId and userId', () => {
+    expect(SetupPollOutput.safeParse({ status: 'confirmed', accountId: 'bot-123', userId: 'user-456' }).success).toBe(true)
+  })
+  it('rejects an empty payload', () => {
+    expect(SetupPollOutput.safeParse({}).success).toBe(false)
+  })
+})
+
+describe('SetupStatusOutput', () => {
+  it('accepts the snapshot shape', () => {
+    expect(SetupStatusOutput.safeParse({
+      stateDir: '/tmp/wechat-cc',
+      bound: true,
+      accounts: [{ id: 'bot-1', botId: 'bot-1', userId: 'user-1', baseUrl: 'https://example.com' }],
+      access: { dmPolicy: 'allowlist', allowFrom: ['user-1'] },
+      provider: 'claude',
+      daemon: { alive: true, pid: 1234 },
+      service: { installed: true, kind: 'launchagent' },
+    }).success).toBe(true)
+  })
+  it('accepts the snapshot shape with optional model field', () => {
+    expect(SetupStatusOutput.safeParse({
+      stateDir: '/tmp/wechat-cc',
+      bound: false,
+      accounts: [],
+      access: { dmPolicy: 'allowlist', allowFrom: [] },
+      provider: 'claude',
+      model: 'claude-opus-4-5',
+      daemon: { alive: false, pid: null },
+      service: { installed: false, kind: 'systemd-user' },
+    }).success).toBe(true)
+  })
+  it('rejects an empty payload', () => {
+    expect(SetupStatusOutput.safeParse({}).success).toBe(false)
+  })
+})
+
+describe('SetupQrJsonOutput', () => {
+  it('accepts the QR payload shape', () => {
+    expect(SetupQrJsonOutput.safeParse({
+      qrcode: 'https://qr.example.com/token-abc',
+      qrcode_img_content: 'data:image/png;base64,abc123',
+      expires_in_ms: 480000,
+    }).success).toBe(true)
+  })
+  it('rejects missing qrcode', () => {
+    expect(SetupQrJsonOutput.safeParse({ qrcode_img_content: 'x', expires_in_ms: 480000 }).success).toBe(false)
   })
 })
