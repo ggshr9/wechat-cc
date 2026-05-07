@@ -128,6 +128,16 @@ export async function evaluateRound(input: ModeratorRoundInput, deps: ModeratorE
     return { action: 'end', reasoning: `round ${input.round} > maxRounds ${input.maxRounds}` }
   }
 
+  // UX rule (post v0.5.9 dogfooding): the user explicitly switched to
+  // /chat to hear from both AIs. If round 1 returns "end" we send 0
+  // replies, which feels like the bot ignored them. Force at least one
+  // speaker turn per user msg — moderator can still end on round 2+ if
+  // the conversation is exhausted.
+  // Implementation: we let haiku run, but coerce action='end' to a
+  // continue-with-fallback-prompt whenever round === 1. This preserves
+  // the moderator's speaker choice (if it picked one despite saying
+  // 'end') and otherwise alternates from history.
+
   const historyText = input.history.length === 0
     ? '(empty — fresh chatroom)'
     : input.history
@@ -175,6 +185,19 @@ ${a}, ${b}${lastSpeaker ? ` （上一发言是 ${lastSpeaker}，本轮挑另一�
 
   const obj = parsed as { action?: unknown; speaker?: unknown; prompt?: unknown; reasoning?: unknown }
   if (obj.action === 'end') {
+    if (input.round === 1) {
+      // The user wrote a new message and is waiting for SOMETHING. Even
+      // if the moderator thinks the message is trivial / casual, falling
+      // through with no reply feels like the bot ignored them. Coerce to
+      // a single-speaker continue using the generic prompt.
+      log('CHATROOM_MOD', `moderator wanted end on round 1 (${typeof obj.reasoning === 'string' ? obj.reasoning : '—'}); coercing to continue so user gets at least one reply`)
+      return {
+        action: 'continue',
+        speaker: peerOf(lastSpeaker, input.participants),
+        prompt: genericContinuePrompt(input, lastSpeaker),
+        reasoning: 'round1_must_continue',
+      }
+    }
     return {
       action: 'end',
       ...(typeof obj.reasoning === 'string' ? { reasoning: obj.reasoning } : {}),

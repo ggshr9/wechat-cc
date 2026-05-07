@@ -166,7 +166,7 @@ export function makeModeCommands(deps: ModeCommandsDeps): ModeCommands {
         return true
       }
 
-      // /chat — chatroom mode (RFC 03 P5: two agents take turns via @-tag routing)
+      // /chat — chatroom mode (v0.5.9: persistent session driven by claude-haiku-4-5 moderator)
       if (slashWord.toLowerCase() === 'chat' && tail === '') {
         try {
           deps.coordinator.setMode(msg.chatId, { kind: 'chatroom' })
@@ -176,7 +176,7 @@ export function makeModeCommands(deps: ModeCommandsDeps): ModeCommands {
         }
         await reply(
           msg.chatId,
-          '✅ 聊天室模式开启。Claude 和 Codex 会在你的下一条消息后轮流讨论（最多 4 轮内部 round），用 @ 路由（@user 给你，@codex / @claude 给对方）。每条回复都带 [Claude] / [Codex] 前缀。/stop 退出。',
+          '✅ 聊天室开启。Claude 和 Codex 都"在场"了——你之后每条消息他们都看得见对方的回复，会接着上下文讨论。每条回复带 [Claude] / [Codex] 前缀。切走（/cc /codex /solo）会清空聊天室上下文。',
         )
         deps.log('MODE_CMD', `chat=${msg.chatId} → chatroom`)
         return true

@@ -626,14 +626,24 @@ describe('ConversationCoordinator', () => {
       expect(userReplies).toEqual(['[Claude] claude 答 X', '[Codex] codex 同意 X 但补充 Y'])
     })
 
-    it('terminates immediately when moderator returns end on round 1', async () => {
+    it('round 1 end is coerced to continue (user must hear at least one AI per msg)', async () => {
+      // v0.5.10 — moderator returning 'end' on round 1 used to mean "0
+      // replies" which made user feel ignored. Now coerced to a single
+      // continue with the generic prompt; subsequent rounds may still end.
       const { c, dispatchedTexts, sendAssistantText } = setupChatroom({
-        moderatorDecisions: [{ action: 'end', reasoning: 'trivial' }],
-        replies: {},
+        moderatorDecisions: [
+          { action: 'end', reasoning: 'trivial' },     // would-be skip
+          { action: 'end', reasoning: 'now done' },    // round 2 actually ends
+        ],
+        replies: {
+          claude: [{ assistantText: ['某个回应'] }],
+        },
       })
       await c.dispatch(inbound('chat-1', 'hi'))
-      expect(dispatchedTexts).toHaveLength(0)
-      expect(sendAssistantText).not.toHaveBeenCalled()
+      // One dispatch happened — the coerced round-1 continue.
+      expect(dispatchedTexts).toHaveLength(1)
+      expect(sendAssistantText).toHaveBeenCalledTimes(1)
+      expect(sendAssistantText.mock.calls[0]?.[1]).toContain('[Claude]')
     })
 
     it('forces end at chatroomMaxRounds even if moderator says continue', async () => {

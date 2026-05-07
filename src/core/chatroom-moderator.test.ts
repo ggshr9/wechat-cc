@@ -183,6 +183,30 @@ describe('evaluateRound', () => {
     expect(promptArg).toContain('第一个问题')  // older context still visible
   })
 
+  it('round 1 + moderator returns end → coerced to continue (user must hear from at least one AI)', async () => {
+    const haikuEval = vi.fn().mockResolvedValue(JSON.stringify({
+      action: 'end', reasoning: '消息太轻飘了不需要回',
+    }))
+    const r = await evaluateRound(
+      {
+        round: 1, maxRounds: 4, participants: PARTICIPANTS,
+        history: [
+          { role: 'user', text: '第一个 Q' },
+          { role: 'speaker', speaker: 'claude', text: 'A1' },
+          { role: 'speaker', speaker: 'codex', text: 'B1' },
+          { role: 'user', text: '哦哦' },  // casual follow-up; moderator might want to skip
+        ],
+      },
+      { haikuEval },
+    )
+    // Despite moderator saying 'end', the new rule forces continue on round 1.
+    expect(r.action).toBe('continue')
+    if (r.action === 'continue') {
+      expect(r.speaker).toBe('claude')  // alternates from last speaker (codex)
+      expect(r.reasoning).toBe('round1_must_continue')
+    }
+  })
+
   it('round = maxRounds: moderator decides normally (no auto-end), expected to pick synthesis speaker', async () => {
     const haikuEval = vi.fn().mockResolvedValue(JSON.stringify({
       action: 'continue', speaker: 'codex', prompt: '🎯 综合', reasoning: '终轮综合',

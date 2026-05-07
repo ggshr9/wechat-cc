@@ -148,10 +148,11 @@ describe('makeModeCommands', () => {
     const consumed = await cmds.handle(inbound('/chat'))
     expect(consumed).toBe(true)
     expect(set).toHaveBeenCalledWith('chat-1', { kind: 'chatroom' })
-    expect(sentMessages[0]?.[1]).toContain('聊天室模式开启')
-    expect(sentMessages[0]?.[1]).toContain('@user')
-    expect(sentMessages[0]?.[1]).toContain('@codex')
-    expect(sentMessages[0]?.[1]).toContain('/stop')
+    // v0.5.10 — confirmation describes persistent chatroom (no longer
+    // mentions 4-round limit / @-tag protocol; that was v0.5.7-era).
+    expect(sentMessages[0]?.[1]).toContain('聊天室')
+    expect(sentMessages[0]?.[1]).toContain('Claude')
+    expect(sentMessages[0]?.[1]).toContain('Codex')
   })
 
   it('/chat surfaces validation error when one provider missing', async () => {
