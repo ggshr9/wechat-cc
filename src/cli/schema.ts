@@ -486,3 +486,65 @@ export const SessionsSearchOutput = z.object({
   hits: z.array(z.unknown()),
 })
 export type SessionsSearchOutputT = z.infer<typeof SessionsSearchOutput>
+
+// ── wechat-cc demo seed --json ────────────────────────────────────────────────
+// Emits { ok: true, ...seedDemo() result } where seedDemo returns
+// { observations, milestones, events } (all counts as numbers).
+// cli.ts: console.log(JSON.stringify({ ok: true, ...result }, null, 2))
+
+export const DemoSeedOutput = z.object({
+  ok: z.literal(true),
+  observations: z.number(),
+  milestones: z.number(),
+  events: z.number(),
+})
+export type DemoSeedOutputT = z.infer<typeof DemoSeedOutput>
+
+// ── wechat-cc demo unseed --json ──────────────────────────────────────────────
+// Emits { ok: true, ...unseedDemo() result } where unseedDemo returns
+// { removed } (total row count removed across all demo stores). Idempotent —
+// removed may be 0 on a second call.
+
+export const DemoUnseedOutput = z.object({
+  ok: z.literal(true),
+  removed: z.number(),
+})
+export type DemoUnseedOutputT = z.infer<typeof DemoUnseedOutput>
+
+// ── wechat-cc reply [--to <chat_id>] [text] --json ───────────────────────────
+// Success: { ok: true, chat_id, chunks, account }
+//   (chat_id from --to / defaultTerminalChatId; chunks/account from sendReplyOnce)
+// Error  : { ok: false, error } — emitted on stdout (exit 1) so GUI callers
+//          can read structured failure rather than crash on non-zero exit.
+
+export const ReplyOutput = z.discriminatedUnion('ok', [
+  z.object({
+    ok: z.literal(true),
+    chat_id: z.string(),
+    chunks: z.number(),
+    account: z.string(),
+  }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+])
+export type ReplyOutputT = z.infer<typeof ReplyOutput>
+
+// ── wechat-cc logs [--tail N] --json ─────────────────────────────────────────
+// Emits tailLog() result when --json flag is set. Always the ok:true branch
+// (the ok:false LogTailError is only printed without --json, as process.exit(1)).
+// entries[].raw is the original log line; timestamp/tag/message are parsed fields
+// (empty strings when the line doesn't match the daemon's standard format).
+
+const LogEntry = z.object({
+  timestamp: z.string(),
+  tag: z.string(),
+  message: z.string(),
+  raw: z.string(),
+})
+
+export const LogsOutput = z.object({
+  ok: z.literal(true),
+  logFile: z.string(),
+  totalLines: z.number(),
+  entries: z.array(LogEntry),
+})
+export type LogsOutputT = z.infer<typeof LogsOutput>

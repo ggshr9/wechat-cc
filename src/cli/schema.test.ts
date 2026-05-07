@@ -24,6 +24,10 @@ import {
   SessionsReadJsonlOutput,
   SessionsDeleteOutput,
   SessionsSearchOutput,
+  DemoSeedOutput,
+  DemoUnseedOutput,
+  ReplyOutput,
+  LogsOutput,
 } from './schema'
 
 describe('DoctorOutput', () => {
@@ -607,5 +611,91 @@ describe('SessionsSearchOutput', () => {
   })
   it('rejects when ok is missing', () => {
     expect(SessionsSearchOutput.safeParse({ query: 'x', hits: [] }).success).toBe(false)
+  })
+})
+
+// ── wechat-cc demo seed --json ────────────────────────────────────────────────
+
+describe('DemoSeedOutput', () => {
+  it('accepts ok:true with seed counts', () => {
+    expect(DemoSeedOutput.safeParse({
+      ok: true,
+      observations: 3,
+      milestones: 2,
+      events: 1,
+    }).success).toBe(true)
+  })
+  it('rejects when ok is missing', () => {
+    expect(DemoSeedOutput.safeParse({ observations: 3, milestones: 2, events: 1 }).success).toBe(false)
+  })
+  it('rejects when a count field is missing', () => {
+    expect(DemoSeedOutput.safeParse({ ok: true, observations: 3, milestones: 2 }).success).toBe(false)
+  })
+})
+
+// ── wechat-cc demo unseed --json ──────────────────────────────────────────────
+
+describe('DemoUnseedOutput', () => {
+  it('accepts ok:true with removed count', () => {
+    expect(DemoUnseedOutput.safeParse({ ok: true, removed: 7 }).success).toBe(true)
+  })
+  it('accepts ok:true with zero removed (idempotent unseed)', () => {
+    expect(DemoUnseedOutput.safeParse({ ok: true, removed: 0 }).success).toBe(true)
+  })
+  it('rejects when ok is missing', () => {
+    expect(DemoUnseedOutput.safeParse({ removed: 7 }).success).toBe(false)
+  })
+})
+
+// ── wechat-cc reply --json ────────────────────────────────────────────────────
+
+describe('ReplyOutput', () => {
+  it('accepts ok:true with chat_id, chunks and account', () => {
+    expect(ReplyOutput.safeParse({
+      ok: true,
+      chat_id: 'o9cq80abc@im.wechat',
+      chunks: 1,
+      account: 'bot-abc123-im-bot',
+    }).success).toBe(true)
+  })
+  it('accepts ok:false with error message', () => {
+    expect(ReplyOutput.safeParse({
+      ok: false,
+      error: 'no chat resolved — pass --to <chat_id> or send a WeChat message first',
+    }).success).toBe(true)
+  })
+  it('rejects unknown discriminator', () => {
+    expect(ReplyOutput.safeParse({ ok: 'maybe' }).success).toBe(false)
+  })
+})
+
+// ── wechat-cc logs --json ─────────────────────────────────────────────────────
+
+describe('LogsOutput', () => {
+  it('accepts ok:true with populated entries array', () => {
+    expect(LogsOutput.safeParse({
+      ok: true,
+      logFile: '/home/user/.local/share/wechat-cc/channel.log',
+      totalLines: 120,
+      entries: [
+        {
+          timestamp: '2026-05-07T10:00:00.000Z',
+          tag: 'SESSION_EXPIRED',
+          message: '18ca067b4366-im-bot — token revoked',
+          raw: '2026-05-07T10:00:00.000Z [SESSION_EXPIRED] 18ca067b4366-im-bot — token revoked',
+        },
+      ],
+    }).success).toBe(true)
+  })
+  it('accepts ok:true with empty entries array (log file absent)', () => {
+    expect(LogsOutput.safeParse({
+      ok: true,
+      logFile: '/home/user/.local/share/wechat-cc/channel.log',
+      totalLines: 0,
+      entries: [],
+    }).success).toBe(true)
+  })
+  it('rejects when ok is missing', () => {
+    expect(LogsOutput.safeParse({ logFile: '/tmp/channel.log', totalLines: 0, entries: [] }).success).toBe(false)
   })
 })
