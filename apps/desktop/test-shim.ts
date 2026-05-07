@@ -115,6 +115,7 @@ const CONTENT_TYPES: Record<string, string> = {
 }
 
 Bun.serve({
+  hostname: '127.0.0.1',
   port: PORT,
   development: true,
   async fetch(req) {
