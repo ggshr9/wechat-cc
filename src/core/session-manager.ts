@@ -104,6 +104,7 @@ export class SessionManager {
       ? await provider.spawn(project, { resumeSessionId })
       : await provider.spawn(project)
 
+    const sessionStore = this.opts.sessionStore
     const handle: SessionHandle = {
       alias,
       path,
@@ -111,7 +112,19 @@ export class SessionManager {
       lastUsedAt: Date.now(),
       dispatch(text: string): AsyncIterable<AgentEvent> {
         handle.lastUsedAt = Date.now()
-        return session.dispatch(text)
+        const inner = session.dispatch(text)
+        if (!sessionStore) return inner
+        // Intercept result events to persist the session_id for future resumes.
+        return {
+          async *[Symbol.asyncIterator]() {
+            for await (const ev of inner) {
+              yield ev
+              if (ev.kind === 'result' && ev.sessionId) {
+                sessionStore.set(alias, ev.sessionId, providerId)
+              }
+            }
+          },
+        }
       },
       async close() {
         await session.close()

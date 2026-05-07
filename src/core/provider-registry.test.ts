@@ -1,13 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { createProviderRegistry } from './provider-registry'
+import { makeFakeSession } from './test-helpers'
 import type { AgentProvider } from './agent-provider'
 
 const stub: AgentProvider = {
-  spawn: async () => ({
-    dispatch: async () => ({ assistantText: [], replyToolCalled: false }),
-    close: async () => {},
-    onAssistantText: () => () => {},
-    onResult: () => () => {},
+  spawn: async () => makeFakeSession({
+    events: [{ kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 }],
   }),
 }
 
