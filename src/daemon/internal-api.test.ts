@@ -175,7 +175,8 @@ describe('internal-api', () => {
         body: JSON.stringify({}),
       })
       expect(resp.status).toBe(400)
-      expect(await resp.json()).toMatchObject({ error: 'path_required' })
+      // After T7: schema validation fires in index.ts before the handler.
+      expect(await resp.json()).toMatchObject({ error: 'invalid_request' })
     })
 
     it('POST /v1/memory/write returns ok:false + error on FS rejection (e.g. .txt extension)', async () => {
@@ -340,7 +341,8 @@ describe('internal-api', () => {
         body: JSON.stringify({}),
       })
       expect(resp.status).toBe(400)
-      expect(await resp.json()).toMatchObject({ error: 'alias_required' })
+      // After T7: schema validation fires in index.ts before the handler.
+      expect(await resp.json()).toMatchObject({ error: 'invalid_request' })
     })
 
     it('POST /v1/projects/add forwards alias + path', async () => {
@@ -414,7 +416,8 @@ describe('internal-api', () => {
         body: JSON.stringify({ chat_id: 'c' }),  // name missing
       })
       expect(resp.status).toBe(400)
-      expect(await resp.json()).toMatchObject({ error: 'name_required' })
+      // After T7: schema validation fires in index.ts before the handler.
+      expect(await resp.json()).toMatchObject({ error: 'invalid_request' })
     })
 
     it('returns 503 when projects dep is not wired', async () => {
@@ -583,9 +586,9 @@ describe('internal-api', () => {
         body: JSON.stringify({ provider: 'mystery' }),
       })
       expect(resp.status).toBe(400)
-      const body = await resp.json() as { error: string; allowed?: string[] }
-      expect(body.error).toBe('provider_required')
-      expect(body.allowed).toEqual(['http_tts', 'qwen'])
+      // After T7: schema validation fires in index.ts before the handler.
+      const body = await resp.json() as { error: string }
+      expect(body.error).toBe('invalid_request')
     })
 
     it('POST /v1/voice/save_config catches saveConfig() throw and shapes ok:false', async () => {
@@ -689,14 +692,15 @@ describe('internal-api', () => {
         body: JSON.stringify({ content: '# hi' }),
       })
       expect(r1.status).toBe(400)
-      expect(await r1.json()).toMatchObject({ error: 'title_required' })
+      // After T7: schema validation fires in index.ts before the handler.
+      expect(await r1.json()).toMatchObject({ error: 'invalid_request' })
       const r2 = await fetch(`http://127.0.0.1:${port}/v1/share/page`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify({ title: 't' }),
       })
       expect(r2.status).toBe(400)
-      expect(await r2.json()).toMatchObject({ error: 'content_required' })
+      expect(await r2.json()).toMatchObject({ error: 'invalid_request' })
     })
 
     it('POST /v1/share/page catches sharePage() throw and returns ok:false', async () => {
@@ -761,7 +765,8 @@ describe('internal-api', () => {
         body: JSON.stringify({ slug: 123 }),
       })
       expect(resp.status).toBe(400)
-      expect(await resp.json()).toMatchObject({ error: 'slug_must_be_string' })
+      // After T7: schema validation fires in index.ts before the handler.
+      expect(await resp.json()).toMatchObject({ error: 'invalid_request' })
     })
 
     it('returns 503 when share_page dep not wired', async () => {
@@ -933,7 +938,8 @@ describe('internal-api', () => {
           body: JSON.stringify(body),
         })
         expect(resp.status).toBe(400)
-        expect(await resp.json()).toMatchObject({ error: 'minutes_must_be_int_1_to_1440' })
+        // After T7: schema validation fires in index.ts before the handler.
+        expect(await resp.json()).toMatchObject({ error: 'invalid_request' })
       }
     })
 
@@ -1050,14 +1056,15 @@ describe('internal-api', () => {
         body: JSON.stringify({ text: 't' }),
       })
       expect(r1.status).toBe(400)
-      expect(await r1.json()).toMatchObject({ error: 'chat_id_required' })
+      // After T7: schema validation fires in index.ts before the handler.
+      expect(await r1.json()).toMatchObject({ error: 'invalid_request' })
       const r2 = await fetch(`http://127.0.0.1:${port}/v1/wechat/reply`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify({ chat_id: 'c' }),
       })
       expect(r2.status).toBe(400)
-      expect(await r2.json()).toMatchObject({ error: 'text_required' })
+      expect(await r2.json()).toMatchObject({ error: 'invalid_request' })
     })
 
     it('POST /v1/wechat/reply catches sendReply throw and returns ok:false', async () => {
@@ -1092,7 +1099,7 @@ describe('internal-api', () => {
       expect(replyVoice).toHaveBeenCalledWith('c', '念这一段')
     })
 
-    it('POST /v1/wechat/reply_voice rejects text > 500 chars (legacy cap)', async () => {
+    it('POST /v1/wechat/reply_voice rejects text > 500 chars (handler business rule)', async () => {
       const replyVoice = vi.fn()
       const { port, token } = await startWithIlink({ replyVoice: replyVoice as never })
       const resp = await fetch(`http://127.0.0.1:${port}/v1/wechat/reply_voice`, {
@@ -1100,9 +1107,12 @@ describe('internal-api', () => {
         headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify({ chat_id: 'c', text: 'x'.repeat(501) }),
       })
+      // 500-char cap is a handler business rule (not a schema constraint),
+      // so the wire contract is 200 with structured reason — preserves the
+      // agent client's ability to adapt vs a generic 400 invalid_request.
       expect(resp.status).toBe(200)
       expect(await resp.json()).toEqual({ ok: false, reason: 'too_long', limit: 500 })
-      // dep was NOT called — input rejected before crossing the boundary
+      // dep was NOT called — handler short-circuits before crossing the boundary
       expect(replyVoice).not.toHaveBeenCalled()
     })
 
@@ -1395,7 +1405,8 @@ describe('internal-api', () => {
           body: JSON.stringify({ prompt: 'hi' }),
         })
         expect(r1.status).toBe(400)
-        expect(await r1.json()).toMatchObject({ error: 'peer_required' })
+        // After T7: schema validation fires in index.ts before the handler.
+        expect(await r1.json()).toMatchObject({ error: 'invalid_request' })
 
         const r2 = await fetch(`http://127.0.0.1:${port}/v1/delegate`, {
           method: 'POST',
@@ -1403,7 +1414,7 @@ describe('internal-api', () => {
           body: JSON.stringify({ peer: 'codex' }),
         })
         expect(r2.status).toBe(400)
-        expect(await r2.json()).toMatchObject({ error: 'prompt_required' })
+        expect(await r2.json()).toMatchObject({ error: 'invalid_request' })
       })
 
       it('returns 400 on unknown peer with allowed list', async () => {
@@ -1491,7 +1502,8 @@ describe('internal-api', () => {
           body: JSON.stringify({ peer: 'codex', prompt: 'p', cwd: 'relative/path' }),
         })
         expect(resp.status).toBe(400)
-        expect(await resp.json()).toMatchObject({ error: 'cwd_must_be_absolute' })
+        // After T7: schema validation fires in index.ts before the handler.
+        expect(await resp.json()).toMatchObject({ error: 'invalid_request' })
       })
 
       it('catches dispatchOneShot throw and returns ok:false', async () => {
@@ -1528,5 +1540,81 @@ describe('internal-api', () => {
         expect(await resp.json()).toEqual({ error: 'ilink_not_wired' })
       }
     })
+  })
+})
+
+// ─── request validation (T7) ──────────────────────────────────────────────────
+
+describe('internal-api request validation', () => {
+  let stateDir: string
+  let api: import('./internal-api').InternalApi | null = null
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), 'internal-api-validation-'))
+  })
+  afterEach(async () => {
+    if (api) await api.stop()
+    api = null
+    rmSync(stateDir, { recursive: true, force: true })
+  })
+
+  it('POST with missing required field returns 400 + invalid_request', async () => {
+    const memory = makeMemoryFS({ rootDir: join(stateDir, 'memory') })
+    api = createInternalApi({ stateDir, daemonPid: 1, memory })
+    const { port, tokenFilePath } = await api.start()
+    const token = readFileSync(tokenFilePath, 'utf8').trim()
+    const resp = await fetch(`http://127.0.0.1:${port}/v1/memory/read`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({}),  // missing required `path`
+    })
+    expect(resp.status).toBe(400)
+    const body = await resp.json() as { error: string; detail: unknown }
+    expect(body.error).toBe('invalid_request')
+    expect(body.detail).toBeDefined()
+  })
+
+  it('POST with valid body has handler receive parsed data (memory read round-trip)', async () => {
+    const memory = makeMemoryFS({ rootDir: join(stateDir, 'memory') })
+    api = createInternalApi({ stateDir, daemonPid: 1, memory })
+    const { port, tokenFilePath } = await api.start()
+    const token = readFileSync(tokenFilePath, 'utf8').trim()
+    const resp = await fetch(`http://127.0.0.1:${port}/v1/memory/read`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ path: 'foo.md' }),
+    })
+    expect(resp.status).toBe(200)
+    const body = await resp.json() as { exists: boolean }
+    expect(body.exists).toBe(false)  // file not found, but handler ran correctly
+  })
+
+  it('POST to route with no registered schema skips body validation', async () => {
+    api = createInternalApi({ stateDir, daemonPid: 1 })
+    const { port, tokenFilePath } = await api.start()
+    const token = readFileSync(tokenFilePath, 'utf8').trim()
+    // POST /v1/companion/enable has no body schema — any body should pass through
+    const resp = await fetch(`http://127.0.0.1:${port}/v1/companion/enable`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: '{}',
+    })
+    // No companion wired — returns 503, not 400; validation did not block it
+    expect(resp.status).toBe(503)
+    expect(await resp.json()).toMatchObject({ error: 'companion_not_wired' })
+  })
+
+  it('GET with valid query string proceeds normally', async () => {
+    const memory = makeMemoryFS({ rootDir: join(stateDir, 'memory') })
+    api = createInternalApi({ stateDir, daemonPid: 1, memory })
+    const { port, tokenFilePath } = await api.start()
+    const token = readFileSync(tokenFilePath, 'utf8').trim()
+    const resp = await fetch(`http://127.0.0.1:${port}/v1/memory/list?dir=sub`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    expect(resp.status).toBe(200)
+    const body = await resp.json() as { files: string[] }
+    expect(body.files).toBeDefined()
   })
 })
