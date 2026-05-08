@@ -1,25 +1,30 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Codex, Thread, ThreadEvent, ThreadOptions } from '@openai/codex-sdk'
 import { createCodexAgentProvider, type CodexFactory } from './codex-agent-provider'
+import type { AgentEvent } from './agent-provider'
 
 /**
- * Tests for codex-agent-provider. Uses an injected `codexFactory` to swap
- * the real Codex SDK (which would spawn the codex CLI) for a fake. The
- * fake exposes the same surface — startThread / resumeThread / Thread.run
- * / Thread.runStreamed / Thread.id — so we can assert:
+ * Tests for codex-agent-provider (yield-event shape). Uses an injected
+ * `codexFactory` to swap the real Codex SDK (which would spawn the codex CLI)
+ * for a fake. The fake exposes the same surface — startThread / resumeThread /
+ * Thread.runStreamed / Thread.id — so we can assert:
  *
  *   1. spawn() routes resumeSessionId to resumeThread, fresh to startThread
- *   2. dispatch() translates Codex events to AgentSession callbacks per
- *      RFC 03 §3.5 + Spike 2 README translation table
- *   3. session_id reported by onResult comes from thread.id
- *   4. mcp_tool_call from server='wechat' with reply-family tool flips
- *      replyToolCalled true (matches Claude provider semantics)
- *   5. close() aborts any in-flight turn
- *   6. ThreadOptions defaults match RFC 03 §10 (sandbox=workspace-write,
- *      approval=never)
- *
- * This test does NOT touch the real Codex CLI or OpenAI API.
+ *   2. dispatch() yields AgentEvents in the correct sequence
+ *   3. mcp_tool_call items yield tool_call events with server + tool
+ *   4. turn.failed yields an error event
+ *   5. stream-level error events yield an error event
+ *   6. close() aborts any in-flight turn
+ *   7. appendInstructions is prepended only on first dispatch
+ *   8. ThreadOptions defaults match RFC 03 §10
  */
+
+// Helper: drain an async iterable into an array for assertion.
+async function drain(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
+  const out: AgentEvent[] = []
+  for await (const ev of events) out.push(ev)
+  return out
+}
 
 interface FakeRunRecord {
   input: string
@@ -128,59 +133,29 @@ describe('Codex agent provider', () => {
     expect(fake.resumeThreadCalls[0]).toMatchObject({ id: 'thread-xyz' })
   })
 
-  it('dispatch translates agent_message into onAssistantText + return value', async () => {
+  it('yields init then text then result for a simple turn', async () => {
     const fakeCodex = makeFakeCodex()
     fakeCodex.fake.thread.pushTurn([
-      { type: 'thread.started', thread_id: 'tid-1' },
-      { type: 'turn.started' },
+      { type: 'thread.started', thread_id: 't1' },
       { type: 'item.completed', item: { id: 'i1', type: 'agent_message', text: 'hello from codex' } },
       { type: 'turn.completed', usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5, reasoning_output_tokens: 0 } },
     ])
     const { provider: p } = provider({}, fakeCodex)
     const session = await p.spawn({ alias: 'a', path: '/p' })
-    const heard: string[] = []
-    session.onAssistantText(t => heard.push(t))
 
-    const result = await session.dispatch('hi')
+    const events = await drain(session.dispatch('hi'))
 
-    expect(result.assistantText).toEqual(['hello from codex'])
-    expect(result.replyToolCalled).toBe(false)
-    expect(heard).toEqual(['hello from codex'])
+    expect(events[0]).toEqual({ kind: 'init', sessionId: 't1' })
+    expect(events[1]).toEqual({ kind: 'text', text: 'hello from codex' })
+    expect(events[events.length - 1]?.kind).toBe('result')
+    const resultEv = events.find(e => e.kind === 'result')
+    expect(resultEv).toBeDefined()
   })
 
-  it('dispatch fires onResult with thread.id + incremented num_turns + duration on turn.completed', async () => {
-    const fakeCodex = makeFakeCodex()
-    fakeCodex.fake.thread.pushTurn([
-      { type: 'thread.started', thread_id: 'sid-codex-abc' },
-      { type: 'turn.started' },
-      { type: 'item.completed', item: { id: 'i1', type: 'agent_message', text: 'hi' } },
-      { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } },
-    ])
-    fakeCodex.fake.thread.pushTurn([
-      { type: 'turn.started' },
-      { type: 'item.completed', item: { id: 'i2', type: 'agent_message', text: 'hi again' } },
-      { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } },
-    ])
-    const { provider: p } = provider({}, fakeCodex)
-    const session = await p.spawn({ alias: 'a', path: '/p' })
-    const results: { session_id: string; num_turns: number; duration_ms: number }[] = []
-    session.onResult(r => results.push(r))
-
-    await session.dispatch('first')
-    await session.dispatch('second')
-
-    expect(results).toHaveLength(2)
-    expect(results[0]).toMatchObject({ session_id: 'sid-codex-abc', num_turns: 1 })
-    expect(results[1]).toMatchObject({ session_id: 'sid-codex-abc', num_turns: 2 })
-    expect(results[0]!.duration_ms).toBeGreaterThanOrEqual(0)
-  })
-
-  it('flags replyToolCalled when wechat-mcp reply-family tool is invoked', async () => {
+  it('yields tool_call with server + tool from mcp_tool_call items', async () => {
     const fakeCodex = makeFakeCodex()
     fakeCodex.fake.thread.pushTurn([
       { type: 'thread.started', thread_id: 't1' },
-      { type: 'turn.started' },
-      // wechat reply tool — should flip the flag
       { type: 'item.completed', item: {
           id: 'tc1',
           type: 'mcp_tool_call',
@@ -197,62 +172,108 @@ describe('Codex agent provider', () => {
     const { provider: p } = provider({}, fakeCodex)
     const session = await p.spawn({ alias: 'a', path: '/p' })
 
-    const r = await session.dispatch('please reply')
+    const events = await drain(session.dispatch('please reply'))
 
-    expect(r.replyToolCalled).toBe(true)
+    expect(events.some(e => e.kind === 'tool_call' && e.server === 'wechat' && e.tool === 'reply')).toBe(true)
   })
 
-  it('does NOT flag replyToolCalled for non-wechat MCP servers or non-reply tools', async () => {
+  it('yields error event for turn.failed', async () => {
     const fakeCodex = makeFakeCodex()
     fakeCodex.fake.thread.pushTurn([
       { type: 'thread.started', thread_id: 't1' },
-      { type: 'turn.started' },
-      // Some other MCP server, same tool name — must NOT flip
-      { type: 'item.completed', item: {
-          id: 'tc1', type: 'mcp_tool_call', server: 'unrelated', tool: 'reply',
-          arguments: {}, status: 'completed',
-        },
-      },
-      // wechat-mcp but a non-reply-family tool — must NOT flip
-      { type: 'item.completed', item: {
-          id: 'tc2', type: 'mcp_tool_call', server: 'wechat', tool: 'memory_read',
-          arguments: { path: 'foo.md' }, status: 'completed',
-        },
-      },
-      { type: 'item.completed', item: { id: 'i1', type: 'agent_message', text: 'no reply' } },
+      { type: 'turn.failed', error: { message: 'context limit exceeded' } },
+    ])
+    const { provider: p } = provider({}, fakeCodex)
+    const session = await p.spawn({ alias: 'a', path: '/p' })
+
+    const events = await drain(session.dispatch('hi'))
+
+    expect(events.some(e => e.kind === 'error')).toBe(true)
+    const errorEv = events.find(e => e.kind === 'error')
+    expect((errorEv as { message: string }).message).toBe('context limit exceeded')
+  })
+
+  it('yields error event for stream-level error', async () => {
+    const fakeCodex = makeFakeCodex()
+    fakeCodex.fake.thread.pushTurn([
+      { type: 'thread.started', thread_id: 't1' },
+      { type: 'error', message: 'network timeout' } as unknown as ThreadEvent,
+    ])
+    const { provider: p } = provider({}, fakeCodex)
+    const session = await p.spawn({ alias: 'a', path: '/p' })
+
+    const events = await drain(session.dispatch('hi'))
+
+    expect(events.some(e => e.kind === 'error')).toBe(true)
+    const errorEv = events.find(e => e.kind === 'error')
+    expect((errorEv as { message: string }).message).toBe('network timeout')
+  })
+
+  it('returns empty iterable after close()', async () => {
+    const fakeCodex = makeFakeCodex()
+    // No turns pushed — close before dispatch
+    const { provider: p } = provider({}, fakeCodex)
+    const session = await p.spawn({ alias: 'a', path: '/p' })
+
+    await session.close()
+    const events = await drain(session.dispatch('after close'))
+
+    expect(events).toEqual([])
+  })
+
+  it('preserves first-dispatch instruction injection (appendInstructions)', async () => {
+    const fakeCodex = makeFakeCodex()
+    // Push two turns: one for the first dispatch, one for the second
+    fakeCodex.fake.thread.pushTurn([
+      { type: 'thread.started', thread_id: 't1' },
+      { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } },
+    ])
+    fakeCodex.fake.thread.pushTurn([
+      { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } },
+    ])
+
+    const { provider: p } = provider({ appendInstructions: 'be terse' }, fakeCodex)
+    const session = await p.spawn({ alias: 'a', path: '/p' })
+
+    // First dispatch — should inject instructions
+    await drain(session.dispatch('hi'))
+    // Second dispatch — should NOT inject again
+    await drain(session.dispatch('hello again'))
+
+    const calls = fakeCodex.fake.thread.runStreamedCalls
+    expect(calls).toHaveLength(2)
+    // First call should contain both instructions and message
+    expect(calls[0]!.input).toContain('be terse')
+    expect(calls[0]!.input).toContain('hi')
+    // Second call should NOT contain instructions
+    expect(calls[1]!.input).not.toContain('be terse')
+    expect(calls[1]!.input).toBe('hello again')
+  })
+
+  it('result event has incremented numTurns per dispatch', async () => {
+    const fakeCodex = makeFakeCodex()
+    fakeCodex.fake.thread.pushTurn([
+      { type: 'thread.started', thread_id: 'sid-codex-abc' },
+      { type: 'item.completed', item: { id: 'i1', type: 'agent_message', text: 'hi' } },
+      { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } },
+    ])
+    fakeCodex.fake.thread.pushTurn([
+      { type: 'item.completed', item: { id: 'i2', type: 'agent_message', text: 'hi again' } },
       { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } },
     ])
     const { provider: p } = provider({}, fakeCodex)
     const session = await p.spawn({ alias: 'a', path: '/p' })
 
-    const r = await session.dispatch('hi')
-    expect(r.replyToolCalled).toBe(false)
-  })
+    const firstEvents = await drain(session.dispatch('first'))
+    const secondEvents = await drain(session.dispatch('second'))
 
-  it('flags all reply-family tool variants (reply_voice, send_file, edit_message, broadcast)', async () => {
-    for (const tool of ['reply_voice', 'send_file', 'edit_message', 'broadcast']) {
-      const fakeCodex = makeFakeCodex()
-      fakeCodex.fake.thread.pushTurn([
-        { type: 'thread.started', thread_id: 't' },
-        { type: 'turn.started' },
-        { type: 'item.completed', item: {
-            id: 'tc', type: 'mcp_tool_call', server: 'wechat', tool,
-            arguments: {}, status: 'completed',
-          },
-        },
-        { type: 'item.completed', item: { id: 'i', type: 'agent_message', text: 'ok' } },
-        { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } },
-      ])
-      const { provider: p } = provider({}, fakeCodex)
-      const session = await p.spawn({ alias: 'a', path: '/p' })
-      const r = await session.dispatch('go')
-      expect(r.replyToolCalled, `tool=${tool}`).toBe(true)
-    }
+    const r1 = firstEvents.find(e => e.kind === 'result') as { kind: 'result'; numTurns: number } | undefined
+    const r2 = secondEvents.find(e => e.kind === 'result') as { kind: 'result'; numTurns: number } | undefined
+    expect(r1?.numTurns).toBe(1)
+    expect(r2?.numTurns).toBe(2)
   })
 
   it('close() aborts in-flight turn via the AbortSignal passed to runStreamed', async () => {
-    // A turn that never yields turn.completed — simulates a hung/long-running call.
-    // close() should fire the AbortSignal so the SDK terminates the underlying child.
     let signalCaptured: AbortSignal | undefined
     const codex: Codex = {
       startThread(): Thread {
@@ -276,7 +297,7 @@ describe('Codex agent provider', () => {
     const session = await p.spawn({ alias: 'a', path: '/p' })
     // Don't await dispatch — it'll hang on the generator. Just trigger it
     // so runStreamed runs and our AbortSignal hook fires.
-    void session.dispatch('hangs forever').catch(() => undefined)
+    void session.dispatch('hangs forever')[Symbol.asyncIterator]().next().catch(() => undefined)
     await new Promise(r => setTimeout(r, 5))
     expect(signalCaptured).toBeDefined()
     expect(signalCaptured!.aborted).toBe(false)
@@ -285,8 +306,6 @@ describe('Codex agent provider', () => {
   })
 
   it('does not pass apiKey to the Codex constructor (auth-agnostic per RFC 03 §3.6)', async () => {
-    // The provider constructs Codex via the injected factory; we capture
-    // its argument and assert no apiKey leaked through.
     const factoryArgs: unknown[] = []
     const fake = makeFakeCodex()
     const factory: CodexFactory = (args) => { factoryArgs.push(args); return fake.codex }
@@ -304,5 +323,22 @@ describe('Codex agent provider', () => {
     const p = createCodexAgentProvider({ codexFactory: factory, codexPathOverride: '/opt/codex/bin/codex' })
     await p.spawn({ alias: 'a', path: '/p' })
     expect(factoryArgs[0]).toMatchObject({ codexPathOverride: '/opt/codex/bin/codex' })
+  })
+
+  it('console.error logs SESSION_INIT on thread.started', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fakeCodex = makeFakeCodex()
+    fakeCodex.fake.thread.pushTurn([
+      { type: 'thread.started', thread_id: 'tid-log-test' },
+      { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } },
+    ])
+    const { provider: p } = provider({}, fakeCodex)
+    const session = await p.spawn({ alias: 'logtest', path: '/p' })
+
+    await drain(session.dispatch('hi'))
+
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('SESSION_INIT'))
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('tid-log-test'))
+    errSpy.mockRestore()
   })
 })

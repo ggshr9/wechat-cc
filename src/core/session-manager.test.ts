@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { SessionManager } from './session-manager'
 import { createClaudeAgentProvider } from './claude-agent-provider'
 import { createProviderRegistry, type ProviderRegistry } from './provider-registry'
+import { makeFakeSession } from './test-helpers'
 import type { AgentProvider } from './agent-provider'
 import type { Options, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 
@@ -61,12 +62,15 @@ describe('SessionManager', () => {
   it('uses an injected agent provider to spawn and dispatch project sessions', async () => {
     const dispatched: string[] = []
     const close = vi.fn()
-    const spawn = vi.fn(async () => ({
-      dispatch: async (text: string) => { dispatched.push(text); return { assistantText: [], replyToolCalled: false } },
-      close,
-      onAssistantText: () => () => {},
-      onResult: () => () => {},
-    }))
+    const spawn = vi.fn(async () => {
+      const session = makeFakeSession({
+        events: [{ kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 }],
+        onDispatch: text => dispatched.push(text),
+      })
+      const origClose = session.close.bind(session)
+      session.close = async () => { close(); await origClose() }
+      return session
+    })
 
     const mgr = new SessionManager({
       maxConcurrent: 4,
@@ -75,7 +79,8 @@ describe('SessionManager', () => {
     })
 
     const h = await mgr.acquire('codex-proj', '/repo', 'claude')
-    await h.dispatch('hello codex')
+    // drain the iterable to trigger onDispatch spy
+    for await (const _ of h.dispatch('hello codex')) { /* consume */ }
 
     expect(spawn).toHaveBeenCalledWith({ alias: 'codex-proj', path: '/repo' })
     expect(dispatched).toEqual(['hello codex'])
@@ -114,12 +119,9 @@ describe('SessionManager', () => {
       async spawn(_proj: any) {
         spawnCount++
         await new Promise(r => setTimeout(r, 30))
-        return {
-          dispatch: async () => ({ assistantText: [], replyToolCalled: false }),
-          close: async () => {},
-          onAssistantText: () => () => {},
-          onResult: () => () => {},
-        }
+        return makeFakeSession({
+          events: [{ kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 }],
+        })
       },
     } as unknown as AgentProvider
     const mgr = new SessionManager({
@@ -138,16 +140,24 @@ describe('SessionManager', () => {
 
   it('dispatch pushes messages in order into the prompt iterable', async () => {
     const seen: string[] = []
+    // fakeQuery yields a result event per message so each dispatch can complete.
     fakeQuery.mockImplementation((params: any) => {
       const iter = params.prompt as AsyncIterable<SDKUserMessage>
-      ;(async () => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        let turn = 0
         for await (const m of iter) {
           const content: any = m.message?.content
           const text = Array.isArray(content) ? content.map((b: any) => b.text ?? '').join('') : content
           seen.push(text)
+          // Yield a result event so each dispatch() call completes and the
+          // next dispatch() can be issued without hitting the "in-flight" guard.
+          yield { type: 'result', subtype: 'success', session_id: `sid-${++turn}`, num_turns: turn, duration_ms: 1 } as unknown as SDKMessage
         }
-      })().catch(() => {})
-      return makeFakeQuery()
+      }
+      const q = gen() as unknown as Query
+      ;(q as any).interrupt = vi.fn()
+      ;(q as any).close = vi.fn()
+      return q
     })
 
     const mgr = new SessionManager({
@@ -156,12 +166,12 @@ describe('SessionManager', () => {
       registry: singleClaudeRegistry(() => ({ cwd: '/tmp/x' } as Options)),
     })
     const h = await mgr.acquire('a', '/tmp/x', 'claude')
-    const p1 = h.dispatch('first').catch(() => undefined)
-    const p2 = h.dispatch('second').catch(() => undefined)
-    await new Promise(r => setTimeout(r, 10))
+    // Dispatch sequentially — each must complete before the next can start
+    // (claude provider throws if a previous dispatch is still in flight).
+    for await (const _ of h.dispatch('first')) { /* consume */ }
+    for await (const _ of h.dispatch('second')) { /* consume */ }
     expect(seen).toEqual(['first', 'second'])
     await mgr.shutdown()
-    await Promise.all([p1, p2])
   })
 
   it('evicts least-recently-used when capacity exceeded', async () => {
@@ -311,11 +321,15 @@ describe('SessionManager', () => {
 
     it('persists session_id on result message', async () => {
       const store = makeMockStore()
-      // Fake query that yields a result event
-      fakeQuery.mockImplementation(() => {
+      // Fake query that waits for a prompt message then yields a result event.
+      fakeQuery.mockImplementation((params: any) => {
+        const iter = params.prompt as AsyncIterable<SDKUserMessage>
         async function* gen(): AsyncGenerator<SDKMessage, void> {
-          yield { type: 'result', subtype: 'success', session_id: 'sid-new', num_turns: 1, duration_ms: 100 } as unknown as SDKMessage
-          await new Promise(() => {})
+          // Consume one prompt message, then yield a result
+          for await (const _ of iter) {
+            yield { type: 'result', subtype: 'success', session_id: 'sid-new', num_turns: 1, duration_ms: 100 } as unknown as SDKMessage
+            return
+          }
         }
         const q = gen() as unknown as Query
         ;(q as any).interrupt = vi.fn()
@@ -328,8 +342,9 @@ describe('SessionManager', () => {
         registry: singleClaudeRegistry(() => ({ cwd: '/p' } as Options)),
         sessionStore: store,
       })
-      await mgr.acquire('compass', '/p', 'claude')
-      await new Promise(r => setTimeout(r, 10))
+      const h = await mgr.acquire('compass', '/p', 'claude')
+      // Dispatch and drain so the result event is processed and session_id persisted.
+      for await (const _ of h.dispatch('test')) { /* consume result */ }
       expect(store.set).toHaveBeenCalledWith('compass', 'sid-new', 'claude')
       await mgr.shutdown()
     })
@@ -350,10 +365,7 @@ describe('SessionManager', () => {
 })
 
 function mockSession() {
-  return {
-    dispatch: async () => ({ assistantText: [], replyToolCalled: false }),
-    close: async () => {},
-    onAssistantText: () => () => {},
-    onResult: () => () => {},
-  }
+  return makeFakeSession({
+    events: [{ kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 }],
+  })
 }

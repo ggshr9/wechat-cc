@@ -1,13 +1,18 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createClaudeAgentProvider } from './claude-agent-provider'
+import type { AgentEvent } from './agent-provider'
+
+// Helper: drain an async iterable into an array for assertion.
+async function drain(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
+  const out: AgentEvent[] = []
+  for await (const ev of events) out.push(ev)
+  return out
+}
 
 // We monkeypatch @anthropic-ai/claude-agent-sdk's `query` so the test
 // doesn't actually spawn `claude`. The harness controls the message
-// stream the provider sees and asserts that dispatch() awaits the
-// next `result` event before resolving — this is the contract that
-// message-router.ts depends on. Before the fix, dispatch resolved
-// immediately after pushing to the queue and the router saw an empty
-// assistantText, dropping every WeChat reply on the floor.
+// stream the provider sees and asserts that dispatch() yields events
+// in the correct sequence.
 
 vi.mock('@anthropic-ai/claude-agent-sdk', () => {
   const sentMessages: unknown[] = []
@@ -61,68 +66,42 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => {
 import * as sdk from '@anthropic-ai/claude-agent-sdk'
 
 describe('claude-agent-provider', () => {
-  it('dispatch awaits the next result event and returns collected assistant text', async () => {
+  it('yields init then text then result for a simple turn', async () => {
     const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
-    const session = await provider.spawn({ alias: 'p', path: '/p' })
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' })
 
-    const dispatched = session.dispatch('hello')
+    const eventsPromise = drain(session.dispatch('hi'))
 
-    // Simulate the SDK streaming back two assistant chunks then a result.
-    // dispatch() should resolve only after the result event fires.
+    // Give the background task a tick to start consuming
+    await new Promise(r => setTimeout(r, 0))
+
     ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
-      type: 'assistant', message: { content: [{ type: 'text', text: 'hi ' }] },
+      type: 'system', subtype: 'init', session_id: 's1',
     })
     ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
-      type: 'assistant', message: { content: [{ type: 'text', text: 'there' }] },
+      type: 'assistant', message: { content: [{ type: 'text', text: 'hello' }] },
+    })
+    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
+      type: 'result', subtype: 'success', session_id: 's1', num_turns: 1, duration_ms: 100,
     })
 
-    // Race the dispatch against a 50ms timer to prove it hasn't resolved yet.
-    const tooEarly = await Promise.race([
-      dispatched.then(() => 'resolved'),
-      new Promise<string>(resolve => setTimeout(() => resolve('still-waiting'), 50)),
+    const events = await eventsPromise
+    expect(events).toEqual([
+      { kind: 'init', sessionId: 's1' },
+      { kind: 'text', text: 'hello' },
+      { kind: 'result', sessionId: 's1', numTurns: 1, durationMs: 100 },
     ])
-    expect(tooEarly).toBe('still-waiting')
-
-    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
-      type: 'result', subtype: 'success', session_id: 'sid-1', num_turns: 1, duration_ms: 100,
-    })
-
-    const result = await dispatched
-    expect(result.assistantText).toEqual(['hi ', 'there'])
+    await session.close()
   })
 
-  it('multiple dispatches in flight resolve in FIFO order', async () => {
+  it('yields tool_call for `mcp__wechat__reply` with `{server:"wechat", tool:"reply"}`', async () => {
     const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
-    const session = await provider.spawn({ alias: 'p', path: '/p' })
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' })
 
-    const first = session.dispatch('msg-1')
-    const second = session.dispatch('msg-2')
+    const eventsPromise = drain(session.dispatch('reply please'))
 
-    // First turn: one assistant chunk + result
-    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
-      type: 'assistant', message: { content: [{ type: 'text', text: 'reply-1' }] },
-    })
-    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
-      type: 'result', subtype: 'success', session_id: 'sid-1', num_turns: 1, duration_ms: 100,
-    })
+    await new Promise(r => setTimeout(r, 0))
 
-    expect(await first).toEqual({ assistantText: ['reply-1'], replyToolCalled: false })
-
-    // Second turn
-    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
-      type: 'assistant', message: { content: [{ type: 'text', text: 'reply-2' }] },
-    })
-    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
-      type: 'result', subtype: 'success', session_id: 'sid-1', num_turns: 2, duration_ms: 100,
-    })
-
-    expect(await second).toEqual({ assistantText: ['reply-2'], replyToolCalled: false })
-  })
-
-  it('flags replyToolCalled=true when Claude calls mcp__wechat__reply', async () => {
-    const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
-    const session = await provider.spawn({ alias: 'p', path: '/p' })
-    const turn = session.dispatch('hi')
     ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
       type: 'assistant',
       message: { content: [
@@ -131,16 +110,24 @@ describe('claude-agent-provider', () => {
       ] },
     })
     ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
-      type: 'result', subtype: 'success', session_id: 's', num_turns: 1, duration_ms: 0,
+      type: 'result', subtype: 'success', session_id: 's2', num_turns: 1, duration_ms: 50,
     })
-    const r = await turn
-    expect(r.replyToolCalled).toBe(true)
+
+    const events = await eventsPromise
+    const toolCall = events.find(e => e.kind === 'tool_call')
+    expect(toolCall).toBeDefined()
+    expect(toolCall).toEqual({ kind: 'tool_call', server: 'wechat', tool: 'reply' })
+    await session.close()
   })
 
-  it('flags replyToolCalled=false when Claude only emits text (forgets to call reply)', async () => {
+  it('yields tool_call for built-in tools without server prefix', async () => {
     const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
-    const session = await provider.spawn({ alias: 'p', path: '/p' })
-    const turn = session.dispatch('hi')
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' })
+
+    const eventsPromise = drain(session.dispatch('read a file'))
+
+    await new Promise(r => setTimeout(r, 0))
+
     ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
       type: 'assistant',
       message: { content: [
@@ -148,76 +135,103 @@ describe('claude-agent-provider', () => {
       ] },
     })
     ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
-      type: 'assistant',
-      message: { content: [{ type: 'text', text: '描述一下图片' }] },
+      type: 'result', subtype: 'success', session_id: 's3', num_turns: 1, duration_ms: 0,
     })
-    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
-      type: 'result', subtype: 'success', session_id: 's', num_turns: 1, duration_ms: 0,
-    })
-    const r = await turn
-    expect(r.replyToolCalled).toBe(false)
-    expect(r.assistantText).toEqual(['描述一下图片'])
-  })
 
-  it('close() resolves any still-pending dispatches with empty text instead of hanging', async () => {
-    const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
-    const session = await provider.spawn({ alias: 'p', path: '/p' })
-
-    const dispatched = session.dispatch('will-not-finish')
+    const events = await eventsPromise
+    const toolCall = events.find(e => e.kind === 'tool_call')
+    expect(toolCall).toBeDefined()
+    expect((toolCall as { server?: string }).server).toBeUndefined()
+    expect((toolCall as { tool: string }).tool).toBe('Read')
     await session.close()
-
-    const result = await dispatched
-    expect(result.assistantText).toEqual([])
   })
 
-  it('assistant text arriving with no pending turn is dropped, not attributed to next dispatch', async () => {
+  it('yields error event for non-success result subtype', async () => {
     const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
-    const session = await provider.spawn({ alias: 'p', path: '/p' })
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' })
 
-    // Suppress the [STREAM_DROP] warning the provider emits — we expect it
-    // and the assertion below counts on it being there. spy verifies it ran.
+    const eventsPromise = drain(session.dispatch('hi'))
+
+    await new Promise(r => setTimeout(r, 0))
+
+    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
+      type: 'result', subtype: 'error', result: 'tool execution failed', session_id: 's4', num_turns: 1, duration_ms: 0,
+    })
+
+    const events = await eventsPromise
+    expect(events.some(e => e.kind === 'error')).toBe(true)
+    const errorEvent = events.find(e => e.kind === 'error')
+    expect((errorEvent as { message: string }).message).toContain('error')
+    // result event should still come after error event
+    expect(events.some(e => e.kind === 'result')).toBe(true)
+    await session.close()
+  })
+
+  it('returns an empty iterable after close()', async () => {
+    const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' })
+    await session.close()
+    const events = await drain(session.dispatch('after close'))
+    expect(events).toEqual([])
+  })
+
+  it('throws if dispatch is called while a previous dispatch is in flight', async () => {
+    const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' })
+
+    // Start first dispatch — do NOT drain it yet (keep it in-flight)
+    const first = session.dispatch('a')
+    // Start consuming the iterator to set the active queue
+    const firstIterator = first[Symbol.asyncIterator]()
+    // Kick off the iterator — don't await so it's in-flight
+    const firstNextPromise = firstIterator.next()
+
+    await new Promise(r => setTimeout(r, 0))
+
+    // Second dispatch while first is in flight should throw
+    expect(() => session.dispatch('b')).toThrow(/in flight/)
+
+    // Finish first dispatch cleanly
+    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
+      type: 'result', subtype: 'success', session_id: 's5', num_turns: 1, duration_ms: 0,
+    })
+
+    await firstNextPromise
+    // Drain the rest
+    for await (const _ of { [Symbol.asyncIterator]: () => firstIterator }) { /* drain */ }
+    await session.close()
+  })
+
+  it('assistant text arriving with no active queue is dropped with [STREAM_DROP] warn', async () => {
+    const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' })
+
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    // Pre-emit an assistant chunk before any dispatch is in flight. This
-    // should be dropped (the only "owner" of assistant text is an awaiting
-    // dispatch — attributing pre-pending chunks to a later dispatch would
-    // mix unrelated turns).
+    // Emit assistant text before any dispatch is in flight
     ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
       type: 'assistant', message: { content: [{ type: 'text', text: 'orphan' }] },
     })
-    // Give the iterator loop a tick to consume the yielded message.
+    // Give the iterator loop a tick to consume the yielded message
     await new Promise(r => setTimeout(r, 10))
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('STREAM_DROP'))
 
-    // Now dispatch — the result must contain ONLY this turn's text, not
-    // the orphan from before.
-    const dispatched = session.dispatch('hello')
+    // Now dispatch — the result must contain ONLY this turn's text, not the orphan
+    const eventsPromise = drain(session.dispatch('hello'))
+
+    await new Promise(r => setTimeout(r, 0))
+
     ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
       type: 'assistant', message: { content: [{ type: 'text', text: 'fresh' }] },
     })
     ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
       type: 'result', subtype: 'success', session_id: 'sid-1', num_turns: 1, duration_ms: 100,
     })
-    const result = await dispatched
-    expect(result.assistantText).toEqual(['fresh'])
+
+    const events = await eventsPromise
+    const textEvents = events.filter(e => e.kind === 'text')
+    expect(textEvents).toEqual([{ kind: 'text', text: 'fresh' }])
     warnSpy.mockRestore()
-  })
-
-  it('SDK iterator throwing rejects pending turns rather than hanging', async () => {
-    const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
-    const session = await provider.spawn({ alias: 'p', path: '/p' })
-
-    const dispatched = session.dispatch('hello')
-    // Force the SDK iterator to throw by ending the stream while the turn
-    // is in flight. Implementation rejects all pending turns on iterator
-    // exit; close() then drains. Exact mechanism: end() makes the iterator
-    // return done:true, the for-await exits cleanly, the catch block below
-    // doesn't fire — but any unfinished turn is left dangling. The fix
-    // resolves them empty in close(), which we test above. Here we make
-    // sure end-of-stream alone doesn't throw.
-    ;(sdk as unknown as { __test_end: () => void }).__test_end()
     await session.close()
-    const result = await dispatched
-    expect(result.assistantText).toEqual([])
   })
 })

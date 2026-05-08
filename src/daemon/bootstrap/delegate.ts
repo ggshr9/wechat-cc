@@ -12,6 +12,7 @@
  */
 import { createClaudeAgentProvider } from '../../core/claude-agent-provider'
 import { createCodexAgentProvider } from '../../core/codex-agent-provider'
+import { collectTurn } from '../../core/agent-provider'
 import type { Options } from '@anthropic-ai/claude-agent-sdk'
 import type { ProviderId } from '../../core/conversation'
 import { loadAgentConfig } from '../../lib/agent-config'
@@ -86,7 +87,7 @@ export function buildDelegateDispatch(deps: DelegateBuildDeps): DelegateDispatch
     let session: Awaited<ReturnType<typeof provider.spawn>> | null = null
     try {
       session = await provider.spawn({ alias: '_delegate', path: cwd ?? deps.stateDir })
-      const result = await session.dispatch(prompt)
+      const result = await collectTurn(session.dispatch(prompt))
       const response = result.assistantText.join('\n').trim()
       return { ok: true, response, duration_ms: Date.now() - started }
     } catch (err) {

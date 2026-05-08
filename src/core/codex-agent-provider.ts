@@ -1,5 +1,5 @@
 import { Codex, type Thread, type ThreadEvent, type ThreadItem } from '@openai/codex-sdk'
-import type { AgentProject, AgentProvider, AgentResult, AgentSession } from './agent-provider'
+import type { AgentEvent, AgentProject, AgentProvider, AgentSession } from './agent-provider'
 
 /**
  * codex-agent-provider — Codex SDK companion to claude-agent-provider, using
@@ -13,30 +13,15 @@ import type { AgentProject, AgentProvider, AgentResult, AgentSession } from './a
  *   - `codex login` → ~/.codex/auth.json (ChatGPT subscription)
  *   - OPENAI_API_KEY / CODEX_API_KEY in env (or ~/.codex/config.toml)
  *
- * Translation table from Codex SDK events to AgentSession callbacks
- * (validated against @openai/codex-sdk@0.128.0/dist/index.d.ts):
+ * Translation table from Codex SDK events to AgentEvents:
  *
- *   item.completed{type=agent_message}    → onAssistantText(item.text)
- *                                          + push to dispatch() return.assistantText
- *   item.completed{type=mcp_tool_call,    → set replyToolCalled=true
- *     server='wechat',                       (matches the wechat-mcp reply tool family;
- *     tool ∈ REPLY_TOOL_NAMES}              shipped in P1, currently inert)
- *   turn.completed{usage}                  → onResult({session_id: thread.id,
- *                                                      num_turns, duration_ms})
- *   turn.failed                            → log + throw (next dispatch fresh)
- *   error                                  → log + throw
+ *   thread.started                              → { kind: 'init', sessionId }
+ *   item.completed{type=agent_message}          → { kind: 'text', text }
+ *   item.completed{type=mcp_tool_call}          → { kind: 'tool_call', server, tool }
+ *   turn.completed                              → { kind: 'result', sessionId, numTurns, durationMs }
+ *   turn.failed                                 → { kind: 'error', message }
+ *   error                                       → { kind: 'error', message }
  */
-
-// Mirrors the Claude provider's reply-family. Tool *names* (not server-prefixed)
-// because Codex's mcp_tool_call item separates server + tool fields.
-const REPLY_TOOL_NAMES = new Set([
-  'reply',
-  'reply_voice',
-  'send_file',
-  'edit_message',
-  'broadcast',
-])
-const WECHAT_MCP_SERVER = 'wechat'
 
 /** Test-time injection for the Codex constructor. */
 export type CodexFactory = (opts: ConstructorParameters<typeof Codex>[0]) => Codex
@@ -136,8 +121,6 @@ export function createCodexAgentProvider(opts: CodexAgentProviderOptions = {}): 
         console.error(`wechat channel: [SESSION_RESUME] alias=${project.alias} thread_id=${spawnOpts.resumeSessionId} provider=codex`)
       }
 
-      const assistantListeners = new Set<(text: string) => void>()
-      const resultListeners = new Set<(result: AgentResult) => void>()
       let turnCount = 0
       let activeAborter: AbortController | null = null
       let closed = false
@@ -147,67 +130,67 @@ export function createCodexAgentProvider(opts: CodexAgentProviderOptions = {}): 
       let instructionsInjected = !opts.appendInstructions
 
       return {
-        async dispatch(text: string): Promise<{ assistantText: string[]; replyToolCalled: boolean }> {
-          if (closed) return { assistantText: [], replyToolCalled: false }
-          const turnAborter = new AbortController()
-          activeAborter = turnAborter
-          const turnTexts: string[] = []
-          let replyToolCalled = false
-          const turnStarted = Date.now()
-          let initEmitted = false
+        dispatch(text: string): AsyncIterable<AgentEvent> {
+          return {
+            async *[Symbol.asyncIterator](): AsyncGenerator<AgentEvent> {
+              if (closed) return
+              const turnAborter = new AbortController()
+              activeAborter = turnAborter
+              const turnStarted = Date.now()
+              let initEmitted = false
 
-          // First-dispatch-only injection of channel instructions (RFC 03 P5
-          // review #4). Codex SDK has no system_prompt slot; prefix the
-          // user message instead. Subsequent turns rely on Codex's own
-          // history retention.
-          let dispatchedText = text
-          if (!instructionsInjected && opts.appendInstructions) {
-            dispatchedText = `${opts.appendInstructions}\n\n---\n\n${text}`
-            instructionsInjected = true
-          }
+              // First-dispatch-only injection of channel instructions (RFC 03 P5
+              // review #4). Codex SDK has no system_prompt slot; prefix the
+              // user message instead. Subsequent turns rely on Codex's own
+              // history retention.
+              let dispatchedText = text
+              if (!instructionsInjected && opts.appendInstructions) {
+                dispatchedText = `${opts.appendInstructions}\n\n---\n\n${text}`
+                instructionsInjected = true
+              }
 
-          try {
-            const { events } = await thread.runStreamed(dispatchedText, { signal: turnAborter.signal })
-            for await (const ev of events as AsyncGenerator<ThreadEvent>) {
-              if (ev.type === 'thread.started') {
-                if (!initEmitted) {
-                  console.error(`wechat channel: [SESSION_INIT] alias=${project.alias} thread_id=${ev.thread_id} provider=codex`)
-                  initEmitted = true
-                }
-              } else if (ev.type === 'item.completed') {
-                const item = (ev as { item: ThreadItem }).item
-                if (item.type === 'agent_message') {
-                  turnTexts.push(item.text)
-                  for (const cb of assistantListeners) cb(item.text)
-                } else if (item.type === 'mcp_tool_call') {
-                  if (item.server === WECHAT_MCP_SERVER && REPLY_TOOL_NAMES.has(item.tool)) {
-                    replyToolCalled = true
+              try {
+                const { events } = await thread.runStreamed(dispatchedText, { signal: turnAborter.signal })
+                for await (const ev of events as AsyncGenerator<ThreadEvent>) {
+                  if (ev.type === 'thread.started') {
+                    if (!initEmitted) {
+                      console.error(`wechat channel: [SESSION_INIT] alias=${project.alias} thread_id=${ev.thread_id} provider=codex`)
+                      initEmitted = true
+                    }
+                    yield { kind: 'init', sessionId: ev.thread_id }
+                  } else if (ev.type === 'item.completed') {
+                    const item = (ev as { item: ThreadItem }).item
+                    if (item.type === 'agent_message') {
+                      yield { kind: 'text', text: item.text }
+                    } else if (item.type === 'mcp_tool_call') {
+                      yield { kind: 'tool_call', server: item.server, tool: item.tool }
+                    }
+                  } else if (ev.type === 'turn.completed') {
+                    yield {
+                      kind: 'result',
+                      sessionId: thread.id ?? '',
+                      numTurns: ++turnCount,
+                      durationMs: Date.now() - turnStarted,
+                    }
+                  } else if (ev.type === 'turn.failed') {
+                    const m = ev.error.message
+                    console.error(`wechat channel: [SESSION_RESULT] alias=${project.alias} provider=codex turn.failed=${m.slice(0, 400)}`)
+                    yield { kind: 'error', message: m }
+                  } else if (ev.type === 'error') {
+                    const m = (ev as { type: 'error'; message: string }).message
+                    console.error(`wechat channel: [SESSION_ERROR] alias=${project.alias} provider=codex stream-error=${m.slice(0, 400)}`)
+                    yield { kind: 'error', message: m }
                   }
                 }
-              } else if (ev.type === 'turn.completed') {
-                const result: AgentResult = {
-                  session_id: thread.id ?? '',
-                  num_turns: ++turnCount,
-                  duration_ms: Date.now() - turnStarted,
-                }
-                for (const cb of resultListeners) cb(result)
-              } else if (ev.type === 'turn.failed') {
-                const msg = ev.error.message
-                console.error(`wechat channel: [SESSION_RESULT] alias=${project.alias} provider=codex turn.failed=${msg.slice(0, 400)}`)
-              } else if (ev.type === 'error') {
-                const msg = (ev as { type: 'error'; message: string }).message
-                console.error(`wechat channel: [SESSION_ERROR] alias=${project.alias} provider=codex stream-error=${msg.slice(0, 400)}`)
+              } catch (err) {
+                const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+                console.error(`wechat channel: [SESSION_ERROR] alias=${project.alias} provider=codex dispatch threw: ${detail}`)
+                throw err
+              } finally {
+                if (activeAborter === turnAborter) activeAborter = null
               }
-            }
-          } catch (err) {
-            const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
-            console.error(`wechat channel: [SESSION_ERROR] alias=${project.alias} provider=codex dispatch threw: ${detail}`)
-            throw err
-          } finally {
-            if (activeAborter === turnAborter) activeAborter = null
+            },
           }
-
-          return { assistantText: turnTexts, replyToolCalled }
         },
         async close(): Promise<void> {
           closed = true
@@ -217,8 +200,6 @@ export function createCodexAgentProvider(opts: CodexAgentProviderOptions = {}): 
           // any in-flight turn is sufficient.
           activeAborter?.abort()
         },
-        onAssistantText(cb) { assistantListeners.add(cb); return () => { assistantListeners.delete(cb) } },
-        onResult(cb) { resultListeners.add(cb); return () => { resultListeners.delete(cb) } },
       }
     },
   }

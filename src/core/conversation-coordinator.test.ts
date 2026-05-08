@@ -2,16 +2,15 @@ import { describe, expect, it, vi } from 'vitest'
 import { createConversationCoordinator } from './conversation-coordinator'
 import { createProviderRegistry } from './provider-registry'
 import * as capabilityMatrix from './capability-matrix'
-import type { AgentProvider } from './agent-provider'
+import { makeFakeSession } from './test-helpers'
+import type { AgentEvent, AgentProvider } from './agent-provider'
 import type { Mode } from './conversation'
 import type { InboundMsg } from './prompt-format'
 
+/** Minimal AgentProvider whose spawn() returns a session that emits no events. */
 const dummyProvider: AgentProvider = {
-  spawn: async () => ({
-    dispatch: async () => ({ assistantText: [], replyToolCalled: false }),
-    close: async () => {},
-    onAssistantText: () => () => {},
-    onResult: () => () => {},
+  spawn: async () => makeFakeSession({
+    events: [{ kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 }],
   }),
 }
 
@@ -28,6 +27,18 @@ function inbound(chatId: string, text: string): InboundMsg {
   return {
     chatId, userId: chatId, text, msgType: 'text',
     createTimeMs: Date.now(), accountId: 'acct-1',
+  }
+}
+
+/** Make a fake handle that the acquire mock returns. */
+function makeHandle(providerId: string, session: ReturnType<typeof makeFakeSession>) {
+  return {
+    alias: 'a',
+    path: '/p',
+    providerId,
+    lastUsedAt: 0,
+    dispatch: (text: string) => session.dispatch(text),
+    close: async () => {},
   }
 }
 
@@ -126,14 +137,14 @@ describe('ConversationCoordinator', () => {
   it('dispatch acquires session under the chat\'s persisted provider', async () => {
     const store = makeMockStore()
     store.set('chat-1', { kind: 'solo', provider: 'codex' })
-    const dispatchMock = vi.fn(async () => ({ assistantText: [], replyToolCalled: false }))
-    const acquire = vi.fn(async (_alias: string, _path: string, _provider: string) => ({
-      alias: 'a', path: '/p', providerId: 'codex', lastUsedAt: 0,
-      dispatch: dispatchMock,
-      close: async () => {},
-      onAssistantText: () => () => {},
-      onResult: () => () => {},
-    }))
+    const dispatched: string[] = []
+    const session = makeFakeSession({
+      events: [{ kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 }],
+      onDispatch: t => dispatched.push(t),
+    })
+    const acquire = vi.fn(async (_alias: string, _path: string, _provider: string) =>
+      makeHandle('codex', session)
+    )
     const registry = createProviderRegistry()
     registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
     registry.register('codex', dummyProvider, { displayName: 'Codex', canResume: () => true })
@@ -149,19 +160,18 @@ describe('ConversationCoordinator', () => {
     })
     await c.dispatch(inbound('chat-1', 'hi codex'))
     expect(acquire).toHaveBeenCalledWith('a', '/p', 'codex')
-    expect(dispatchMock).toHaveBeenCalledWith('[fmt]hi codex')
+    expect(dispatched).toContain('[fmt]hi codex')
   })
 
   it('dispatch falls back to default provider when persisted mode references unknown provider', async () => {
     const store = makeMockStore()
     store.set('chat-1', { kind: 'solo', provider: 'gemini' })  // not registered
-    const acquire = vi.fn(async (_alias: string, _path: string, _providerId: string) => ({
-      alias: 'a', path: '/p', providerId: 'claude', lastUsedAt: 0,
-      dispatch: async () => ({ assistantText: [], replyToolCalled: false }),
-      close: async () => {},
-      onAssistantText: () => () => {},
-      onResult: () => () => {},
-    }))
+    const session = makeFakeSession({
+      events: [{ kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 }],
+    })
+    const acquire = vi.fn(async (_alias: string, _path: string, _providerId: string) =>
+      makeHandle('claude', session)
+    )
     const registry = createProviderRegistry()
     registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
     const log = vi.fn()
@@ -181,13 +191,15 @@ describe('ConversationCoordinator', () => {
   })
 
   it('skips fallback sendAssistantText when reply tool was called', async () => {
-    const acquire = vi.fn(async (_alias: string, _path: string, _providerId: string) => ({
-      alias: 'a', path: '/p', providerId: 'claude', lastUsedAt: 0,
-      dispatch: async () => ({ assistantText: ['hi from agent'], replyToolCalled: true }),
-      close: async () => {},
-      onAssistantText: () => () => {},
-      onResult: () => () => {},
-    }))
+    const session = makeFakeSession({
+      events: [
+        { kind: 'tool_call', server: 'wechat', tool: 'reply' },
+        { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+      ],
+    })
+    const acquire = vi.fn(async (_alias: string, _path: string, _providerId: string) =>
+      makeHandle('claude', session)
+    )
     const sendAssistantText = vi.fn(async (_chatId: string, _text: string) => {})
     const registry = createProviderRegistry()
     registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
@@ -207,13 +219,16 @@ describe('ConversationCoordinator', () => {
   })
 
   it('forwards assistantText via fallback when reply tool was NOT called', async () => {
-    const acquire = vi.fn(async (_alias: string, _path: string, _providerId: string) => ({
-      alias: 'a', path: '/p', providerId: 'claude', lastUsedAt: 0,
-      dispatch: async () => ({ assistantText: ['raw text 1', 'raw text 2'], replyToolCalled: false }),
-      close: async () => {},
-      onAssistantText: () => () => {},
-      onResult: () => () => {},
-    }))
+    const session = makeFakeSession({
+      events: [
+        { kind: 'text', text: 'raw text 1' },
+        { kind: 'text', text: 'raw text 2' },
+        { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+      ],
+    })
+    const acquire = vi.fn(async (_alias: string, _path: string, _providerId: string) =>
+      makeHandle('claude', session)
+    )
     const sendAssistantText = vi.fn(async (_chatId: string, _text: string) => {})
     const registry = createProviderRegistry()
     registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
@@ -239,13 +254,12 @@ describe('ConversationCoordinator', () => {
   it('dispatch calls assertSupported for the effective provider before acquiring session', async () => {
     // Spy on assertSupported — verify it's called with correct (mode, provider, permissionMode)
     const spy = vi.spyOn(capabilityMatrix, 'assertSupported')
-    const acquire = vi.fn(async (_alias: string, _path: string, _providerId: string) => ({
-      alias: 'a', path: '/p', providerId: 'claude', lastUsedAt: 0,
-      dispatch: async () => ({ assistantText: [], replyToolCalled: false }),
-      close: async () => {},
-      onAssistantText: () => () => {},
-      onResult: () => () => {},
-    }))
+    const session = makeFakeSession({
+      events: [{ kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 }],
+    })
+    const acquire = vi.fn(async (_alias: string, _path: string, _providerId: string) =>
+      makeHandle('claude', session)
+    )
     const registry = createProviderRegistry()
     registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
     const c = createConversationCoordinator({
@@ -272,14 +286,17 @@ describe('ConversationCoordinator', () => {
       const registry = createProviderRegistry()
       registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
       registry.register('codex', dummyProvider, { displayName: 'Codex', canResume: () => true })
-      const dispatchMock = vi.fn(async () => ({ assistantText: ['hi from primary'], replyToolCalled: true }))
-      const acquire = vi.fn(async (_alias: string, _path: string, providerId: string) => ({
-        alias: 'a', path: '/p', providerId, lastUsedAt: 0,
-        dispatch: dispatchMock,
-        close: async () => {},
-        onAssistantText: () => () => {},
-        onResult: () => () => {},
-      }))
+      const dispatched: string[] = []
+      const session = makeFakeSession({
+        events: [
+          { kind: 'tool_call', server: 'wechat', tool: 'reply' },
+          { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+        ],
+        onDispatch: t => dispatched.push(t),
+      })
+      const acquire = vi.fn(async (_alias: string, _path: string, providerId: string) =>
+        makeHandle(providerId, session)
+      )
       const log = vi.fn()
       const c = createConversationCoordinator({
         resolveProject: () => ({ alias: 'a', path: '/p' }),
@@ -291,15 +308,15 @@ describe('ConversationCoordinator', () => {
         permissionMode: 'strict',
         log,
       })
-      return { c, acquire, dispatchMock, log, store }
+      return { c, acquire, dispatched, log, store }
     }
 
     it('dispatches solo to the primary provider (peer reachable via delegate-mcp tool, not parallel session)', async () => {
-      const { c, acquire, dispatchMock } = setupPrimaryTool({ initialMode: { kind: 'primary_tool', primary: 'claude' } })
+      const { c, acquire, dispatched } = setupPrimaryTool({ initialMode: { kind: 'primary_tool', primary: 'claude' } })
       await c.dispatch(inbound('chat-1', 'hi'))
       expect(acquire).toHaveBeenCalledTimes(1)
       expect(acquire.mock.calls[0]?.[2]).toBe('claude')
-      expect(dispatchMock).toHaveBeenCalledTimes(1)
+      expect(dispatched).toHaveLength(1)
     })
 
     it('reverse — primary_tool with codex primary dispatches to codex', async () => {
@@ -314,13 +331,15 @@ describe('ConversationCoordinator', () => {
       const registry = createProviderRegistry()
       registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
       registry.register('codex', dummyProvider, { displayName: 'Codex', canResume: () => true })
-      const acquire = vi.fn(async (_alias: string, _path: string, _providerId: string) => ({
-        alias: 'a', path: '/p', providerId: 'claude', lastUsedAt: 0,
-        dispatch: async () => ({ assistantText: [], replyToolCalled: true }),
-        close: async () => {},
-        onAssistantText: () => () => {},
-        onResult: () => () => {},
-      }))
+      const session = makeFakeSession({
+        events: [
+          { kind: 'tool_call', server: 'wechat', tool: 'reply' },
+          { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+        ],
+      })
+      const acquire = vi.fn(async (_alias: string, _path: string, _providerId: string) =>
+        makeHandle('claude', session)
+      )
       const log = vi.fn()
       const c = createConversationCoordinator({
         resolveProject: () => ({ alias: 'a', path: '/p' }),
@@ -361,8 +380,8 @@ describe('ConversationCoordinator', () => {
 
   describe('parallel mode (P3)', () => {
     function setupParallel(opts: {
-      claudeResult?: { assistantText: string[]; replyToolCalled: boolean }
-      codexResult?: { assistantText: string[]; replyToolCalled: boolean }
+      claudeEvents?: AgentEvent[]
+      codexEvents?: AgentEvent[]
       claudeThrows?: Error
       codexThrows?: Error
     } = {}) {
@@ -373,21 +392,48 @@ describe('ConversationCoordinator', () => {
       registry.register('codex', dummyProvider, { displayName: 'Codex', canResume: () => true })
       const sendAssistantText = vi.fn(async (_chatId: string, _text: string) => {})
       const dispatchCalls: Array<{ providerId: string; text: string }> = []
-      const acquire = vi.fn(async (alias: string, path: string, providerId: string) => ({
-        alias, path, providerId, lastUsedAt: 0,
-        dispatch: async (text: string) => {
-          dispatchCalls.push({ providerId, text })
-          if (providerId === 'claude') {
-            if (opts.claudeThrows) throw opts.claudeThrows
-            return opts.claudeResult ?? { assistantText: [], replyToolCalled: true }
+
+      const defaultResultEvent: AgentEvent = { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 }
+      const defaultReplyEvents: AgentEvent[] = [
+        { kind: 'tool_call', server: 'wechat', tool: 'reply' },
+        defaultResultEvent,
+      ]
+
+      const claudeEvents = opts.claudeEvents ?? defaultReplyEvents
+      const codexEvents = opts.codexEvents ?? defaultReplyEvents
+
+      const acquire = vi.fn(async (alias: string, path: string, providerId: string) => {
+        if (providerId === 'claude' && opts.claudeThrows) {
+          return {
+            alias, path, providerId, lastUsedAt: 0,
+            dispatch: (_text: string): AsyncIterable<AgentEvent> => {
+              const err = opts.claudeThrows!
+              return {
+                async *[Symbol.asyncIterator]() { throw err },
+              }
+            },
+            close: async () => {},
           }
-          if (opts.codexThrows) throw opts.codexThrows
-          return opts.codexResult ?? { assistantText: [], replyToolCalled: true }
-        },
-        close: async () => {},
-        onAssistantText: () => () => {},
-        onResult: () => () => {},
-      }))
+        }
+        if (providerId === 'codex' && opts.codexThrows) {
+          return {
+            alias, path, providerId, lastUsedAt: 0,
+            dispatch: (_text: string): AsyncIterable<AgentEvent> => {
+              const err = opts.codexThrows!
+              return {
+                async *[Symbol.asyncIterator]() { throw err },
+              }
+            },
+            close: async () => {},
+          }
+        }
+        const events = providerId === 'claude' ? claudeEvents : codexEvents
+        const session = makeFakeSession({
+          events,
+          onDispatch: t => dispatchCalls.push({ providerId, text: t }),
+        })
+        return makeHandle(providerId, session)
+      })
       const c = createConversationCoordinator({
         resolveProject: () => ({ alias: 'a', path: '/p' }),
         manager: { acquire },
@@ -416,8 +462,16 @@ describe('ConversationCoordinator', () => {
 
     it('skips fallback sendAssistantText when both providers called reply tool', async () => {
       const { c, sendAssistantText } = setupParallel({
-        claudeResult: { assistantText: ['hi'], replyToolCalled: true },
-        codexResult: { assistantText: ['hi'], replyToolCalled: true },
+        claudeEvents: [
+          { kind: 'text', text: 'hi' },
+          { kind: 'tool_call', server: 'wechat', tool: 'reply' },
+          { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+        ],
+        codexEvents: [
+          { kind: 'text', text: 'hi' },
+          { kind: 'tool_call', server: 'wechat', tool: 'reply' },
+          { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+        ],
       })
       await c.dispatch(inbound('chat-1', 'hi'))
       expect(sendAssistantText).not.toHaveBeenCalled()
@@ -425,8 +479,15 @@ describe('ConversationCoordinator', () => {
 
     it('forwards prefixed assistant text via fallback per-provider when reply tool NOT called', async () => {
       const { c, sendAssistantText } = setupParallel({
-        claudeResult: { assistantText: ['claude raw 1', 'claude raw 2'], replyToolCalled: false },
-        codexResult: { assistantText: ['codex raw'], replyToolCalled: false },
+        claudeEvents: [
+          { kind: 'text', text: 'claude raw 1' },
+          { kind: 'text', text: 'claude raw 2' },
+          { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+        ],
+        codexEvents: [
+          { kind: 'text', text: 'codex raw' },
+          { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+        ],
       })
       await c.dispatch(inbound('chat-1', 'hi'))
       const sent = sendAssistantText.mock.calls.map(([, t]) => t).sort()
@@ -440,7 +501,10 @@ describe('ConversationCoordinator', () => {
     it('one provider throwing does NOT block the other (allSettled semantics)', async () => {
       const { c, sendAssistantText } = setupParallel({
         claudeThrows: new Error('claude went poof'),
-        codexResult: { assistantText: ['codex still here'], replyToolCalled: false },
+        codexEvents: [
+          { kind: 'text', text: 'codex still here' },
+          { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+        ],
       })
       await c.dispatch(inbound('chat-1', 'hi'))
       // Codex's text still made it through
@@ -453,13 +517,15 @@ describe('ConversationCoordinator', () => {
       // Only claude registered — codex missing
       const registry = createProviderRegistry()
       registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
-      const acquire = vi.fn(async (_alias: string, _path: string, _providerId: string) => ({
-        alias: 'a', path: '/p', providerId: 'claude', lastUsedAt: 0,
-        dispatch: async () => ({ assistantText: [], replyToolCalled: true }),
-        close: async () => {},
-        onAssistantText: () => () => {},
-        onResult: () => () => {},
-      }))
+      const session = makeFakeSession({
+        events: [
+          { kind: 'tool_call', server: 'wechat', tool: 'reply' },
+          { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+        ],
+      })
+      const acquire = vi.fn(async (_alias: string, _path: string, _providerId: string) =>
+        makeHandle('claude', session)
+      )
       const log = vi.fn()
       const c = createConversationCoordinator({
         resolveProject: () => ({ alias: 'a', path: '/p' }),
@@ -503,14 +569,16 @@ describe('ConversationCoordinator', () => {
       const registry = createProviderRegistry()
       registry.register('alice', dummyProvider, { displayName: 'Alice', canResume: () => true })
       registry.register('bob', dummyProvider, { displayName: 'Bob', canResume: () => true })
-      const acquire = vi.fn(async (alias: string, path: string, providerId: string) => ({
-        alias, path, providerId, lastUsedAt: 0,
-        dispatch: async () => ({ assistantText: [`hi from ${providerId}`], replyToolCalled: false }),
-        close: async () => {},
-        onAssistantText: () => () => {},
-        onResult: () => () => {},
-      }))
       const sendAssistantText = vi.fn(async (_chatId: string, _text: string) => {})
+      const acquire = vi.fn(async (alias: string, path: string, providerId: string) => {
+        const session = makeFakeSession({
+          events: [
+            { kind: 'text', text: `hi from ${providerId}` },
+            { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+          ],
+        })
+        return makeHandle(providerId, session)
+      })
       const c = createConversationCoordinator({
         resolveProject: () => ({ alias: 'a', path: '/p' }),
         manager: { acquire },
@@ -541,7 +609,7 @@ describe('ConversationCoordinator', () => {
         prompt?: string
         reasoning?: string
       }>
-      // Per-provider replies queue (FIFO).
+      // Per-provider replies queue (FIFO) — each entry maps to AgentEvents.
       replies: Record<string, Array<{ assistantText: string[]; replyToolCalled?: boolean }>>
       maxRounds?: number
     }) {
@@ -552,20 +620,26 @@ describe('ConversationCoordinator', () => {
       registry.register('codex', dummyProvider, { displayName: 'Codex', canResume: () => true })
       const dispatchedTexts: Array<{ providerId: string; text: string }> = []
       const counters: Record<string, number> = {}
-      const acquire = vi.fn(async (_alias: string, _path: string, providerId: string) => ({
-        alias: 'a', path: '/p', providerId, lastUsedAt: 0,
-        dispatch: async (text: string) => {
-          dispatchedTexts.push({ providerId, text })
-          const list = opts.replies[providerId] ?? []
-          const i = counters[providerId] ?? 0
-          counters[providerId] = i + 1
-          const r = list[i] ?? { assistantText: [], replyToolCalled: false }
-          return { assistantText: r.assistantText, replyToolCalled: r.replyToolCalled ?? false }
-        },
-        close: async () => {},
-        onAssistantText: () => () => {},
-        onResult: () => () => {},
-      }))
+      const acquire = vi.fn(async (_alias: string, _path: string, providerId: string) => {
+        const list = opts.replies[providerId] ?? []
+        return {
+          alias: 'a', path: '/p', providerId, lastUsedAt: 0,
+          dispatch: (text: string): AsyncIterable<AgentEvent> => {
+            dispatchedTexts.push({ providerId, text })
+            const i = counters[providerId] ?? 0
+            counters[providerId] = i + 1
+            const r = list[i] ?? { assistantText: [], replyToolCalled: false }
+            const events: AgentEvent[] = []
+            for (const t of r.assistantText) events.push({ kind: 'text', text: t })
+            if (r.replyToolCalled) events.push({ kind: 'tool_call', server: 'wechat', tool: 'reply' })
+            events.push({ kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 })
+            return {
+              async *[Symbol.asyncIterator]() { for (const ev of events) yield ev },
+            }
+          },
+          close: async () => {},
+        }
+      })
       const sendAssistantText = vi.fn(async (_chatId: string, _text: string) => {})
       const log = vi.fn()
       let modCallCount = 0
@@ -684,7 +758,6 @@ describe('ConversationCoordinator', () => {
 
     it('aborts mid-loop on cancel(chatId) (RFC 03 review #11)', async () => {
       let coordinatorRef: ReturnType<typeof createConversationCoordinator> | null = null
-      const dispatchedProviders: string[] = []
       const setup = setupChatroom({
         moderatorDecisions: [
           { action: 'continue', speaker: 'claude', prompt: '1' },
@@ -697,22 +770,6 @@ describe('ConversationCoordinator', () => {
         },
       })
       coordinatorRef = setup.c
-      // Wrap acquire to fire cancel on codex's turn.
-      const wrapped = vi.fn(async (alias: string, path: string, providerId: string) => {
-        dispatchedProviders.push(providerId)
-        const handle = await setup.acquire(alias, path, providerId)
-        const origDispatch = handle.dispatch
-        handle.dispatch = async (text: string) => {
-          const r = await origDispatch(text)
-          if (providerId === 'codex') coordinatorRef!.cancel('chat-1')
-          return r
-        }
-        return handle
-      })
-      // Replace acquire with wrapped — easier than re-building. (Hack: we
-      // already created the coordinator with the original acquire; mock
-      // calls via the underlying spy still get captured.)
-      const _ = wrapped // suppress unused if it isn't used
       // Note: simpler — just dispatch and rely on the SAME acquire spy
       // path; cancel is invoked via the stored ref before round 3.
       // Effectively: round 1 (claude), round 2 (codex + cancel), round 3 aborts.
@@ -738,13 +795,15 @@ describe('ConversationCoordinator', () => {
       // Only claude registered
       const registry = createProviderRegistry()
       registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
-      const acquire = vi.fn(async (_a: string, _p: string, _provider: string) => ({
-        alias: 'a', path: '/p', providerId: 'claude', lastUsedAt: 0,
-        dispatch: async () => ({ assistantText: [], replyToolCalled: true }),
-        close: async () => {},
-        onAssistantText: () => () => {},
-        onResult: () => () => {},
-      }))
+      const session = makeFakeSession({
+        events: [
+          { kind: 'tool_call', server: 'wechat', tool: 'reply' },
+          { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+        ],
+      })
+      const acquire = vi.fn(async (_a: string, _p: string, _provider: string) =>
+        makeHandle('claude', session)
+      )
       const log = vi.fn()
       const c = createConversationCoordinator({
         resolveProject: () => ({ alias: 'a', path: '/p' }),

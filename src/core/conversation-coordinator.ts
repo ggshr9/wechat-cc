@@ -21,6 +21,7 @@ import type { Mode, ProviderId } from './conversation'
 import type { InboundMsg } from './prompt-format'
 import { evaluateRound as evaluateModeratorRound, type ModeratorDecision, type ChatroomEntry } from './chatroom-moderator'
 import { assertSupported, UnsupportedCombinationError, type PermissionMode } from './capability-matrix'
+import { collectTurn, type TurnSummary } from './agent-provider'
 
 export class ModeNotImplementedError extends Error {
   constructor(public readonly modeKind: Mode['kind']) {
@@ -178,9 +179,9 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     })
     const handle = await deps.manager.acquire(proj.alias, proj.path, providerId)
     const text = deps.format(msg)
-    const result = await handle.dispatch(text)
-    const assistantTexts = result.assistantText
-    const replyToolCalled = result.replyToolCalled
+    const summary = await collectTurn(handle.dispatch(text))
+    const assistantTexts = summary.assistantText
+    const replyToolCalled = summary.replyToolCalled
 
     // Same fallback semantics as the legacy routeInbound: only forward
     // raw assistant text when the agent did NOT call a reply-family
@@ -296,10 +297,10 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
         ? prompt
         : `${prompt}\n\n[chatroom 模式]：请用纯文本回复，不要调 reply 工具。daemon 会自动加 [Display] 前缀转发给用户。`
 
-      let result: { assistantText: string[]; replyToolCalled: boolean }
+      let result: TurnSummary
       try {
         const handle = await deps.manager.acquire(proj.alias, proj.path, speaker)
-        result = await handle.dispatch(dispatchedPrompt)
+        result = await collectTurn(handle.dispatch(dispatchedPrompt))
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err)
         deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} threw: ${reason}`)
@@ -363,7 +364,7 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
       parallelProviders.map(p => deps.manager.acquire(proj.alias, proj.path, p)),
     )
     const text = deps.format(msg)
-    const settled = await Promise.allSettled(handles.map(h => h.dispatch(text)))
+    const settled = await Promise.allSettled(handles.map(h => collectTurn(h.dispatch(text))))
 
     for (let i = 0; i < settled.length; i++) {
       const r = settled[i]!
