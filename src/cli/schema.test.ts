@@ -681,7 +681,7 @@ describe('ReplyOutput', () => {
 // ── wechat-cc update --check --json ──────────────────────────────────────────
 
 describe('UpdateCheckOutput', () => {
-  it('accepts ok:true probe with update available', () => {
+  it('accepts ok:true probe with update available + binary-mode fields', () => {
     expect(UpdateCheckOutput.safeParse({
       ok: true,
       mode: 'check',
@@ -691,6 +691,11 @@ describe('UpdateCheckOutput', () => {
       behind: 3,
       aheadOfRemote: 0,
       lockfileWillChange: true,
+      // Binary-mode fields surfaced post-2026-05-08 (commit 0a94357).
+      // Schema must round-trip them so dashboard / desktop consumers
+      // can render "binary stale even when no upstream changes" UI.
+      binaryStale: true,
+      binaryPath: '/home/u/.local/bin/wechat-cc-cli',
       dirty: false,
       dirtyFiles: [],
     }).success).toBe(true)
@@ -712,7 +717,7 @@ describe('UpdateCheckOutput', () => {
 // ── wechat-cc update --json (apply path) ──────────────────────────────────────
 
 describe('UpdateApplyOutput', () => {
-  it('accepts ok:true applied branch', () => {
+  it('accepts ok:true applied branch (with rebuildRan)', () => {
     expect(UpdateApplyOutput.safeParse({
       ok: true,
       mode: 'apply',
@@ -720,9 +725,27 @@ describe('UpdateApplyOutput', () => {
       toCommit: 'def5678',
       lockfileChanged: true,
       installRan: true,
+      // Required field added 2026-05-08 (commit 3707980). Producers always
+      // emit it; this fixture pins the contract so a future schema drift
+      // (TS type updated, Zod schema not) fails CI before reaching desktop.
+      rebuildRan: true,
       daemonAction: 'restarted',
       elapsedMs: 4200,
     }).success).toBe(true)
+  })
+  it('rejects ok:true branch without rebuildRan (regression for 2026-05-08 schema-drift gap)', () => {
+    expect(UpdateApplyOutput.safeParse({
+      ok: true,
+      mode: 'apply',
+      fromCommit: 'abc1234',
+      toCommit: 'def5678',
+      lockfileChanged: false,
+      installRan: false,
+      // rebuildRan deliberately omitted — schema must require it so the
+      // CLI producer is forced to populate it on every code path.
+      daemonAction: 'noop',
+      elapsedMs: 100,
+    }).success).toBe(false)
   })
   it('accepts ok:false rejected branch', () => {
     expect(UpdateApplyOutput.safeParse({
@@ -731,6 +754,15 @@ describe('UpdateApplyOutput', () => {
       reason: 'dirty_tree',
       message: 'working tree has uncommitted changes; commit/stash/discard then retry',
       details: { dirtyFiles: ['src/foo.ts'] },
+    }).success).toBe(true)
+  })
+  it('accepts new rebuild_failed reason', () => {
+    expect(UpdateApplyOutput.safeParse({
+      ok: false,
+      mode: 'apply',
+      reason: 'rebuild_failed',
+      message: 'bun build --compile failed for /home/u/.local/bin/wechat-cc-cli',
+      details: { stderr: 'TS2305: ...' },
     }).success).toBe(true)
   })
   it('rejects unknown ok discriminator', () => {

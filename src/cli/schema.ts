@@ -542,6 +542,7 @@ const UpdateReason = z.enum([
   'pull_conflict',
   'install_failed',
   'bun_missing',
+  'rebuild_failed',
   'daemon_running_not_service',
   'service_stop_failed',
   'not_a_git_repo',
@@ -556,6 +557,10 @@ export const UpdateCheckOutput = z.object({
   behind: z.number().optional(),
   aheadOfRemote: z.number().optional(),
   lockfileWillChange: z.boolean().optional(),
+  // 2026-05-08 sentinel-based binary-staleness check (commit 0a94357).
+  // Set unconditionally when binary mode is active; absent in dev mode.
+  binaryStale: z.boolean().optional(),
+  binaryPath: z.string().optional(),
   dirty: z.boolean().optional(),
   dirtyFiles: z.array(z.string()).optional(),
   reason: UpdateReason.optional(),
@@ -579,6 +584,10 @@ export const UpdateApplyOutput = z.discriminatedUnion('ok', [
     toCommit: z.string(),
     lockfileChanged: z.boolean(),
     installRan: z.boolean(),
+    // 2026-05-08 binary-rebuild step (commit 3707980 + 0a94357 sentinel).
+    // True only when binary mode active AND `bun build --compile` ran;
+    // dev-mode (bun cli.ts) and unchanged-binary fast-paths leave it false.
+    rebuildRan: z.boolean(),
     daemonAction: DaemonAction,
     elapsedMs: z.number(),
   }),
