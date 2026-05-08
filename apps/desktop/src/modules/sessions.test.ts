@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-// @ts-expect-error JS sibling
 import { groupProjectsByRecency, projectRow, searchHitRow, turnHtml, turnHtmlCompact, extractUserText, extractClaudeReplies, sessionHasReplyTool, buildExportMarkdown, extractWechatMeta, avatarInitial, avatarColor, extractSessionContact, extractSessionChatId, extractTurnTimestamp, formatChatTimestamp } from './sessions.js'
 
 describe('groupProjectsByRecency', () => {

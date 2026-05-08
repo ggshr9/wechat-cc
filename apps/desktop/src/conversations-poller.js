@@ -1,3 +1,6 @@
+// @ts-check
+/** @typedef {import('../../../src/cli/schema').ConversationsListOutputT} ConversationsList */
+
 // conversations-poller — RFC 03 P5.2. Polls
 // `wechat-cc conversations list --json` and notifies subscribers.
 // Same lifecycle contract as doctor-poller, intentionally dumb (no
@@ -10,13 +13,22 @@
 // on a 500ms debounce; nothing this poller catches will be more recent
 // than that.
 
+/**
+ * @param {{ invoke: (cmd: string, args: { args: string[] }) => Promise<unknown>, intervalMs?: number }} opts
+ */
 export function createConversationsPoller({ invoke, intervalMs = 10000 }) {
+  /** @type {ConversationsList | null} */
   let last = null
+  /** @type {unknown} */
   let lastError = null
+  /** @type {Set<(report: ConversationsList) => void>} */
   const subscribers = new Set()
+  /** @type {ReturnType<typeof setInterval> | null} */
   let timer = null
+  /** @type {Promise<ConversationsList | null> | null} */
   let inflight = null
 
+  /** @param {ConversationsList} report */
   function notify(report) {
     const snap = Array.from(subscribers)
     for (const cb of snap) {
@@ -28,7 +40,7 @@ export function createConversationsPoller({ invoke, intervalMs = 10000 }) {
     if (inflight) return inflight
     inflight = (async () => {
       try {
-        const report = await invoke("wechat_cli_json", { args: ["conversations", "list", "--json"] })
+        const report = /** @type {ConversationsList} */ (await invoke("wechat_cli_json", { args: ["conversations", "list", "--json"] }))
         last = report
         lastError = null
         notify(report)
@@ -53,6 +65,7 @@ export function createConversationsPoller({ invoke, intervalMs = 10000 }) {
       if (timer) { clearInterval(timer); timer = null }
     },
     refresh,
+    /** @param {(report: ConversationsList) => void} cb */
     subscribe(cb) {
       subscribers.add(cb)
       if (last) {

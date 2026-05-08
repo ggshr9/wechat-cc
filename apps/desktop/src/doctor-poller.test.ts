@@ -1,5 +1,4 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-// @ts-expect-error — vanilla JS sibling module; covered at runtime.
 import { createDoctorPoller } from './doctor-poller.js'
 
 beforeEach(() => { vi.useRealTimers() })
@@ -138,7 +137,7 @@ describe('createDoctorPoller', () => {
       5000,
       5,
     )
-    expect(result.checks.daemon.alive).toBe(true)
+    expect(result!.checks.daemon.alive).toBe(true)
   })
 
   it('waitForCondition returns last report on timeout', async () => {
@@ -149,6 +148,6 @@ describe('createDoctorPoller', () => {
       50,
       10,
     )
-    expect(result.checks.daemon.alive).toBe(false)
+    expect(result!.checks.daemon.alive).toBe(false)
   })
 })

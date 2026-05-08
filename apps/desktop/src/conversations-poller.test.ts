@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest'
-// @ts-expect-error — vanilla JS sibling module; covered at runtime.
 import { createConversationsPoller } from './conversations-poller.js'
 
 describe('createConversationsPoller', () => {

@@ -4,7 +4,6 @@ import {
   initialMode, dashboardHero, accountRows, formatRelativeTime,
   updateProbeLine, updateApplyLine, restartButtonState, deleteAccountConfirmCopy,
   UPDATE_REASON_COPY, modeBadge, conversationRows,
-// @ts-expect-error — vanilla JS sibling module; covered at runtime.
 } from './view.js'
 
 // Single source of truth for UpdateReason union — must stay in sync with
@@ -49,6 +48,7 @@ describe('doctorRows', () => {
         daemon: { alive: false, pid: null },
       },
     })
+    // @ts-expect-error untyped .js return value; will be fixed when view.js gets // @ts-check
     expect(rows.map((r: [string, unknown]) => r[0])).toEqual([
       'Bun', 'Git', 'Claude', 'Codex', '微信账号', 'Allowlist', 'Provider', 'Daemon',
     ])
@@ -90,6 +90,7 @@ describe('doctorRows', () => {
         daemon: { alive: false, pid: null },
       },
     })
+    // @ts-expect-error untyped .js return value; will be fixed when view.js gets // @ts-check
     expect(rows.map((r: [string, unknown]) => r[0])).toEqual([
       'Claude', 'Codex', '微信账号', 'Allowlist', 'Provider', 'Daemon',
     ])
@@ -348,8 +349,8 @@ describe('conversationRows', () => {
     // Sort by tone (chatroom < solo) then chat_id ascending.
     expect(rows.map((r: { chatId: string }) => r.chatId)).toEqual(['c1', 'c2', 'c3'])
     // Falls back to chat_id when user_name is null.
-    expect(rows[2]).toMatchObject({ chatId: 'c3', name: 'c3' })
-    expect(rows[0].badge.tone).toBe('chatroom')
+    expect(rows[2]!).toMatchObject({ chatId: 'c3', name: 'c3' })
+    expect(rows[0]!.badge.tone).toBe('chatroom')
   })
   it('returns [] for empty / non-array input', () => {
     expect(conversationRows([])).toEqual([])

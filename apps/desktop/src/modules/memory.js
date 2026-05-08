@@ -1,3 +1,15 @@
+// @ts-check
+/// <reference lib="dom" />
+/** @typedef {import('../../../../src/cli/schema').MemoryListOutputT} MemoryList */
+/** @typedef {import('../../../../src/cli/schema').MemoryReadOutputT} MemoryRead */
+/** @typedef {import('../../../../src/cli/schema').MemoryWriteOutputT} MemoryWrite */
+/** @typedef {import('../../../../src/cli/schema').ObservationsListOutputT} ObservationsList */
+/** @typedef {import('../../../../src/cli/schema').MilestonesListOutputT} MilestonesList */
+/** @typedef {import('../../../../src/cli/schema').EventsListOutputT} EventsList */
+/**
+ * @typedef {{ invoke: (cmd: string, args: Record<string, unknown>) => Promise<unknown>, formatInvokeError: (err: unknown) => string, doctorPoller: { current: { userNames?: Record<string, string> } | null } }} Deps
+ */
+
 // Memory pane module. Lists Companion v2 memory files (per-user grouping),
 // renders selected .md files with the vendored `marked` parser, and lets
 // the user edit + save them in-place via `wechat-cc memory write`.
@@ -15,6 +27,7 @@ import { decisionRow } from "./decisions.js"
 // "we have a file open" flag for the edit button visibility. `editing`
 // flips the textarea/render visibility; `pristine` is the unsaved-content
 // snapshot used by the cancel path.
+/** @type {{ users: MemoryList, selected: { userId: string, path: string } | null, marked: { parse: (s: string) => string } | null, editing: boolean, pristine: string, dirtySwitchPending: string | null }} */
 const memoryState = {
   users: [],
   selected: null,
@@ -31,27 +44,31 @@ async function loadMarked() {
   if (memoryState.marked) return memoryState.marked
   try {
     const mod = await import("../vendor/marked.js")
-    memoryState.marked = mod.marked || mod.default || mod
+    memoryState.marked = /** @type {{ parse: (s: string) => string }} */ (mod.marked || mod.defaults || mod)
     return memoryState.marked
   } catch (err) {
     console.warn("local marked load failed, falling back to <pre>", err)
-    memoryState.marked = { parse: (s) => `<pre>${escapeHtml(s)}</pre>` }
+    memoryState.marked = { parse: (/** @type {string} */ s) => `<pre>${escapeHtml(s)}</pre>` }
     return memoryState.marked
   }
 }
 
+/** @param {Deps} deps */
 export async function loadMemoryPane(deps) {
-  const result = await deps.invoke("wechat_cli_json", { args: ["memory", "list", "--json"] })
+  const result = /** @type {MemoryList} */ (await deps.invoke("wechat_cli_json", { args: ["memory", "list", "--json"] }))
   memoryState.users = Array.isArray(result) ? result : []
   renderMemorySidebar(deps)
   const totalFiles = memoryState.users.reduce((s, u) => s + u.fileCount, 0)
-  document.getElementById("memory-meta").textContent = `${memoryState.users.length} 个用户 · ${totalFiles} 文件`
+  const metaEl = document.getElementById("memory-meta")
+  if (metaEl) metaEl.textContent = `${memoryState.users.length} 个用户 · ${totalFiles} 文件`
   const navCount = document.getElementById("memory-count")
   if (navCount) navCount.textContent = totalFiles > 0 ? String(totalFiles) : ""
 }
 
+/** @param {Deps} deps */
 function renderMemorySidebar(deps) {
   const sidebar = document.getElementById("memory-sidebar")
+  if (!sidebar) return
   const userNames = deps.doctorPoller.current?.userNames || {}
   if (memoryState.users.length === 0) {
     sidebar.innerHTML = `<div class="empty" style="margin: 0; padding: 18px; font-size: 12px;"><div class="h">空</div><div class="sub">memory/ 还没文件——Claude 还没写过笔记。</div></div>`
@@ -74,11 +91,18 @@ function renderMemorySidebar(deps) {
       </div>
     `
   }).join("")
-  sidebar.querySelectorAll(".mem-file").forEach(btn =>
-    btn.addEventListener("click", () => openMemoryFile(deps, btn.dataset.user, btn.dataset.path, btn.dataset.mtime))
-  )
+  sidebar.querySelectorAll(".mem-file").forEach(el => {
+    const btn = /** @type {HTMLElement} */ (el)
+    btn.addEventListener("click", () => openMemoryFile(deps, btn.dataset.user || "", btn.dataset.path || "", btn.dataset.mtime || ""))
+  })
 }
 
+/**
+ * @param {Deps} deps
+ * @param {string} userId
+ * @param {string} relPath
+ * @param {string} mtime
+ */
 async function openMemoryFile(deps, userId, relPath, mtime) {
   // Bail out cleanly if user clicks a different file mid-edit. We don't
   // discard their text silently — surface the choice.
@@ -104,33 +128,34 @@ async function openMemoryFile(deps, userId, relPath, mtime) {
     memoryState.dirtySwitchPending = null
     setEditMode(false)
   }
-  document.querySelectorAll(".mem-file").forEach(el =>
-    el.classList.toggle("active", el.dataset.user === userId && el.dataset.path === relPath)
-  )
+  document.querySelectorAll(".mem-file").forEach(el => {
+    const btn = /** @type {HTMLElement} */ (el)
+    el.classList.toggle("active", btn.dataset.user === userId && btn.dataset.path === relPath)
+  })
   const head = document.getElementById("memory-content-head")
   const pathEl = document.getElementById("memory-content-path")
   const mtimeEl = document.getElementById("memory-content-mtime")
   const rendered = document.getElementById("memory-rendered")
   const userNames = deps.doctorPoller.current?.userNames || {}
   const friendly = userNames[userId] || userId.split("@")[0]
-  pathEl.textContent = `${friendly} / ${relPath}`
-  mtimeEl.textContent = `updated ${formatRelativeTime(mtime)}`
-  head.hidden = false
+  if (pathEl) pathEl.textContent = `${friendly} / ${relPath}`
+  if (mtimeEl) mtimeEl.textContent = `updated ${formatRelativeTime(mtime)}`
+  if (head) head.hidden = false
   setStatus(null)
-  rendered.innerHTML = `<p class="empty-state">读取中…</p>`
+  if (rendered) rendered.innerHTML = `<p class="empty-state">读取中…</p>`
   let result
   try {
-    result = await deps.invoke("wechat_cli_json", { args: ["memory", "read", userId, relPath, "--json"] })
+    result = /** @type {MemoryRead} */ (await deps.invoke("wechat_cli_json", { args: ["memory", "read", userId, relPath, "--json"] }))
   } catch (err) {
-    rendered.innerHTML = `<p class="empty-state">读取失败：${escapeHtml(deps.formatInvokeError(err))}</p>`
+    if (rendered) rendered.innerHTML = `<p class="empty-state">读取失败：${escapeHtml(deps.formatInvokeError(err))}</p>`
     return
   }
   if (!result.ok) {
-    rendered.innerHTML = `<p class="empty-state">读取失败：${escapeHtml(result.error || "unknown")}</p>`
+    if (rendered) rendered.innerHTML = `<p class="empty-state">读取失败：${escapeHtml(result.error || "unknown")}</p>`
     return
   }
   const marked = await loadMarked()
-  rendered.innerHTML = marked.parse(result.content)
+  if (rendered) rendered.innerHTML = marked.parse(result.content)
   memoryState.selected = { userId, path: relPath }
   memoryState.pristine = result.content
   // Show the edit button now that there's content to edit.
@@ -141,30 +166,33 @@ async function openMemoryFile(deps, userId, relPath, mtime) {
 // Toggle textarea ↔ rendered. `editing=true` swaps in the textarea
 // pre-filled with current content; `editing=false` shows the rendered
 // markdown. Save/cancel button visibility is gated on `editing`.
+/** @param {boolean} editing */
 function setEditMode(editing) {
   memoryState.editing = editing
   const rendered = document.getElementById("memory-rendered")
-  const editor = document.getElementById("memory-editor")
+  const editor = /** @type {HTMLTextAreaElement | null} */ (document.getElementById("memory-editor"))
   const editBtn = document.getElementById("memory-edit-btn")
   const saveBtn = document.getElementById("memory-save-btn")
   const cancelBtn = document.getElementById("memory-cancel-btn")
   if (editing) {
-    editor.value = memoryState.pristine
-    editor.hidden = false
-    rendered.hidden = true
-    editBtn.hidden = true
-    saveBtn.hidden = false
-    cancelBtn.hidden = false
-    editor.focus()
+    if (editor) { editor.value = memoryState.pristine; editor.hidden = false; editor.focus() }
+    if (rendered) rendered.hidden = true
+    if (editBtn) editBtn.hidden = true
+    if (saveBtn) saveBtn.hidden = false
+    if (cancelBtn) cancelBtn.hidden = false
   } else {
-    editor.hidden = true
-    rendered.hidden = false
-    editBtn.hidden = !memoryState.selected  // keep hidden if nothing open
-    saveBtn.hidden = true
-    cancelBtn.hidden = true
+    if (editor) editor.hidden = true
+    if (rendered) rendered.hidden = false
+    if (editBtn) editBtn.hidden = !memoryState.selected  // keep hidden if nothing open
+    if (saveBtn) saveBtn.hidden = true
+    if (cancelBtn) cancelBtn.hidden = true
   }
 }
 
+/**
+ * @param {string | null} message
+ * @param {string} [tone]
+ */
 function setStatus(message, tone) {
   const el = document.getElementById("memory-status")
   if (!el) return
@@ -174,10 +202,11 @@ function setStatus(message, tone) {
   if (tone) el.dataset.tone = tone
 }
 
+/** @param {Deps} deps */
 async function saveCurrent(deps) {
   if (!memoryState.selected || !memoryState.editing) return
-  const editor = document.getElementById("memory-editor")
-  const content = editor.value
+  const editor = /** @type {HTMLTextAreaElement | null} */ (document.getElementById("memory-editor"))
+  const content = editor ? editor.value : ""
   if (content === memoryState.pristine) {
     setStatus("内容未改动", "info")
     setEditMode(false)
@@ -193,23 +222,23 @@ async function saveCurrent(deps) {
     return
   }
   setStatus("保存中…", "info")
-  const saveBtn = document.getElementById("memory-save-btn")
-  const cancelBtn = document.getElementById("memory-cancel-btn")
-  saveBtn.disabled = true
-  cancelBtn.disabled = true
+  const saveBtn = /** @type {HTMLButtonElement | null} */ (document.getElementById("memory-save-btn"))
+  const cancelBtn = /** @type {HTMLButtonElement | null} */ (document.getElementById("memory-cancel-btn"))
+  if (saveBtn) saveBtn.disabled = true
+  if (cancelBtn) cancelBtn.disabled = true
   let result
   try {
-    result = await deps.invoke("wechat_cli_json", {
+    result = /** @type {MemoryWrite} */ (await deps.invoke("wechat_cli_json", {
       args: ["memory", "write", memoryState.selected.userId, memoryState.selected.path, "--body-base64", bodyB64, "--json"],
-    })
+    }))
   } catch (err) {
-    saveBtn.disabled = false
-    cancelBtn.disabled = false
+    if (saveBtn) saveBtn.disabled = false
+    if (cancelBtn) cancelBtn.disabled = false
     setStatus(`保存失败：${deps.formatInvokeError(err)}`, "bad")
     return
   }
-  saveBtn.disabled = false
-  cancelBtn.disabled = false
+  if (saveBtn) saveBtn.disabled = false
+  if (cancelBtn) cancelBtn.disabled = false
   if (!result.ok) {
     setStatus(`保存失败：${result.error || "unknown"}`, "bad")
     return
@@ -218,7 +247,8 @@ async function saveCurrent(deps) {
   // the file list so size/mtime reflect the new state.
   memoryState.pristine = content
   const marked = await loadMarked()
-  document.getElementById("memory-rendered").innerHTML = marked.parse(content)
+  const renderedEl = document.getElementById("memory-rendered")
+  if (renderedEl) renderedEl.innerHTML = marked.parse(content)
   setEditMode(false)
   setStatus(`已保存 (${result.bytesWritten}B)`, "ok")
   setTimeout(() => setStatus(null), 2500)
@@ -226,6 +256,7 @@ async function saveCurrent(deps) {
 }
 
 // Wire edit/save/cancel buttons. main.js calls this once at boot.
+/** @param {Deps} deps */
 export function wireMemoryButtons(deps) {
   document.getElementById("memory-edit-btn")?.addEventListener("click", () => {
     if (!memoryState.selected) return
@@ -239,6 +270,7 @@ export function wireMemoryButtons(deps) {
   document.getElementById("memory-save-btn")?.addEventListener("click", () => saveCurrent(deps))
 }
 
+/** @param {number} n */
 function formatBytes(n) {
   if (n < 1024) return `${n}B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}k`
@@ -248,6 +280,7 @@ function formatBytes(n) {
 // Memory pane top zone — Claude's recent observations + milestone cards.
 // Loads from CLI: observations list + milestones list. Empty state already
 // in HTML (Task 9). Refresh on pane switch + manual button.
+/** @param {Deps} deps */
 export async function loadMemoryTopZone(deps) {
   const chatId = await currentChatId(deps)
   if (!chatId) return  // no chat configured yet — leave empty-state visible
@@ -257,10 +290,10 @@ export async function loadMemoryTopZone(deps) {
   if (!obsBox || !msBox) return
 
   try {
-    const [obsResp, msResp] = await Promise.all([
+    const [obsResp, msResp] = /** @type {[ObservationsList, MilestonesList]} */ (await Promise.all([
       deps.invoke("wechat_cli_json", { args: ["observations", "list", chatId, "--json"] }),
       deps.invoke("wechat_cli_json", { args: ["milestones", "list", chatId, "--json"] }),
-    ])
+    ]))
     const observations = (obsResp.observations || []).slice(0, 3)
     if (observations.length === 0) {
       // Keep design-language §1.3 #5 — empty states have narrative, not "暂无数据"
@@ -277,6 +310,7 @@ export async function loadMemoryTopZone(deps) {
 // Memory pane bottom — Claude's recent decisions (events.jsonl folded zone).
 // Lazy-loaded on first toggle expand to avoid a hot-path read on every pane
 // switch.
+/** @param {Deps} deps */
 export async function loadMemoryDecisions(deps) {
   const chatId = await currentChatId(deps)
   if (!chatId) return
@@ -285,9 +319,9 @@ export async function loadMemoryDecisions(deps) {
   if (!box) return
 
   try {
-    const resp = await deps.invoke("wechat_cli_json", {
+    const resp = /** @type {EventsList} */ (await deps.invoke("wechat_cli_json", {
       args: ["events", "list", chatId, "--json", "--limit", "30"],
-    })
+    }))
     const events = (resp.events || []).reverse() // newest first
     if (events.length === 0) {
       box.innerHTML = `<p class="empty-state">还没记录到决策。</p>`
@@ -299,6 +333,10 @@ export async function loadMemoryDecisions(deps) {
   }
 }
 
+/**
+ * @param {Deps} deps
+ * @param {string} obsId
+ */
 export async function archiveObservation(deps, obsId) {
   const chatId = await currentChatId(deps)
   if (!chatId) return
@@ -320,6 +358,10 @@ export async function archiveObservation(deps, obsId) {
 //
 // Returns Promise<string|null> — best-effort populates memoryState.users
 // once if the pane was queried before loadMemoryPane completed.
+/**
+ * @param {Deps} deps
+ * @returns {Promise<string | null>}
+ */
 async function currentChatId(deps) {
   if (memoryState.users.length === 0) {
     try { await loadMemoryPane(deps) } catch { /* fall through */ }

@@ -9,7 +9,6 @@ beforeEach(() => {
 })
 
 // Import AFTER document stub so setPending's getElementById doesn't crash
-// @ts-expect-error JS sibling
 const { restartDaemon } = await import('./dashboard.js')
 
 function fakeDoctorPoller(cachedDaemonRunning = true) {

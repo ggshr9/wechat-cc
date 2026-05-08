@@ -8,6 +8,18 @@ import { loadAgentConfig, saveAgentConfig, type AgentProviderKind } from './src/
 import { analyzeDoctor, defaultDoctorDeps, printDoctor, serviceStatus, setupStatus } from './src/cli/doctor'
 import { buildServicePlan, installService, startService, stopService, uninstallService } from './src/cli/service-manager'
 import { compiledBinaryPath, compiledRepoRoot } from './src/lib/runtime-info'
+import {
+  DoctorOutput, SetupPollOutput, SetupStatusOutput, SetupQrJsonOutput,
+  ServiceStatusOutput, ServiceInstallOutput, ServiceStartOutput, ServiceStopOutput, ServiceUninstallOutput,
+  AccountRemoveOutput, DaemonKillOutput, ProviderShowOutput,
+  MemoryListOutput, MemoryReadOutput, MemoryWriteOutput,
+  EventsListOutput, ObservationsListOutput, ObservationsArchiveOutput, MilestonesListOutput,
+  SessionsListProjectsOutput, SessionsReadJsonlOutput, SessionsDeleteOutput, SessionsSearchOutput,
+  DemoSeedOutput, DemoUnseedOutput, ReplyOutput, LogsOutput,
+  UpdateCheckOutput, UpdateApplyOutput, ConversationsListOutput,
+  GuardStatusOutput, GuardEnableOutput, GuardDisableOutput,
+  AvatarInfoOutput, AvatarSetOutput, AvatarRemoveOutput,
+} from './src/cli/schema'
 
 // Write potentially-large JSON to a sibling file, return the small
 // envelope {ok, out_file, bytes} via stdout. Fixes the desktop sessions
@@ -184,7 +196,7 @@ const doctorCmd = defineCommand({
   },
   run({ args }) {
     const report = analyzeDoctor(defaultDoctorDeps())
-    if (args.json) console.log(JSON.stringify(report, null, 2))
+    if (args.json) console.log(JSON.stringify(DoctorOutput.parse(report), null, 2))
     else printDoctor(report)
   },
 })
@@ -197,7 +209,7 @@ const setupStatusCmd = defineCommand({
   run({ args }) {
     const deps = defaultDoctorDeps()
     const status = setupStatus(deps)
-    if (args.json) console.log(JSON.stringify(status, null, 2))
+    if (args.json) console.log(JSON.stringify(SetupStatusOutput.parse(status), null, 2))
     else console.log(status.bound ? 'wechat: bound' : 'wechat: not bound')
   },
 })
@@ -231,7 +243,7 @@ const eventsListCmd = defineCommand({
       migrateFromFile: join(memoryRoot, args.chatId, 'events.jsonl'),
     })
     const list = await store.list({ limit })
-    console.log(args.json ? JSON.stringify({ ok: true, events: list }, null, 2) : list.map(e => `${e.ts} ${e.kind} ${e.trigger}`).join('\n'))
+    console.log(args.json ? JSON.stringify(EventsListOutput.parse({ ok: true, events: list }), null, 2) : list.map(e => `${e.ts} ${e.kind} ${e.trigger}`).join('\n'))
   },
 })
 
@@ -257,7 +269,7 @@ const observationsListCmd = defineCommand({
       migrateFromFile: join(memoryRoot, args.chatId, 'observations.jsonl'),
     })
     const list = includeArchived ? await store.listArchived() : await store.listActive()
-    console.log(args.json ? JSON.stringify({ ok: true, observations: list }, null, 2) : list.map(o => `${o.ts} ${o.body}`).join('\n'))
+    console.log(args.json ? JSON.stringify(ObservationsListOutput.parse({ ok: true, observations: list }), null, 2) : list.map(o => `${o.ts} ${o.body}`).join('\n'))
   },
 })
 
@@ -277,7 +289,7 @@ const observationsArchiveCmd = defineCommand({
       migrateFromFile: join(memoryRoot, args.chatId, 'observations.jsonl'),
     })
     await store.archive(args.obsId)
-    console.log(args.json ? JSON.stringify({ ok: true, archived: args.obsId }, null, 2) : `archived ${args.obsId}`)
+    console.log(args.json ? JSON.stringify(ObservationsArchiveOutput.parse({ ok: true, archived: args.obsId }), null, 2) : `archived ${args.obsId}`)
   },
 })
 
@@ -304,7 +316,7 @@ const milestonesListCmd = defineCommand({
       migrateFromFile: join(memoryRoot, args.chatId, 'milestones.jsonl'),
     })
     const list = await store.list()
-    console.log(args.json ? JSON.stringify({ ok: true, milestones: list }, null, 2) : list.map(m => `${m.ts} ${m.body}`).join('\n'))
+    console.log(args.json ? JSON.stringify(MilestonesListOutput.parse({ ok: true, milestones: list }), null, 2) : list.map(m => `${m.ts} ${m.body}`).join('\n'))
   },
 })
 
@@ -338,7 +350,7 @@ const conversationsListCmd = defineCommand({
         mode: rec.mode,
       }
     })
-    if (args.json) console.log(JSON.stringify({ ok: true, conversations }, null, 2))
+    if (args.json) console.log(JSON.stringify(ConversationsListOutput.parse({ ok: true, conversations }), null, 2))
     else console.log(conversations.map(c => `${c.chat_id} ${c.user_name ?? ''} ${c.mode.kind}`).join('\n'))
   },
 })
@@ -360,7 +372,7 @@ const logsCmd = defineCommand({
     const { tailLog } = await import('./src/cli/logs.ts')
     const result = tailLog(STATE_DIR, tail)
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      console.log(JSON.stringify(LogsOutput.parse(result), null, 2))
       return
     }
     if (!result.ok) {
@@ -399,7 +411,7 @@ const sessionsListProjectsCmd = defineCommand({
       summary: rec.summary ?? null,
       summary_updated_at: rec.summary_updated_at ?? null,
     }))
-    if (args.json) emitJson({ ok: true, projects }, outFile)
+    if (args.json) emitJson(SessionsListProjectsOutput.parse({ ok: true, projects }), outFile)
     else console.log(projects.map(p => `${p.alias} ${p.last_used_at}`).join('\n'))
 
     // Fire-and-forget: refresh stale summaries in the background. The current
@@ -458,7 +470,7 @@ const sessionsReadJsonlCmd = defineCommand({
       // v0.5.11 — error paths must also honour --out-file. Without this,
       // the dashboard's via-file shim path reads ENOENT instead of an
       // error envelope.
-      if (args.json) emitJson({ ok: false, error: 'no such alias' }, outFile)
+      if (args.json) emitJson(SessionsReadJsonlOutput.parse({ ok: false, error: 'no such alias' }), outFile)
       else console.log('no such alias')
       return
     }
@@ -473,12 +485,12 @@ const sessionsReadJsonlCmd = defineCommand({
       const codexRoot = join(homedir(), '.codex', 'sessions')
       const path = findCodexRollout(codexRoot, rec.session_id)
       if (!path) {
-        if (args.json) emitJson({ ok: false, error: 'codex rollout not found', codex_root: codexRoot }, outFile)
+        if (args.json) emitJson(SessionsReadJsonlOutput.parse({ ok: false, error: 'codex rollout not found', codex_root: codexRoot }), outFile)
         else console.log('codex rollout not found')
         return
       }
       const turns = readCodexJsonlAsClaudeTurns(path)
-      if (args.json) emitJson({ ok: true, alias: args.alias, session_id: rec.session_id, provider: 'codex', turns }, outFile)
+      if (args.json) emitJson(SessionsReadJsonlOutput.parse({ ok: true, alias: args.alias, session_id: rec.session_id, provider: 'codex', turns }), outFile)
       else console.log(`${turns.length} turns (codex)`)
       return
     }
@@ -486,13 +498,13 @@ const sessionsReadJsonlCmd = defineCommand({
     const path = resolveProjectJsonlPath(args.alias, rec.session_id)
     const { existsSync, readFileSync } = await import('node:fs')
     if (!existsSync(path)) {
-      if (args.json) emitJson({ ok: false, error: 'jsonl missing', path }, outFile)
+      if (args.json) emitJson(SessionsReadJsonlOutput.parse({ ok: false, error: 'jsonl missing', path }), outFile)
       else console.log('jsonl missing')
       return
     }
     const lines = readFileSync(path, 'utf8').split('\n').filter(l => l.length > 0)
     const turns = lines.map(l => { try { return JSON.parse(l) } catch { return null } }).filter(t => t !== null)
-    if (args.json) emitJson({ ok: true, alias: args.alias, session_id: rec.session_id, turns }, outFile)
+    if (args.json) emitJson(SessionsReadJsonlOutput.parse({ ok: true, alias: args.alias, session_id: rec.session_id, turns }), outFile)
     else console.log(`${turns.length} turns`)
   },
 })
@@ -510,7 +522,7 @@ const sessionsDeleteCmd = defineCommand({
     const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
     store.delete(args.alias)
     await store.flush()
-    console.log(args.json ? JSON.stringify({ ok: true, deleted: args.alias }, null, 2) : `deleted ${args.alias}`)
+    console.log(args.json ? JSON.stringify(SessionsDeleteOutput.parse({ ok: true, deleted: args.alias }), null, 2) : `deleted ${args.alias}`)
   },
 })
 
@@ -530,7 +542,7 @@ const sessionsSearchCmd = defineCommand({
     const { openWechatDb } = await import('./src/lib/db')
     const db = openWechatDb(STATE_DIR)
     const hits = await searchAcrossSessions(args.query, { limit, stateDir: STATE_DIR, db })
-    if (args.json) emitJson({ ok: true, query: args.query, hits }, outFile)
+    if (args.json) emitJson(SessionsSearchOutput.parse({ ok: true, query: args.query, hits }), outFile)
     else console.log(hits.map(h => `${h.alias} · ${h.snippet}`).join('\n'))
   },
 })
@@ -554,7 +566,7 @@ const avatarInfoCmd = defineCommand({
   async run({ args }) {
     const { avatarInfo } = await import('./src/daemon/avatar/store')
     const info = avatarInfo(STATE_DIR, args.key)
-    if (args.json) console.log(JSON.stringify({ ok: true, ...info }))
+    if (args.json) console.log(JSON.stringify(AvatarInfoOutput.parse({ ok: true, ...info })))
     else console.log(`${args.key}: ${info.exists ? info.path : '(no avatar)'}`)
   },
 })
@@ -570,11 +582,11 @@ const avatarSetCmd = defineCommand({
     const { setAvatar } = await import('./src/daemon/avatar/store')
     try {
       const result = setAvatar(STATE_DIR, args.key, args.base64)
-      if (args.json) console.log(JSON.stringify(result))
+      if (args.json) console.log(JSON.stringify(AvatarSetOutput.parse(result)))
       else console.log(`set ${args.key} → ${result.path}`)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+      if (args.json) console.log(JSON.stringify(AvatarSetOutput.parse({ ok: false, error: msg })))
       else console.error(`avatar set failed: ${msg}`)
       process.exit(1)
     }
@@ -590,7 +602,7 @@ const avatarRemoveCmd = defineCommand({
   async run({ args }) {
     const { removeAvatar } = await import('./src/daemon/avatar/store')
     const result = removeAvatar(STATE_DIR, args.key)
-    if (args.json) console.log(JSON.stringify(result))
+    if (args.json) console.log(JSON.stringify(AvatarRemoveOutput.parse(result)))
     else console.log(`removed ${args.key}`)
   },
 })
@@ -628,7 +640,7 @@ const guardStatusCmd = defineCommand({
       probe_error: probeRes.error ?? null,
       probe_ms: probeRes.ms,
     }
-    if (args.json) console.log(JSON.stringify(out, null, 2))
+    if (args.json) console.log(JSON.stringify(GuardStatusOutput.parse(out), null, 2))
     else {
       console.log(`enabled: ${out.enabled}`)
       console.log(`ip:      ${out.ip ?? '?'}${out.ip_error ? ` (${out.ip_error})` : ''}`)
@@ -642,7 +654,7 @@ async function setGuardEnabled(enabled: boolean, json: boolean): Promise<void> {
   const cfg = loadGuardConfig(STATE_DIR)
   cfg.enabled = enabled
   saveGuardConfig(STATE_DIR, cfg)
-  if (json) console.log(JSON.stringify({ ok: true, enabled: cfg.enabled }))
+  if (json) console.log(JSON.stringify((enabled ? GuardEnableOutput : GuardDisableOutput).parse({ ok: true, enabled: cfg.enabled })))
   else console.log(`guard: ${cfg.enabled ? 'enabled' : 'disabled'}`)
 }
 
@@ -672,7 +684,7 @@ const providerShowCmd = defineCommand({
   args: { json: { type: 'boolean', description: 'JSON envelope' } },
   run({ args }) {
     const config = loadAgentConfig(STATE_DIR)
-    if (args.json) console.log(JSON.stringify(config, null, 2))
+    if (args.json) console.log(JSON.stringify(ProviderShowOutput.parse(config), null, 2))
     else console.log(`provider: ${config.provider}${config.model ? ` (${config.model})` : ''} unattended=${config.dangerouslySkipPermissions}`)
   },
 })
@@ -749,7 +761,7 @@ const memoryListCmd = defineCommand({
   async run({ args }) {
     const { listAllMemory } = await import('./src/cli/memory.ts')
     const users = listAllMemory(STATE_DIR)
-    if (args.json) console.log(JSON.stringify(users, null, 2))
+    if (args.json) console.log(JSON.stringify(MemoryListOutput.parse(users), null, 2))
     else {
       if (users.length === 0) console.log('(no memory files)')
       for (const u of users) {
@@ -771,7 +783,7 @@ const memoryReadCmd = defineCommand({
     const { readMemoryFile } = await import('./src/cli/memory.ts')
     try {
       const content = readMemoryFile(STATE_DIR, args.userId, args.path)
-      if (args.json) console.log(JSON.stringify({ ok: true, userId: args.userId, path: args.path, content }, null, 2))
+      if (args.json) console.log(JSON.stringify(MemoryReadOutput.parse({ ok: true, userId: args.userId, path: args.path, content }), null, 2))
       else process.stdout.write(content)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -780,7 +792,7 @@ const memoryReadCmd = defineCommand({
       // pattern in `update --json` and is what the GUI invoke path
       // expects — error info travels via JSON.ok=false, not exit code).
       if (args.json) {
-        console.log(JSON.stringify({ ok: false, error: msg }))
+        console.log(JSON.stringify(MemoryReadOutput.parse({ ok: false, error: msg })))
         return
       }
       console.error(`memory read failed: ${msg}`)
@@ -807,12 +819,12 @@ const memoryWriteCmd = defineCommand({
       // assumption matches the GUI's btoa(unescape(encodeURIComponent(body))).
       const body = Buffer.from(args['body-base64'], 'base64').toString('utf8')
       const result = writeMemoryFile(STATE_DIR, args.userId, args.path, body)
-      if (args.json) console.log(JSON.stringify({ ok: true, userId: args.userId, path: args.path, ...result }, null, 2))
+      if (args.json) console.log(JSON.stringify(MemoryWriteOutput.parse({ ok: true, userId: args.userId, path: args.path, ...result }), null, 2))
       else console.log(`${result.created ? 'created' : 'updated'}: ${args.userId}/${args.path} (${result.bytesWritten}B)`)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       if (args.json) {
-        console.log(JSON.stringify({ ok: false, error: msg }))
+        console.log(JSON.stringify(MemoryWriteOutput.parse({ ok: false, error: msg })))
         return
       }
       console.error(`memory write failed: ${msg}`)
@@ -841,7 +853,7 @@ const accountRemoveCmd = defineCommand({
     try {
       const result = removeAccount({ stateDir: STATE_DIR }, args.botId)
       if (args.json) {
-        console.log(JSON.stringify({ ok: true, ...result, restartRequired: true }, null, 2))
+        console.log(JSON.stringify(AccountRemoveOutput.parse({ ok: true, ...result, restartRequired: true }), null, 2))
       } else {
         console.log(`removed: ${result.botId}`)
         for (const r of result.removed) console.log(`  - ${r}`)
@@ -850,7 +862,7 @@ const accountRemoveCmd = defineCommand({
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+      if (args.json) console.log(JSON.stringify(AccountRemoveOutput.parse({ ok: false, error: msg })))
       else console.error(`account remove failed: ${msg}`)
       process.exit(1)
     }
@@ -876,7 +888,7 @@ const daemonKillCmd = defineCommand({
     }
     const { killDaemonByPid, defaultKillDeps } = await import('./src/cli/daemon-kill.ts')
     const result = await killDaemonByPid(defaultKillDeps(), pid)
-    if (args.json) console.log(JSON.stringify(result, null, 2))
+    if (args.json) console.log(JSON.stringify(DaemonKillOutput.parse(result), null, 2))
     else console.log(result.killed ? `killed pid ${result.pid}` : `failed: ${result.message}`)
     if (!result.killed) process.exit(1)
   },
@@ -901,7 +913,8 @@ async function runDemo(verb: 'seed' | 'unseed', chatIdArg: string | undefined, j
   const db = openWechatDb(STATE_DIR)
   const fn = verb === 'seed' ? seedDemo : unseedDemo
   const result = await fn({ stateDir: STATE_DIR, chatId, db })
-  console.log(json ? JSON.stringify({ ok: true, ...result }, null, 2) : JSON.stringify(result))
+  const demoSchema = verb === 'seed' ? DemoSeedOutput : DemoUnseedOutput
+  console.log(json ? JSON.stringify(demoSchema.parse({ ok: true, ...result }), null, 2) : JSON.stringify(result))
 }
 
 const demoSeedCmd = defineCommand({
@@ -998,7 +1011,7 @@ const setupCmd = defineCommand({
   async run({ args }) {
     if (args['qr-json']) {
       const { requestSetupQrCode } = await import('./src/cli/setup-flow.ts')
-      console.log(JSON.stringify(await requestSetupQrCode(), null, 2))
+      console.log(JSON.stringify(SetupQrJsonOutput.parse(await requestSetupQrCode()), null, 2))
       return
     }
     // Same rationale as `run`: import setup.ts directly so the compiled
@@ -1021,7 +1034,7 @@ const setupPollCmd = defineCommand({
       ...(args['base-url'] !== undefined ? { baseUrl: args['base-url'] } : {}),
       stateDir: STATE_DIR,
     })
-    if (args.json) console.log(JSON.stringify(result, null, 2))
+    if (args.json) console.log(JSON.stringify(SetupPollOutput.parse(result), null, 2))
     else console.log(result.status)
   },
 })
@@ -1082,7 +1095,7 @@ const serviceCmd = defineCommand({
     const json = Boolean(args.json)
     if (action === 'status') {
       const status = serviceStatus(defaultDoctorDeps())
-      if (json) console.log(JSON.stringify({ ...status, plan, agentConfig: config }, null, 2))
+      if (json) console.log(JSON.stringify(ServiceStatusOutput.parse({ ...status, plan, agentConfig: config }), null, 2))
       else console.log(`service: ${status.state}${status.installed ? ' [installed]' : ''}${status.pid ? ` pid=${status.pid}` : ''}`)
       return
     }
@@ -1116,8 +1129,12 @@ const serviceCmd = defineCommand({
     } else if (action === 'start') startService(plan, sideOpts)
     else if (action === 'stop') stopService(plan, sideOpts)
     else if (action === 'uninstall') uninstallService(plan, sideOpts)
-    const out = { ok: true, action, plan, agentConfig: config, dryRun }
-    if (json) console.log(JSON.stringify(out, null, 2))
+    const out = { ok: true as const, action, plan, agentConfig: config, dryRun }
+    const serviceActionSchema = action === 'install' ? ServiceInstallOutput
+      : action === 'start' ? ServiceStartOutput
+      : action === 'stop' ? ServiceStopOutput
+      : ServiceUninstallOutput
+    if (json) console.log(JSON.stringify(serviceActionSchema.parse(out), null, 2))
     else console.log(`service ${action}: ok${dryRun ? ' (dry-run)' : ''}`)
   },
 })
@@ -1168,7 +1185,7 @@ const replyCmd = defineCommand({
     const { sendReplyOnce, defaultTerminalChatId } = await import('./src/lib/send-reply.ts')
     const json = Boolean(args.json)
     const emitFailure = (error: string): void => {
-      if (json) console.log(JSON.stringify({ ok: false, error }))
+      if (json) console.log(JSON.stringify(ReplyOutput.parse({ ok: false, error })))
       else console.error(`reply failed: ${error}`)
       process.exit(1)
     }
@@ -1188,7 +1205,7 @@ const replyCmd = defineCommand({
       return
     }
     if (json) {
-      console.log(JSON.stringify({ ok: true, chat_id: chatId, chunks: result.chunks, account: result.account }))
+      console.log(JSON.stringify(ReplyOutput.parse({ ok: true, chat_id: chatId, chunks: result.chunks, account: result.account })))
     } else {
       console.log(`Sent: ${result.chunks} chunk(s) via account ${result.account} → ${chatId}`)
     }
@@ -1224,7 +1241,7 @@ const updateCmd = defineCommand({
         message: 'no git repo at this binary\'s location; in-place updates are not available for desktop bundles (download a newer version from GitHub Releases instead)',
         details: { repoRoot },
       }
-      if (json) console.log(JSON.stringify(synthetic, null, 2))
+      if (json) console.log(JSON.stringify((check ? UpdateCheckOutput : UpdateApplyOutput).parse(synthetic), null, 2))
       else console.error(`update: not_a_git_repo — ${synthetic.message}`)
       if (!json) process.exit(1)
       return
@@ -1233,7 +1250,7 @@ const updateCmd = defineCommand({
     if (check) {
       const probe = analyzeUpdate(deps)
       if (json) {
-        console.log(JSON.stringify(probe, null, 2))
+        console.log(JSON.stringify(UpdateCheckOutput.parse(probe), null, 2))
       } else if (!probe.ok) {
         console.error(`update check: ${probe.reason} — ${probe.message}`)
         process.exit(1)
@@ -1246,7 +1263,7 @@ const updateCmd = defineCommand({
     }
     const result = await applyUpdate(deps)
     if (json) {
-      console.log(JSON.stringify(result, null, 2))
+      console.log(JSON.stringify(UpdateApplyOutput.parse(result), null, 2))
     } else if (!result.ok) {
       console.error(`update failed: ${result.reason} — ${result.message}`)
       process.exit(1)

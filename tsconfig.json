@@ -10,10 +10,23 @@
     "lib": ["ESNext"],
     "esModuleInterop": true,
     "allowImportingTsExtensions": true,
+    "allowJs": true,
     "noEmit": true,
     "verbatimModuleSyntax": true,
     "resolveJsonModule": true
   },
-  "include": ["**/*.ts", "src/**/*.ts", "types/**/*.d.ts"],
+  "include": [
+    "**/*.ts",
+    "src/**/*.ts",
+    "types/**/*.d.ts",
+    "apps/desktop/src/conversations-poller.js",
+    "apps/desktop/src/doctor-poller.js",
+    "apps/desktop/src/main.js",
+    "apps/desktop/src/modules/service.js",
+    "apps/desktop/src/modules/sessions.js",
+    "apps/desktop/src/modules/update.js",
+    "apps/desktop/src/modules/memory.js",
+    "apps/desktop/src/modules/qr.js"
+  ],
   "exclude": ["node_modules", "docs/spike/**", "apps/desktop/playwright/**", "apps/desktop/playwright.config.ts"]
 }

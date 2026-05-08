@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   observationRow, milestoneCard, formatRelativeTimeShort,
-// @ts-expect-error — vanilla JS sibling module; covered at runtime.
 } from './observations.js'
 
 describe('observationRow', () => {

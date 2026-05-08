@@ -1,3 +1,14 @@
+// @ts-check
+/// <reference lib="dom" />
+/** @typedef {import('../../../../src/cli/schema').InstallProgressOutputT} InstallProgress */
+/** @typedef {import('../../../../src/cli/schema').ServiceStatusOutputT} ServiceStatus */
+/** @typedef {import('../../../../src/cli/schema').ServiceInstallOutputT} ServiceInstall */
+/** @typedef {import('../../../../src/cli/schema').ServiceStartOutputT} ServiceStart */
+/** @typedef {import('../../../../src/cli/schema').ServiceStopOutputT} ServiceStop */
+/** @typedef {import('../../../../src/cli/schema').ServiceUninstallOutputT} ServiceUninstall */
+/** @typedef {import('../../../../src/cli/schema').DaemonKillOutputT} DaemonKill */
+/** @typedef {import('../../../../src/cli/schema').DoctorOutputT} DoctorReport */
+
 // Service install/stop module. Owns the wizard's background-service screen:
 // invokes `service install/stop --json`, pre-checks for foreign daemons,
 // renders the post-stop alert, drives the "force kill" path, and waits
@@ -20,11 +31,18 @@ const PROGRESS_POLL_MS = 250
 // progress events older than this. Real installs finish in <15s.
 const PROGRESS_STALE_MS = 30_000
 
+/** @typedef {{ invoke: (cmd: string, args: { args: string[] }) => Promise<unknown>, formatInvokeError: (err: unknown) => string, doctorPoller: { current: unknown, refresh: () => Promise<unknown>, waitForCondition: (pred: (r: DoctorReport) => boolean, timeoutMs: number, pollMs: number) => Promise<unknown> } }} ServiceDeps */
+
+/**
+ * @param {ServiceDeps} deps
+ * @param {{ unattended: boolean, autoStart: boolean }} state
+ * @param {'install' | 'start' | 'stop' | 'uninstall'} action
+ */
 export async function serviceAction(deps, state, action) {
   const planEl = document.getElementById("service-plan")
   const summaryEl = document.getElementById("service-summary")
   const alertEl = document.getElementById("post-stop-alert")
-  const btn = document.getElementById("service-install")
+  const btn = /** @type {HTMLButtonElement | null} */ (document.getElementById("service-install"))
   // The whole flow takes 5–10 s (foreground guard + cli invoke + 8 s
   // settle wait). Without disabling the button + showing real step
   // progress, users see "安装中…" forever and can't tell where it's
@@ -32,7 +50,9 @@ export async function serviceAction(deps, state, action) {
   // for the install-command portion, falling back to client-known phase
   // names for foreground-check + daemon-settle (which are wizard-side).
   const originalLabel = btn ? btn.innerHTML : ''
+  /** @type {(() => void) | null} */
   let progressStop = null
+  /** @param {string} text */
   const setBtnLabel = (text) => { if (btn) btn.innerHTML = text }
   if (btn) {
     btn.disabled = true
@@ -51,6 +71,7 @@ export async function serviceAction(deps, state, action) {
       planEl.textContent = `[${nowStamp()}] 准备安装…\n`
       planEl.classList.add("show")
     }
+    /** @param {string} line */
     const appendPlan = (line) => {
       if (!planEl) return
       planEl.textContent += line.endsWith('\n') ? line : line + '\n'
@@ -59,7 +80,7 @@ export async function serviceAction(deps, state, action) {
     progressStop = startProgressPolling(deps, setBtnLabel, appendPlan)
   }
   try {
-    return await serviceActionInner(deps, state, action, planEl, summaryEl, alertEl, setBtnLabel)
+    return await serviceActionInner(deps, state, action, planEl, summaryEl, alertEl)
   } finally {
     if (progressStop) progressStop()
     restoreBtn()
@@ -68,6 +89,7 @@ export async function serviceAction(deps, state, action) {
 
 function nowStamp() {
   const d = new Date()
+  /** @param {number} n */
   const pad = (n) => String(n).padStart(2, '0')
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
@@ -76,15 +98,21 @@ function nowStamp() {
  * Poll install-progress.json (written by CLI's installService.onProgress).
  * Updates the button label AND the technical-details log so the user can
  * follow along step-by-step in both places.
+ * @param {{ invoke: (cmd: string, args: { args: string[] }) => Promise<unknown> }} deps
+ * @param {(text: string) => void} setBtnLabel
+ * @param {((line: string) => void) | null} appendPlan
+ * @returns {() => void}
  */
 function startProgressPolling(deps, setBtnLabel, appendPlan) {
+  /** @type {ReturnType<typeof setTimeout> | null} */
   let timer = null
+  /** @type {string | null} */
   let lastShown = null
   let cancelled = false
   const tick = async () => {
     if (cancelled) return
     try {
-      const p = await deps.invoke("wechat_cli_json", { args: ["install-progress", "--json"] }).catch(() => null)
+      const p = /** @type {InstallProgress | null} */ (await deps.invoke("wechat_cli_json", { args: ["install-progress", "--json"] }).catch(() => null))
       if (p && typeof p.step === 'number' && typeof p.total === 'number') {
         const ageMs = typeof p.ts === 'number' ? Date.now() - p.ts : 0
         if (ageMs >= 0 && ageMs < PROGRESS_STALE_MS) {
@@ -103,11 +131,24 @@ function startProgressPolling(deps, setBtnLabel, appendPlan) {
   return () => { cancelled = true; if (timer) clearTimeout(timer) }
 }
 
+/** @param {unknown} s */
 function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+  /** @type {Record<string, string>} */
+  const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
+  return String(s).replace(/[&<>"']/g, (c) => map[c] ?? c)
 }
 
+/**
+ * @param {ServiceDeps} deps
+ * @param {{ unattended: boolean, autoStart: boolean }} state
+ * @param {'install' | 'start' | 'stop' | 'uninstall'} action
+ * @param {HTMLElement | null} planEl
+ * @param {HTMLElement | null} summaryEl
+ * @param {HTMLElement | null} alertEl
+ */
 async function serviceActionInner(deps, state, action, planEl, summaryEl, alertEl) {
+  // summaryEl is always present in the wizard DOM; cast away null for clean TS.
+  const summary = /** @type {HTMLElement} */ (summaryEl)
   if (alertEl) alertEl.hidden = true
   if (action === "install") {
     // Hard-severity gate: if the selected agent backend (Claude/Codex)
@@ -115,9 +156,9 @@ async function serviceActionInner(deps, state, action, planEl, summaryEl, alertE
     // inbound message dies in SDK spawn — the "fake success" trap. Refuse
     // here with a single inline line; user reads the doctor row above
     // (which already shows the npm install command + 复制 button).
-    const hardReds = collectHardReds(deps.doctorPoller.current)
+    const hardReds = collectHardReds(/** @type {DoctorReport | null} */ (deps.doctorPoller.current))
     if (hardReds.length > 0) {
-      summaryEl.textContent = `先装 ${hardReds.join("、")} — daemon 起来后无法工作。复制上方命令即可。`
+      summary.textContent = `先装 ${hardReds.join("、")} — daemon 起来后无法工作。复制上方命令即可。`
       return
     }
     state.unattended = isToggleOn("unattended-toggle")
@@ -129,9 +170,9 @@ async function serviceActionInner(deps, state, action, planEl, summaryEl, alertE
     // exits, Restart=always loops, user is stuck. Surface the existing
     // post-stop-alert UI but with pre-install copy so the user can
     // force-kill before we touch any unit files.
-    const status = await deps.invoke("wechat_cli_json", { args: ["service", "status", "--json"] }).catch(() => null)
+    const status = /** @type {ServiceStatus | null} */ (await deps.invoke("wechat_cli_json", { args: ["service", "status", "--json"] }).catch(() => null))
     if (status && status.alive && !status.installed && status.pid) {
-      summaryEl.textContent = "检测到前台 daemon 仍在运行，需要先停掉再安装服务。"
+      summary.textContent = "检测到前台 daemon 仍在运行，需要先停掉再安装服务。"
       showPostStopAlert(status.pid)
       const headEl = document.querySelector("#post-stop-alert .h")
       if (headEl) headEl.textContent = `先停掉前台 daemon (pid ${status.pid}) — 否则装上的 service 会立刻被 PID 锁挤掉`
@@ -143,14 +184,16 @@ async function serviceActionInner(deps, state, action, planEl, summaryEl, alertE
     args.push("--unattended", state.unattended ? "true" : "false")
     args.push("--auto-start", state.autoStart ? "true" : "false")
   }
+  /** @type {ServiceInstall | ServiceStart | ServiceStop | ServiceUninstall} */
   let result
   try {
-    result = await deps.invoke("wechat_cli_json", { args })
+    result = /** @type {ServiceInstall | ServiceStart | ServiceStop | ServiceUninstall} */ (await deps.invoke("wechat_cli_json", { args }))
   } catch (err) {
     const friendly = deps.formatInvokeError(err)
-    summaryEl.textContent = friendly
+    summary.textContent = friendly
     if (planEl) {
-      planEl.textContent += `\n[${nowStamp()}] ❌ service ${action} 失败：\n${friendly}\n\n— 原始错误 —\n${err?.stack || err}\n`
+      const errObj = /** @type {Error | null} */ (err instanceof Error ? err : null)
+      planEl.textContent += `\n[${nowStamp()}] ❌ service ${action} 失败：\n${friendly}\n\n— 原始错误 —\n${errObj?.stack || String(err)}\n`
       planEl.classList.add("show")
       planEl.scrollTop = planEl.scrollHeight
     }
@@ -166,40 +209,42 @@ async function serviceActionInner(deps, state, action, planEl, summaryEl, alertE
       planEl.textContent = JSON.stringify(result, null, 2)
     }
   }
-  if (result.dryRun) {
-    summaryEl.textContent = action === "stop"
+  // Narrow dryRun: only present on the ok:true branch of each service action schema.
+  const dryRun = result.ok ? result.dryRun : false
+  if (dryRun) {
+    summary.textContent = action === "stop"
       ? "演示模式：实际未停止 daemon（DRY_RUN）。"
       : "演示模式：实际未执行（DRY_RUN）。"
-  } else if (result.alive || result.ok) {
-    summaryEl.textContent = action === "stop" ? "服务已停止。" : "服务已启动。"
+  } else if (result.ok) {
+    summary.textContent = action === "stop" ? "服务已停止。" : "服务已启动。"
   }
   // After install/start, the daemon takes 1-3s to spawn, write server.pid,
   // and finish bootstrap. doctorPoller.waitForCondition refreshes every
   // 500ms (with subscriber notifications) until daemon.alive=true or 8s.
-  if (!result.dryRun && (action === "install" || action === "start")) {
+  if (!dryRun && (action === "install" || action === "start")) {
     if (planEl && action === "install") {
       planEl.textContent += `[${nowStamp()}] ⏳ 等待 daemon 就绪…（最多 ${DAEMON_SETTLE_TIMEOUT_MS / 1000}s）\n`
       planEl.scrollTop = planEl.scrollHeight
     }
     await deps.doctorPoller.waitForCondition(
-      r => !!r?.checks?.daemon?.alive,
+      r => !!r.checks.daemon.alive,
       DAEMON_SETTLE_TIMEOUT_MS,
       DAEMON_SETTLE_POLL_MS,
     )
   }
-  const post = await deps.doctorPoller.refresh()
-  if (action === "stop" && !result.dryRun && post?.checks.daemon.alive && post.checks.daemon.pid) {
+  const post = /** @type {DoctorReport | null} */ (await deps.doctorPoller.refresh())
+  if (action === "stop" && !dryRun && post?.checks.daemon.alive && post.checks.daemon.pid) {
     showPostStopAlert(post.checks.daemon.pid)
   }
-  if (!result.dryRun && (action === "install" || action === "start")) {
+  if (!dryRun && (action === "install" || action === "start")) {
     if (post?.checks.daemon.alive) {
-      summaryEl.textContent = `服务已启动 · pid ${post.checks.daemon.pid}`
+      summary.textContent = `服务已启动 · pid ${post.checks.daemon.pid}`
       if (planEl && action === "install") {
         planEl.textContent += `[${nowStamp()}] ✓ daemon alive (pid ${post.checks.daemon.pid})\n`
         planEl.scrollTop = planEl.scrollHeight
       }
     } else if (post?.checks.service?.installed) {
-      summaryEl.textContent = "服务已安装但 daemon 未运行（systemctl 可能正在重试，30s 后再看）。"
+      summary.textContent = "服务已安装但 daemon 未运行（systemctl 可能正在重试，30s 后再看）。"
       if (planEl && action === "install") {
         planEl.textContent += `[${nowStamp()}] ⚠ 服务已注册但 daemon 未起来 — 可能 systemctl/launchd/schtasks 在重试，30s 后查 service status\n`
         planEl.scrollTop = planEl.scrollHeight
@@ -208,6 +253,7 @@ async function serviceActionInner(deps, state, action, planEl, summaryEl, alertE
   }
 }
 
+/** @param {string} id */
 function isToggleOn(id) {
   const el = document.getElementById(id)
   return !!el && el.classList.contains("on")
@@ -217,6 +263,7 @@ function isToggleOn(id) {
 // check whose severity is "hard" (would make the install useless).
 // Soft reds (no bound account, allowlist empty) DON'T block — those
 // can be fixed any time after install.
+/** @param {DoctorReport | null | undefined} report */
 function collectHardReds(report) {
   if (!report?.checks) return []
   const out = []
@@ -227,6 +274,9 @@ function collectHardReds(report) {
   return out
 }
 
+/**
+ * @param {number} pid
+ */
 export function showPostStopAlert(pid) {
   const alertEl = document.getElementById("post-stop-alert")
   const pidEl = document.getElementById("post-stop-pid")
@@ -235,16 +285,21 @@ export function showPostStopAlert(pid) {
   alertEl.hidden = false
 }
 
+/**
+ * @param {{ invoke: (cmd: string, args: { args: string[] }) => Promise<unknown>, formatInvokeError: (err: unknown) => string, doctorPoller: { refresh: () => Promise<unknown> } }} deps
+ */
 export async function forceKillDaemon(deps) {
   const pidEl = document.getElementById("post-stop-pid")
   const alertEl = document.getElementById("post-stop-alert")
-  const summaryEl = document.getElementById("service-summary")
+  // summaryEl is always present in the wizard DOM; cast away null for clean TS.
+  const summaryEl = /** @type {HTMLElement} */ (document.getElementById("service-summary"))
   const pid = Number.parseInt(pidEl?.textContent || "", 10)
   if (!Number.isFinite(pid) || pid <= 0) return
   summaryEl.textContent = `正在 kill pid ${pid}…`
+  /** @type {DaemonKill} */
   let result
   try {
-    result = await deps.invoke("wechat_cli_json", { args: ["daemon", "kill", String(pid), "--json"] })
+    result = /** @type {DaemonKill} */ (await deps.invoke("wechat_cli_json", { args: ["daemon", "kill", String(pid), "--json"] }))
   } catch (err) {
     summaryEl.textContent = `kill 失败：${deps.formatInvokeError(err)}`
     return
