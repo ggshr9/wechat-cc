@@ -4,7 +4,7 @@ import { findOnPath } from '../lib/util'
 import { readDaemon } from './doctor'
 import { detectServiceBinaryPath } from './binary-detect'
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, renameSync, unlinkSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir, platform } from 'node:os'
 import { join } from 'node:path'
 
@@ -48,10 +48,17 @@ export interface UpdateDeps {
    * daemon. When `detect()` returns null (dev mode running `bun cli.ts`),
    * the rebuild step is skipped. Optional for back-compat with callers
    * that don't yet wire it up.
+   *
+   * `readSentinel(binaryPath)` reads the SHA that produced the binary
+   * (`<binaryPath>.commit` written by rebuild). Used by analyzeUpdate
+   * to mark binaryStale=true when the sentinel mismatches local HEAD —
+   * triggers a rebuild even when there's no upstream to pull. Returns
+   * null when the sentinel file is missing (pre-fix binary, force rebuild).
    */
   binary?: {
     detect: () => string | null
     rebuild: (binaryPath: string) => RunResult
+    readSentinel: (binaryPath: string) => string | null
   }
   now?: () => number
 }
@@ -65,6 +72,10 @@ export interface UpdateProbe {
   behind?: number
   aheadOfRemote?: number
   lockfileWillChange?: boolean
+  /** True when binary mode is active AND the sentinel file is missing or doesn't match HEAD — meaning the binary lags the local source even if there's no upstream to pull. */
+  binaryStale?: boolean
+  /** Absolute path the binary refresh would target. Set when binary mode active. */
+  binaryPath?: string
   dirty?: boolean
   dirtyFiles?: string[]
   reason?: UpdateReason
@@ -127,12 +138,30 @@ export function analyzeUpdate(deps: UpdateDeps): UpdateProbe {
   const dirtyFiles = porcelain.split('\n').map((l) => l.slice(3).trim()).filter(Boolean)
   const lockfileDiff = deps.runGit(['diff', '--name-only', 'HEAD', `origin/${branch}`, '--', 'bun.lock']).stdout
 
+  // Binary mode + sentinel check — drives rebuild even when there's no
+  // upstream to pull. Only meaningful when binary mode is configured;
+  // dev-mode users (bun cli.ts) get binaryStale=false unconditionally.
+  let binaryStale = false
+  let binaryPath: string | undefined
+  if (deps.binary) {
+    const detected = deps.binary.detect()
+    if (detected) {
+      binaryPath = detected
+      const sentinel = deps.binary.readSentinel(detected)
+      // null sentinel = pre-fix binary built before this feature shipped
+      // → treat as stale so the first update post-upgrade refreshes it.
+      binaryStale = sentinel !== head
+    }
+  }
+
   probe.ok = true
   probe.currentCommit = head
   probe.latestCommit = remoteHead
   probe.behind = behind
   probe.aheadOfRemote = ahead
-  probe.updateAvailable = behind > 0
+  probe.updateAvailable = behind > 0 || binaryStale
+  probe.binaryStale = binaryStale
+  if (binaryPath) probe.binaryPath = binaryPath
   probe.dirty = dirtyFiles.length > 0
   probe.dirtyFiles = dirtyFiles
   probe.lockfileWillChange = lockfileDiff.trim().length > 0
@@ -266,22 +295,20 @@ function runMutatingSteps(
   }
 
   // Binary refresh — only when service points at compiled `wechat-cc-cli`.
-  // detect() returns null in dev mode (bun cli.ts) so this is a no-op for
+  // detect() in analyzeUpdate already populated probe.binaryPath when binary
+  // mode is active; null in dev mode (bun cli.ts) so this is a no-op for
   // source-checkout users. The rebuild helper handles atomic replace; if
   // it fails we surface rebuild_failed and let the caller's bestEffortStart
   // bring the daemon back on the OLD binary (better than leaving it down).
   let rebuildRan = false
-  if (deps.binary) {
-    const binaryPath = deps.binary.detect()
-    if (binaryPath) {
-      const rebuilt = deps.binary.rebuild(binaryPath)
-      rebuildRan = rebuilt.code === 0
-      if (rebuilt.code !== 0) {
-        return {
-          ok: false, mode: 'apply', reason: 'rebuild_failed',
-          message: `bun build --compile failed for ${binaryPath}`,
-          details: { stderr: rebuilt.stderr, binaryPath },
-        }
+  if (deps.binary && probe.binaryPath) {
+    const rebuilt = deps.binary.rebuild(probe.binaryPath)
+    rebuildRan = rebuilt.code === 0
+    if (rebuilt.code !== 0) {
+      return {
+        ok: false, mode: 'apply', reason: 'rebuild_failed',
+        message: `bun build --compile failed for ${probe.binaryPath}`,
+        details: { stderr: rebuilt.stderr, binaryPath: probe.binaryPath },
       }
     }
   }
@@ -346,8 +373,28 @@ export function defaultUpdateDeps(repoRoot: string, stateDir: string): UpdateDep
         repoRoot,
         binaryPath,
       }),
+      readSentinel: (binaryPath) => {
+        const sentinelPath = `${binaryPath}.commit`
+        if (!existsSync(sentinelPath)) return null
+        try { return readFileSync(sentinelPath, 'utf8').trim() } catch { return null }
+      },
     },
   }
+}
+
+function writeBinarySentinel(binaryPath: string, repoRoot: string): void {
+  // Capture HEAD at rebuild time so a future `wechat-cc update` can detect
+  // "binary lags HEAD" via sentinel mismatch — fixes the second framework
+  // gap from the 2026-05-08 audit (update was a no-op when behind=0 even
+  // if binary was older than the local source). Best-effort: silently
+  // skip if git's missing or HEAD is detached.
+  const r = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8', windowsHide: true })
+  if (r.status !== 0) return
+  const sha = (r.stdout ?? '').trim()
+  if (!sha) return
+  try {
+    writeFileSync(`${binaryPath}.commit`, sha + '\n', { mode: 0o644 })
+  } catch { /* best-effort sentinel; rebuild itself succeeded */ }
 }
 
 // Spawn `bun build --compile` to a temp file in the same dir as the target
@@ -388,6 +435,10 @@ function compileAndAtomicReplace(opts: {
       code: 1,
     }
   }
+  // Drop the sentinel last, after the binary is in place. If this throws
+  // we still report success — the rebuild worked, sentinel is just a
+  // cache. Worst case: next update sees null sentinel and rebuilds again.
+  writeBinarySentinel(opts.binaryPath, opts.repoRoot)
   return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', code: 0 }
 }
 

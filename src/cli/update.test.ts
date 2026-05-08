@@ -30,6 +30,8 @@ interface FakeOpts {
   /** Path returned by binary.detect(); null = dev mode (no rebuild). undefined = omit binary dep entirely (back-compat with pre-rebuild deps). */
   detectedBinary?: string | null
   rebuildResult?: RunResult
+  /** Sentinel SHA returned by binary.readSentinel(); null = no sentinel on disk (pre-fix binary). */
+  binarySentinel?: string | null
 }
 
 function makeFakeDeps(opts: FakeOpts = {}) {
@@ -49,6 +51,7 @@ function makeFakeDeps(opts: FakeOpts = {}) {
   const install = vi.fn(() => opts.installResult ?? ok())
   const rebuild = vi.fn((_path: string) => opts.rebuildResult ?? ok())
   const detect = vi.fn(() => opts.detectedBinary ?? null)
+  const readSentinel = vi.fn((_path: string) => opts.binarySentinel ?? null)
 
   const runGit = vi.fn<(args: string[]) => RunResult>((args) => {
     const route = opts.extraGit?.(args)
@@ -76,10 +79,10 @@ function makeFakeDeps(opts: FakeOpts = {}) {
       stop,
       start,
     },
-    binary: { detect, rebuild },
+    binary: { detect, rebuild, readSentinel },
     now: () => 0,
   }
-  return { deps, runGit, stop, start, install, rebuild, detect }
+  return { deps, runGit, stop, start, install, rebuild, detect, readSentinel }
 }
 
 describe('analyzeUpdate', () => {
@@ -383,6 +386,48 @@ describe('applyUpdate — completion paths', () => {
     if (!result.ok) return
     expect(result.rebuildRan).toBe(false)
     expect(rebuild).not.toHaveBeenCalled()
+  })
+
+  it('binary stale at HEAD (sentinel mismatch) → rebuilds even when behind=0', async () => {
+    // Pre-2026-05-08 second framework gap: `wechat-cc update` only rebuilt
+    // the binary when `git fetch` showed new upstream commits. If the user
+    // pulled a fix earlier (or built the binary from a different commit),
+    // running update again at clean HEAD said "noop" and left the daemon
+    // on the stale binary. Sentinel-file approach: track the binary's
+    // source SHA; rebuild whenever it diverges from the local HEAD.
+    const { deps, rebuild, install } = makeFakeDeps({
+      behind: 0, ahead: 0, head: 'aaaa', remoteHead: 'aaaa',
+      daemon: { alive: true, pid: 1 },
+      serviceInstalled: true,
+      detectedBinary: '/home/u/.local/bin/wechat-cc-cli',
+      // Caller wires a sentinel probe — fake says binary was built at 'old'
+      // but HEAD is 'aaaa'. Rebuild required.
+      binarySentinel: 'old',
+    })
+    const result = await applyUpdate(deps)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.rebuildRan).toBe(true)
+    expect(result.daemonAction).toBe('restarted')
+    expect(rebuild).toHaveBeenCalledOnce()
+    expect(install).not.toHaveBeenCalled()  // no upstream → no install
+  })
+
+  it('binary fresh at HEAD (sentinel match) + behind=0 → fast-path noop, no rebuild', async () => {
+    const { deps, rebuild, install } = makeFakeDeps({
+      behind: 0, ahead: 0, head: 'aaaa', remoteHead: 'aaaa',
+      daemon: { alive: true, pid: 1 },
+      serviceInstalled: true,
+      detectedBinary: '/home/u/.local/bin/wechat-cc-cli',
+      binarySentinel: 'aaaa',  // sentinel matches HEAD — binary is current
+    })
+    const result = await applyUpdate(deps)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.daemonAction).toBe('noop')
+    expect(result.rebuildRan).toBe(false)
+    expect(rebuild).not.toHaveBeenCalled()
+    expect(install).not.toHaveBeenCalled()
   })
 
   it('rebuild fails → reject rebuild_failed, install ran, daemon restored', async () => {
