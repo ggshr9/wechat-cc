@@ -1,23 +1,49 @@
 # Spec · Multi-provider extension (Cursor SDK + Claude API direct + N-way modes)
 
-**Status**: Draft · 2026-05-08
+**Status**: Draft · 2026-05-08 (revised — P2 deferred 2026-05-08)
 **Author**: GSR + Claude Opus 4.7 (1M context)
-**Implementation**: Three independent phases — P1 (Cursor provider), P2 (Claude API direct provider), P3 (N-way mode generalization). Phases land independently; P1 and P2 in either order, P3 only after at least one of P1/P2 is in.
+**Implementation**: Two active phases — P1 (Cursor provider) and P3 (N-way mode generalization). P2 (Claude API direct provider) deferred indefinitely; see "P2 deferral" note below for rationale. P1 and P3 land independently; P3 only after P1 is in.
 **Predecessor context**: v0.5.14 closed the chatroom moderator paraphrase + .claude.json bleed-in chain. P2 from `2026-05-07-api-contract-and-agent-session.md` already unified the `AgentProvider` / `AgentSession` interface — adding a third provider is mechanically the same shape as adding Codex was. This spec is about whether and how to lean on that.
 
 ---
 
 ## TL;DR
 
-Three orthogonal additions, each ~150-300 LOC of provider code plus mode-system changes:
+Two active phases, each ~150-300 LOC of provider code plus mode-system changes:
 
 1. **P1 — Cursor SDK provider** (Tier S): Adds `cursor` as a third registered provider. Uses `@cursor/sdk` (TypeScript, public-beta as of 2026-04-29) which **supports MCP servers natively over stdio + HTTP**, so wechat-mcp + delegate-mcp plug straight in the same way they do for Claude / Codex. User pays Cursor token-based via `CURSOR_API_KEY`. Cursor's own harness ships skills / hooks / subagents that the wechat-cc agent can leverage — meaningfully different from the existing two providers, not just another Anthropic/OpenAI wrapper.
 
-2. **P2 — Claude API direct provider** (Tier S): Adds `claude-api` as a sibling to the existing `claude` provider. Uses `@anthropic-ai/sdk` directly instead of spawning the Claude Code CLI subprocess, eliminating `~/.claude/.claude.json` config bleed-in *permanently* (today's `e6f40f5` fix mitigates one symptom; this kills the class). Anthropic's hosted MCP support means wechat-mcp + delegate-mcp still work. Loses Claude Code's `canUseTool` per-tool permission relay — degraded to coarse policy, same as Codex.
+2. **P3 — N-way mode generalization**: `parallel` and `chatroom` modes are 2-provider-hardcoded today (`parallelProviders: [ProviderId, ProviderId]`). With three+ registered providers, users want `/all` (every registered provider answers) or `/chat claude codex cursor`. The chatroom moderator already routes by selecting a speaker from a participants list — extending to N is local. Slash command parsing + persistence schema need a small evolution.
 
-3. **P3 — N-way mode generalization**: `parallel` and `chatroom` modes are 2-provider-hardcoded today (`parallelProviders: [ProviderId, ProviderId]`). With three+ registered providers, users want `/all` (every registered provider answers) or `/chat claude codex cursor`. The chatroom moderator already routes by selecting a speaker from a participants list — extending to N is local. Slash command parsing + persistence schema need a small evolution.
+**Deferred**: P2 (Claude API direct provider) — see "P2 deferral" below.
 
-P1 and P2 are independent and do not require P3. P3 is independent of P1/P2 in principle but only meaningful once at least one new provider is in.
+P3 is independent of P1 in principle but only meaningful once a third provider is in.
+
+---
+
+## P2 deferral (2026-05-08)
+
+P2 was originally framed as "permanently kill the `~/.claude/.claude.json` bleed-in class by going around the Claude Code CLI." After the v0.5.14 fix chain (commit `e6f40f5` pinning `model` in SDK options + commit `c096756` trimming `settingSources` to `['project','local']` + systemd env clears), the bleed-in surface is structurally closed at the symptom level. A direct `claude-api` provider would still be cleaner architecturally (no CLI subprocess, no inheritance path *at all*), but the cost-benefit shifted:
+
+- **What we'd gain**: faster cold start (~100ms vs ~3-5s), one less moving part, structural rather than mitigated isolation
+- **What we'd lose**: Claude Code's per-tool permission relay (`canUseTool`), the `claude_code` system-prompt preset, JSONL session resume that interoperates with the user's interactive Claude Code workflow
+
+Since v0.5.14 those losses now outweigh the gains for the dogfood-maintainer use case. P2 is deferred until a concrete user-driven reason surfaces (e.g. "I want my daemon to never read `~/.claude/`, period" — a legitimate posture choice but not currently asked for).
+
+This deferral does NOT preclude `claude-api` ever — the spec's design section is preserved below for the eventual reactivation.
+
+### Anti-pattern: generic "any LLM API key" plugin
+
+A natural follow-up question is "should we just support arbitrary API keys (OpenAI / Anthropic / Google / xAI / Mistral / DeepSeek) via a generic LiteLLM-style adapter?" **No.** The wechat-cc value proposition is the channel + tools + memory + chat modes — and all of those depend on rich tool calling. Raw LLM completion APIs vary widely in tool-calling shape (Anthropic's `tools`, OpenAI's `functions`, Google's `function_declarations`, etc.) and most of them don't speak MCP. A generic adapter would be ~1500 LOC of harness + per-provider mappers + tool-call format translation + ongoing maintenance per provider — and the resulting agent quality would be worse than any single SDK-backed provider.
+
+**Better policy**: when a specific provider ships a Code-SDK-class agent runtime (with MCP support), add it as a per-provider `<vendor>-agent-provider.ts` (~200 LOC, Cursor-shaped). Don't preempt with a generic plugin system.
+
+Concrete future candidates that could each become a Tier S provider when their SDKs ship:
+- **Gemini Code SDK** (Google) — when it ships with MCP support
+- **xAI Grok SDK / DeepSeek SDK / Mistral Agent SDK** — same criterion
+- **Local LLM via Ollama / vLLM** — separate phase; needs a function-calling shim layer, not the generic adapter
+
+Generic API key isn't the path. Per-provider SDK as it ships, is.
 
 ---
 
@@ -223,7 +249,7 @@ E2E:
 
 ---
 
-## P2 Design — Claude API direct provider
+## P2 Design — Claude API direct provider (DEFERRED — preserved for future reactivation)
 
 ### Why a separate provider, not replace `claude`?
 
@@ -423,25 +449,22 @@ Persistence: `participants` joins `mode_kind` / `mode_provider` / `mode_primary`
 
 ## Implementation plan
 
-Three phases, each its own PR. Recommended order based on dependency:
+Two active phases, each its own PR. Recommended order:
 
 **Phase 1 (P1 — Cursor SDK provider)**: ~3 days
 - Day 1: Spike — install `@cursor/sdk`, verify MCP wiring, document event shape
 - Day 2: Provider implementation + unit tests (mirror codex-agent-provider.test.ts pattern)
 - Day 3: Bootstrap registration + agent-config.json schema bump + e2e (`dispatch-solo-cursor.e2e.test.ts`) + docs
 
-**Phase 2 (P2 — Claude API direct)**: ~3 days
-- Day 1: Spike — confirm Anthropic API hosted MCP shape; install latest `@anthropic-ai/sdk`
-- Day 2: Provider + unit tests
-- Day 3: Bootstrap + e2e + dashboard wizard provider-pick UI updates
-
-**Phase 3 (P3 — N-way modes)**: ~2 days
+**Phase 3 (P3 — N-way modes)**: ~2 days, after P1 lands
 - Day 1: Mode type + persistence migration; coordinator dispatch refactor (drop 2-tuple constraints); slash command grammar + tests
 - Day 2: Moderator prompt updates for 3-way + e2e (3-provider parallel + 3-speaker chatroom)
 
-Total ~8 days if done back-to-back. Feature-flagged via `WECHAT_CC_EXPERIMENTAL_PROVIDERS=1` until dogfooded; flag stripped at v0.6.0 release boundary.
+Total ~5 days if done back-to-back. Feature-flagged via `WECHAT_CC_EXPERIMENTAL_PROVIDERS=1` until dogfooded; flag stripped at v0.6.0 release boundary.
 
-Each phase independently deployable and shippable. P1 alone gives users the Cursor option without N-way mode rework. P2 alone closes the `.claude.json` bleed-in class. P3 alone is meaningless without P1 or P2 (you'd be N-way'ing 2 providers).
+P1 is independently shippable; P3 only adds value once a third provider exists.
+
+(P2 deferred — design section above preserved for future reactivation if the cost-benefit shifts back.)
 
 ---
 
@@ -455,12 +478,7 @@ Each phase independently deployable and shippable. P1 alone gives users the Curs
 - e2e `dispatch-solo-cursor.e2e.test.ts` passes
 - doctor probe surfaces Cursor as a registered provider
 
-**P2 done when:**
-- `wechat-cc provider set claude-api --model claude-opus-4-7` works
-- User sends `/claude-api` → next message dispatched via direct Anthropic SDK
-- agent-config.json `claudeApiModel` field round-trips through `loadAgentConfig`
-- `~/.claude/.claude.json` model alias being broken does NOT affect `claude-api` dispatch
-- coexists with `claude` (CLI-spawned) — `/cc` and `/claude-api` route differently per chat
+**P2 acceptance**: deferred. Re-enable when reactivated.
 
 **P3 done when:**
 - `/chat claude codex cursor` triggers 3-speaker chatroom
@@ -484,6 +502,8 @@ Each phase independently deployable and shippable. P1 alone gives users the Curs
 
 ## Decision: ship this when?
 
-**Not this week.** v0.5.14 just landed; let it bake. P1 is the most self-contained piece and could ship as v0.5.15 or v0.6.0 once the spike confirms Cursor SDK MCP wiring works. P2 and P3 are weeks 2-3.
+**Not this week.** v0.5.14 just landed; let it bake. P1 is the most self-contained piece and could ship as v0.5.15 or v0.6.0 once the spike confirms Cursor SDK MCP wiring works. P3 follows once P1 is dogfooded.
 
-If user demand for one specific path is loud (e.g., "I want my daemon insulated from `.claude.json`"), prioritize P2 first. If the request is "I want to try Cursor in wechat", prioritize P1. P3 only when at least one of P1/P2 is in hand — it has nothing to do until then.
+P2 deferred — see top section. The class of "permanently kill `.claude.json` bleed-in" was structurally closed by v0.5.14's commit chain (`e6f40f5` + `c096756`), so the urgency dropped. P2 reactivates if a user explicitly asks for "daemon never reads `~/.claude/`."
+
+Future per-provider candidates (Gemini / xAI / DeepSeek / etc.) are NOT in this spec — each gets its own `<vendor>-agent-provider.ts` PR if and when their Code-SDK-class agent runtime ships. No generic LLM-API-key plugin path; that's an explicit anti-pattern (see "Anti-pattern" subsection above).
