@@ -15,7 +15,7 @@ import {
   MemoryListOutput, MemoryReadOutput, MemoryWriteOutput,
   EventsListOutput, ObservationsListOutput, ObservationsArchiveOutput, MilestonesListOutput,
   SessionsListProjectsOutput, SessionsReadJsonlOutput, SessionsDeleteOutput, SessionsSearchOutput,
-  DemoSeedOutput, DemoUnseedOutput, ReplyOutput, LogsOutput,
+  DemoSeedOutput, DemoUnseedOutput, ReplyOutput,
   UpdateCheckOutput, UpdateApplyOutput, ConversationsListOutput,
   GuardStatusOutput, GuardEnableOutput, GuardDisableOutput,
   AvatarInfoOutput, AvatarSetOutput, AvatarRemoveOutput,
@@ -369,19 +369,11 @@ const logsCmd = defineCommand({
   async run({ args }) {
     const tailNum = args.tail ? Number.parseInt(args.tail, 10) : 50
     const tail = Number.isFinite(tailNum) ? tailNum : 50
-    const { tailLog } = await import('./src/cli/logs.ts')
-    const result = tailLog(STATE_DIR, tail)
-    if (args.json) {
-      console.log(JSON.stringify(LogsOutput.parse(result), null, 2))
-      return
-    }
-    if (!result.ok) {
-      console.error(`logs read failed: ${result.error}`)
-      process.exit(1)
-    }
-    // Plain-text form for terminal users — match the file's original layout
-    // so `wechat-cc logs --tail 30` looks like a `tail -n 30 channel.log`.
-    for (const e of result.entries) console.log(e.raw)
+    const { tailLog, formatLogsForCli } = await import('./src/cli/logs.ts')
+    const out = formatLogsForCli(tailLog(STATE_DIR, tail), Boolean(args.json))
+    if (out.stdout) console.log(out.stdout)
+    if (out.stderr) console.error(out.stderr)
+    if (out.exitCode !== 0) process.exit(out.exitCode)
   },
 })
 
@@ -1148,18 +1140,19 @@ const installProgressCmd = defineCommand({
     json: { type: 'boolean', description: 'JSON envelope (default; flag is for symmetry with other commands)' },
   },
   async run() {
-    const { existsSync, readFileSync } = await import('node:fs')
-    const progressPath = join(STATE_DIR, 'install-progress.json')
-    if (!existsSync(progressPath)) {
-      console.log('{}')
+    const { readInstallProgress } = await import('./src/cli/install-progress.ts')
+    const result = readInstallProgress(STATE_DIR)
+    if (result.kind === 'progress') {
+      console.log(JSON.stringify(result.value))
       return
     }
-    try {
-      const raw = readFileSync(progressPath, 'utf8')
-      console.log(raw.trim() || '{}')
-    } catch {
-      console.log('{}')
+    if (result.kind === 'invalid') {
+      // Wizard polls at ~250ms; never crash it. Surface the validation
+      // error to stderr (visible in `wechat-cc logs` when run via service)
+      // but keep stdout = `{}` so the wizard treats it as "no progress yet".
+      console.error(`install-progress.json invalid: ${result.error}`)
     }
+    console.log('{}')
   },
 })
 

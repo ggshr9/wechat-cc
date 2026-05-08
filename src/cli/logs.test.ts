@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { clampTail, parseLine, tailLog } from './logs'
+import { clampTail, formatLogsForCli, parseLine, tailLog } from './logs'
 
 let stateDir: string
 
@@ -125,5 +125,59 @@ describe('tailLog', () => {
     if (!r.ok) return
     expect(r.entries.length).toBe(5000)  // MAX_TAIL
     expect(r.entries[0]!.raw).toBe('line-1000')  // tail of 5000 from 6000 starts at index 1000
+  })
+})
+
+// Why this is split out: prior to 2026-05-07 the cli.ts handler called
+// `LogsOutput.parse(result)` BEFORE checking `!result.ok`, which threw a
+// ZodError on the error branch instead of exiting cleanly. The schema is
+// (intentionally) success-only; the format helper is what enforces the
+// contract — ok:false never reaches LogsOutput.parse.
+describe('formatLogsForCli', () => {
+  const errResult = { ok: false as const, logFile: '/tmp/x.log', error: 'EACCES' }
+  const okEmpty = { ok: true as const, logFile: '/tmp/x.log', totalLines: 0, entries: [] }
+  const okTwo = {
+    ok: true as const,
+    logFile: '/tmp/x.log',
+    totalLines: 2,
+    entries: [
+      { timestamp: '', tag: '', message: 'a', raw: 'a' },
+      { timestamp: '', tag: '', message: 'b', raw: 'b' },
+    ],
+  }
+
+  it('on error + asJson=true exits 1 with stderr (does NOT throw ZodError)', () => {
+    const r = formatLogsForCli(errResult, true)
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr).toContain('EACCES')
+    expect(r.stdout).toBe('')
+  })
+
+  it('on error + asJson=false exits 1 with stderr', () => {
+    const r = formatLogsForCli(errResult, false)
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr).toContain('EACCES')
+  })
+
+  it('on success + asJson=true emits valid LogsOutput JSON envelope', () => {
+    const r = formatLogsForCli(okTwo, true)
+    expect(r.exitCode).toBe(0)
+    expect(r.stderr).toBe('')
+    const parsed = JSON.parse(r.stdout)
+    expect(parsed.ok).toBe(true)
+    expect(parsed.totalLines).toBe(2)
+    expect(parsed.entries).toHaveLength(2)
+  })
+
+  it('on success + asJson=false emits raw lines joined by newline', () => {
+    const r = formatLogsForCli(okTwo, false)
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toBe('a\nb')
+  })
+
+  it('on success + asJson=false with empty entries emits empty stdout', () => {
+    const r = formatLogsForCli(okEmpty, false)
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toBe('')
   })
 })

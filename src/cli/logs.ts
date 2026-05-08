@@ -14,6 +14,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { LogsOutput } from './schema'
 
 export interface LogEntry {
   /** ISO timestamp ("" if line doesn't match the format). */
@@ -80,4 +81,25 @@ export function tailLog(stateDir: string, lastN: number): LogTailResult | LogTai
   const n = clampTail(lastN)
   const tail = lines.slice(-n)
   return { ok: true, logFile, totalLines: lines.length, entries: tail.map(parseLine) }
+}
+
+export interface LogsCliFormat {
+  /** Empty string when there is nothing to print to stdout. */
+  stdout: string
+  /** Empty string when there is no error to report. */
+  stderr: string
+  exitCode: 0 | 1
+}
+
+// Centralises the "what does `wechat-cc logs` print?" decision so the
+// success/error split is enforced in one place. The schema is success-only
+// by design — error results never reach LogsOutput.parse.
+export function formatLogsForCli(result: LogTailResult | LogTailError, asJson: boolean): LogsCliFormat {
+  if (!result.ok) {
+    return { stdout: '', stderr: `logs read failed: ${result.error}`, exitCode: 1 }
+  }
+  if (asJson) {
+    return { stdout: JSON.stringify(LogsOutput.parse(result), null, 2), stderr: '', exitCode: 0 }
+  }
+  return { stdout: result.entries.map(e => e.raw).join('\n'), stderr: '', exitCode: 0 }
 }
