@@ -116,6 +116,9 @@ const SetupPollStatusConfirmed = z.object({
   status: z.literal('confirmed'),
   accountId: z.string(),
   userId: z.string(),
+  // 'first' | 'reconnect' | 'redundant' | 'new_account' — see setup-flow.ts
+  // and docs/specs/2026-05-10-rescan-feedback.md for the full state machine.
+  scenario: z.enum(['first', 'reconnect', 'redundant', 'new_account']),
 })
 
 export const SetupPollOutput = z.discriminatedUnion('status', [

@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { ILINK_APP_ID, ILINK_BASE_URL, ILINK_BOT_TYPE } from '../lib/config'
@@ -13,10 +13,25 @@ export interface SetupQrPayload {
   expires_in_ms: number
 }
 
+/**
+ * Distinguishes the four flavors of "scan completed" so the wizard can give
+ * 小白 users honest feedback instead of always saying "绑定成功" + a fresh
+ * accountId (looks like a brand-new binding every time, even on re-scan of
+ * the same WeChat account). See docs/specs/2026-05-10-rescan-feedback.md.
+ *
+ * - first       — no prior account dirs, truly fresh setup
+ * - reconnect   — same userId existed but its session was flagged expired
+ *                 (errcode=-14): user is fixing a known-broken connection
+ * - redundant   — same userId existed and was still alive: user re-scanned
+ *                 unnecessarily (likely doesn't realize they're connected)
+ * - new_account — different userId existed: user switched WeChat accounts
+ */
+export type Scenario = 'first' | 'reconnect' | 'redundant' | 'new_account'
+
 export type SetupPollResult =
   | { status: 'wait' | 'scaned' | 'expired' }
   | { status: 'scaned_but_redirect'; baseUrl: string }
-  | { status: 'confirmed'; accountId: string; userId: string }
+  | { status: 'confirmed'; accountId: string; userId: string; scenario: Scenario }
 
 export type FetchText = (baseUrl: string, endpoint: string, timeoutMs?: number) => Promise<string>
 
@@ -60,6 +75,13 @@ export async function pollSetupQrStatus(opts: {
   baseUrl?: string
   stateDir?: string
   fetchText?: FetchText
+  /**
+   * Probe whether a previously-bound bot was flagged session-expired. Used
+   * only by `determineScenario` to distinguish 'reconnect' from 'redundant'.
+   * Defaults to always-false; worst-case mislabels reconnect as redundant
+   * (the user-facing copy is still truthful in both cases).
+   */
+  isExpired?: (botDirName: string) => boolean
 }): Promise<SetupPollResult> {
   const baseUrl = opts.baseUrl ?? ILINK_BASE_URL
   const fetchText = opts.fetchText ?? ilinkGet
@@ -96,8 +118,9 @@ export async function pollSetupQrStatus(opts: {
       stateDir: opts.stateDir,
       currentBaseUrl: baseUrl,
       status: { ...status, status: 'confirmed' },
+      ...(opts.isExpired ? { isExpired: opts.isExpired } : {}),
     })
-    return { status: 'confirmed', accountId: saved.accountId, userId: saved.userId }
+    return { status: 'confirmed', accountId: saved.accountId, userId: saved.userId, scenario: saved.scenario }
   }
   return { status: status.status }
 }
@@ -114,7 +137,8 @@ export function persistConfirmedAccount(opts: {
   stateDir?: string
   currentBaseUrl: string
   status: ConfirmedSetupStatus
-}): { accountId: string; userId: string } {
+  isExpired?: (botDirName: string) => boolean
+}): { accountId: string; userId: string; scenario: Scenario } {
   const stateDir = opts.stateDir ?? join(homedir(), '.claude', 'channels', 'wechat')
   const accountsDir = join(stateDir, 'accounts')
   const accessFile = join(stateDir, 'access.json')
@@ -149,6 +173,17 @@ export function persistConfirmedAccount(opts: {
     }
   }
 
+  // Determine scenario AFTER writing the new dir but BEFORE dedupe runs.
+  // determineScenario excludes the just-written dir by name, so the OTHER
+  // active accounts are inspected for same-userId / different-userId / etc.
+  // Once dedupe archives them they look superseded and the signal is lost.
+  const scenario = determineScenario(
+    accountsDir,
+    status.ilink_user_id ?? '',
+    accountId,
+    opts.isExpired ? { isExpired: opts.isExpired } : {},
+  )
+
   // v0.5.6: archive any older bot dirs that share this scan's userId.
   // ilink invalidates the previous bot server-side when a user re-scans, so
   // their local account dirs would otherwise pile up and the daemon would
@@ -162,5 +197,54 @@ export function persistConfirmedAccount(opts: {
     )
   }
 
-  return { accountId, userId: status.ilink_user_id ?? '' }
+  return { accountId, userId: status.ilink_user_id ?? '', scenario }
+}
+
+export interface ScenarioDeps {
+  isExpired?: (botDirName: string) => boolean
+}
+
+/**
+ * Classify a fresh scan against the existing `accounts/` directory state.
+ * Excludes `scanBotDirName` (the just-written dir for THIS scan) so the
+ * caller can invoke this AFTER persisting the new dir but BEFORE dedupe.
+ *
+ * Returns:
+ *   - 'first'        — no other active dirs exist (or all are malformed)
+ *   - 'new_account'  — other active dirs exist, none with this userId
+ *   - 'reconnect'    — other active dir matches userId AND its session is expired
+ *   - 'redundant'    — other active dir matches userId AND is still alive
+ *
+ * `isExpired` defaults to always-false, in which case 'reconnect' collapses
+ * into 'redundant' (the user-facing copy stays truthful in either case).
+ */
+export function determineScenario(
+  accountsDir: string,
+  scanUserId: string,
+  scanBotDirName: string,
+  deps: ScenarioDeps = {},
+): Scenario {
+  if (!existsSync(accountsDir)) return 'first'
+  const isExpired = deps.isExpired ?? (() => false)
+
+  const others: { id: string; userId: string }[] = []
+  for (const name of readdirSync(accountsDir)) {
+    if (name.includes('.superseded.')) continue
+    if (name === scanBotDirName) continue
+    const metaPath = join(accountsDir, name, 'account.json')
+    if (!existsSync(metaPath)) continue
+    try {
+      const meta = JSON.parse(readFileSync(metaPath, 'utf8')) as { userId?: string }
+      if (typeof meta.userId === 'string' && meta.userId) {
+        others.push({ id: name, userId: meta.userId })
+      }
+    } catch { /* skip malformed account.json — same posture as dedupe-accounts */ }
+  }
+
+  if (others.length === 0) return 'first'
+
+  const sameUser = others.find(a => a.userId === scanUserId)
+  if (!sameUser) return 'new_account'
+
+  return isExpired(sameUser.id) ? 'reconnect' : 'redundant'
 }

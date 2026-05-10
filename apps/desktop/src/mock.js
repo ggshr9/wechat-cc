@@ -29,7 +29,7 @@ export async function mockInvoke(command, args, state) {
     const count = Number(sessionStorage.getItem("qrPollCount") || "0") + 1
     sessionStorage.setItem("qrPollCount", String(count))
     if (count < 3) return { status: count === 1 ? "wait" : "scaned" }
-    return { status: "confirmed", accountId: "mock-bot", userId: "mock-user" }
+    return { status: "confirmed", accountId: "mock-bot", userId: "mock-user", scenario: "first" }
   }
   if (command === "wechat_cli_json" && args.args?.[0] === "service") {
     return { ok: true, state: "running", alive: true, pid: 12345, plan: { kind: "launchagent", serviceName: "wechat-cc" } }

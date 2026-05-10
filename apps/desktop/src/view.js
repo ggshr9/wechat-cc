@@ -28,6 +28,18 @@ export function doctorRows(report) {
   return rows
 }
 
+// Confirmed-scan copy keyed on `scenario` (see setup-flow.ts Scenario type).
+// Tells 小白 users what actually happened — the previous "绑定成功 +
+// accountId" was identical for first-scan, re-scan, redundant, and account-
+// switch, which made re-scanning feel like a fresh binding every time.
+// See docs/specs/2026-05-10-rescan-feedback.md.
+export const SCAN_SCENARIO_COPY = {
+  first:       { title: "连接成功",     message: "可以开始用了。" },
+  reconnect:   { title: "重新连接成功", message: "之前的记忆和对话都还在，可以接着用。" },
+  redundant:   { title: "已是连接状态", message: "你已经连接了这个账号。这次扫码刷新了连接，原对话不受影响。" },
+  new_account: { title: "切换到新账号", message: "原账号的记忆保留在本地，但当前只接收新账号的消息。" },
+}
+
 // Compute the next QR-screen UI state from an incoming setup-poll result.
 // Returns the patch to apply to UI + state. `prev.currentBaseUrl` may be
 // updated by the redirect branch; the caller writes it back.
@@ -39,10 +51,14 @@ export function pollAdvance(prev, result) {
     return { stopTimer: false, currentBaseUrl: result.baseUrl }
   }
   if (result.status === "confirmed") {
+    // Defensive fallback to 'first' if scenario is missing — keeps an old
+    // daemon + new desktop pairing from breaking the wizard. Schema enforces
+    // the field on production payloads.
+    const copy = SCAN_SCENARIO_COPY[result.scenario] ?? SCAN_SCENARIO_COPY.first
     return {
       stopTimer: true,
-      qrTitle: "绑定成功",
-      qrMessage: `${result.accountId} 已保存。`,
+      qrTitle: copy.title,
+      qrMessage: copy.message,
       continueEnabled: true,
     }
   }

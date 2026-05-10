@@ -134,8 +134,19 @@ describe('SetupPollOutput', () => {
   it('accepts scaned_but_redirect with baseUrl', () => {
     expect(SetupPollOutput.safeParse({ status: 'scaned_but_redirect', baseUrl: 'https://alt.example.com' }).success).toBe(true)
   })
-  it('accepts confirmed with accountId and userId', () => {
-    expect(SetupPollOutput.safeParse({ status: 'confirmed', accountId: 'bot-123', userId: 'user-456' }).success).toBe(true)
+  it('accepts confirmed with accountId, userId, and scenario', () => {
+    expect(SetupPollOutput.safeParse({ status: 'confirmed', accountId: 'bot-123', userId: 'user-456', scenario: 'first' }).success).toBe(true)
+  })
+  it('accepts each of the four scenario enum values on confirmed', () => {
+    for (const scenario of ['first', 'reconnect', 'redundant', 'new_account'] as const) {
+      expect(SetupPollOutput.safeParse({ status: 'confirmed', accountId: 'bot-123', userId: 'user-456', scenario }).success).toBe(true)
+    }
+  })
+  it('rejects confirmed without scenario (additive field is required)', () => {
+    expect(SetupPollOutput.safeParse({ status: 'confirmed', accountId: 'bot-123', userId: 'user-456' }).success).toBe(false)
+  })
+  it('rejects confirmed with an unknown scenario value', () => {
+    expect(SetupPollOutput.safeParse({ status: 'confirmed', accountId: 'bot-123', userId: 'user-456', scenario: 'mystery' }).success).toBe(false)
   })
   it('rejects an empty payload', () => {
     expect(SetupPollOutput.safeParse({}).success).toBe(false)

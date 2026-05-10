@@ -111,9 +111,37 @@ describe('pollAdvance', () => {
       stopTimer: false, currentBaseUrl: 'https://x',
     })
   })
-  it('confirmed → stops timer + enables continue + names accountId', () => {
-    expect(pollAdvance({}, { status: 'confirmed', accountId: 'bot-1' })).toMatchObject({
-      stopTimer: true, qrTitle: '绑定成功', qrMessage: 'bot-1 已保存。', continueEnabled: true,
+  it('confirmed first → "连接成功" / "可以开始用了。"', () => {
+    expect(pollAdvance({}, { status: 'confirmed', accountId: 'bot-1', userId: 'u-1', scenario: 'first' })).toMatchObject({
+      stopTimer: true, qrTitle: '连接成功', qrMessage: '可以开始用了。', continueEnabled: true,
+    })
+  })
+  it('confirmed reconnect → "重新连接成功"', () => {
+    expect(pollAdvance({}, { status: 'confirmed', accountId: 'bot-1', userId: 'u-1', scenario: 'reconnect' })).toMatchObject({
+      stopTimer: true, qrTitle: '重新连接成功', continueEnabled: true,
+    })
+    expect(pollAdvance({}, { status: 'confirmed', accountId: 'bot-1', userId: 'u-1', scenario: 'reconnect' }).qrMessage)
+      .toContain('记忆和对话')
+  })
+  it('confirmed redundant → "已是连接状态" + reassurance', () => {
+    expect(pollAdvance({}, { status: 'confirmed', accountId: 'bot-1', userId: 'u-1', scenario: 'redundant' })).toMatchObject({
+      stopTimer: true, qrTitle: '已是连接状态', continueEnabled: true,
+    })
+    expect(pollAdvance({}, { status: 'confirmed', accountId: 'bot-1', userId: 'u-1', scenario: 'redundant' }).qrMessage)
+      .toContain('原对话不受影响')
+  })
+  it('confirmed new_account → "切换到新账号"', () => {
+    expect(pollAdvance({}, { status: 'confirmed', accountId: 'bot-2', userId: 'u-2', scenario: 'new_account' })).toMatchObject({
+      stopTimer: true, qrTitle: '切换到新账号', continueEnabled: true,
+    })
+    expect(pollAdvance({}, { status: 'confirmed', accountId: 'bot-2', userId: 'u-2', scenario: 'new_account' }).qrMessage)
+      .toContain('原账号的记忆保留在本地')
+  })
+  it('confirmed missing scenario → defensive fallback to first-scan copy', () => {
+    // Old daemon + new desktop pairing — scenario field absent. Wizard
+    // should still render usable copy rather than crash on undefined.
+    expect(pollAdvance({}, { status: 'confirmed', accountId: 'bot-1', userId: 'u-1' })).toMatchObject({
+      stopTimer: true, qrTitle: '连接成功', continueEnabled: true,
     })
   })
   it('expired → stops timer + tells user to refresh', () => {

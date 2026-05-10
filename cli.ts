@@ -1032,10 +1032,25 @@ const setupPollCmd = defineCommand({
   },
   async run({ args }) {
     const { pollSetupQrStatus } = await import('./src/cli/setup-flow.ts')
+    // Best-effort: open the daemon's SQLite read-only-style so scenario
+    // detection can distinguish 'reconnect' from 'redundant'. db.ts uses
+    // WAL mode + 5s busy_timeout, so concurrent access from a running
+    // daemon is safe. If the db doesn't exist yet (fresh install), fall
+    // through with isExpired undefined — determineScenario then collapses
+    // 'reconnect' into 'redundant', which is still truthful copy.
+    let isExpired: ((botDirName: string) => boolean) | undefined
+    try {
+      const { openWechatDb } = await import('./src/lib/db')
+      const { makeSessionStateStore } = await import('./src/daemon/session-state')
+      const db = openWechatDb(STATE_DIR)
+      const store = makeSessionStateStore(db)
+      isExpired = (botDirName: string) => store.isExpired(botDirName)
+    } catch { /* db absent or schema older than session_state migration — leave undefined */ }
     const result = await pollSetupQrStatus({
       qrcode: args.qrcode,
       ...(args['base-url'] !== undefined ? { baseUrl: args['base-url'] } : {}),
       stateDir: STATE_DIR,
+      ...(isExpired ? { isExpired } : {}),
     })
     if (args.json) console.log(JSON.stringify(SetupPollOutput.parse(result), null, 2))
     else console.log(result.status)

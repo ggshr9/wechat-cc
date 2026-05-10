@@ -287,7 +287,7 @@ Bun.serve({
             cliArgs[0] === 'setup-poll'
           ) {
             if (__mockState.qrScanComplete) {
-              return Response.json({ result: { status: 'confirmed', accountId: 'mock-bot', userId: 'mock-user' } })
+              return Response.json({ result: { status: 'confirmed', accountId: 'mock-bot', userId: 'mock-user', scenario: 'first' } })
             }
             return Response.json({ result: { status: 'wait' } })
           }

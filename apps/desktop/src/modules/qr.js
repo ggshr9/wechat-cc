@@ -114,7 +114,14 @@ async function pollQr(deps, state) {
   // primary CTA in the header ("继续") tells them what to do next.
   if (result.status === "confirmed") {
     const box = document.getElementById("qr-box")
-    if (box) box.innerHTML = `<div style="font-size: 13px; color: var(--green-ink); padding: 24px 12px; text-align: center; line-height: 1.6;">✓<br>已绑定<br><span style="font-family: var(--mono); font-size: 11px; color: var(--ink-3);">${escapeHtml(result.accountId || "")}</span></div>`
+    // Two-char badge label distinguishes the 4 scan scenarios at a glance
+    // without overwhelming the small badge slot. See SCAN_SCENARIO_COPY in
+    // view.js for the full prose; this is just the "what kind of scan" tag.
+    const label = result.scenario === "redundant"   ? "已连接"
+                : result.scenario === "reconnect"   ? "已重连"
+                : result.scenario === "new_account" ? "已切换"
+                :                                     "已绑定"
+    if (box) box.innerHTML = `<div style="font-size: 13px; color: var(--green-ink); padding: 24px 12px; text-align: center; line-height: 1.6;">✓<br>${label}<br><span style="font-family: var(--mono); font-size: 11px; color: var(--ink-3);">${escapeHtml(result.accountId || "")}</span></div>`
     const ttl = document.getElementById("qr-ttl")
     if (ttl) ttl.textContent = "—"
     // The "已绑定" badge in the right column already conveys success —
