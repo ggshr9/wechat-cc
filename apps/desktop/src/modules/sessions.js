@@ -651,6 +651,14 @@ export function startDetailAutoRefresh(deps, intervalMs = 4000) {
     // Capture scroll state so the re-render preserves user position.
     const chatEl = document.querySelector('.phone-chat')
     const chat = chatEl instanceof HTMLElement ? chatEl : null
+    // Skip refresh while the user is actively scrolling. openProjectDetail
+    // replaces .phone-chat via innerHTML — the new element starts at
+    // scrollTop=0 and we restore via RAF, but if that races a user scroll
+    // gesture (especially "just reached bottom"), the restoration can land
+    // before layout completes and snap the view to the top. The
+    // is-scrolling class is added by attachScrollbarFade for ~700ms after
+    // the last scroll event; we treat it as a "user busy" guard.
+    if (chat?.classList.contains('is-scrolling')) return
     const wasAtBottom = chat
       ? (chat.scrollTop + chat.clientHeight >= chat.scrollHeight - 6)
       : true
