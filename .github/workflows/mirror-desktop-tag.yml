@@ -1,0 +1,57 @@
+name: Mirror v* tag → desktop-v* tag
+
+# Defense for the "I cut a release but forgot to tag desktop too" failure
+# mode that shipped v0.5.15 and v0.5.16 without a desktop bundle. The
+# release flow is two paired tags:
+#   - vX.Y.Z         — CLI tag, what `wechat-cc update` watches
+#   - desktop-vX.Y.Z — desktop tag, triggers the bundle build + draft release
+#
+# Skipping the desktop tag silently breaks the GitHub Releases flow without
+# any visible error. This workflow auto-creates the desktop tag from the
+# v* tag's commit so the desktop.yml workflow always fires.
+
+# Glob `v*` matches tags STARTING with `v` (so `v0.5.16` yes,
+# `desktop-v0.5.16` no — different prefix, no recursion risk).
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  mirror:
+    name: Mirror to desktop-v* tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout (full history so we can read the v* tag's commit)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create + push desktop-${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          MIRROR="desktop-${GITHUB_REF_NAME}"
+
+          # Idempotent: if the operator pushed both tags themselves (the
+          # documented manual flow), skip without flapping.
+          if git rev-parse --verify "refs/tags/$MIRROR" >/dev/null 2>&1; then
+            echo "$MIRROR already exists — skipping"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Use the v* tag's target commit (NOT $GITHUB_SHA, which is the
+          # commit the workflow run is checked out at — same in practice
+          # for tag-push events, but explicit is clearer + future-proofs
+          # against trigger-graph changes).
+          TARGET_SHA=$(git rev-list -n 1 "$GITHUB_REF_NAME")
+          git tag -a "$MIRROR" "$TARGET_SHA" -m "Auto-mirrored from $GITHUB_REF_NAME"
+          git push origin "$MIRROR"
+
+          echo "Mirrored $GITHUB_REF_NAME → $MIRROR (sha: $TARGET_SHA)"
