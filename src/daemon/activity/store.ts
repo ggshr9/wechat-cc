@@ -24,6 +24,13 @@ export interface ActivityStore {
 export interface ActivityStoreOpts {
   /** Legacy <stateRoot>/<chatId>/activity.jsonl. Imported on first construction. */
   migrateFromFile?: string
+  /**
+   * Clock dep — defaults to `Date.now`. Tests pass a fixed value so
+   * `recentDays(N)` produces deterministic cutoffs regardless of when CI
+   * runs (without this, tests with hardcoded April dates eventually drift
+   * past their N-day window and assert against an empty result).
+   */
+  now?: () => number
 }
 
 function utcDateKey(d: Date): string {
@@ -38,6 +45,7 @@ interface Row {
 
 export function makeActivityStore(db: Db, chatId: string, opts: ActivityStoreOpts = {}): ActivityStore {
   if (opts.migrateFromFile) maybeImportLegacy(db, chatId, opts.migrateFromFile)
+  const now = opts.now ?? Date.now
 
   // INSERT…ON CONFLICT keeps the existing first_msg_ts (we want the very
   // first message of the day) and increments msg_count by 1. Atomic.
@@ -55,7 +63,7 @@ export function makeActivityStore(db: Db, chatId: string, opts: ActivityStoreOpt
     },
 
     async recentDays(n) {
-      const cutoff = new Date(Date.now() - n * 86400_000)
+      const cutoff = new Date(now() - n * 86400_000)
       const cutoffKey = utcDateKey(cutoff)
       return stmtRecent.all(chatId, cutoffKey).map(r => ({
         date: r.date,

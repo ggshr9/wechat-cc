@@ -4,27 +4,35 @@ import { dedupeAccountsByUserId, SUPERSEDED_INFIX } from './dedupe-accounts'
 // In-memory FS fixture builder. Keys are absolute paths; for dirs the value
 // is the array of child names; for files it's the string content. mtimeMs
 // is tracked separately so tests can simulate "newer dir wins" picks.
+//
+// Path-separator note: dedupe-accounts.ts builds child paths via `join()`,
+// which produces backslashes on Windows. Test fixtures are written with
+// forward slashes (matching POSIX intuition + author keystrokes). Wrap
+// every dep in `norm` so lookups work cross-platform without touching
+// production code or making fixture authors think about runner OS.
 function fs(tree: Record<string, { type: 'dir'; children: string[]; mtimeMs?: number } | { type: 'file'; content: string; mtimeMs?: number }>) {
   const renames: Array<[string, string]> = []
+  const norm = (p: string) => p.replace(/\\/g, '/')
   return {
     renames,
     deps: {
-      exists: (p: string) => p in tree || renames.some(([_, to]) => to === p),
+      exists: (p: string) => norm(p) in tree || renames.some(([_, to]) => to === norm(p)),
       readdir: (p: string) => {
-        const node = tree[p]
+        const node = tree[norm(p)]
         if (!node || node.type !== 'dir') throw new Error(`not a dir: ${p}`)
         return node.children
       },
       readFile: (p: string) => {
-        const node = tree[p]
+        const node = tree[norm(p)]
         if (!node || node.type !== 'file') throw new Error(`not a file: ${p}`)
         return node.content
       },
-      stat: (p: string) => ({ mtimeMs: (tree[p] as any)?.mtimeMs ?? 0 }),
+      stat: (p: string) => ({ mtimeMs: (tree[norm(p)] as any)?.mtimeMs ?? 0 }),
       rename: (from: string, to: string) => {
-        renames.push([from, to])
+        const nf = norm(from); const nt = norm(to)
+        renames.push([nf, nt])
         // Mutate tree so subsequent reads see the rename.
-        if (from in tree) { tree[to] = tree[from]!; delete tree[from] }
+        if (nf in tree) { tree[nt] = tree[nf]!; delete tree[nf] }
       },
       now: () => new Date('2026-05-06T12:00:00Z').getTime(),
       log: () => {},

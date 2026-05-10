@@ -8,6 +8,13 @@ import { openTestDb, type Db } from '../../lib/db'
 describe('activity store', () => {
   let dir: string
   let db: Db
+  // Pin "now" to a date AFTER the test fixtures' April timestamps so
+  // recentDays(N) windows are deterministic. Without this, tests asserting
+  // recentDays(7) returns 4-28/4-29 entries fail as soon as today drifts
+  // past 2026-05-06 (7 days after 4-29) — silently green for a few days,
+  // then suddenly red on a CI runner whose clock crossed the threshold.
+  const FIXED_NOW = () => new Date('2026-04-30T00:00:00Z').getTime()
+
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'activity-'))
     db = openTestDb()
@@ -18,7 +25,7 @@ describe('activity store', () => {
   })
 
   it('records first message of a day', async () => {
-    const store = makeActivityStore(db, 'chat_x')
+    const store = makeActivityStore(db, 'chat_x', { now: FIXED_NOW })
     await store.recordInbound(new Date('2026-04-29T08:00:00Z'))
     const days = await store.recentDays(30)
     expect(days).toHaveLength(1)
@@ -27,7 +34,7 @@ describe('activity store', () => {
   })
 
   it('increments msg_count for same-day messages without adding new entries', async () => {
-    const store = makeActivityStore(db, 'chat_x')
+    const store = makeActivityStore(db, 'chat_x', { now: FIXED_NOW })
     await store.recordInbound(new Date('2026-04-29T08:00:00Z'))
     await store.recordInbound(new Date('2026-04-29T14:00:00Z'))
     await store.recordInbound(new Date('2026-04-29T22:00:00Z'))
@@ -37,7 +44,7 @@ describe('activity store', () => {
   })
 
   it('appends new entries on day change', async () => {
-    const store = makeActivityStore(db, 'chat_x')
+    const store = makeActivityStore(db, 'chat_x', { now: FIXED_NOW })
     await store.recordInbound(new Date('2026-04-28T23:30:00Z'))
     await store.recordInbound(new Date('2026-04-29T00:30:00Z'))
     const days = await store.recentDays(30)
@@ -46,7 +53,7 @@ describe('activity store', () => {
   })
 
   it('recentDays(N) limits how far back we read', async () => {
-    const store = makeActivityStore(db, 'chat_x')
+    const store = makeActivityStore(db, 'chat_x', { now: FIXED_NOW })
     await store.recordInbound(new Date('2026-01-01T00:00:00Z'))
     await store.recordInbound(new Date('2026-04-28T00:00:00Z'))
     await store.recordInbound(new Date('2026-04-29T00:00:00Z'))
@@ -55,8 +62,8 @@ describe('activity store', () => {
   })
 
   it('different chatIds keep separate counts', async () => {
-    const a = makeActivityStore(db, 'chat_a')
-    const b = makeActivityStore(db, 'chat_b')
+    const a = makeActivityStore(db, 'chat_a', { now: FIXED_NOW })
+    const b = makeActivityStore(db, 'chat_b', { now: FIXED_NOW })
     await a.recordInbound(new Date('2026-04-29T08:00:00Z'))
     await a.recordInbound(new Date('2026-04-29T09:00:00Z'))
     await b.recordInbound(new Date('2026-04-29T10:00:00Z'))
