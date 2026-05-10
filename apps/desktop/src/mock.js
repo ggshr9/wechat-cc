@@ -34,6 +34,9 @@ export async function mockInvoke(command, args, state) {
   if (command === "wechat_cli_json" && args.args?.[0] === "service") {
     return { ok: true, state: "running", alive: true, pid: 12345, plan: { kind: "launchagent", serviceName: "wechat-cc" } }
   }
+  if (command === "wechat_cli_json" && args.args?.[0] === "daemon" && args.args?.[1] === "kill-residual") {
+    return { killed: false, pid: 0, message: "no server.pid file (lock already free)" }
+  }
   if (command === "wechat_cli_json" && args.args?.[0] === "provider" && args.args?.[1] === "show") {
     return { provider: state?.selectedProvider ?? "claude", dangerouslySkipPermissions: state?.unattended ?? true }
   }

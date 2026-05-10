@@ -853,8 +853,26 @@ const accountRemoveCmd = defineCommand({
   },
   async run({ args }) {
     const { removeAccount } = await import('./src/cli/account-remove.ts')
+    // Best-effort SQLite session_state cleanup. The legacy file path is
+    // dead post-PR7 migration; without this hook every `account remove`
+    // on a previously-expired bot leaves an orphan SQLite row forever.
+    let clearSessionStateBot: ((botId: string) => boolean) | undefined
     try {
-      const result = removeAccount({ stateDir: STATE_DIR }, args.botId)
+      const { openWechatDb } = await import('./src/lib/db')
+      const { makeSessionStateStore } = await import('./src/daemon/session-state')
+      const db = openWechatDb(STATE_DIR)
+      const store = makeSessionStateStore(db)
+      clearSessionStateBot = (botId: string) => {
+        if (!store.isExpired(botId)) return false
+        store.clear(botId)
+        return true
+      }
+    } catch { /* db absent / migration not run yet — fall through to legacy-file-only cleanup */ }
+    try {
+      const result = removeAccount({
+        stateDir: STATE_DIR,
+        ...(clearSessionStateBot ? { clearSessionStateBot } : {}),
+      }, args.botId)
       if (args.json) {
         console.log(JSON.stringify(AccountRemoveOutput.parse({ ok: true, ...result, restartRequired: true }), null, 2))
       } else {
@@ -897,9 +915,30 @@ const daemonKillCmd = defineCommand({
   },
 })
 
+const daemonKillResidualCmd = defineCommand({
+  meta: {
+    name: 'kill-residual',
+    description: 'Read server.pid and kill the daemon if alive (covers manual `wechat-cc run` instances launchctl/systemd cannot reach)',
+  },
+  args: {
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    const { killResidualDaemon, defaultResidualKillDeps } = await import('./src/cli/daemon-kill.ts')
+    const result = await killResidualDaemon(defaultResidualKillDeps(), join(STATE_DIR, 'server.pid'))
+    if (args.json) console.log(JSON.stringify(DaemonKillOutput.parse(result), null, 2))
+    else console.log(result.killed ? `killed pid ${result.pid}` : result.message)
+    // Exit 0 for "nothing to kill" or successful kill — the desktop's restart
+    // step treats those identically (lock is free, proceed to start). Only
+    // exit 1 if we found a live daemon we couldn't kill (operator must
+    // intervene before the next start succeeds).
+    if (!result.killed && /still alive/.test(result.message)) process.exit(1)
+  },
+})
+
 const daemonCmd = defineCommand({
   meta: { name: 'daemon', description: 'Daemon process control' },
-  subCommands: { kill: daemonKillCmd },
+  subCommands: { kill: daemonKillCmd, 'kill-residual': daemonKillResidualCmd },
 })
 
 async function runDemo(verb: 'seed' | 'unseed', chatIdArg: string | undefined, json: boolean): Promise<void> {

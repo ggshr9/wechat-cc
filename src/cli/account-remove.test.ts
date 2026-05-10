@@ -74,4 +74,54 @@ describe('removeAccount', () => {
       `session-state.json.bots[${BOT}]`,
     ])
   })
+
+  // ── SQLite session_state cleanup (post-PR7 store) ─────────────────────
+  // PR7 migrated session_state from session-state.json to SQLite. The
+  // legacy file gets renamed to .migrated and never repopulated, so for
+  // any post-migration user the only live store is SQLite. Without the
+  // clearSessionStateBot dep, account-remove silently leaks rows.
+
+  it('post-PR7 leak demo: without clearSessionStateBot dep, no SQLite cleanup happens', () => {
+    // Simulate a real post-PR7 install: legacy file is gone (.migrated),
+    // so dropSessionStateBot is a no-op. SQLite cleanup needs the dep.
+    rmSync(join(stateDir, 'session-state.json'))
+    const result = removeAccount({ stateDir }, BOT)
+    expect(result.removed.some(r => r.startsWith('session_state.sqlite'))).toBe(false)
+    expect(result.removed.some(r => r.includes('session-state.json'))).toBe(false)
+    // ↑ This is the leak: nothing in `removed` references session_state at
+    //   all, even though for a real user the SQLite row may still be there.
+  })
+
+  it('clears SQLite session_state row when clearSessionStateBot dep is wired', () => {
+    const cleared: string[] = []
+    const result = removeAccount({
+      stateDir,
+      clearSessionStateBot: (botId) => {
+        cleared.push(botId)
+        return true  // simulate row was present and got cleared
+      },
+    }, BOT)
+    expect(cleared).toEqual([BOT])
+    expect(result.removed).toContain(`session_state.sqlite[${BOT}]`)
+  })
+
+  it('omits SQLite removed entry when row was not present (clearSessionStateBot returns false)', () => {
+    const result = removeAccount({
+      stateDir,
+      clearSessionStateBot: () => false,  // nothing to clear
+    }, BOT)
+    expect(result.removed.some(r => r.startsWith('session_state.sqlite'))).toBe(false)
+  })
+
+  it('SQLite cleanup runs even when account dir is already gone (admin re-running cleanup)', () => {
+    rmSync(join(stateDir, 'accounts', BOT), { recursive: true })
+    const result = removeAccount({
+      stateDir,
+      clearSessionStateBot: () => true,
+    }, BOT)
+    expect(result.warnings.some(w => w.includes('account dir not found'))).toBe(true)
+    // Even with a missing account dir, the SQLite row still gets cleared —
+    // important for admin recovery from half-cleaned state.
+    expect(result.removed).toContain(`session_state.sqlite[${BOT}]`)
+  })
 })

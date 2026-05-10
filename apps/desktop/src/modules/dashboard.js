@@ -110,9 +110,9 @@ export function updateClock() {
   el.textContent = now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })
 }
 
-// Stop the daemon via `service stop`. Mirrors restartDaemon's pending UX
-// but only fires the stop step. After this returns, restart-button state
-// re-renders to show "启动" (since daemon is now offline).
+// Stop the daemon via `service stop` + residual-kill. Mirrors restartDaemon's
+// pending UX but only fires the stop steps. After this returns, restart-button
+// state re-renders to show "启动" (since daemon is now offline).
 export async function stopDaemon(deps) {
   setPending("停止…")
   try {
@@ -121,6 +121,12 @@ export async function stopDaemon(deps) {
     setPending(`停止失败：${deps.formatInvokeError(err)}`)
     return
   }
+  // Same residual-kill rationale as restartDaemon: launchctl/systemd doesn't
+  // touch manual `wechat-cc run` instances, so without this step "停止" can
+  // leave a daemon polling silently in the background.
+  try {
+    await deps.invoke("wechat_cli_json", { args: ["daemon", "kill-residual", "--json"] })
+  } catch { /* best effort */ }
   await deps.doctorPoller.refresh()
   setPending("已停止")
   setTimeout(() => setPending(""), 2000)
@@ -148,6 +154,15 @@ export async function restartDaemon(deps) {
   try {
     await deps.invoke("wechat_cli_json", { args: ["service", "stop", "--json"] })
   } catch { /* tolerate */ }
+  // Force-kill any process still holding server.pid. `service stop` only
+  // terminates launchctl/systemd-managed processes — a manual `wechat-cc
+  // run` started in a terminal is invisible to them and will refuse the
+  // next `service start` with "another daemon already running", causing
+  // a silent restart loop. This step closes that gap cross-platform.
+  setPending("清理残留…")
+  try {
+    await deps.invoke("wechat_cli_json", { args: ["daemon", "kill-residual", "--json"] })
+  } catch { /* best effort — start step will surface real failures */ }
   setPending("启动…")
   try {
     await deps.invoke("wechat_cli_json", { args: ["service", "start", "--json"] })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { killDaemonByPid, type KillDeps } from './daemon-kill'
+import { killDaemonByPid, killResidualDaemon, type KillDeps, type KillResidualDeps } from './daemon-kill'
 
 function makeDeps(opts: {
   cmdline?: string | null
@@ -85,5 +85,71 @@ describe('killDaemonByPid', () => {
     const b = await killDaemonByPid(makeDeps({ cmdline: 'bun src/daemon/main.ts --dangerously', diesAfter: 0.5 }).deps, 1)
     expect(a.killed).toBe(true)
     expect(b.killed).toBe(true)
+  })
+})
+
+// ── killResidualDaemon ────────────────────────────────────────────────
+// Wraps killDaemonByPid with a "read server.pid first" step. Used by
+// dashboard restart between `service stop` and `service start` to handle
+// manual `wechat-cc run` instances that launchctl doesn't manage.
+
+function makeResidualDeps(opts: {
+  pidFileContent?: string | null
+  cmdline?: string | null
+  diesAfter?: number
+}): KillResidualDeps {
+  const base = makeDeps(opts).deps
+  return {
+    ...base,
+    readPidFile: () => opts.pidFileContent === undefined ? null : opts.pidFileContent,
+  }
+}
+
+describe('killResidualDaemon', () => {
+  it('returns "lock already free" when pid file is absent', async () => {
+    const deps = makeResidualDeps({})  // pidFileContent undefined → readPidFile returns null
+    const r = await killResidualDaemon(deps, '/state/server.pid')
+    expect(r.killed).toBe(false)
+    expect(r.pid).toBe(0)
+    expect(r.message).toMatch(/no server.pid/)
+  })
+
+  it('returns "lock already free" when pid file is empty', async () => {
+    const deps = makeResidualDeps({ pidFileContent: '' })
+    const r = await killResidualDaemon(deps, '/state/server.pid')
+    expect(r.killed).toBe(false)
+    expect(r.message).toMatch(/no server.pid|invalid pid/)
+  })
+
+  it('rejects malformed pid file content (not an integer)', async () => {
+    const deps = makeResidualDeps({ pidFileContent: 'not-a-pid' })
+    const r = await killResidualDaemon(deps, '/state/server.pid')
+    expect(r.killed).toBe(false)
+    expect(r.message).toMatch(/invalid pid/)
+  })
+
+  it('returns "not found" when pid file points to a dead process', async () => {
+    const deps = makeResidualDeps({ pidFileContent: '99999', cmdline: null })
+    const r = await killResidualDaemon(deps, '/state/server.pid')
+    expect(r.killed).toBe(false)
+    expect(r.message).toMatch(/not found/)
+  })
+
+  it('refuses to kill a non-daemon pid (e.g. recycled by another app)', async () => {
+    const deps = makeResidualDeps({ pidFileContent: '4321', cmdline: '/usr/bin/firefox' })
+    const r = await killResidualDaemon(deps, '/state/server.pid')
+    expect(r.killed).toBe(false)
+    expect(r.message).toMatch(/does not look like a wechat-cc daemon/)
+  })
+
+  it('kills a live wechat-cc daemon referenced by server.pid', async () => {
+    const deps = makeResidualDeps({
+      pidFileContent: '4321',
+      cmdline: 'bun cli.ts run --dangerously',
+      diesAfter: 0.5,
+    })
+    const r = await killResidualDaemon(deps, '/state/server.pid')
+    expect(r.killed).toBe(true)
+    expect(r.pid).toBe(4321)
   })
 })

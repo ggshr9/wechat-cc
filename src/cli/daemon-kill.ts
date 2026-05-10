@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
 import { platform } from 'node:os'
 
 export interface KillDeps {
@@ -10,6 +11,13 @@ export interface KillDeps {
   // existence check is the standard idiom).
   killSignal: (pid: number, signal: number | string) => void
   sleep: (ms: number) => Promise<void>
+}
+
+export interface KillResidualDeps extends KillDeps {
+  // Read trimmed file contents, or null if the file is absent / unreadable.
+  // Path-handling stays in the caller; this dep keeps the helper testable
+  // without touching real filesystem.
+  readPidFile: (path: string) => string | null
 }
 
 export interface KillResult {
@@ -52,6 +60,50 @@ export async function killDaemonByPid(deps: KillDeps, pid: number): Promise<Kill
 
 function isAlive(deps: KillDeps, pid: number): boolean {
   try { deps.killSignal(pid, 0); return true } catch { return false }
+}
+
+/**
+ * Read `server.pid` and forcefully terminate the daemon if it's alive.
+ *
+ * This is the cross-platform "kill whatever holds the lock" used by the
+ * dashboard's restart button between `service stop` and `service start`.
+ * `service stop` only terminates launchctl-managed processes; a manual
+ * `wechat-cc run` started in a terminal is invisible to launchctl, holds
+ * the same `server.pid` lock, and would refuse the next `service start`
+ * with "another daemon already running". Without this step, the user's
+ * symptoms include silent service-start failures + endless launchd
+ * restart loops with the manual daemon still polling.
+ *
+ * Best-effort by design — the four "harmless" outcomes (no pid file,
+ * malformed contents, dead pid, killed cleanly) all converge to "lock is
+ * free for the next start". Only true unkillable processes report failure.
+ */
+export async function killResidualDaemon(
+  deps: KillResidualDeps,
+  pidFilePath: string,
+): Promise<KillResult> {
+  const raw = deps.readPidFile(pidFilePath)
+  if (raw === null || raw === '') {
+    return { killed: false, pid: 0, message: 'no server.pid file (lock already free)' }
+  }
+  const pid = Number.parseInt(raw, 10)
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return { killed: false, pid: 0, message: `invalid pid in server.pid: ${raw}` }
+  }
+  return killDaemonByPid(deps, pid)
+}
+
+export function defaultResidualKillDeps(): KillResidualDeps {
+  const base = defaultKillDeps()
+  return {
+    ...base,
+    readPidFile(path) {
+      try {
+        if (!existsSync(path)) return null
+        return readFileSync(path, 'utf8').trim()
+      } catch { return null }
+    },
+  }
 }
 
 export function defaultKillDeps(): KillDeps {

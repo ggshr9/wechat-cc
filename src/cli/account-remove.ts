@@ -14,6 +14,21 @@ export interface RemoveAccountResult {
 
 export interface RemoveAccountDeps {
   stateDir: string
+  /**
+   * Optional: clear the SQLite `session_state` row for this bot. Returns
+   * true if a row was actually removed, false if nothing was there.
+   *
+   * Why this exists as a dep instead of being inlined: the legacy cleanup
+   * targets `session-state.json` which post-PR7 has been migrated to
+   * SQLite + renamed to `.migrated`. Without this dep, account-remove is
+   * a no-op against the live store — every `account remove` on a
+   * previously-expired bot leaves an orphaned SQLite row forever.
+   *
+   * The CLI binds this to the daemon's `wechat-cc.db`; tests can mock
+   * or omit. Best-effort by design — a missing/uninitialised db falls
+   * through to legacy-file-only cleanup, same posture as v0.5.x.
+   */
+  clearSessionStateBot?: (botId: string) => boolean
 }
 
 // Fully decommission a bound bot — wipes its directory and all per-bot
@@ -27,7 +42,9 @@ export interface RemoveAccountDeps {
 //   accounts/<botId>/         — removed entirely
 //   context_tokens.json       — drop entry keyed by userId
 //   user_account_ids.json     — drop entry keyed by userId
-//   session-state.json        — drop entry keyed by botId
+//   session-state.json        — drop entry keyed by botId (legacy, pre-PR7)
+//   session_state SQLite row  — only when deps.clearSessionStateBot is wired
+//                                (CLI defaults to wired; missing-db falls through)
 //
 // Files NOT touched:
 //   user_names.json           — keep nickname for re-bind
@@ -58,6 +75,10 @@ export function removeAccount(deps: RemoveAccountDeps, botId: string): RemoveAcc
 
   if (dropSessionStateBot(join(stateDir, 'session-state.json'), botId)) {
     removed.push(`session-state.json.bots[${botId}]`)
+  }
+
+  if (deps.clearSessionStateBot?.(botId)) {
+    removed.push(`session_state.sqlite[${botId}]`)
   }
 
   return { botId, removed, warnings }
