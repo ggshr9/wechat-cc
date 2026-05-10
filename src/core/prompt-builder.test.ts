@@ -94,6 +94,12 @@ describe('buildSystemPrompt', () => {
     expect(p).toContain('定时 tick')
   })
 
+  it('Companion silent-tick guidance forbids visible assistant text on "不打扰"', () => {
+    const p = buildSystemPrompt({ ...defaults(), companionEnabled: true })
+    expect(p).toContain('不要产生任何可见的 assistant text')
+    expect(p).toContain('沉默就是沉默')
+  })
+
   it('memory section is always present (memory is provider-agnostic)', () => {
     const p1 = buildSystemPrompt(defaults())
     const p2 = buildSystemPrompt({ ...defaults(), companionEnabled: true })

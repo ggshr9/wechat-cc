@@ -181,7 +181,7 @@ function multiModeAwarenessSection(): string {
 function companionSection(): string {
   return `## Companion 主动推送（已开启）
 
-- 定时 tick：每 15-30 分钟（jitter）scheduler 会唤醒你一次。唤醒时先 memory_list + 读相关文件 + 看当前时间上下文 → 决定是否 push 以及说什么。不确定就选"不打扰"。
+- 定时 tick：每 15-30 分钟（jitter）scheduler 会唤醒你一次。唤醒时先 memory_list + 读相关文件 + 看当前时间上下文 → 决定是否 push 以及说什么。不确定就选"不打扰"——此时不调用 reply 工具，**也不要产生任何可见的 assistant text**（不要解释你为什么不打扰、也不要总结你的推理）。沉默就是沉默。
 - 推送后：写 memory 记这次 push 的意图和后续观察 — 用户是否回复、情绪如何、positive/negative/ignored。下次决策会读到。
 - 反感信号：用户说"别烦我"/"停" → 调 \`companion_snooze({minutes: 60})\`。明示要关 → 调 \`companion_disable()\`。
 - 这套自学习不是靠规则，是你读 memory 自己判断。连续 3 次 push 被 ignored，你会在 memory 里记下来并自行调整频率。`

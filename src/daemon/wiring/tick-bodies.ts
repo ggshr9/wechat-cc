@@ -47,8 +47,10 @@ export function buildTickBodies(deps: TickDeps): TickBodies {
     const tickText =
       `<companion_tick ts="${new Date().toISOString()}" default_chat_id="${cfg.default_chat_id}" />\n` +
       `定时唤醒。先 memory_list + memory_read 你觉得相关的文件。` +
-      `再看当前时间和用户最近状态。决定是否向 ${cfg.default_chat_id} push，或保持沉默。` +
-      `不确定就选不打扰。push 后写一条 memory 记下决策和意图（便于下次 tick 读到效果）。`
+      `再看当前时间和用户最近状态。决定是否向 ${cfg.default_chat_id} push。` +
+      `\n\n要 push：调 reply 工具，内容就是要发给用户的话。` +
+      `\n不 push：直接结束这一轮，**不调用 reply**，**也不产生任何 assistant text**——不要解释你为什么不打扰、不要总结你看到的状态。沉默就是沉默。` +
+      `\n不确定就选不 push（结束）。push 后写一条 memory 记下决策和意图（便于下次 tick 读到效果）。`
     try { await handle.dispatch(tickText) }
     catch (err) { deps.log('SCHED', `companion tick dispatch failed: ${errMsg(err)}`) }
   }
