@@ -151,6 +151,80 @@ describe('dedupeAccountsByUserId', () => {
     expect(r.affectedUserIds).toHaveLength(0)
   })
 
+  // ── Edge cases that could mis-archive a freshly-bound bot ────────────
+  // The boot-time dedupe (main.ts:38) runs with empty opts, so its only
+  // signal for "which is newer" is filesystem mtime. On fast SSDs the two
+  // dirs from a quick remove+rescan can land within the same ms tick, and
+  // the tiebreak is `b.botId.localeCompare(a.botId)` (descending). If the
+  // tiebreak doesn't agree with the actual scan order, the FRESH bot dir
+  // gets archived — daemon then loads only the now-dead old bot.
+
+  it('tied mtimes + lex tiebreak: lex-larger botId wins regardless of true scan order', () => {
+    // Both dirs at mtimeMs=1000. Lex desc picks 'zzz@bot' over 'aaa@bot'.
+    // If the user actually scanned zzz first then aaa, aaa is the new bot
+    // but lex picks zzz → archives aaa → the FRESH bind is lost.
+    const { deps, renames } = fs({
+      '/state/accounts': { type: 'dir', children: ['bot-aaa', 'bot-zzz'] },
+      '/state/accounts/bot-aaa': { type: 'dir', children: ['account.json'], mtimeMs: 1000 },
+      '/state/accounts/bot-aaa/account.json': { type: 'file', content: '{"userId":"u","botId":"aaa@bot"}' },
+      '/state/accounts/bot-zzz': { type: 'dir', children: ['account.json'], mtimeMs: 1000 },
+      '/state/accounts/bot-zzz/account.json': { type: 'file', content: '{"userId":"u","botId":"zzz@bot"}' },
+    })
+    const r = dedupeAccountsByUserId('/state/accounts', {}, deps)
+    // Confirms: tiebreak archives the lex-smaller dir, regardless of which
+    // scan was actually newer in wall-clock terms. This is a known mis-
+    // archive risk when boot dedupe runs on fast SSDs without an explicit
+    // keepBotId. Setup-flow's dedupe is unaffected (it always passes
+    // keepBotId), but a daemon restart between scans + an mtime tie can
+    // surface this.
+    expect(renames.map(([from]) => from)).toEqual(['/state/accounts/bot-aaa'])
+    expect(r.affectedUserIds).toEqual(['u'])
+  })
+
+  it('legacy account.json without botId field: lookup falls back to dir name (no false match)', () => {
+    // If a legacy/half-written account.json has no botId field, dedupe-
+    // accounts.ts:85 falls back to using the directory name as the botId.
+    // Scenario: scan-time dedupe asks for keepBotId="new@bot" (raw,
+    // unsanitised), but a stale dir's account.json yields botId="bot-old"
+    // (dir name fallback). The `e.botId === wantedBotId` check fails and
+    // `e.dir.endsWith(wantedBotId)` also fails (sanitised vs raw), so
+    // dedupe falls through to mtime sort. If mtimes are correct, that
+    // still picks the right one — but if the legacy dir has a fresher
+    // mtime (e.g. it was touch'd by some other code), the FRESH bind
+    // could be archived.
+    const { deps, renames } = fs({
+      '/state/accounts': { type: 'dir', children: ['bot-stale', 'bot-fresh'] },
+      // Stale: legacy file, no botId field, but mtime is freshest
+      '/state/accounts/bot-stale': { type: 'dir', children: ['account.json'], mtimeMs: 9999 },
+      '/state/accounts/bot-stale/account.json': { type: 'file', content: '{"userId":"u-shared"}' },
+      // Fresh: explicit botId, but mtime is older
+      '/state/accounts/bot-fresh': { type: 'dir', children: ['account.json'], mtimeMs: 5000 },
+      '/state/accounts/bot-fresh/account.json': { type: 'file', content: '{"userId":"u-shared","botId":"fresh@bot"}' },
+    })
+    // Caller asked to keep fresh@bot (the just-scanned one). But the lookup
+    // can't find e.botId === "fresh@bot" in the stale dir (botId fallback
+    // is "bot-stale"), so explicit-keep works — fresh is kept correctly.
+    const r = dedupeAccountsByUserId('/state/accounts', { keepUserId: 'u-shared', keepBotId: 'fresh@bot' }, deps)
+    expect(renames.map(([from]) => from)).toEqual(['/state/accounts/bot-stale'])
+    expect(r.affectedUserIds).toEqual(['u-shared'])
+  })
+
+  it('empty keepBotId falls through to mtime sort (boot-time dedupe semantics)', () => {
+    // Boot-time call: `dedupeAccountsByUserId(accountsDir, {})`. Verifies
+    // that when caller passes no keepUserId/keepBotId, the explicit-keep
+    // branch is skipped entirely and we go straight to mtime tiebreak.
+    const { deps, renames } = fs({
+      '/state/accounts': { type: 'dir', children: ['bot-A', 'bot-B'] },
+      '/state/accounts/bot-A': { type: 'dir', children: ['account.json'], mtimeMs: 1000 },
+      '/state/accounts/bot-A/account.json': { type: 'file', content: '{"userId":"u","botId":"A@bot"}' },
+      '/state/accounts/bot-B': { type: 'dir', children: ['account.json'], mtimeMs: 9000 },
+      '/state/accounts/bot-B/account.json': { type: 'file', content: '{"userId":"u","botId":"B@bot"}' },
+    })
+    const r = dedupeAccountsByUserId('/state/accounts', {}, deps)
+    expect(renames.map(([from]) => from)).toEqual(['/state/accounts/bot-A'])
+    expect(r.affectedUserIds).toEqual(['u'])
+  })
+
   it('logs each supersede event via deps.log', () => {
     const logs: Array<[string, string]> = []
     const { deps } = fs({
