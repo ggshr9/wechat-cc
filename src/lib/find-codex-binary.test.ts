@@ -4,6 +4,45 @@ import { findCodexBinary } from './find-codex-binary'
 const HOME = '/home/u'
 
 describe('findCodexBinary', () => {
+  it('prefers the macOS .app bundle Resources shim (highest priority — version-matched + immune to global codex on PATH)', () => {
+    // Desktop installer ships @openai/codex inside the .app at
+    // Contents/Resources/codex. find-codex-binary derives that path from
+    // process.execPath when the daemon was launched as a Tauri sidecar.
+    const execPath = '/Applications/wechat-cc.app/Contents/MacOS/wechat-cc-cli'
+    const fs = new Set([
+      '/Applications/wechat-cc.app/Contents/Resources/codex/bin/codex.js',
+      // Even when a plugin-style install ALSO has the shim, the .app
+      // bundle wins — it's the source of truth for the installed daemon.
+      '/home/u/.claude/plugins/local/wechat/node_modules/@openai/codex/bin/codex.js',
+      '/usr/local/bin/codex',
+    ])
+    const result = findCodexBinary({
+      exists: (p) => fs.has(p),
+      readdir: () => [],
+      pathEnv: '/usr/local/bin',
+      homeDir: HOME,
+      platform: 'darwin',
+      execPath,
+    })
+    expect(result).toBe('/Applications/wechat-cc.app/Contents/Resources/codex/bin/codex.js')
+  })
+
+  it('skips the .app bundle probe when execPath is not a Tauri-style sidecar layout', () => {
+    // Running from source (`bun src/daemon/main.ts`) — execPath points
+    // somewhere like /opt/homebrew/bin/bun. The probe must not invent a
+    // fake Resources path off such a parent.
+    const fs = new Set(['/home/u/.claude/plugins/local/wechat/node_modules/@openai/codex/bin/codex.js'])
+    const result = findCodexBinary({
+      exists: (p) => fs.has(p),
+      readdir: () => [],
+      pathEnv: '/usr/local/bin',
+      homeDir: HOME,
+      platform: 'darwin',
+      execPath: '/opt/homebrew/bin/bun',
+    })
+    expect(result).toBe('/home/u/.claude/plugins/local/wechat/node_modules/@openai/codex/bin/codex.js')
+  })
+
   it('prefers wechat-cc-bundled JS shim over PATH/nvm (version-matched)', () => {
     const fs = new Set([
       '/home/u/.claude/plugins/local/wechat/node_modules/@openai/codex/bin/codex.js',

@@ -46,6 +46,31 @@ export interface FindCodexBinaryDeps {
   platform?: NodeJS.Platform
   /** Defaults to `process.env.WECHAT_CC_ROOT`. */
   wechatCcRoot?: string | undefined
+  /** Defaults to `process.execPath`. Used to derive the desktop installer's
+   *  .app bundle Resources path so a version-matched codex shipped inside
+   *  the bundle wins over a stale global codex on PATH. */
+  execPath?: string
+}
+
+/** Derive `<bundle>.app/Contents/Resources/` from `execPath` when the
+ *  daemon was launched as a Tauri sidecar. Returns null in source mode
+ *  (or any other non-`.app` launch context) so we never falsely probe a
+ *  parent directory that has nothing to do with the bundle. macOS only
+ *  for now — Linux .deb and Windows .nsis have their own conventions
+ *  that a follow-up can wire when desktop builds need them. */
+function appResourcesFrom(
+  execPath: string,
+  p: typeof posixPath,
+): string | null {
+  // execPath = .../wechat-cc.app/Contents/MacOS/<binary>
+  // → Resources at .../wechat-cc.app/Contents/Resources
+  const macOSDir = p.dirname(execPath)               // .../Contents/MacOS
+  const contentsDir = p.dirname(macOSDir)            // .../Contents
+  const bundleDir = p.dirname(contentsDir)           // .../wechat-cc.app
+  if (p.basename(macOSDir) !== 'MacOS') return null
+  if (p.basename(contentsDir) !== 'Contents') return null
+  if (!bundleDir.endsWith('.app')) return null
+  return p.join(contentsDir, 'Resources')
 }
 
 // Common on-disk locations of wechat-cc's own source clone — the README
@@ -71,12 +96,27 @@ export function findCodexBinary(deps: FindCodexBinaryDeps = {}): string | null {
   const homeDir = deps.homeDir ?? homedir()
   const platform = deps.platform ?? process.platform
   const wechatCcRoot = 'wechatCcRoot' in deps ? deps.wechatCcRoot : process.env.WECHAT_CC_ROOT
+  const execPath = deps.execPath ?? process.execPath
   const exe = platform === 'win32' ? 'codex.exe' : 'codex'
   const sep = platform === 'win32' ? ';' : ':'
   // Drive `join` off the `platform` dep, not the host. Otherwise tests
   // that pass platform: 'linux' still get backslash-joined paths on a
   // Windows runner and never match their forward-slash fixtures.
   const platformPath = platform === 'win32' ? winPath : posixPath
+
+  // 0. Tauri .app bundle Resources (highest priority). When the daemon was
+  // launched as the desktop installer's sidecar, execPath looks like
+  // /<...>/wechat-cc.app/Contents/MacOS/wechat-cc-cli. The Tauri bundle
+  // ships `Contents/Resources/codex/bin/codex.js` (the matching @openai/codex
+  // package — see apps/desktop/src-tauri/tauri.conf.json). Finding it here
+  // guarantees version match regardless of what global codex the user has.
+  // We pattern-match the parent-of-parent on `.app/Contents` so we don't
+  // false-positive on source-mode (`bun` on PATH) launches.
+  const bundleResources = appResourcesFrom(execPath, platformPath)
+  if (bundleResources) {
+    const shim = platformPath.join(bundleResources, 'codex', 'bin', 'codex.js')
+    if (exists(shim)) return shim
+  }
 
   // 1. wechat-cc's bundled, SDK-version-matched JS shim (highest priority).
   // The Codex wire protocol changes across versions: a globally-installed

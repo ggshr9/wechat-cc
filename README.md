@@ -423,6 +423,8 @@ for the SDK-level capability table this is derived from.
 | `@all <msg>` | Broadcast |
 | `@<name> <msg>` | Forward to a specific user |
 | `/health` | Bot health (admin) — surfaces expired bots, cleanup hints |
+| `/health ai` | AI provider status (admin) — per-provider session age, zero token |
+| `/reset` or `/重置` | Drop AI sessions for this chat (admin) — next message starts fresh from current keychain |
 | `/hearth ingest|list|show|apply` | Vault governance (admin, hearth-enabled) |
 
 The Companion + memory features are configured via natural language, not
@@ -552,6 +554,28 @@ install, run `wechat-cc update`.
 Run `/health` from WeChat (admin-gated). Expired bots show up there;
 respond with `清理 <bot-id>` to remove from active list. Re-scan the QR
 to bind a fresh session.
+
+**AI replies with "AI 暂时不可用…" notice (v0.5.17+)**
+Your AI provider's credentials have gone stale — either OAuth tokens
+expired and the long-running subprocess can't refresh, or you haven't
+run `claude` interactively on this machine yet. The daemon now self-heals
+on the next message (idle reset + reactive sentinel), but if you want to
+force it right now, send `/reset` (or `/重置`) from your WeChat chat. The
+daemon also auto-recycles a stale session for any chat that's still busy
+when its access token expires, so most users won't see this notice more
+than once per failure.
+
+If you've never run `claude` on this machine: open a terminal, run
+`claude /login`, complete the OAuth flow, then send any message in WeChat
+— the next dispatch picks up the fresh keychain credential automatically.
+
+**Codex provider unavailable / no codex reply (v0.5.17+)**
+`wechat-cc-cli doctor` shows the installed `codex` version. If it differs
+from the bundled SDK's expected version (e.g. installed 0.125 vs bundled
+0.128), the boot log will say `codex provider NOT registered — version
+check failed`. Fix: `npm i -g @openai/codex@<expected-version>` (the boot
+log includes the exact version), or remove the older codex from PATH.
+Restart the daemon. `wechat-cc setup` doesn't need to re-run.
 
 ---
 

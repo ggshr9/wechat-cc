@@ -396,6 +396,16 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
         break
       }
 
+      // Auth-fail self-heal — same shape as solo/parallel. Releasing the
+      // speaker's session means a follow-up /chat dispatch starts from a
+      // fresh subprocess. Ending the loop here is the safe call: the user
+      // already got the neutral notice from handleAuthFailed and the
+      // moderator's next pick is unreliable while credentials are stale.
+      if (result.errorCode === 'auth_failed') {
+        await handleAuthFailed(msg.chatId, proj.alias, speaker, result)
+        break
+      }
+
       // If the speaker called the reply tool despite chatroom mode, the
       // text already went out via internal-api with the [Display] prefix.
       // Skip our own forwarding (would double-send) but still record
@@ -458,6 +468,15 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
       const providerId = parallelProviders[i]!
       if (r.status === 'rejected') {
         deps.log('COORDINATOR_PARALLEL', `provider=${providerId} threw: ${r.reason instanceof Error ? r.reason.message : r.reason}`)
+        continue
+      }
+      // Same self-heal as solo: the failing provider's session is released
+      // so the next /both dispatch spawns a fresh subprocess. handleAuthFailed
+      // also fires (one throttled neutral notice across both providers per
+      // chat per hour). The other provider's reply (if any) still goes
+      // through below — partial reply is better than no reply.
+      if (r.value.errorCode === 'auth_failed') {
+        await handleAuthFailed(msg.chatId, proj.alias, providerId, r.value)
         continue
       }
       const { assistantText, replyToolCalled } = r.value

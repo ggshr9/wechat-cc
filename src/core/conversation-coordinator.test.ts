@@ -564,6 +564,56 @@ describe('ConversationCoordinator', () => {
       return { c, acquire, sendAssistantText, dispatchCalls }
     }
 
+    it('on auth_failed: releases ONLY the failing provider; other provider replies normally', async () => {
+      // The solo path's release-on-auth-failed pattern must extend to /both
+      // mode too — without it, a stale-credential provider stays cached in
+      // the session pool for the full idle window (30 min) and every /both
+      // dispatch silently produces no reply from that side.
+      const store = makeMockStore()
+      store.set('chat-p', { kind: 'parallel' })
+      const registry = createProviderRegistry()
+      registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
+      registry.register('codex', dummyProvider, { displayName: 'Codex', canResume: () => true })
+      const release = vi.fn(async () => {})
+      const acquire = vi.fn(async (_alias: string, _path: string, providerId: string) => {
+        const events: AgentEvent[] = providerId === 'claude'
+          ? [
+              { kind: 'error', code: 'auth_failed', message: 'claude reports not logged in' },
+              { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+            ]
+          : [
+              { kind: 'text', text: 'codex reply' },
+              { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+            ]
+        return makeHandle(providerId, makeFakeSession({ events }))
+      })
+      const sendAssistantText = vi.fn(async (_chatId: string, _text: string) => {})
+      const c = createConversationCoordinator({
+        resolveProject: () => ({ alias: 'a', path: '/p' }),
+        manager: { acquire, release },
+        conversationStore: store,
+        registry,
+        defaultProviderId: 'claude',
+        format: (m) => m.text,
+        sendAssistantText,
+        permissionMode: 'strict',
+        log: () => {},
+      })
+      await c.dispatch(inbound('chat-p', 'hi'))
+
+      // Failing provider was released; healthy one was not.
+      expect(release).toHaveBeenCalledWith('a', 'claude')
+      expect(release).not.toHaveBeenCalledWith('a', 'codex')
+      // Codex's normal reply made it through with the parallel-mode prefix.
+      const sent = sendAssistantText.mock.calls.map(call => call[1] as string)
+      expect(sent.some(t => t === '[Codex] codex reply')).toBe(true)
+      // Exactly one neutral auth-fail notice, regardless of which provider failed.
+      const notices = sent.filter(t => /AI.*不可用|wechat-cc/i.test(t))
+      expect(notices).toHaveLength(1)
+      // The raw "Not logged in / Please run /login" string did NOT leak.
+      expect(sent.some(t => /Please run \/login|Not logged in/.test(t))).toBe(false)
+    })
+
     it('fans out the same inbound to both providers concurrently', async () => {
       const { c, acquire, dispatchCalls } = setupParallel()
       await c.dispatch(inbound('chat-1', 'hello both'))
@@ -796,6 +846,65 @@ describe('ConversationCoordinator', () => {
       expect(dispatchedTexts[0]?.text).toContain('不要调 reply 工具')
       // claude's output goes to user with [Display] prefix.
       expect(sendAssistantText).toHaveBeenCalledWith('chat-1', '[Claude] claude 的回答')
+    })
+
+    it('on speaker auth_failed: releases speaker session, sends notice, ends the chatroom cleanly', async () => {
+      // /chat mode parity with /solo and /both: when a speaker's session
+      // returns the structured auth_failed event, the coordinator must
+      // release the session and end the loop with the neutral notice. The
+      // previous code path silently broke (assistantText empty → "produced
+      // no assistant text — ending") and the user got NOTHING.
+      const store = makeMockStore()
+      store.set('chat-r', { kind: 'chatroom' })
+      const registry = createProviderRegistry()
+      registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
+      registry.register('codex', dummyProvider, { displayName: 'Codex', canResume: () => true })
+      const release = vi.fn(async () => {})
+      const acquire = vi.fn(async (_alias: string, _path: string, providerId: string) => {
+        const events: AgentEvent[] = providerId === 'claude'
+          ? [
+              { kind: 'error', code: 'auth_failed', message: 'stale claude' },
+              { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+            ]
+          : [
+              { kind: 'text', text: 'codex reply' },
+              { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+            ]
+        return makeHandle(providerId, makeFakeSession({ events }))
+      })
+      const sendAssistantText = vi.fn(async (_chatId: string, _text: string) => {})
+      // Moderator decisions: pick claude first, then claude again. We expect
+      // the loop to exit after the FIRST round because claude returned
+      // auth_failed — the second decision should never be consumed.
+      let modCalls = 0
+      const haikuEval = vi.fn(async () => {
+        modCalls++
+        return JSON.stringify({ action: 'continue', speaker: 'claude', prompt: '开场', reasoning: '' })
+      })
+      const c = createConversationCoordinator({
+        resolveProject: () => ({ alias: 'a', path: '/p' }),
+        manager: { acquire, release },
+        conversationStore: store,
+        registry,
+        defaultProviderId: 'claude',
+        format: (m) => m.text,
+        sendAssistantText,
+        permissionMode: 'strict',
+        log: () => {},
+        haikuEval,
+        chatroomMaxRounds: 4,
+      })
+      await c.dispatch(inbound('chat-r', '开始讨论'))
+
+      // claude's session was released so the next inbound starts clean.
+      expect(release).toHaveBeenCalledWith('a', 'claude')
+      // Loop exited after the first speaker turn (moderator called once).
+      expect(modCalls).toBe(1)
+      // User got the neutral notice — NOT the raw sentinel or a "[Claude]" prefix.
+      const sent = sendAssistantText.mock.calls.map(call => call[1] as string)
+      expect(sent.some(t => /AI.*不可用/.test(t))).toBe(true)
+      expect(sent.some(t => /Please run \/login|Not logged in/.test(t))).toBe(false)
+      expect(sent.some(t => /^\[Claude\]/.test(t))).toBe(false)
     })
 
     it('runs a 2-round exchange when moderator continues then ends', async () => {
