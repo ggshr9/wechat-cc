@@ -73,7 +73,7 @@ process.on('exit', () => { for (const c of cleanup) try { Promise.resolve(c()).c
   const log = (tag: string, line: string, fields?: Record<string, unknown>) => {
     logs.push({ tag, line, ...(fields ? { fields } : {}) })
   }
-  const ilink = makeIlinkStub() as never
+  const ilink = makeIlinkStub()
 
   header('Booting an isolated daemon')
   const db = openTestDb()
@@ -81,7 +81,11 @@ process.on('exit', () => { for (const c of cleanup) try { Promise.resolve(c()).c
   const boot = buildBootstrap({
     db,
     stateDir,
-    ilink,
+    // ilink stub is structurally close enough for the bootstrap surfaces
+    // we exercise here, but doesn't fully satisfy IlinkAdapter. Cast only
+    // at the call site so the outer `ilink` keeps its inferred shape and
+    // subsequent reads (e.g. ilink.sessionState below) typecheck.
+    ilink: ilink as never,
     loadProjects: () => ({ projects: { P: { path: process.cwd(), last_active: 0 } }, current: 'P' }),
     lastActiveChatId: () => null,
     log,
