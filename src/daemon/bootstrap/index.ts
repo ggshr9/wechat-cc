@@ -328,6 +328,21 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     resumeTTLMs: 7 * 24 * 60 * 60_000,
   })
 
+  // Periodic idle sweep — without this, idleEvictMs is dead config (the
+  // method exists but was never called from production paths). 30 min of
+  // inactivity is the limit before a session is dropped; the next dispatch
+  // spawns a fresh subprocess that re-reads keychain credentials. Required
+  // to avoid the long-running-daemon OAuth-staleness path that surfaces as
+  // the claude binary streaming "Not logged in · Please run /login" as
+  // assistant text. unref() so the timer never keeps the event loop alive
+  // (matters for tests that build a real bootstrap and then exit).
+  const idleSweepTimer = setInterval(() => {
+    sessionManager.sweepIdle().catch(err => {
+      deps.log('IDLE_SWEEP', `error: ${err instanceof Error ? err.message : String(err)}`)
+    })
+  }, 60_000)
+  idleSweepTimer.unref()
+
   // Per-chat conversation mode (RFC 03 P2). Default for new chats =
   // `solo` with the daemon-configured provider. `/cc` `/codex` `/solo`
   // commands flip individual chats; persisted in conversations.json.

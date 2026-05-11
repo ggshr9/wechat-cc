@@ -167,6 +167,39 @@ describe('claude-agent-provider', () => {
     await session.close()
   })
 
+  it('translates "Please run /login" assistant text into an auth_failed error event (not a normal text reply)', async () => {
+    // When claude is unauthenticated, its binary streams the literal text
+    // "Not logged in · Please run /login" as an assistant message. Without
+    // interception that string leaks to the user as if it were a real reply.
+    // The provider must intercept it and surface a structured error so the
+    // coordinator can suppress the fallback path.
+    const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' })
+
+    const eventsPromise = drain(session.dispatch('hi'))
+
+    await new Promise(r => setTimeout(r, 0))
+
+    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'Not logged in · Please run /login' }] },
+    })
+    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
+      type: 'result', subtype: 'success', session_id: 's-auth', num_turns: 1, duration_ms: 0,
+    })
+
+    const events = await eventsPromise
+    // The auth-fail text MUST NOT pass through as a normal text event.
+    expect(events.find(e => e.kind === 'text')).toBeUndefined()
+    // It must be surfaced as a structured error with a specific code.
+    const errorEvent = events.find(e => e.kind === 'error')
+    expect(errorEvent).toBeDefined()
+    expect((errorEvent as { code?: string }).code).toBe('auth_failed')
+    // Result event still arrives last so the iterator closes cleanly.
+    expect(events[events.length - 1]?.kind).toBe('result')
+    await session.close()
+  })
+
   it('returns an empty iterable after close()', async () => {
     const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
     const session = await provider.spawn({ alias: 'foo', path: '/tmp' })

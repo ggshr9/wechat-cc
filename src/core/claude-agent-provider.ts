@@ -41,6 +41,14 @@ function extractText(content: AssistantContent | undefined): string {
   return content.map(b => (b?.type === 'text' ? b.text ?? '' : '')).join('')
 }
 
+// The claude binary prints this literal phrase as assistant text when it has
+// no usable credentials (verified by inspecting the binary's string table).
+// Without interception the phrase leaks to the user as if it were the AI's
+// reply ("Not logged in · Please run /login"). We tag it with a structured
+// error code so the coordinator can suppress the fallback path and respond
+// with a controlled notification instead.
+const AUTH_FAIL_RE = /Please run \/login/i
+
 /**
  * Parse a Claude SDK tool_use block's `name` (e.g. 'mcp__wechat__reply')
  * into our normalised `{ server, tool }` shape. Built-in tools (Read,
@@ -112,9 +120,22 @@ export function createClaudeAgentProvider(opts: ClaudeAgentProviderOptions): Age
                   }
                 }
               }
-              // Emit text event for any text content
+              // Emit text event for any text content — UNLESS the binary is
+              // surfacing its "not logged in" sentinel as assistant text. In
+              // that case route it as a structured error; coordinator drops
+              // the fallback-reply and emits a controlled user-facing notice.
               const text = extractText(content)
-              if (text) aq.push({ kind: 'text', text })
+              if (text) {
+                if (AUTH_FAIL_RE.test(text)) {
+                  aq.push({
+                    kind: 'error',
+                    code: 'auth_failed',
+                    message: `claude reports not logged in: ${text.slice(0, 160)}`,
+                  })
+                } else {
+                  aq.push({ kind: 'text', text })
+                }
+              }
             } else if (msg.type === 'result') {
               if (msg.subtype && msg.subtype !== 'success') {
                 const summary = typeof msg.result === 'string'

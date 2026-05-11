@@ -84,7 +84,26 @@ export interface ConversationCoordinatorDeps {
    * loop still functions, just without LLM-quality routing decisions.
    */
   haikuEval?: (prompt: string) => Promise<string>
+  /**
+   * Throttle window (ms) for the "AI 暂时不可用" notice the coordinator
+   * emits when a provider reports `errorCode: 'auth_failed'`. The first
+   * failure in a chat sends one notice; further failures within this
+   * window are silent (avoids spamming the user while their AI session
+   * is broken). Default: 60 min.
+   */
+  authFailNotifyThrottleMs?: number
+  /**
+   * Clock injection — used by the auth-failed notice throttle so tests
+   * can drive virtual time without `vi.useFakeTimers()`. Defaults to
+   * `Date.now`.
+   */
+  now?: () => number
 }
+
+/** User-facing notice when a provider reports auth_failed. Deliberately
+ *  generic — no terminal commands, no "/login" instruction. The recovery
+ *  surface is the desktop dashboard, not this chat. */
+const AUTH_FAIL_NOTICE = '⚠ AI 暂时不可用，请在 wechat-cc 桌面端检查并重新连接。'
 
 export interface ConversationCoordinator {
   dispatch(msg: InboundMsg): Promise<void>
@@ -123,6 +142,25 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
 
   const parallelProviders: ProviderId[] = deps.parallelProviders ?? ['claude', 'codex']
   const chatroomMaxRounds = deps.chatroomMaxRounds ?? 4
+  const authFailThrottleMs = deps.authFailNotifyThrottleMs ?? 60 * 60_000
+  const nowMs = deps.now ?? Date.now
+  // chatId → last-notice-at; used to throttle the auth_failed notice.
+  const authFailLastNotifyAt = new Map<string, number>()
+
+  /** Returns true if this chat just received its auth_failed notice
+   *  (caller skips fallback-reply). On throttle the chat is silent — the
+   *  user already saw the notice within the window. */
+  async function handleAuthFailed(chatId: string, providerId: ProviderId, summary: TurnSummary): Promise<void> {
+    deps.log('AUTH_FAILED', `chat=${chatId} provider=${providerId} message=${JSON.stringify((summary.error ?? '').slice(0, 200))}`, {
+      event: 'auth_failed',
+      chat_id: chatId,
+      provider: providerId,
+    })
+    const last = authFailLastNotifyAt.get(chatId) ?? 0
+    if (nowMs() - last < authFailThrottleMs) return
+    authFailLastNotifyAt.set(chatId, nowMs())
+    await deps.sendAssistantText?.(chatId, AUTH_FAIL_NOTICE)
+  }
   // v0.5.9 — chatroom is now a persistent session per chatId. History
   // accumulates across user messages until the user switches mode away
   // from chatroom (then we delete the entry). Lets the moderator see the
@@ -182,6 +220,15 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     const summary = await collectTurn(handle.dispatch(text))
     const assistantTexts = summary.assistantText
     const replyToolCalled = summary.replyToolCalled
+
+    // Structured auth-failure path: provider intercepted the "Not logged in"
+    // assistant text and re-emitted it as a coded error. Suppress fallback
+    // and send a throttled neutral notice instead — never leak provider
+    // failure text to the user.
+    if (summary.errorCode === 'auth_failed') {
+      await handleAuthFailed(msg.chatId, providerId, summary)
+      return
+    }
 
     // Same fallback semantics as the legacy routeInbound: only forward
     // raw assistant text when the agent did NOT call a reply-family

@@ -249,6 +249,89 @@ describe('ConversationCoordinator', () => {
     expect(sendAssistantText).toHaveBeenCalledWith('chat-1', 'raw text 2')
   })
 
+  it('on auth_failed: suppresses raw assistant text AND sends a single neutral notice', async () => {
+    // When the provider emits a structured auth_failed error (claude binary
+    // surfaced "Please run /login" as assistant text), the coordinator must
+    // NOT forward any of the text via fallback-reply. It instead sends one
+    // controlled user-facing notice — generic, no terminal instructions.
+    const session = makeFakeSession({
+      events: [
+        // Provider intercepts the "Please run /login" text and emits a
+        // structured error in its place (see claude-agent-provider).
+        { kind: 'error', code: 'auth_failed', message: 'claude reports not logged in: Not logged in · Please run /login' },
+        { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+      ],
+    })
+    const acquire = vi.fn(async (_alias: string, _path: string, _providerId: string) =>
+      makeHandle('claude', session)
+    )
+    const sendAssistantText = vi.fn(async (_chatId: string, _text: string) => {})
+    const registry = createProviderRegistry()
+    registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
+    const c = createConversationCoordinator({
+      resolveProject: () => ({ alias: 'a', path: '/p' }),
+      manager: { acquire },
+      conversationStore: makeMockStore(),
+      registry,
+      defaultProviderId: 'claude',
+      format: () => 'x',
+      sendAssistantText,
+      permissionMode: 'strict',
+      log: () => {},
+    })
+    await c.dispatch(inbound('chat-1', 'hi'))
+    // Exactly one outbound message, NOT the raw "Please run /login" text.
+    expect(sendAssistantText).toHaveBeenCalledTimes(1)
+    const [chatId, text] = sendAssistantText.mock.calls[0]!
+    expect(chatId).toBe('chat-1')
+    expect(text).not.toContain('Please run /login')
+    expect(text).not.toContain('Not logged in')
+    expect(text).toMatch(/AI .*不可用|wechat-cc/i)
+  })
+
+  it('on auth_failed: throttles repeated notices for the same chat', async () => {
+    const session = makeFakeSession({
+      events: [
+        { kind: 'error', code: 'auth_failed', message: 'x' },
+        { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+      ],
+    })
+    const acquire = vi.fn(async (_alias: string, _path: string, _providerId: string) =>
+      makeHandle('claude', session)
+    )
+    const sendAssistantText = vi.fn(async (_chatId: string, _text: string) => {})
+    const registry = createProviderRegistry()
+    registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
+    let clock = 1_000_000
+    const c = createConversationCoordinator({
+      resolveProject: () => ({ alias: 'a', path: '/p' }),
+      manager: { acquire },
+      conversationStore: makeMockStore(),
+      registry,
+      defaultProviderId: 'claude',
+      format: () => 'x',
+      sendAssistantText,
+      permissionMode: 'strict',
+      log: () => {},
+      authFailNotifyThrottleMs: 1000,
+      now: () => clock,
+    })
+    // First failure: one notice.
+    await c.dispatch(inbound('chat-1', 'hi'))
+    expect(sendAssistantText).toHaveBeenCalledTimes(1)
+    // 500ms later (within throttle window): silent.
+    clock += 500
+    await c.dispatch(inbound('chat-1', 'hi again'))
+    expect(sendAssistantText).toHaveBeenCalledTimes(1)
+    // Past the window: notice again.
+    clock += 600
+    await c.dispatch(inbound('chat-1', 'still broken?'))
+    expect(sendAssistantText).toHaveBeenCalledTimes(2)
+    // Different chat shares no throttle slot — first hit notifies immediately.
+    await c.dispatch(inbound('chat-2', 'hi'))
+    expect(sendAssistantText).toHaveBeenCalledTimes(3)
+  })
+
   // chatroom is now implemented in P5 — see "chatroom mode (P5)" describe block below.
 
   it('dispatch calls assertSupported for the effective provider before acquiring session', async () => {

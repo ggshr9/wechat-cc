@@ -27,7 +27,7 @@ export type AgentEvent =
   | { kind: 'tool_call'; server?: string; tool: string }
   | { kind: 'init'; sessionId: string }
   | { kind: 'result'; sessionId: string; numTurns: number; durationMs: number }
-  | { kind: 'error'; message: string }
+  | { kind: 'error'; message: string; code?: string }
 
 export interface AgentSession {
   /**
@@ -68,6 +68,9 @@ export interface TurnSummary {
   replyToolCalled: boolean
   result?: { sessionId: string; numTurns: number; durationMs: number }
   error?: string
+  /** Provider-emitted error code (e.g. 'auth_failed') — lets the coordinator
+   *  branch on failure category without string-matching the message. */
+  errorCode?: string
 }
 
 export async function collectTurn(events: AsyncIterable<AgentEvent>): Promise<TurnSummary> {
@@ -75,6 +78,7 @@ export async function collectTurn(events: AsyncIterable<AgentEvent>): Promise<Tu
   let replyToolCalled = false
   let result: TurnSummary['result']
   let error: string | undefined
+  let errorCode: string | undefined
   for await (const ev of events) {
     if (ev.kind === 'text') {
       texts.push(ev.text)
@@ -84,7 +88,8 @@ export async function collectTurn(events: AsyncIterable<AgentEvent>): Promise<Tu
       result = { sessionId: ev.sessionId, numTurns: ev.numTurns, durationMs: ev.durationMs }
     } else if (ev.kind === 'error') {
       error = ev.message
+      if (ev.code) errorCode = ev.code
     }
   }
-  return { assistantText: texts, replyToolCalled, result, error }
+  return { assistantText: texts, replyToolCalled, result, error, errorCode }
 }
