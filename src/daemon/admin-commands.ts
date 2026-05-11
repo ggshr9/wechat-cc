@@ -12,6 +12,9 @@ import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import type { InboundMsg } from '../core/prompt-format'
+import type { ProviderRegistry } from '../core/provider-registry'
+import type { SessionManager } from '../core/session-manager'
+import type { SessionStore } from '../core/session-store'
 import type { SessionStateStore, ExpiredBot } from './session-state'
 import { loadHearthApi, type HearthApi, type HearthLoadResult } from './hearth-adapter'
 
@@ -29,6 +32,11 @@ export interface AdminCommandsDeps {
   log: (tag: string, line: string) => void
   /** ISO timestamp when the daemon booted (for uptime display). */
   startedAt: string
+  /** chatId → project alias resolver; same lookup the coordinator uses. */
+  resolveProject: (chatId: string) => { alias: string; path: string } | null
+  registry: Pick<ProviderRegistry, 'list'>
+  sessionManager: Pick<SessionManager, 'release' | 'list'>
+  sessionStore: Pick<SessionStore, 'get' | 'delete'>
 }
 
 export interface AdminCommands {
@@ -42,12 +50,21 @@ const HEARTH_LIST_RE = /^\s*\/hearth\s+list\s*$/
 const HEARTH_SHOW_RE = /^\s*\/hearth\s+show\s+([A-Za-z0-9_-]+)\s*$/
 const HEARTH_APPLY_RE = /^\s*\/hearth\s+apply\s+([A-Za-z0-9_-]+)\s*$/
 const HEARTH_HELP_RE = /^\s*\/hearth(\s+help)?\s*$/
+// /reset and the Chinese alias /重置 both drop the current chat's AI sessions
+// (every registered provider) so the next dispatch starts from a fresh
+// subprocess + clean keychain read. Emergency recovery hatch for the operator
+// when the desktop dashboard isn't reachable.
+const RESET_RE = /^\s*\/(?:reset|重置)\s*$/
+// /health ai is the AI-side companion of /health: per-provider session state
+// for the current chat. Does not run the underlying CLIs (zero token, zero
+// network) — just inspects the daemon's own bookkeeping.
+const HEALTH_AI_RE = /^\s*\/health\s+ai\s*$/
 
 export function makeAdminCommands(deps: AdminCommandsDeps): AdminCommands {
   return {
     async handle(msg) {
       const text = msg.text.trim()
-      const isCmd = text === '/health' || CLEANUP_RE.test(text) || HEARTH_INGEST_RE.test(text) || HEARTH_LIST_RE.test(text) || HEARTH_SHOW_RE.test(text) || HEARTH_APPLY_RE.test(text) || HEARTH_HELP_RE.test(text)
+      const isCmd = text === '/health' || HEALTH_AI_RE.test(text) || RESET_RE.test(text) || CLEANUP_RE.test(text) || HEARTH_INGEST_RE.test(text) || HEARTH_LIST_RE.test(text) || HEARTH_SHOW_RE.test(text) || HEARTH_APPLY_RE.test(text) || HEARTH_HELP_RE.test(text)
       if (!isCmd) return false
 
       if (!deps.isAdmin(msg.chatId)) {
@@ -57,6 +74,16 @@ export function makeAdminCommands(deps: AdminCommandsDeps): AdminCommands {
 
       if (text === '/health') {
         await sendHealthReport(deps, msg.chatId)
+        return true
+      }
+
+      if (HEALTH_AI_RE.test(text)) {
+        await sendAiHealthReport(deps, msg.chatId)
+        return true
+      }
+
+      if (RESET_RE.test(text)) {
+        await runReset(deps, msg.chatId)
         return true
       }
 
@@ -317,6 +344,68 @@ async function runCleanup(deps: AdminCommandsDeps, adminChatId: string, target: 
     '',
     '重扫：wechat-cc setup',
   ].join('\n'))
+}
+
+async function runReset(deps: AdminCommandsDeps, adminChatId: string): Promise<void> {
+  const proj = deps.resolveProject(adminChatId)
+  if (!proj) {
+    await deps.sendMessage(adminChatId, '❌ 本聊天未绑定任何项目，没有可重置的会话。')
+    return
+  }
+  // Release every registered provider's in-memory session for this alias,
+  // then wipe the persisted resume-id row so the next dispatch is a clean
+  // start. Releasing release() is idempotent (no-op if nothing cached).
+  const providers = deps.registry.list()
+  for (const p of providers) {
+    try {
+      await deps.sessionManager.release(proj.alias, p)
+    } catch (err) {
+      deps.log('ADMIN_CMD', `/reset release ${proj.alias}/${p} failed: ${err instanceof Error ? err.message : err}`)
+    }
+  }
+  deps.sessionStore.delete(proj.alias)
+  deps.log('ADMIN_CMD', `/reset chat=${adminChatId} alias=${proj.alias} providers=${providers.join(',')}`)
+  await deps.sendMessage(
+    adminChatId,
+    `✓ 已重置 AI 会话\n  chat: ${adminChatId}\n  project: ${proj.alias}\n  providers: ${providers.join(', ') || '(无)'}\n\n下一条消息会从干净状态开始。`,
+  )
+}
+
+async function sendAiHealthReport(deps: AdminCommandsDeps, adminChatId: string): Promise<void> {
+  const proj = deps.resolveProject(adminChatId)
+  if (!proj) {
+    await deps.sendMessage(adminChatId, '❌ 本聊天未绑定任何项目，无法查询 AI 会话状态。')
+    return
+  }
+  const providers = deps.registry.list()
+  const lines: string[] = ['🤖 AI 会话状态', `project: ${proj.alias}`, '']
+  if (providers.length === 0) {
+    lines.push('(无已注册的 provider — 检查 daemon 启动日志)')
+  } else {
+    for (const p of providers) {
+      const rec = deps.sessionStore.get(proj.alias, p)
+      if (rec) {
+        const age = humanAge(Date.parse(rec.last_used_at))
+        lines.push(`  ${p}: 会话 ${rec.session_id.slice(0, 8)}… (${age} 前)`)
+      } else {
+        lines.push(`  ${p}: 无会话`)
+      }
+    }
+  }
+  lines.push('', '重置：/reset  （丢掉所有 provider 的会话，下一条从头开始）')
+  await deps.sendMessage(adminChatId, lines.join('\n'))
+}
+
+/** "5m ago" style — minutes / hours / days. Returns "<1m" for sub-minute. */
+function humanAge(parsedAtMs: number): string {
+  if (Number.isNaN(parsedAtMs)) return '?'
+  const sec = Math.floor((Date.now() - parsedAtMs) / 1000)
+  if (sec < 60) return '<1m'
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `${min}m`
+  const h = Math.floor(min / 60)
+  if (h < 48) return `${h}h`
+  return `${Math.floor(h / 24)}d`
 }
 
 function hoursSince(iso: string): string {

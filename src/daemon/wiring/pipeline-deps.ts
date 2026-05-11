@@ -56,6 +56,13 @@ export function buildPipelineDeps(opts: PipelineDepsOpts, refs: PipelineDepsRefs
     resolveUserName: (cid) => ilink.resolveUserName(cid),
     sendMessage: (cid, txt) => ilink.sendMessage(cid, txt),
     sharePage: (t, c, o) => ilink.sharePage(t, c, o),
+    // /reset and /health ai need to see the same registry/sessionManager/
+    // sessionStore the coordinator drives — that's how dropping a session
+    // here is visible on the next inbound dispatch.
+    resolveProject: boot.resolve,
+    registry: boot.registry,
+    sessionManager: boot.sessionManager,
+    sessionStore: boot.sessionStore,
     log,
     startedAt: STARTED_AT_ISO,
   })

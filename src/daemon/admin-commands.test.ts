@@ -39,7 +39,7 @@ describe('admin-commands', () => {
     rmSync(stateDir, { recursive: true, force: true })
   })
 
-  function make() {
+  function make(overrides: Partial<AdminCommandsDeps> = {}) {
     return makeAdminCommands({
       stateDir,
       isAdmin: isAdmin as unknown as AdminCommandsDeps['isAdmin'],
@@ -53,6 +53,13 @@ describe('admin-commands', () => {
       loadHearthApi: loadHearthApi as unknown as NonNullable<AdminCommandsDeps['loadHearthApi']>,
       log: log as unknown as AdminCommandsDeps['log'],
       startedAt: '2026-04-24T00:00:00Z',
+      // Defaults that make legacy tests opt-out of the AI admin surface; new
+      // tests inject real fakes via overrides.
+      resolveProject: () => null,
+      registry: { list: () => [] },
+      sessionManager: { release: async () => {}, list: () => [] },
+      sessionStore: { get: () => null, delete: () => {} },
+      ...overrides,
     })
   }
 
@@ -158,5 +165,95 @@ describe('admin-commands', () => {
     expect(body).toContain('hearth 未安装或未配置')
     expect(body).toContain('HEARTH_HOME')
     expect(body).toContain('/hearth')
+  })
+
+  describe('/reset (AI session reset)', () => {
+    it('releases every registered provider\'s in-memory session and clears stored resume ids', async () => {
+      const release = vi.fn(async () => {})
+      const del = vi.fn()
+      const cmds = make({
+        resolveProject: () => ({ alias: 'foo', path: '/p/foo' }),
+        registry: { list: () => ['claude', 'codex'] },
+        sessionManager: { release, list: () => [] },
+        sessionStore: { get: () => null, delete: del },
+      })
+      expect(await cmds.handle(msg('/reset'))).toBe(true)
+      // One release call per registered provider, keyed to the chat's alias.
+      expect(release).toHaveBeenCalledTimes(2)
+      expect(release).toHaveBeenCalledWith('foo', 'claude')
+      expect(release).toHaveBeenCalledWith('foo', 'codex')
+      // Persisted resume id is wiped so the next dispatch starts fresh.
+      expect(del).toHaveBeenCalledWith('foo')
+      // User-facing confirmation mentions reset + the chat alias.
+      const body = sentBody()
+      expect(body).toMatch(/重置|reset/i)
+      expect(body).toContain('foo')
+    })
+
+    it('/重置 is an accepted alias', async () => {
+      const release = vi.fn(async () => {})
+      const cmds = make({
+        resolveProject: () => ({ alias: 'bar', path: '/p/bar' }),
+        registry: { list: () => ['claude'] },
+        sessionManager: { release, list: () => [] },
+        sessionStore: { get: () => null, delete: () => {} },
+      })
+      expect(await cmds.handle(msg('/重置'))).toBe(true)
+      expect(release).toHaveBeenCalledWith('bar', 'claude')
+    })
+
+    it('reports a clear message and no side effects when the chat has no project mapped', async () => {
+      const release = vi.fn(async () => {})
+      const del = vi.fn()
+      const cmds = make({
+        resolveProject: () => null,
+        registry: { list: () => ['claude'] },
+        sessionManager: { release, list: () => [] },
+        sessionStore: { get: () => null, delete: del },
+      })
+      expect(await cmds.handle(msg('/reset'))).toBe(true)
+      expect(release).not.toHaveBeenCalled()
+      expect(del).not.toHaveBeenCalled()
+      expect(sentBody()).toMatch(/未绑定|no project|未映射/i)
+    })
+  })
+
+  describe('/health ai', () => {
+    it('lists every registered provider with stored-session age for the chat', async () => {
+      const fiveMinAgo = new Date(Date.now() - 5 * 60_000).toISOString()
+      const cmds = make({
+        resolveProject: () => ({ alias: 'foo', path: '/p/foo' }),
+        registry: { list: () => ['claude', 'codex'] },
+        sessionManager: { release: async () => {}, list: () => [] },
+        sessionStore: {
+          get: (alias, provider) => {
+            if (alias === 'foo' && provider === 'claude') {
+              return { session_id: 'sid-1', last_used_at: fiveMinAgo, provider: 'claude' }
+            }
+            return null
+          },
+          delete: () => {},
+        },
+      })
+      expect(await cmds.handle(msg('/health ai'))).toBe(true)
+      const body = sentBody()
+      // Both providers appear, with their status.
+      expect(body).toContain('claude')
+      expect(body).toContain('codex')
+      // claude has a session (5m fresh); codex doesn't.
+      expect(body).toMatch(/5m|5 min/i)
+      expect(body).toMatch(/无.*会话|no.*session/i)
+    })
+
+    it('reports gracefully when the chat has no project mapped', async () => {
+      const cmds = make({
+        resolveProject: () => null,
+        registry: { list: () => ['claude'] },
+        sessionManager: { release: async () => {}, list: () => [] },
+        sessionStore: { get: () => null, delete: () => {} },
+      })
+      expect(await cmds.handle(msg('/health ai'))).toBe(true)
+      expect(sentBody()).toMatch(/未绑定|no project|未映射/i)
+    })
   })
 })

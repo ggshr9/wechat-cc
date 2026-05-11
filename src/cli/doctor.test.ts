@@ -71,6 +71,49 @@ describe('doctor installer JSON', () => {
     expect(report.nextActions).not.toContain('start_service')
   })
 
+  it('reports CLI binary versions for claude + codex when probe is wired', () => {
+    // Tests need to see `claude --version` / `codex --version` in the
+    // report so the dashboard + support flows can spot SDK↔CLI protocol
+    // mismatches (e.g. codex-cli 0.125 paired with codex-sdk 0.128 returns
+    // empty assistantText → silent FALLBACK_REPLY → no reply ever reaches
+    // the user; see src/lib/find-codex-binary.ts:81-89).
+    const report = analyzeDoctor({
+      stateDir: '/state',
+      findOnPath: (cmd) => `/bin/${cmd}`,
+      probeBinaryVersion: (path) => {
+        if (path === '/bin/claude') return '2.1.138 (Claude Code)'
+        if (path === '/bin/codex') return 'codex-cli 0.125.0'
+        return null
+      },
+      readAccounts: () => [],
+      readAccess: () => ({ dmPolicy: 'allowlist', allowFrom: [] }),
+      readAgentConfig: () => ({ provider: 'claude', dangerouslySkipPermissions: true, autoStart: false }),
+      readUserNames: () => ({}),
+      readExpiredBots: () => [],
+      daemon: () => ({ alive: false, pid: null }),
+      service: missingSystemd,
+    })
+    expect(report.checks.claude.version).toBe('2.1.138 (Claude Code)')
+    expect(report.checks.codex.version).toBe('codex-cli 0.125.0')
+  })
+
+  it('CLI version is null when the probe returns null (e.g. binary refuses --version)', () => {
+    const report = analyzeDoctor({
+      stateDir: '/state',
+      findOnPath: (cmd) => `/bin/${cmd}`,
+      probeBinaryVersion: () => null,
+      readAccounts: () => [],
+      readAccess: () => ({ dmPolicy: 'allowlist', allowFrom: [] }),
+      readAgentConfig: () => ({ provider: 'claude', dangerouslySkipPermissions: true, autoStart: false }),
+      readUserNames: () => ({}),
+      readExpiredBots: () => [],
+      daemon: () => ({ alive: false, pid: null }),
+      service: missingSystemd,
+    })
+    expect(report.checks.claude.version).toBeNull()
+    expect(report.checks.codex.version).toBeNull()
+  })
+
   it('is ready when deps, account, access, provider, daemon, AND service are healthy', () => {
     const report = analyzeDoctor({
       stateDir: '/state',

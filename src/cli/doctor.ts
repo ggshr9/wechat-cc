@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { platform as osPlatform } from 'node:os'
+import { spawnSync } from 'node:child_process'
 import { STATE_DIR } from '../lib/config'
 import { findOnPath } from '../lib/util'
 import { loadAgentConfig, type AgentConfig } from '../lib/agent-config'
@@ -43,6 +44,15 @@ export type Runtime = 'compiled-bundle' | 'source'
 export interface DoctorDeps {
   stateDir: string
   findOnPath: (cmd: string) => string | null
+  /**
+   * Sync probe of `<path> --version` — used to surface CLI versions for
+   * claude/codex in the doctor report. Returns the first non-empty stdout
+   * line, or null on timeout/error/binary refuses. Optional so existing
+   * callers without the probe wired continue to typecheck; defaults to a
+   * null-returning stub, which leaves `version` fields as `null`. Real
+   * implementation in `defaultDoctorDeps` uses `spawnSync` with a 3 s cap.
+   */
+  probeBinaryVersion?: (path: string) => string | null
   readAccounts: () => BoundAccount[]
   readAccess: () => AccessSnapshot
   readAgentConfig: () => AgentConfig
@@ -93,8 +103,12 @@ export interface DoctorReport {
   checks: {
     bun: DoctorCheckBase & { path: string | null }
     git: DoctorCheckBase & { path: string | null }
-    claude: DoctorCheckBase & { path: string | null }
-    codex: DoctorCheckBase & { path: string | null }
+    // `version`: first line of `<binary> --version`; null when the binary
+    // isn't on disk, when --version timed out, or when no probe is wired.
+    // Surfaced so support flows can spot SDK↔CLI protocol mismatches
+    // (see src/lib/find-codex-binary.ts for the codex 0.125/0.128 trap).
+    claude: DoctorCheckBase & { path: string | null; version: string | null }
+    codex: DoctorCheckBase & { path: string | null; version: string | null }
     accounts: DoctorCheckBase & { count: number; items: BoundAccount[] }
     access: DoctorCheckBase & { dmPolicy: string; allowFromCount: number }
     provider: DoctorCheckBase & { provider: AgentConfig['provider']; model?: string; binaryPath: string | null }
@@ -113,6 +127,9 @@ export function analyzeDoctor(deps: DoctorDeps): DoctorReport {
   const git = deps.findOnPath('git')
   const claude = deps.findOnPath('claude')
   const codex = deps.findOnPath('codex')
+  const probe = deps.probeBinaryVersion ?? (() => null)
+  const claudeVersion = claude ? probe(claude) : null
+  const codexVersion = codex ? probe(codex) : null
   const accounts = deps.readAccounts()
   const access = deps.readAccess()
   const agent = deps.readAgentConfig()
@@ -166,14 +183,14 @@ export function analyzeDoctor(deps: DoctorDeps): DoctorReport {
       ...(isBundle || git ? {} : { severity: 'soft' as const }),
     },
     claude: {
-      ok: !!claude, path: claude,
+      ok: !!claude, path: claude, version: claudeVersion,
       ...(claude ? {} : {
         severity: (claudeIsActive ? 'hard' : 'soft') as Severity,
         fix: { command: 'npm install -g @anthropic-ai/claude-code', link: 'https://docs.claude.com/en/docs/claude-code/install' },
       }),
     },
     codex: {
-      ok: !!codex, path: codex,
+      ok: !!codex, path: codex, version: codexVersion,
       ...(codex ? {} : {
         severity: (codexIsActive ? 'hard' : 'soft') as Severity,
         fix: { link: 'https://github.com/openai/codex#installation' },
@@ -277,6 +294,7 @@ export function defaultDoctorDeps(stateDir = STATE_DIR): DoctorDeps {
   return {
     stateDir,
     findOnPath,
+    probeBinaryVersion,
     readAccounts: () => readAccounts(stateDir),
     readAccess: () => readAccess(stateDir),
     readAgentConfig: () => loadAgentConfig(stateDir),
@@ -286,6 +304,23 @@ export function defaultDoctorDeps(stateDir = STATE_DIR): DoctorDeps {
     service: () => defaultServiceSnapshot(stateDir),
     runtime: isCompiledBundle() ? 'compiled-bundle' : 'source',
     platform: osPlatform(),
+  }
+}
+
+/** Spawn `<path> --version`, return the first non-empty stdout line, or
+ *  null on non-zero exit, timeout, or no usable output. Hard 3 s cap. */
+export function probeBinaryVersion(path: string): string | null {
+  try {
+    const r = spawnSync(path, ['--version'], {
+      stdio: 'pipe',
+      windowsHide: true,
+      timeout: 3000,
+    })
+    if (r.status !== 0) return null
+    const out = (r.stdout?.toString() ?? '').split(/\r?\n/).find(l => l.trim().length > 0)
+    return out ? out.trim() : null
+  } catch {
+    return null
   }
 }
 
@@ -420,8 +455,8 @@ export function printDoctor(report: DoctorReport): void {
     console.log(`bun: ${fmt(report.checks.bun)}`)
     console.log(`git: ${fmt(report.checks.git)}`)
   }
-  console.log(`claude: ${fmt(report.checks.claude)}`)
-  console.log(`codex: ${fmt(report.checks.codex)}`)
+  console.log(`claude: ${fmtWithVersion(report.checks.claude)}`)
+  console.log(`codex: ${fmtWithVersion(report.checks.codex)}`)
   console.log(`provider: ${report.checks.provider.provider}${report.checks.provider.model ? ` (${report.checks.provider.model})` : ''}`)
   console.log(`accounts: ${report.checks.accounts.count}`)
   console.log(`access: ${report.checks.access.dmPolicy}, allowed=${report.checks.access.allowFromCount}`)
@@ -433,4 +468,9 @@ export function printDoctor(report: DoctorReport): void {
 
 function fmt(c: { ok: boolean; path: string | null }): string {
   return c.ok ? `ok (${c.path})` : 'missing'
+}
+
+function fmtWithVersion(c: { ok: boolean; path: string | null; version: string | null }): string {
+  if (!c.ok) return 'missing'
+  return c.version ? `ok (${c.path}, ${c.version})` : `ok (${c.path})`
 }
