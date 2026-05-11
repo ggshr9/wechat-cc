@@ -46,6 +46,7 @@ import { buildDelegateDispatch, type DelegateDispatch } from './delegate'
 import { makeSendAssistantText } from './fallback-reply'
 import { findCodexBinary } from '../../lib/find-codex-binary'
 import { checkCodexVersion } from './codex-version-check'
+import { makeHaikuEval } from './haiku-eval'
 // JSON import — version field is read at module init. resolveJsonModule is
 // on in tsconfig, and `with { type: 'json' }` is the spec'd syntax.
 import codexCliPkg from '@openai/codex/package.json' with { type: 'json' }
@@ -400,38 +401,11 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     sendAssistantText: makeSendAssistantText({ sendMessage: deps.ilink.sendMessage, log: deps.log }),
     log: deps.log,
     // v0.5.8 — chatroom moderator. One-shot haiku-4-5 eval per round.
-    // Lazy-import the SDK so unit tests for createCoordinator don't have
-    // to mock @anthropic-ai/claude-agent-sdk; production calls do exactly
-    // one query() per moderator turn (3-5× per /chat dispatch).
-    //
-    // pathToClaudeCodeExecutable: the SDK tries to locate its bundled
-    // claude CLI via moduleRequire.resolve('./cli.js') — which fails in
-    // bun-compiled binaries (import.meta.url is /$bunfs/...). Same trap
-    // as the codex SDK; same fix: hand it the real binary path the
-    // claude provider already discovered. Without this the moderator
-    // throws "Native CLI binary for linux-x64 not found" every round
-    // and we silently fall back to alternation + generic prompts.
-    haikuEval: async (prompt) => {
-      const { query } = await import('@anthropic-ai/claude-agent-sdk')
-      const q = query({
-        prompt,
-        options: {
-          model: 'claude-haiku-4-5',
-          maxTurns: 1,
-          ...(claudeBin ? { pathToClaudeCodeExecutable: claudeBin } : {}),
-        },
-      })
-      let text = ''
-      for await (const raw of q as AsyncGenerator<import('@anthropic-ai/claude-agent-sdk').SDKMessage>) {
-        const msg = raw as unknown as { type: string; message?: { content?: unknown } }
-        if (msg.type === 'assistant' && Array.isArray(msg.message?.content)) {
-          for (const part of msg.message.content as Array<{ type?: string; text?: string }>) {
-            if (part.type === 'text' && typeof part.text === 'string') text += part.text
-          }
-        }
-      }
-      return text
-    },
+    // Extracted to ./haiku-eval so the AUTH_FAIL sentinel interception is
+    // testable: stale moderator credentials throw with a structured error
+    // + emit a loud [AUTH_FAILED] log, instead of silently degrading to
+    // alternation via the parse-failed branch of evaluateRound.
+    haikuEval: makeHaikuEval({ log: deps.log, ...(claudeBin ? { claudeBin } : {}) }),
   })
 
   // RFC 03 P4 — bare delegate providers + one-shot dispatcher.

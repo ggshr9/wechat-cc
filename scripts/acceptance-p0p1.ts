@@ -219,6 +219,129 @@ process.on('exit', () => { for (const c of cleanup) try { Promise.resolve(c()).c
   if (boot.sessionStore.get('P', 'claude') === null) pass('/重置 (Chinese alias) also clears sessionStore')
   else fail('/重置 did not clear the sessionStore row')
 
+  // ───────────────────────────────────────────────────────────────
+  // #5 parallel mode auth_failed — release the failing provider,
+  // healthy provider replies normally, exactly one neutral notice
+  // ───────────────────────────────────────────────────────────────
+  header('#5 parallel mode (/both): one provider auth_failed, the other answers')
+  const parallelSends = vi.fn(async (_chatId: string, _text: string) => {})
+  const parallelRelease = vi.fn(async () => {})
+  // Need codex registered for parallel — fake it directly in a registry-like
+  // overlay since the real bootstrap refused codex due to the live version
+  // mismatch (which is itself verified by #4 above).
+  const parallelRegistry = (await import('../src/core/provider-registry')).createProviderRegistry()
+  parallelRegistry.register('claude', { spawn: async () => ({ dispatch: () => ({ async *[Symbol.asyncIterator]() {} }), close: async () => {} }) }, { displayName: 'Claude', canResume: () => true })
+  parallelRegistry.register('codex', { spawn: async () => ({ dispatch: () => ({ async *[Symbol.asyncIterator]() {} }), close: async () => {} }) }, { displayName: 'Codex', canResume: () => true })
+  const parallelAcquire = vi.fn(async (_alias: string, _path: string, providerId: string) => {
+    return {
+      alias: 'P', path: '/p', providerId, lastUsedAt: Date.now(),
+      async *dispatch() {
+        if (providerId === 'claude') {
+          yield { kind: 'error' as const, code: 'auth_failed', message: 'stale claude' }
+        } else {
+          yield { kind: 'text' as const, text: 'codex reply' }
+        }
+        yield { kind: 'result' as const, sessionId: 's', numTurns: 1, durationMs: 0 }
+      },
+      close: async () => {},
+    }
+  })
+  const parallelStore = new Map<string, { mode: { kind: 'parallel' } }>()
+  parallelStore.set('par-chat', { mode: { kind: 'parallel' } })
+  const parallelCoord = createConversationCoordinator({
+    resolveProject: () => ({ alias: 'P', path: process.cwd() }),
+    manager: { acquire: parallelAcquire, release: parallelRelease },
+    conversationStore: { get: (cid: string) => parallelStore.get(cid) ?? null, set: () => {} } as never,
+    registry: parallelRegistry,
+    defaultProviderId: 'claude',
+    format: () => 'parallel inbound',
+    sendAssistantText: parallelSends,
+    permissionMode: 'dangerously',
+    log,
+  })
+  await parallelCoord.dispatch({ chatId: 'par-chat', userId: 'par-chat', text: 'hi', msgType: 'text', createTimeMs: Date.now(), accountId: 'acct' })
+  const parallelTexts = parallelSends.mock.calls.map(c => (c as unknown as [string, string])[1])
+  const releasedClaude = parallelRelease.mock.calls.some(c => (c as unknown as [string, string])[0] === 'P' && (c as unknown as [string, string])[1] === 'claude')
+  const releasedCodex = parallelRelease.mock.calls.some(c => (c as unknown as [string, string])[0] === 'P' && (c as unknown as [string, string])[1] === 'codex')
+  if (releasedClaude && !releasedCodex) pass('release fired ONLY for the failing provider (claude), not the healthy one')
+  else fail(`release wiring wrong: claude=${releasedClaude} codex=${releasedCodex}`)
+  if (parallelTexts.some(t => t === '[Codex] codex reply')) pass('healthy codex reply forwarded with [Codex] prefix')
+  else fail('healthy codex reply did not reach sendAssistantText', parallelTexts)
+  const parallelNotices = parallelTexts.filter(t => /AI.*不可用/.test(t))
+  if (parallelNotices.length === 1) pass('exactly one neutral notice across both providers (throttle holds)')
+  else fail(`expected 1 notice, got ${parallelNotices.length}`, parallelTexts)
+  if (!parallelTexts.some(t => /Please run \/login|Not logged in/.test(t))) pass('raw auth-fail string did not leak in parallel mode')
+  else fail('LEAK in parallel mode')
+
+  // ───────────────────────────────────────────────────────────────
+  // #6 chatroom mode auth_failed on speaker — release + notice + clean exit
+  // ───────────────────────────────────────────────────────────────
+  header('#6 chatroom mode (/chat): speaker auth_failed ends the loop cleanly')
+  const roomSends = vi.fn(async (_chatId: string, _text: string) => {})
+  const roomRelease = vi.fn(async () => {})
+  let modCalls = 0
+  const roomHaiku = vi.fn(async () => {
+    modCalls++
+    return JSON.stringify({ action: 'continue', speaker: 'claude', prompt: '开场', reasoning: '' })
+  })
+  const roomAcquire = vi.fn(async (_alias: string, _path: string, providerId: string) => ({
+    alias: 'P', path: '/p', providerId, lastUsedAt: Date.now(),
+    async *dispatch() {
+      yield { kind: 'error' as const, code: 'auth_failed', message: 'stale moderator-picked speaker' }
+      yield { kind: 'result' as const, sessionId: 's', numTurns: 1, durationMs: 0 }
+    },
+    close: async () => {},
+  }))
+  const roomStore = new Map<string, { mode: { kind: 'chatroom' } }>()
+  roomStore.set('room-chat', { mode: { kind: 'chatroom' } })
+  const roomCoord = createConversationCoordinator({
+    resolveProject: () => ({ alias: 'P', path: process.cwd() }),
+    manager: { acquire: roomAcquire, release: roomRelease },
+    conversationStore: { get: (cid: string) => roomStore.get(cid) ?? null, set: () => {} } as never,
+    registry: parallelRegistry,  // reuse — has claude + codex
+    defaultProviderId: 'claude',
+    format: () => 'chatroom inbound',
+    sendAssistantText: roomSends,
+    permissionMode: 'dangerously',
+    log,
+    haikuEval: roomHaiku,
+    chatroomMaxRounds: 4,
+  })
+  await roomCoord.dispatch({ chatId: 'room-chat', userId: 'room-chat', text: '开始', msgType: 'text', createTimeMs: Date.now(), accountId: 'acct' })
+  if (roomRelease.mock.calls.some(c => (c as unknown as [string, string])[1] === 'claude')) pass('chatroom speaker session released on auth_failed')
+  else fail('release was NOT called on chatroom auth_failed')
+  if (modCalls === 1) pass('chatroom loop exited after the failed speaker turn (moderator called once)')
+  else fail(`expected 1 moderator call, got ${modCalls}`)
+  const roomTexts = roomSends.mock.calls.map(c => c[1] as string)
+  if (roomTexts.some(t => /AI.*不可用/.test(t))) pass('user got the neutral notice in chatroom mode')
+  else fail('no neutral notice sent in chatroom mode', roomTexts)
+  if (!roomTexts.some(t => /Please run \/login|Not logged in/.test(t))) pass('raw auth-fail string did not leak in chatroom mode')
+  else fail('LEAK in chatroom mode')
+
+  // ───────────────────────────────────────────────────────────────
+  // #7 moderator haikuEval AUTH_FAIL throws + logs [AUTH_FAILED]
+  // ───────────────────────────────────────────────────────────────
+  header('#7 chatroom moderator: stale credentials throw + emit structured log')
+  const { makeHaikuEval } = await import('../src/daemon/bootstrap/haiku-eval')
+  const modLogs: string[] = []
+  const haikuQuery = (() => {
+    async function* gen() {
+      yield { type: 'assistant', message: { content: [{ type: 'text', text: 'Not logged in · Please run /login' }] } }
+    }
+    return gen()
+  }) as never
+  const haiku = makeHaikuEval({ log: (tag, line) => modLogs.push(`[${tag}] ${line}`), queryImpl: haikuQuery as never })
+  let threw = false
+  try { await haiku('any prompt') } catch (e) {
+    threw = true
+    const msg = e instanceof Error ? e.message : String(e)
+    if (/auth_failed/.test(msg)) pass(`haikuEval threw with auth_failed marker: ${msg.slice(0, 80)}`)
+    else fail('haikuEval threw but message lacked auth_failed marker', msg)
+  }
+  if (!threw) fail('haikuEval did NOT throw on stale credentials — would silently degrade')
+  if (modLogs.some(l => l.startsWith('[AUTH_FAILED]'))) pass('haikuEval emitted [AUTH_FAILED] log for operators')
+  else fail('no [AUTH_FAILED] log from haikuEval', modLogs)
+
   console.log('\n' + (process.exitCode ? '✗ some checks failed' : '✓ all acceptance checks passed'))
 })().catch(err => {
   console.error('acceptance harness threw:', err)
