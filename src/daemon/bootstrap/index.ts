@@ -31,7 +31,7 @@ import { lookup, type PermissionMode } from '../../core/capability-matrix'
 import { formatInbound } from '../../core/prompt-format'
 import type { IlinkAdapter } from '../ilink-glue'
 import type { Options } from '@anthropic-ai/claude-agent-sdk'
-import { findOnPath } from '../../lib/util'
+import { findOnPath, probeBinaryVersion } from '../../lib/util'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -45,6 +45,10 @@ import { claudeSessionJsonlPath, codexSessionJsonlPaths } from './session-paths'
 import { buildDelegateDispatch, type DelegateDispatch } from './delegate'
 import { makeSendAssistantText } from './fallback-reply'
 import { findCodexBinary } from '../../lib/find-codex-binary'
+import { checkCodexVersion } from './codex-version-check'
+// JSON import — version field is read at module init. resolveJsonModule is
+// on in tsconfig, and `with { type: 'json' }` is the spec'd syntax.
+import codexCliPkg from '@openai/codex/package.json' with { type: 'json' }
 
 /**
  * Locate a working Claude Code binary. The SDK's own native-binary detection
@@ -275,8 +279,21 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
   // codex then 4xx's at validateMode (visible in dashboard as a red dropdown
   // border + revert) instead of silently swallowing dispatch errors per turn.
   const codexBinary = findCodexBinary()
-  if (codexBinary) {
-    deps.log('BOOT', `codex binary: ${codexBinary}`)
+  // Boot-time SDK ↔ CLI version match. The codex wire protocol is version-
+  // locked: a mismatched CLI (e.g. globally-installed `codex` 0.125 paired
+  // with our bundled SDK 0.128) silently emits events the SDK can't decode
+  // and every dispatch returns empty assistantText (no reply, no error —
+  // see src/lib/find-codex-binary.ts:81-86). Better to refuse registration
+  // loudly than ship a provider that will silently never reply.
+  const codexVersionCheck = codexBinary
+    ? checkCodexVersion({
+        binary: codexBinary,
+        probe: probeBinaryVersion,
+        expectedVersion: codexCliPkg.version,
+      })
+    : null
+  if (codexBinary && codexVersionCheck?.ok) {
+    deps.log('BOOT', `codex binary: ${codexBinary} (v${codexVersionCheck.actualSemver})`)
     registry.register(
       'codex',
       createCodexAgentProvider({
@@ -315,6 +332,14 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
         displayName: 'Codex',
         canResume: (_cwd, sid) => codexSessionJsonlPaths(HOME, sid).some(p => existsSync(p)),
       },
+    )
+  } else if (codexBinary && codexVersionCheck && !codexVersionCheck.ok) {
+    deps.log('BOOT',
+      `codex provider NOT registered — version check failed. ` +
+      `binary=${codexBinary} actual=${codexVersionCheck.actualSemver ?? codexVersionCheck.rawVersion ?? '(unreadable)'} ` +
+      `expected=${codexVersionCheck.expectedVersion} reason=${codexVersionCheck.reason}. ` +
+      `The codex SDK ↔ CLI protocol is version-locked; a mismatched CLI silently emits events the SDK can't decode (no reply ever reaches the user). ` +
+      `Run \`npm i -g @openai/codex@${codexVersionCheck.expectedVersion}\` or remove the older codex from PATH.`,
     )
   } else {
     deps.log('BOOT', 'codex binary not found in PATH or ~/.nvm — codex provider not registered. Install `npm i -g @openai/codex` to enable /codex /both /chat modes.')

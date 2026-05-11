@@ -41,13 +41,16 @@ function extractText(content: AssistantContent | undefined): string {
   return content.map(b => (b?.type === 'text' ? b.text ?? '' : '')).join('')
 }
 
-// The claude binary prints this literal phrase as assistant text when it has
-// no usable credentials (verified by inspecting the binary's string table).
+// The claude binary prints these literal phrases as assistant text when it
+// has no usable credentials (verified by inspecting the binary's string
+// table). Two distinct markers because the SDK can split a single message
+// across multiple `assistant` events — matching only "/login" would leak
+// the first chunk ("Not logged in") to the user before the second arrives.
 // Without interception the phrase leaks to the user as if it were the AI's
-// reply ("Not logged in · Please run /login"). We tag it with a structured
-// error code so the coordinator can suppress the fallback path and respond
-// with a controlled notification instead.
-const AUTH_FAIL_RE = /Please run \/login/i
+// reply. We tag it with a structured error code so the coordinator can
+// suppress the fallback path and respond with a controlled notification
+// instead.
+const AUTH_FAIL_RE = /(Please run \/login|Not logged in)/i
 
 /**
  * Parse a Claude SDK tool_use block's `name` (e.g. 'mcp__wechat__reply')

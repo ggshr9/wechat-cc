@@ -206,6 +206,86 @@ describe('SessionManager', () => {
     await mgr.shutdown()
   })
 
+  it('sweepIdle leaves a session alone while a dispatch is still in flight', async () => {
+    // Without this guard, a long-running turn (e.g. claude doing heavy tool
+    // work for 30+ min) gets killed mid-stream when lastUsedAt looks idle.
+    // The dispatch's collectTurn never sees a `result` event and the user
+    // ends up with a truncated reply.
+    vi.useFakeTimers()
+    let closeCount = 0
+    type ResolveNext = (v: IteratorResult<unknown>) => void
+    const pending: ResolveNext[] = []
+    const buffered: unknown[] = []
+    let ended = false
+    function push(ev: unknown) {
+      const r = pending.shift()
+      if (r) r({ value: ev, done: false })
+      else buffered.push(ev)
+    }
+    function end() {
+      ended = true
+      while (pending.length > 0) {
+        const r = pending.shift()!
+        r({ value: undefined, done: true })
+      }
+    }
+    const stallableSession = {
+      dispatch() {
+        return {
+          [Symbol.asyncIterator]() {
+            return {
+              next() {
+                if (buffered.length > 0) return Promise.resolve({ value: buffered.shift(), done: false }) as Promise<IteratorResult<unknown>>
+                if (ended) return Promise.resolve({ value: undefined, done: true }) as Promise<IteratorResult<unknown>>
+                return new Promise<IteratorResult<unknown>>(r => pending.push(r))
+              },
+            }
+          },
+        }
+      },
+      async close() { closeCount++ },
+    }
+    const spawn = vi.fn(async () => stallableSession as never)
+    const mgr = new SessionManager({
+      maxConcurrent: 10,
+      idleEvictMs: 1000,
+      registry: registryWithProvider({ spawn } as unknown as AgentProvider),
+    })
+    const h = await mgr.acquire('a', '/p', 'claude')
+
+    // Begin draining — consume one event then PAUSE before the result.
+    const drained: unknown[] = []
+    const iter = h.dispatch('hi')[Symbol.asyncIterator]()
+    const firstPromise = iter.next()
+    push({ kind: 'init', sessionId: 's1' })
+    drained.push((await firstPromise).value)
+    // Iterator now awaiting next event — dispatch is in flight.
+    const pendingNext = iter.next()
+
+    // Advance well past the idle threshold and try to sweep.
+    vi.advanceTimersByTime(60_000)
+    await mgr.sweepIdle()
+    expect(closeCount).toBe(0)
+    expect(mgr.list()).toHaveLength(1)
+
+    // Finish the turn — sweep should now release.
+    push({ kind: 'result', sessionId: 's1', numTurns: 1, durationMs: 0 })
+    await pendingNext
+    end()
+    // Drain remainder (the wrapper's `for await` may still need to finalize).
+    while (true) {
+      const r = await iter.next()
+      drained.push(r.value)
+      if (r.done) break
+    }
+
+    vi.advanceTimersByTime(60_000)
+    await mgr.sweepIdle()
+    expect(closeCount).toBe(1)
+    expect(mgr.list()).toEqual([])
+    vi.useRealTimers()
+  })
+
   it('keeps independent sessions for the same alias under different providers (P2 multi-provider)', async () => {
     let claudeSpawn = 0
     let codexSpawn = 0

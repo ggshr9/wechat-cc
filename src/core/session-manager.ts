@@ -51,6 +51,14 @@ export class SessionManager {
   // tick + an inbound message racing on alias `_default` would both miss
   // the cache and both spawn — first one ends up orphaned.
   private readonly pending = new Map<string, Promise<SessionHandle>>()
+  // In-flight dispatch counter keyed by (provider, alias). Each dispatch()
+  // iterator increments on first .next() entry and decrements in its
+  // finally block. sweepIdle skips any session with count > 0 — a 30 min+
+  // turn must not be killed mid-stream just because lastUsedAt looks
+  // stale. release() / shutdown / enforceCapacity ignore the counter
+  // (those are operator-triggered or capacity-enforced and must be
+  // unconditional).
+  private readonly inFlight = new Map<string, number>()
 
   constructor(opts: SessionManagerOptions) {
     this.opts = opts
@@ -105,6 +113,8 @@ export class SessionManager {
       : await provider.spawn(project)
 
     const sessionStore = this.opts.sessionStore
+    const k = key(providerId, alias)
+    const inFlight = this.inFlight
     const handle: SessionHandle = {
       alias,
       path,
@@ -113,15 +123,24 @@ export class SessionManager {
       dispatch(text: string): AsyncIterable<AgentEvent> {
         handle.lastUsedAt = Date.now()
         const inner = session.dispatch(text)
-        if (!sessionStore) return inner
-        // Intercept result events to persist the session_id for future resumes.
+        // Track in-flight under (provider, alias) so sweepIdle can skip
+        // busy sessions. Wrap unconditionally — even when sessionStore is
+        // absent — otherwise an iterator started without persistence won't
+        // bump the counter and a long turn gets evicted mid-stream.
         return {
           async *[Symbol.asyncIterator]() {
-            for await (const ev of inner) {
-              yield ev
-              if (ev.kind === 'result' && ev.sessionId) {
-                sessionStore.set(alias, ev.sessionId, providerId)
+            inFlight.set(k, (inFlight.get(k) ?? 0) + 1)
+            try {
+              for await (const ev of inner) {
+                yield ev
+                if (ev.kind === 'result' && ev.sessionId && sessionStore) {
+                  sessionStore.set(alias, ev.sessionId, providerId)
+                }
               }
+            } finally {
+              const n = inFlight.get(k) ?? 1
+              if (n <= 1) inFlight.delete(k)
+              else inFlight.set(k, n - 1)
             }
           },
         }
@@ -181,6 +200,11 @@ export class SessionManager {
   async sweepIdle(): Promise<void> {
     const now = Date.now()
     for (const s of Array.from(this.sessions.values())) {
+      // Never evict a session with an active dispatch — killing it mid-
+      // stream would leave the coordinator's collectTurn loop hanging on
+      // a queue that's about to be nulled out.
+      const k = key(s.handle.providerId, s.handle.alias)
+      if ((this.inFlight.get(k) ?? 0) > 0) continue
       if (now - s.handle.lastUsedAt >= this.opts.idleEvictMs) {
         await this.release(s.handle.alias, s.handle.providerId)
       }

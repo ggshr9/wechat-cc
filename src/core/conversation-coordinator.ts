@@ -32,7 +32,7 @@ export class ModeNotImplementedError extends Error {
 
 export interface ConversationCoordinatorDeps {
   resolveProject(chatId: string): { alias: string; path: string } | null
-  manager: Pick<SessionManager, 'acquire'>
+  manager: Pick<SessionManager, 'acquire'> & Partial<Pick<SessionManager, 'release'>>
   conversationStore: Pick<ConversationStore, 'get' | 'set'>
   registry: Pick<ProviderRegistry, 'has' | 'list' | 'get'>
   /**
@@ -147,15 +147,26 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
   // chatId → last-notice-at; used to throttle the auth_failed notice.
   const authFailLastNotifyAt = new Map<string, number>()
 
-  /** Returns true if this chat just received its auth_failed notice
-   *  (caller skips fallback-reply). On throttle the chat is silent — the
+  /** On auth_failed: release the in-memory session (so the next dispatch
+   *  starts a fresh subprocess that re-reads keychain — self-heal without
+   *  waiting for an idle gap that a busy chat never reaches), then send
+   *  one throttled neutral notice. On throttle the chat is silent — the
    *  user already saw the notice within the window. */
-  async function handleAuthFailed(chatId: string, providerId: ProviderId, summary: TurnSummary): Promise<void> {
-    deps.log('AUTH_FAILED', `chat=${chatId} provider=${providerId} message=${JSON.stringify((summary.error ?? '').slice(0, 200))}`, {
+  async function handleAuthFailed(chatId: string, alias: string, providerId: ProviderId, summary: TurnSummary): Promise<void> {
+    deps.log('AUTH_FAILED', `chat=${chatId} alias=${alias} provider=${providerId} message=${JSON.stringify((summary.error ?? '').slice(0, 200))}`, {
       event: 'auth_failed',
       chat_id: chatId,
+      project_alias: alias,
       provider: providerId,
     })
+    // Release is best-effort — if it throws we still want to send the user
+    // notice. release() being absent from the manager dep (e.g. in test
+    // fixtures that don't exercise the recycle path) is also tolerated.
+    try {
+      await deps.manager.release?.(alias, providerId)
+    } catch (err) {
+      deps.log('AUTH_FAILED', `release ${alias}/${providerId} threw: ${err instanceof Error ? err.message : err}`)
+    }
     const last = authFailLastNotifyAt.get(chatId) ?? 0
     if (nowMs() - last < authFailThrottleMs) return
     authFailLastNotifyAt.set(chatId, nowMs())
@@ -226,7 +237,7 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     // and send a throttled neutral notice instead — never leak provider
     // failure text to the user.
     if (summary.errorCode === 'auth_failed') {
-      await handleAuthFailed(msg.chatId, providerId, summary)
+      await handleAuthFailed(msg.chatId, proj.alias, providerId, summary)
       return
     }
 

@@ -92,3 +92,27 @@ function safeExecutable(path: string): boolean {
     return false
   }
 }
+
+/**
+ * Spawn `<path> --version`, return the first non-empty stdout line, or
+ * null on non-zero exit, timeout, or no usable output. Hard 3 s cap.
+ *
+ * Used by doctor (display) and bootstrap (codex SDK ↔ CLI version
+ * matching). Sync because both callers are at startup/admin path — no
+ * hot-path concern, and async would force an unwanted refactor through
+ * the doctor sync surface.
+ */
+export function probeBinaryVersion(path: string): string | null {
+  try {
+    const r = spawnSync(path, ['--version'], {
+      stdio: 'pipe',
+      windowsHide: true,
+      timeout: 3000,
+    })
+    if (r.status !== 0) return null
+    const out = (r.stdout?.toString() ?? '').split(/\r?\n/).find(l => l.trim().length > 0)
+    return out ? out.trim() : null
+  } catch {
+    return null
+  }
+}

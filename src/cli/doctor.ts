@@ -2,9 +2,8 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { platform as osPlatform } from 'node:os'
-import { spawnSync } from 'node:child_process'
 import { STATE_DIR } from '../lib/config'
-import { findOnPath } from '../lib/util'
+import { findOnPath, probeBinaryVersion } from '../lib/util'
 import { loadAgentConfig, type AgentConfig } from '../lib/agent-config'
 import { buildServicePlan, isServiceInstalled, type ServiceKind } from './service-manager'
 import { compiledBinaryPath, compiledRepoRoot, isCompiledBundle } from '../lib/runtime-info'
@@ -304,23 +303,6 @@ export function defaultDoctorDeps(stateDir = STATE_DIR): DoctorDeps {
     service: () => defaultServiceSnapshot(stateDir),
     runtime: isCompiledBundle() ? 'compiled-bundle' : 'source',
     platform: osPlatform(),
-  }
-}
-
-/** Spawn `<path> --version`, return the first non-empty stdout line, or
- *  null on non-zero exit, timeout, or no usable output. Hard 3 s cap. */
-export function probeBinaryVersion(path: string): string | null {
-  try {
-    const r = spawnSync(path, ['--version'], {
-      stdio: 'pipe',
-      windowsHide: true,
-      timeout: 3000,
-    })
-    if (r.status !== 0) return null
-    const out = (r.stdout?.toString() ?? '').split(/\r?\n/).find(l => l.trim().length > 0)
-    return out ? out.trim() : null
-  } catch {
-    return null
   }
 }
 

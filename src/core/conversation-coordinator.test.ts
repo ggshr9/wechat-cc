@@ -289,6 +289,39 @@ describe('ConversationCoordinator', () => {
     expect(text).toMatch(/AI .*不可用|wechat-cc/i)
   })
 
+  it('on auth_failed: releases the in-memory session so the next dispatch starts a fresh subprocess', async () => {
+    // The notice alone is not enough — without releasing the session, a
+    // busy chat (where dispatch() keeps bumping lastUsedAt) never goes
+    // idle, so sweepIdle never recycles the poisoned subprocess and the
+    // user is stuck behind the throttle window with no recovery.
+    const release = vi.fn(async () => {})
+    const session = makeFakeSession({
+      events: [
+        { kind: 'error', code: 'auth_failed', message: 'x' },
+        { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+      ],
+    })
+    const acquire = vi.fn(async (_alias: string, _path: string, providerId: string) =>
+      makeHandle(providerId, session)
+    )
+    const registry = createProviderRegistry()
+    registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
+    const c = createConversationCoordinator({
+      resolveProject: () => ({ alias: 'a', path: '/p' }),
+      manager: { acquire, release },
+      conversationStore: makeMockStore(),
+      registry,
+      defaultProviderId: 'claude',
+      format: () => 'x',
+      sendAssistantText: async () => {},
+      permissionMode: 'strict',
+      log: () => {},
+    })
+    await c.dispatch(inbound('chat-1', 'hi'))
+    expect(release).toHaveBeenCalledTimes(1)
+    expect(release).toHaveBeenCalledWith('a', 'claude')
+  })
+
   it('on auth_failed: throttles repeated notices for the same chat', async () => {
     const session = makeFakeSession({
       events: [

@@ -200,6 +200,34 @@ describe('claude-agent-provider', () => {
     await session.close()
   })
 
+  it('routes a "Not logged in" assistant chunk to auth_failed even when "/login" arrives separately', async () => {
+    // The SDK is free to split the auth-fail sentinel across multiple
+    // assistant messages — observed shape from the claude binary's string
+    // table is two distinct strings, "Not logged in" and "Please run /login".
+    // The provider must catch the first chunk; otherwise that chunk flows to
+    // the user as a normal reply before the second one trips the error path.
+    const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' })
+
+    const eventsPromise = drain(session.dispatch('hi'))
+    await new Promise(r => setTimeout(r, 0))
+
+    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'Not logged in' }] },
+    })
+    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
+      type: 'result', subtype: 'success', session_id: 's-auth-split', num_turns: 1, duration_ms: 0,
+    })
+
+    const events = await eventsPromise
+    expect(events.find(e => e.kind === 'text')).toBeUndefined()
+    const errorEvent = events.find(e => e.kind === 'error')
+    expect(errorEvent).toBeDefined()
+    expect((errorEvent as { code?: string }).code).toBe('auth_failed')
+    await session.close()
+  })
+
   it('returns an empty iterable after close()', async () => {
     const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
     const session = await provider.spawn({ alias: 'foo', path: '/tmp' })
