@@ -9,6 +9,13 @@ name: Mirror v* tag → desktop-v* tag
 # Skipping the desktop tag silently breaks the GitHub Releases flow without
 # any visible error. This workflow auto-creates the desktop tag from the
 # v* tag's commit so the desktop.yml workflow always fires.
+#
+# REQUIRES `RELEASE_PAT` secret (fine-grained PAT with contents:write +
+# workflows on this repo). The default GITHUB_TOKEN cannot be used here:
+# GitHub Actions intentionally suppresses downstream workflow triggers for
+# pushes made with GITHUB_TOKEN (anti-recursion). desktop-v0.5.17 hit
+# exactly this trap — tag was created, desktop.yml never fired. A PAT push
+# is treated as a user push and triggers downstream workflows normally.
 
 # Glob `v*` matches tags STARTING with `v` (so `v0.5.16` yes,
 # `desktop-v0.5.16` no — different prefix, no recursion risk).
@@ -28,10 +35,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.RELEASE_PAT }}
 
       - name: Create + push desktop-${{ github.ref_name }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PAT }}
         run: |
           set -euo pipefail
           MIRROR="desktop-${GITHUB_REF_NAME}"
