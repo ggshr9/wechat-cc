@@ -85,7 +85,7 @@ export interface ConversationCoordinatorDeps {
    */
   haikuEval?: (prompt: string) => Promise<string>
   /**
-   * Throttle window (ms) for the "AI 暂时不可用" notice the coordinator
+   * Throttle window (ms) for the per-provider "登录已过期" notice the coordinator
    * emits when a provider reports `errorCode: 'auth_failed'`. The first
    * failure in a chat sends one notice; further failures within this
    * window are silent (avoids spamming the user while their AI session

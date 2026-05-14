@@ -611,6 +611,8 @@ describe('ConversationCoordinator', () => {
       // Exactly one neutral auth-fail notice, regardless of which provider failed.
       const notices = sent.filter(t => /登录已过期/.test(t))
       expect(notices).toHaveLength(1)
+      expect(notices[0]).toMatch(/Claude 登录已过期/)
+      expect(notices[0]).toContain('claude login')
       // The raw "Not logged in / Please run /login" string did NOT leak.
       expect(sent.some(t => /Please run \/login|Not logged in/.test(t))).toBe(false)
     })
@@ -903,7 +905,7 @@ describe('ConversationCoordinator', () => {
       expect(modCalls).toBe(1)
       // User got the neutral notice — NOT the raw sentinel or a "[Claude]" prefix.
       const sent = sendAssistantText.mock.calls.map(call => call[1] as string)
-      expect(sent.some(t => /登录已过期/.test(t))).toBe(true)
+      expect(sent.some(t => /Claude 登录已过期/.test(t) && t.includes('claude login'))).toBe(true)
       expect(sent.some(t => /Please run \/login|Not logged in/.test(t))).toBe(false)
       expect(sent.some(t => /^\[Claude\]/.test(t))).toBe(false)
     })
