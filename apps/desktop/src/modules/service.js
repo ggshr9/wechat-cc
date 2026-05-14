@@ -286,6 +286,68 @@ export function showPostStopAlert(pid) {
 }
 
 /**
+ * Pure orchestrator used by the single-page 扫码 flow. Does NOT bind to
+ * any specific DOM element — caller passes an `onProgress(label)` callback
+ * and decides where to render. Returns:
+ *   { ok: true,  serviceKind, daemonPid }                — success
+ *   { ok: false, stage: 'install'|'start'|'alive', error, details } — failure
+ *
+ * Stages:
+ *   install — `wechat-cc service install --json` returned ok:true
+ *   start   — `wechat-cc service start --json` returned ok:true
+ *   alive   — daemon HTTP api responds within 15s total (5s normal +
+ *             10s extended grace via the polling loop)
+ *
+ * @param {{ invoke: (cmd: string, args: { args: string[] }) => Promise<unknown> }} deps
+ * @param {(label: string) => void} onProgress
+ */
+export async function silentInstallAndStart(deps, onProgress) {
+  const fail = (stage, error, details) => ({ ok: false, stage, error, details })
+
+  try {
+    onProgress("安装后台服务…")
+    const installResp = /** @type {{ ok?: boolean, kind?: string, error?: string, stderr?: string }} */ (
+      await deps.invoke("wechat_cli_json", { args: ["service", "install", "--json"] })
+    )
+    if (!installResp?.ok) return fail("install", installResp?.error || "install failed", installResp?.stderr ?? null)
+
+    onProgress("启动后台服务…")
+    const startResp = /** @type {{ ok?: boolean, error?: string, stderr?: string }} */ (
+      await deps.invoke("wechat_cli_json", { args: ["service", "start", "--json"] })
+    )
+    if (!startResp?.ok) return fail("start", startResp?.error || "start failed", startResp?.stderr ?? null)
+
+    onProgress("等待 daemon 启动…")
+    const aliveOk = await waitDaemonAlive(deps, 15_000)
+    if (!aliveOk) return fail("alive", "daemon 启动超时", "internal HTTP API did not respond within 15s")
+
+    const pidResp = /** @type {{ pid?: number, checks?: { daemon?: { pid?: number } } } | null} */ (
+      await deps.invoke("wechat_cli_json", { args: ["doctor", "--json"] }).catch(() => null)
+    )
+    const daemonPid = pidResp?.checks?.daemon?.pid ?? pidResp?.pid ?? null
+    return { ok: true, serviceKind: installResp.kind ?? null, daemonPid }
+  } catch (e) {
+    return fail("install", e instanceof Error ? e.message : String(e), null)
+  }
+}
+
+/**
+ * Poll `wechat-cli doctor --json` until daemon.alive is true or totalMs elapses.
+ * @param {{ invoke: (cmd: string, args: { args: string[] }) => Promise<unknown> }} deps
+ */
+async function waitDaemonAlive(deps, totalMs) {
+  const start = Date.now()
+  while (Date.now() - start < totalMs) {
+    const r = /** @type {{ checks?: { daemon?: { alive?: boolean } } } | null} */ (
+      await deps.invoke("wechat_cli_json", { args: ["doctor", "--json"] }).catch(() => null)
+    )
+    if (r?.checks?.daemon?.alive) return true
+    await new Promise((res) => setTimeout(res, 500))
+  }
+  return false
+}
+
+/**
  * @param {{ invoke: (cmd: string, args: { args: string[] }) => Promise<unknown>, formatInvokeError: (err: unknown) => string, doctorPoller: { refresh: () => Promise<unknown> } }} deps
  */
 export async function forceKillDaemon(deps) {
