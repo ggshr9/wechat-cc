@@ -42,9 +42,13 @@ const state = {
   currentBaseUrl: /** @type {string | null} */ (null),
   selectedProvider: "claude",
   unattended: true,
-  autoStart: false,
+  // Match the v0.6 backend default (true) so a loadAgentConfig failure
+  // leaves the UI consistent with the on-disk reality. The actual value
+  // is overwritten by loadAgentConfig() at boot when that call succeeds.
+  autoStart: true,
   closeStopsDaemon: false,
   qrTimer: /** @type {ReturnType<typeof setTimeout> | null} */ (null),
+  qrConfirmTimer: /** @type {ReturnType<typeof setTimeout> | null} */ (null),
   qrErrors: 0,
   clockTimer: /** @type {ReturnType<typeof setInterval> | null} */ (null),
   mode: "loading",
@@ -185,9 +189,12 @@ async function handleScanClick() {
   const result = await silentInstallAndStart(deps, (label) => showInstallStrip(label))
 
   hideInstallStrip()
-  btn.disabled = false
 
   if (!result.ok) {
+    // Re-enable only on failure so the user can retry. On success the
+    // QR modal is opening and the button must stay disabled — otherwise
+    // a stray click during the modal flow re-runs install→QR concurrently.
+    btn.disabled = false
     const fail = /** @type {{ ok: false, stage: string, error: string, details: string | null }} */ (/** @type {unknown} */ (result))
     const stageLabel = /** @type {Record<string, string>} */ ({
       install: "安装后台服务失败",
@@ -199,12 +206,19 @@ async function handleScanClick() {
   }
 
   // Service running. Open QR modal; on bind success, route to dashboard.
-  await openQrModal({ invoke, mock }, state, {
-    onBound: () => {
-      setMode("dashboard")
-      doctorPoller.refresh()
-    },
-  })
+  // Button stays disabled through the QR flow. Re-enable in finally so
+  // it's clickable again if the user closes the modal without binding
+  // (then they'd need to retry — re-enabling lets them).
+  try {
+    await openQrModal({ invoke, mock }, state, {
+      onBound: () => {
+        setMode("dashboard")
+        doctorPoller.refresh()
+      },
+    })
+  } finally {
+    btn.disabled = false
+  }
 }
 
 // ─── doctor subscribers ──────────────────────────────────────────────

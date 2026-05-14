@@ -4,7 +4,7 @@
 /** @typedef {import('../../../../src/cli/schema').SetupPollOutputT} SetupPoll */
 /**
  * @typedef {{ invoke: (cmd: string, args: Record<string, unknown>) => Promise<unknown>, mock: boolean }} Deps
- * @typedef {{ setup: SetupQrJson | null, currentBaseUrl: string | null, qrTimer: ReturnType<typeof setInterval> | null, qrErrors: number }} QrState
+ * @typedef {{ setup: SetupQrJson | null, currentBaseUrl: string | null, qrTimer: ReturnType<typeof setInterval> | null, qrConfirmTimer: ReturnType<typeof setTimeout> | null, qrErrors: number }} QrState
  * @typedef {{ onConfirmed?: () => void, onCancel?: () => void }} QrCallbacks
  */
 
@@ -43,6 +43,10 @@ export async function openQrModal(deps, state, opts) {
 
   const cleanup = () => {
     if (state.qrTimer != null) { clearInterval(state.qrTimer); state.qrTimer = null }
+    // The 800ms "success badge → onConfirmed" timer (set in pollQr) must
+    // also be cancellable from cleanup — otherwise a user who closes the
+    // modal in that window still triggers onBound from a stale closure.
+    if (state.qrConfirmTimer != null) { clearTimeout(state.qrConfirmTimer); state.qrConfirmTimer = null }
     if (typeof dialog.close === "function" && dialog.open) dialog.close()
     else dialog.removeAttribute("open")
   }
@@ -168,7 +172,13 @@ async function pollQr(deps, state, callbacks) {
     if (rawToggle) rawToggle.hidden = true
     const raw = document.getElementById("qr-raw")
     if (raw) { raw.classList.remove("show"); raw.hidden = true }
-    // Brief pause so the user sees the success badge before the dialog closes.
-    setTimeout(() => callbacks.onConfirmed?.(), 800)
+    // Brief pause so the user sees the success badge before the dialog
+    // closes. Stored on state so cleanup() can cancel it if the user
+    // dismisses the modal in this 800ms window (otherwise the stale
+    // onConfirmed fires after close, leaking onBound side-effects).
+    state.qrConfirmTimer = setTimeout(() => {
+      state.qrConfirmTimer = null
+      callbacks.onConfirmed?.()
+    }, 800)
   }
 }
