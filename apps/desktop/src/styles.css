@@ -58,7 +58,6 @@
   --amber-soft: #f6ecd3;
   --rouge:      #b04832;
   --rouge-soft: #f4dcd3;
-  --danger:     #b04832;
 
   /* type */
   --sans: "Geist", "Noto Sans SC", -apple-system, BlinkMacSystemFont, "PingFang SC", system-ui, sans-serif;
@@ -254,7 +253,7 @@ input { font: inherit; color: inherit; }
   background-position: right 6px center;
   padding-right: 18px;
 }
-.mode-select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mode-select:focus { outline: 2px solid var(--green); outline-offset: 1px; }
 .mode-select.mode-solo     { background-color: var(--green-soft); color: var(--green-ink); }
 .mode-select.mode-parallel { background-color: var(--amber-soft); color: var(--amber); }
 .mode-select.mode-primary  { background-color: #e3e8f0;          color: #3b4a63; }
@@ -720,13 +719,13 @@ input { font: inherit; color: inherit; }
 @keyframes pip-pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
 
 .error-strip {
-  border: 1px solid var(--danger);
+  border: 1px solid var(--rouge);
   border-radius: 10px;
   padding: 12px 14px;
   background: var(--paper-2);
 }
 .error-strip .error-row { display: flex; align-items: center; gap: 10px; }
-.error-strip .ic { color: var(--danger); font-weight: 700; }
+.error-strip .ic { color: var(--rouge); font-weight: 700; }
 .error-strip .error-msg { flex: 1; font-size: 13px; }
 .error-strip .btn.mini { padding: 4px 10px; font-size: 12px; }
 .error-strip .error-details { margin-top: 10px; padding: 8px; background: var(--paper); border-radius: 6px; font-size: 11px; max-height: 200px; overflow: auto; }
@@ -774,8 +773,13 @@ input { font: inherit; color: inherit; }
   z-index: 50;
   display: flex; flex-direction: column;
   transform: translateX(100%); transition: transform 200ms ease;
+  pointer-events: none; visibility: hidden;
 }
-.settings-drawer:not([hidden]) { transform: translateX(0); }
+.settings-drawer.is-open {
+  transform: translateX(0);
+  pointer-events: auto;
+  visibility: visible;
+}
 .drawer-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 18px 22px; border-bottom: 1px solid var(--hair);
