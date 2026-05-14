@@ -464,6 +464,12 @@ function wireEvents() {
 
   document.getElementById("accounts-body")?.addEventListener("click", ev => handleAccountRowClick(deps, ev))
 
+  document.getElementById("add-account-btn")?.addEventListener("click", () => setMode("wizard"))
+  document.getElementById("setup-back-to-dashboard")?.addEventListener("click", (e) => {
+    e.preventDefault()
+    setMode("dashboard")
+  })
+
   document.querySelectorAll("[data-action='open-wizard']").forEach(btn =>
     btn.addEventListener("click", () => setMode("wizard"))
   )

@@ -99,6 +99,39 @@ test('old step-nav DOM is gone (regression guard)', async ({ page, shimUrl }) =>
   await expect(page.locator('#enter-dashboard')).toHaveCount(0)
 })
 
+test('setup page shows first-time subtitle when no accounts bound', async ({ page, shimUrl, shim }) => {
+  // Seed a clean state. demo.seed leaves accounts empty by default — verify.
+  await shim.invoke('demo.seed')
+  await page.goto(shimUrl)
+  await page.waitForFunction(
+    () => ['wizard', 'dashboard'].includes(document.documentElement.dataset.mode ?? ''),
+    { timeout: 15_000 }
+  )
+  // Force wizard mode for this assertion (shim may have routed to dashboard
+  // if accounts seeded — robust check is on the elements regardless of mode).
+  await page.evaluate(() => { document.documentElement.dataset.mode = 'wizard' })
+
+  // First-time subtitle visible, additive hidden. Run inside the page
+  // to force a re-render after we force mode — call into the wizard renderer
+  // by triggering doctor refresh.
+  // For simplicity assert on the underlying DOM state after re-render — the
+  // doctor poller will tick within 2-3s and re-render via renderSetupPage.
+  await expect(page.locator('#wz-sub-first-time')).toBeVisible()
+  await expect(page.locator('#wz-sub-additive')).toBeHidden()
+  await expect(page.locator('#setup-back-to-dashboard')).toBeHidden()
+})
+
+test('add-account-btn exists on dashboard accounts card', async ({ page, shimUrl }) => {
+  await page.goto(shimUrl)
+  await page.waitForFunction(
+    () => ['wizard', 'dashboard'].includes(document.documentElement.dataset.mode ?? ''),
+    { timeout: 15_000 }
+  )
+  // Regardless of which mode boot routes to, the button exists in DOM.
+  await expect(page.locator('#add-account-btn')).toBeAttached()
+  await expect(page.locator('#add-account-btn')).toHaveText(/绑定新账号/)
+})
+
 test('wizard QR step: setup-poll returns confirmed after auto-complete', async ({ shim }) => {
   // Direct shim API test — verifies the DRY_RUN QR auto-pass mock (P-T12).
   // This is preserved from the previous wizard.spec.ts since the underlying

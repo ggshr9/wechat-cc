@@ -17,8 +17,10 @@
 
         <section id="wizard" class="wizard-single">
           <div class="wz-head">
+            <a id="setup-back-to-dashboard" class="setup-back" hidden href="#" type="button">← 返回控制台</a>
             <h1 class="wz-title">wechat-cc</h1>
-            <p class="wz-sub">把 AI agent 接到你的微信</p>
+            <p class="wz-sub" id="wz-sub-first-time">把 AI agent 接到你的微信</p>
+            <p class="wz-sub" id="wz-sub-additive" hidden>绑定新的微信账号</p>
           </div>
 
           <div class="setup-page">
@@ -64,7 +66,8 @@
               <pre class="error-details" id="setup-error-details-body" hidden></pre>
             </div>
 
-            <p class="wz-help">扫码后进入控制台。后台服务、开机自启等可在控制台「设置」里调整。</p>
+            <p class="wz-help" id="wz-help-first-time">扫码后进入控制台。后台服务、开机自启等可在控制台「设置」里调整。</p>
+            <p class="wz-help" id="wz-help-additive" hidden>扫码绑定的账号会出现在「绑定账号」列表里，原有账号继续可用。</p>
 
             <div class="wz-foot wz-foot-pill">
               <span id="wizard-foot-dot" class="dot"></span>
@@ -215,7 +218,10 @@
               <div class="card">
                 <div class="card-h">
                   绑定账号 · Bound accounts
-                  <span class="right"><span class="meta" id="accounts-meta">—</span></span>
+                  <span class="right">
+                    <button id="add-account-btn" class="btn ghost mini" type="button">+ 绑定新账号</button>
+                    <span class="meta" id="accounts-meta">—</span>
+                  </span>
                 </div>
                 <table class="tbl" id="accounts-table">
                   <thead>

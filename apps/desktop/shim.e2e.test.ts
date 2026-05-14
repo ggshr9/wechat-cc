@@ -95,6 +95,9 @@ describe('apps/desktop shim — HTML structure', () => {
       'setup-error-details', 'setup-error-retry', 'setup-error-details-body',
       'wsl-tip',                                         // WSL notice
       'wizard-foot-dot', 'wizard-foot-text',             // wizard status pill
+      'wz-sub-first-time', 'wz-sub-additive',            // first-time vs additive subtitle
+      'wz-help-first-time', 'wz-help-additive',          // first-time vs additive helper
+      'setup-back-to-dashboard',                         // back link (additive flavor)
       // QR <dialog> (moved out of step 3)
       'qr-modal', 'qr-modal-close', 'qr-modal-title',
       'qr-box', 'qr-refresh', 'qr-message', 'qr-raw', 'qr-raw-toggle',
@@ -104,6 +107,7 @@ describe('apps/desktop shim — HTML structure', () => {
       'unattended-toggle', 'guard-toggle', 'guard-status-line',
       // Dashboard (unchanged by this refactor)
       'hero-card', 'hero-headline',
+      'add-account-btn',                                 // + 绑定新账号 in accounts card
       'accounts-body',
       'update-card', 'update-headline', 'update-body',
       'update-check-btn', 'update-apply-btn',
