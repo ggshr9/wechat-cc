@@ -73,60 +73,65 @@
           </div>
         </section>
 
-        <dialog id="qr-modal" class="qr-modal" aria-labelledby="qr-modal-title">
-          <button class="qr-modal-close" id="qr-modal-close" type="button" aria-label="关闭">×</button>
-          <h2 class="qr-modal-title" id="qr-modal-title">扫码绑定微信</h2>
-          <div class="qr-modal-body">
-            <div id="qr-box" class="qr-box">生成中…</div>
-            <div class="qr-modal-side">
-              <div class="qr-modal-step" id="qr-message">轮询扫码状态…</div>
-              <div class="qr-modal-help">手机扫码后请在微信里点确认</div>
-              <button id="qr-refresh" class="btn ghost mini" type="button">重新生成</button>
-              <button id="qr-raw-toggle" class="qr-raw-toggle" type="button">显示原始响应</button>
-              <pre id="qr-raw"></pre>
-            </div>
-          </div>
-        </dialog>
-
-        <aside id="settings-drawer" class="settings-drawer">
-          <header class="drawer-head">
-            <h2>设置</h2>
-            <button id="settings-close" class="drawer-close" type="button" aria-label="关闭">×</button>
-          </header>
-          <div class="drawer-body">
-            <section class="drawer-section">
-              <h3>后台服务</h3>
-              <div class="toggle-row">
-                <div>
-                  <div class="lab">开机自启</div>
-                  <div class="sub">登录系统时自动启动 daemon。</div>
-                </div>
-                <button class="toggle" id="autostart-toggle" type="button" data-toggle aria-pressed="false" aria-label="开机自启"></button>
-              </div>
-              <p class="drawer-section-help">默认配置：daemon 在系统启动时自动跑，关闭窗口不会影响接收消息。</p>
-            </section>
-            <section class="drawer-section">
-              <h3>行为</h3>
-              <div class="toggle-row">
-                <div>
-                  <div class="lab">自动同意工具调用</div>
-                  <div class="sub">关闭后，每次工具调用都需要在微信里回 y / n（10 分钟超时即拒绝）。</div>
-                </div>
-                <button class="toggle on" id="unattended-toggle" type="button" data-toggle aria-pressed="true" aria-label="自动同意工具调用"></button>
-              </div>
-              <div class="toggle-row">
-                <div>
-                  <div class="lab">网络守护</div>
-                  <div class="sub">每 30 秒探活；网络掉了通知微信端。<span id="guard-status-line" class="guard-status-line">—</span></div>
-                </div>
-                <button class="toggle" id="guard-toggle" type="button" data-toggle aria-pressed="false" aria-label="网络守护"></button>
-              </div>
-            </section>
-          </div>
-        </aside>
-
       </div>
     </main>
+
+    <!-- QR modal + settings drawer are top-level overlays: must live
+         OUTSIDE both <main class="wizard"> and <main class="dashboard"> so
+         the mode-switch display:none on one main doesn't collapse them
+         when invoked from the other (e.g. dashboard's "+ 绑定新账号"
+         opens the QR dialog while data-mode stays "dashboard"). -->
+    <dialog id="qr-modal" class="qr-modal" aria-labelledby="qr-modal-title">
+      <button class="qr-modal-close" id="qr-modal-close" type="button" aria-label="关闭">×</button>
+      <h2 class="qr-modal-title" id="qr-modal-title">扫码绑定微信</h2>
+      <div class="qr-modal-body">
+        <div id="qr-box" class="qr-box">生成中…</div>
+        <div class="qr-modal-side">
+          <div class="qr-modal-step" id="qr-message">轮询扫码状态…</div>
+          <div class="qr-modal-help">手机扫码后请在微信里点确认</div>
+          <button id="qr-refresh" class="btn ghost mini" type="button">重新生成</button>
+          <button id="qr-raw-toggle" class="qr-raw-toggle" type="button">显示原始响应</button>
+          <pre id="qr-raw"></pre>
+        </div>
+      </div>
+    </dialog>
+
+    <aside id="settings-drawer" class="settings-drawer">
+      <header class="drawer-head">
+        <h2>设置</h2>
+        <button id="settings-close" class="drawer-close" type="button" aria-label="关闭">×</button>
+      </header>
+      <div class="drawer-body">
+        <section class="drawer-section">
+          <h3>后台服务</h3>
+          <div class="toggle-row">
+            <div>
+              <div class="lab">开机自启</div>
+              <div class="sub">登录系统时自动启动 daemon。</div>
+            </div>
+            <button class="toggle" id="autostart-toggle" type="button" data-toggle aria-pressed="false" aria-label="开机自启"></button>
+          </div>
+          <p class="drawer-section-help">默认配置：daemon 在系统启动时自动跑，关闭窗口不会影响接收消息。</p>
+        </section>
+        <section class="drawer-section">
+          <h3>行为</h3>
+          <div class="toggle-row">
+            <div>
+              <div class="lab">自动同意工具调用</div>
+              <div class="sub">关闭后，每次工具调用都需要在微信里回 y / n（10 分钟超时即拒绝）。</div>
+            </div>
+            <button class="toggle on" id="unattended-toggle" type="button" data-toggle aria-pressed="true" aria-label="自动同意工具调用"></button>
+          </div>
+          <div class="toggle-row">
+            <div>
+              <div class="lab">网络守护</div>
+              <div class="sub">每 30 秒探活；网络掉了通知微信端。<span id="guard-status-line" class="guard-status-line">—</span></div>
+            </div>
+            <button class="toggle" id="guard-toggle" type="button" data-toggle aria-pressed="false" aria-label="网络守护"></button>
+          </div>
+        </section>
+      </div>
+    </aside>
 
     <!-- ════ DASHBOARD MODE ═══════════════════════════════════════════ -->
     <main class="dashboard">
