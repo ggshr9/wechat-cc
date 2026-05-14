@@ -15,7 +15,7 @@
     <main class="wizard">
       <div class="wizard-window">
 
-        <section id="wizard" class="wizard wizard-single">
+        <section id="wizard" class="wizard-single">
           <div class="wz-head">
             <h1 class="wz-title">wechat-cc</h1>
             <p class="wz-sub">把 AI agent 接到你的微信</p>
@@ -44,7 +44,7 @@
               <div class="env-tip-body">装在 WSL 里的 Claude Code，这个 Windows GUI 客户端连不到 —— 需要在 Windows 端再装一份才能用。WSL 直连集成在路上。</div>
             </details>
 
-            <button id="scan-bind" class="btn primary scan-cta" disabled>
+            <button id="scan-bind" class="btn primary scan-cta" type="button" disabled>
               <span class="ic"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><path d="M9 9h2v2H9zM13 9h1v1h-1zM9 13h1v1H9zM12 12h2v2h-2z"/></svg></span>
               <span class="label">扫码绑定微信 →</span>
             </button>
@@ -58,8 +58,8 @@
               <div class="error-row">
                 <span class="ic">!</span>
                 <span class="error-msg" id="setup-error-msg">—</span>
-                <button class="btn ghost mini" id="setup-error-details">详情</button>
-                <button class="btn primary mini" id="setup-error-retry">重试</button>
+                <button class="btn ghost mini" id="setup-error-details" type="button">详情</button>
+                <button class="btn primary mini" id="setup-error-retry" type="button">重试</button>
               </div>
               <pre class="error-details" id="setup-error-details-body" hidden></pre>
             </div>
@@ -68,20 +68,20 @@
 
             <div class="wz-foot wz-foot-pill">
               <span id="wizard-foot-dot" class="dot"></span>
-              <span id="wizard-foot-text" style="margin-left: 6px;">服务状态未知</span>
+              <span id="wizard-foot-text">服务状态未知</span>
             </div>
           </div>
         </section>
 
-        <dialog id="qr-modal" class="qr-modal">
-          <button class="qr-modal-close" id="qr-modal-close" type="button">×</button>
-          <h2 class="qr-modal-title">扫码绑定微信</h2>
+        <dialog id="qr-modal" class="qr-modal" aria-labelledby="qr-modal-title">
+          <button class="qr-modal-close" id="qr-modal-close" type="button" aria-label="关闭">×</button>
+          <h2 class="qr-modal-title" id="qr-modal-title">扫码绑定微信</h2>
           <div class="qr-modal-body">
             <div id="qr-box" class="qr-box">生成中…</div>
             <div class="qr-modal-side">
               <div class="qr-modal-step" id="qr-message">轮询扫码状态…</div>
               <div class="qr-modal-help">手机扫码后请在微信里点确认</div>
-              <button id="qr-refresh" class="btn ghost mini">重新生成</button>
+              <button id="qr-refresh" class="btn ghost mini" type="button">重新生成</button>
               <button id="qr-raw-toggle" class="qr-raw-toggle" type="button">显示原始响应</button>
               <pre id="qr-raw"></pre>
             </div>
@@ -91,7 +91,7 @@
         <aside id="settings-drawer" class="settings-drawer" hidden>
           <header class="drawer-head">
             <h2>设置</h2>
-            <button id="settings-close" class="drawer-close" type="button">×</button>
+            <button id="settings-close" class="drawer-close" type="button" aria-label="关闭">×</button>
           </header>
           <div class="drawer-body">
             <section class="drawer-section">
@@ -101,14 +101,14 @@
                   <div class="lab">开机自启</div>
                   <div class="sub">登录系统时自动启动 daemon。</div>
                 </div>
-                <button class="toggle" id="autostart-toggle" data-toggle aria-pressed="false"></button>
+                <button class="toggle" id="autostart-toggle" type="button" data-toggle aria-pressed="false" aria-label="开机自启"></button>
               </div>
               <div class="toggle-row">
                 <div>
                   <div class="lab">关窗即终止 daemon (高级)</div>
                   <div class="sub">默认关闭：关窗只关 GUI，daemon 继续跑。打开后关窗会停掉 daemon。</div>
                 </div>
-                <button class="toggle" id="close-stops-daemon-toggle" data-toggle aria-pressed="false"></button>
+                <button class="toggle" id="close-stops-daemon-toggle" type="button" data-toggle aria-pressed="false" aria-label="关窗即终止 daemon"></button>
               </div>
             </section>
             <section class="drawer-section">
@@ -118,14 +118,14 @@
                   <div class="lab">自动同意工具调用</div>
                   <div class="sub">关闭后，每次工具调用都需要在微信里回 y / n（10 分钟超时即拒绝）。</div>
                 </div>
-                <button class="toggle on" id="unattended-toggle" data-toggle aria-pressed="true"></button>
+                <button class="toggle on" id="unattended-toggle" type="button" data-toggle aria-pressed="true" aria-label="自动同意工具调用"></button>
               </div>
               <div class="toggle-row">
                 <div>
                   <div class="lab">网络守护</div>
                   <div class="sub">每 30 秒探活；网络掉了通知微信端。<span id="guard-status-line" class="guard-status-line">—</span></div>
                 </div>
-                <button class="toggle" id="guard-toggle" data-toggle aria-pressed="false"></button>
+                <button class="toggle" id="guard-toggle" type="button" data-toggle aria-pressed="false" aria-label="网络守护"></button>
               </div>
             </section>
           </div>
