@@ -175,6 +175,7 @@ const AgentConfigSchema = z.object({
   model: z.string().optional(),
   dangerouslySkipPermissions: z.boolean(),
   autoStart: z.boolean(),
+  closeStopsDaemon: z.boolean(),
 })
 
 // wechat-cc service status --json

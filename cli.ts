@@ -693,7 +693,7 @@ const providerShowCmd = defineCommand({
 })
 
 const providerSetCmd = defineCommand({
-  meta: { name: 'set', description: 'Switch agent provider (claude|codex), optionally with --model + --unattended' },
+  meta: { name: 'set', description: 'Switch agent provider (claude|codex), optionally with --model + --unattended + --auto-start + --close-stops-daemon' },
   args: {
     provider: { type: 'positional', required: true, description: 'claude | codex', valueHint: 'claude|codex' },
     model: { type: 'string', description: 'Override default model' },
@@ -703,6 +703,8 @@ const providerSetCmd = defineCommand({
     // --unattended as "don't change the existing dangerouslySkipPermissions
     // setting" — distinct from an explicit `--unattended false`.
     unattended: { type: 'string', description: 'true | false | yes | no | on | off (omit to leave unchanged)', valueHint: 'true|false' },
+    'auto-start': { type: 'string', description: 'true | false (omit to leave unchanged) — register service for boot/login auto-start', valueHint: 'true|false' },
+    'close-stops-daemon': { type: 'string', description: 'true | false (omit to leave unchanged) — when true, closing the GUI window stops the daemon', valueHint: 'true|false' },
   },
   run({ args }) {
     if (args.provider !== 'claude' && args.provider !== 'codex') {
@@ -711,12 +713,16 @@ const providerSetCmd = defineCommand({
     }
     const provider = args.provider as AgentProviderKind
     const unattended = parseBoolValue(args.unattended)
+    const autoStart = parseBoolValue(args['auto-start'])
+    const closeStopsDaemon = parseBoolValue(args['close-stops-daemon'])
     const existing = loadAgentConfig(STATE_DIR)
     const next = {
       ...existing,
       provider,
       ...(args.model !== undefined ? { model: args.model } : {}),
       ...(unattended !== undefined ? { dangerouslySkipPermissions: unattended } : {}),
+      ...(autoStart !== undefined ? { autoStart } : {}),
+      ...(closeStopsDaemon !== undefined ? { closeStopsDaemon } : {}),
     }
     // When switching provider, drop a stale model from the previous provider
     // unless the caller explicitly set one.
@@ -724,7 +730,7 @@ const providerSetCmd = defineCommand({
       delete (next as Partial<typeof next>).model
     }
     saveAgentConfig(STATE_DIR, next)
-    console.log(`provider set: ${next.provider}${next.model ? ` (${next.model})` : ''} unattended=${next.dangerouslySkipPermissions}`)
+    console.log(`provider set: ${next.provider}${next.model ? ` (${next.model})` : ''} unattended=${next.dangerouslySkipPermissions} autoStart=${next.autoStart} closeStopsDaemon=${next.closeStopsDaemon}`)
   },
 })
 

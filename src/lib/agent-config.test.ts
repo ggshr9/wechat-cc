@@ -8,7 +8,49 @@ describe('agent-config', () => {
   it('defaults to claude with unattended=true when no config exists', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agent-config-'))
     try {
-      expect(loadAgentConfig(dir)).toEqual({ provider: 'claude', dangerouslySkipPermissions: true, autoStart: false })
+      expect(loadAgentConfig(dir)).toEqual({ provider: 'claude', dangerouslySkipPermissions: true, autoStart: true, closeStopsDaemon: false })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('defaults autoStart to true when no config file exists (v0.6)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agent-config-'))
+    try {
+      const cfg = loadAgentConfig(dir)
+      expect(cfg.autoStart).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('defaults closeStopsDaemon to false', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agent-config-'))
+    try {
+      const cfg = loadAgentConfig(dir)
+      expect(cfg.closeStopsDaemon).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('preserves explicit autoStart=false from saved config (upgrade safety)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agent-config-'))
+    try {
+      saveAgentConfig(dir, { provider: 'claude', dangerouslySkipPermissions: true, autoStart: false, closeStopsDaemon: false })
+      const cfg = loadAgentConfig(dir)
+      expect(cfg.autoStart).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('preserves explicit closeStopsDaemon=true from saved config', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agent-config-'))
+    try {
+      saveAgentConfig(dir, { provider: 'claude', dangerouslySkipPermissions: true, autoStart: true, closeStopsDaemon: true })
+      const cfg = loadAgentConfig(dir)
+      expect(cfg.closeStopsDaemon).toBe(true)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -17,8 +59,8 @@ describe('agent-config', () => {
   it('persists codex provider and model', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agent-config-'))
     try {
-      saveAgentConfig(dir, { provider: 'codex', model: 'gpt-5.3-codex', dangerouslySkipPermissions: true, autoStart: false })
-      expect(loadAgentConfig(dir)).toEqual({ provider: 'codex', model: 'gpt-5.3-codex', dangerouslySkipPermissions: true, autoStart: false })
+      saveAgentConfig(dir, { provider: 'codex', model: 'gpt-5.3-codex', dangerouslySkipPermissions: true, autoStart: false, closeStopsDaemon: false })
+      expect(loadAgentConfig(dir)).toEqual({ provider: 'codex', model: 'gpt-5.3-codex', dangerouslySkipPermissions: true, autoStart: false, closeStopsDaemon: false })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -33,8 +75,8 @@ describe('agent-config', () => {
   it('persists claude provider with explicit model', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agent-config-'))
     try {
-      saveAgentConfig(dir, { provider: 'claude', model: 'claude-opus-4-7', dangerouslySkipPermissions: true, autoStart: false })
-      expect(loadAgentConfig(dir)).toEqual({ provider: 'claude', model: 'claude-opus-4-7', dangerouslySkipPermissions: true, autoStart: false })
+      saveAgentConfig(dir, { provider: 'claude', model: 'claude-opus-4-7', dangerouslySkipPermissions: true, autoStart: false, closeStopsDaemon: false })
+      expect(loadAgentConfig(dir)).toEqual({ provider: 'claude', model: 'claude-opus-4-7', dangerouslySkipPermissions: true, autoStart: false, closeStopsDaemon: false })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -43,8 +85,8 @@ describe('agent-config', () => {
   it('persists dangerouslySkipPermissions=false when explicitly opted out', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agent-config-'))
     try {
-      saveAgentConfig(dir, { provider: 'claude', dangerouslySkipPermissions: false, autoStart: false })
-      expect(loadAgentConfig(dir)).toEqual({ provider: 'claude', dangerouslySkipPermissions: false, autoStart: false })
+      saveAgentConfig(dir, { provider: 'claude', dangerouslySkipPermissions: false, autoStart: false, closeStopsDaemon: false })
+      expect(loadAgentConfig(dir)).toEqual({ provider: 'claude', dangerouslySkipPermissions: false, autoStart: false, closeStopsDaemon: false })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -57,16 +99,16 @@ describe('agent-config', () => {
     try {
       const fs = require('node:fs') as typeof import('node:fs')
       fs.writeFileSync(join(dir, 'agent-config.json'), JSON.stringify({ provider: 'codex', model: 'foo' }))
-      expect(loadAgentConfig(dir)).toEqual({ provider: 'codex', model: 'foo', dangerouslySkipPermissions: true, autoStart: false })
+      expect(loadAgentConfig(dir)).toEqual({ provider: 'codex', model: 'foo', dangerouslySkipPermissions: true, autoStart: true, closeStopsDaemon: false })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  it('persists autoStart=true when set, defaults to false otherwise', () => {
+  it('persists autoStart=true when set', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agent-config-'))
     try {
-      saveAgentConfig(dir, { provider: 'claude', dangerouslySkipPermissions: true, autoStart: true })
+      saveAgentConfig(dir, { provider: 'claude', dangerouslySkipPermissions: true, autoStart: true, closeStopsDaemon: false })
       expect(loadAgentConfig(dir).autoStart).toBe(true)
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -84,7 +126,7 @@ describe('agent-config', () => {
         provider: 'claude', dangerouslySkipPermissions: true, autoStart: true, keepAlive: false,
       }))
       const loaded = loadAgentConfig(dir)
-      expect(loaded).toEqual({ provider: 'claude', dangerouslySkipPermissions: true, autoStart: true })
+      expect(loaded).toEqual({ provider: 'claude', dangerouslySkipPermissions: true, autoStart: true, closeStopsDaemon: false })
       expect((loaded as { keepAlive?: boolean }).keepAlive).toBeUndefined()
     } finally {
       rmSync(dir, { recursive: true, force: true })
