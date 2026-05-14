@@ -19,10 +19,11 @@ export function renderSetupPage(report) {
 }
 
 function renderSetupFlavor(report) {
-  // Account count comes from the doctor report's accounts list. The exact
-  // shape varies — read defensively. Treat any non-empty array as "additive".
-  const accounts = /** @type {unknown[]} */ (report.accounts || report.boundAccounts || [])
-  const additive = Array.isArray(accounts) && accounts.length > 0
+  // Account count lives at report.checks.accounts.count (doctor --json
+  // shape — see src/cli/doctor.ts). Any positive count = "additive":
+  // a returning user opening setup to bind another WeChat account.
+  const count = report?.checks?.accounts?.count ?? 0
+  const additive = count > 0
 
   const setSubAndHelper = (firstTimeShown) => {
     document.getElementById("wz-sub-first-time")?.toggleAttribute("hidden", !firstTimeShown)
