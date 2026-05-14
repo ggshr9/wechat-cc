@@ -341,4 +341,36 @@ describe('Codex agent provider', () => {
     expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('tid-log-test'))
     errSpy.mockRestore()
   })
+
+  it('emits code=auth_failed when turn.failed message matches auth-shape', async () => {
+    const fakeCodex = makeFakeCodex()
+    fakeCodex.fake.thread.pushTurn([
+      { type: 'thread.started', thread_id: 't1' },
+      { type: 'turn.failed', error: { message: 'OPENAI_API_KEY not set, run `codex login`' } },
+    ])
+    const { provider: p } = provider({}, fakeCodex)
+    const session = await p.spawn({ alias: 'a', path: '/p' })
+
+    const events = await drain(session.dispatch('hi'))
+
+    const errs = events.filter((e) => e.kind === 'error')
+    expect(errs).toHaveLength(1)
+    expect((errs[0] as { code?: string }).code).toBe('auth_failed')
+  })
+
+  it('emits code=auth_failed when stream-level error message matches auth-shape', async () => {
+    const fakeCodex = makeFakeCodex()
+    fakeCodex.fake.thread.pushTurn([
+      { type: 'thread.started', thread_id: 't1' },
+      { type: 'error', message: 'not authenticated, please run codex login' } as unknown as ThreadEvent,
+    ])
+    const { provider: p } = provider({}, fakeCodex)
+    const session = await p.spawn({ alias: 'a', path: '/p' })
+
+    const events = await drain(session.dispatch('hi'))
+
+    const errs = events.filter((e) => e.kind === 'error')
+    expect(errs).toHaveLength(1)
+    expect((errs[0] as { code?: string }).code).toBe('auth_failed')
+  })
 })
