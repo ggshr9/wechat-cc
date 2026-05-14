@@ -202,6 +202,7 @@ async function handleScanClick() {
   await openQrModal({ invoke, mock }, state, {
     onBound: () => {
       setMode("dashboard")
+      doctorPoller.refresh()
     },
   })
 }
@@ -262,7 +263,6 @@ async function loadAgentConfig() {
   state.closeStopsDaemon = (/** @type {any} */ (config)).closeStopsDaemon === true
   setToggle("unattended-toggle", state.unattended)
   setToggle("autostart-toggle", state.autoStart)
-  setToggle("close-stops-daemon-toggle", state.closeStopsDaemon)
 }
 
 /**
@@ -358,17 +358,6 @@ function wireEvents() {
         try {
           await invoke("wechat_cli_text", { args: ["provider", "set", state.selectedProvider || "claude", "--auto-start", on ? "true" : "false"] })
         } catch (err) { console.error("autoStart set failed:", err) }
-      } else if (id === "close-stops-daemon-toggle") {
-        // closeStopsDaemon: window-close kills daemon. Default false; advanced.
-        // Check if the provider config CLI supports this flag; if not, only
-        // update in-memory state (Task 10 will add the CLI flag).
-        state.closeStopsDaemon = on
-        try {
-          await invoke("wechat_cli_text", { args: ["provider", "set", state.selectedProvider || "claude", "--close-stops-daemon", on ? "true" : "false"] })
-        } catch (err) {
-          // Flag may not exist yet — non-fatal.
-          console.warn("close-stops-daemon flag not persisted:", err)
-        }
       } else if (id === "guard-toggle") {
         try {
           await invoke("wechat_cli_json", { args: ["guard", on ? "enable" : "disable", "--json"] })
@@ -464,10 +453,12 @@ function wireEvents() {
 
   document.getElementById("accounts-body")?.addEventListener("click", ev => handleAccountRowClick(deps, ev))
 
-  document.getElementById("add-account-btn")?.addEventListener("click", () => setMode("wizard"))
-  document.getElementById("setup-back-to-dashboard")?.addEventListener("click", (e) => {
-    e.preventDefault()
-    setMode("dashboard")
+  document.getElementById("add-account-btn")?.addEventListener("click", () => {
+    openQrModal({ invoke, mock }, state, {
+      onBound: () => {
+        doctorPoller.refresh()
+      },
+    })
   })
 
   document.querySelectorAll("[data-action='open-wizard']").forEach(btn =>

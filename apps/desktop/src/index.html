@@ -17,10 +17,8 @@
 
         <section id="wizard" class="wizard-single">
           <div class="wz-head">
-            <a id="setup-back-to-dashboard" class="setup-back" hidden href="#" type="button">← 返回控制台</a>
             <h1 class="wz-title">wechat-cc</h1>
-            <p class="wz-sub" id="wz-sub-first-time">把 AI agent 接到你的微信</p>
-            <p class="wz-sub" id="wz-sub-additive" hidden>绑定新的微信账号</p>
+            <p class="wz-sub">把 AI agent 接到你的微信</p>
           </div>
 
           <div class="setup-page">
@@ -66,8 +64,7 @@
               <pre class="error-details" id="setup-error-details-body" hidden></pre>
             </div>
 
-            <p class="wz-help" id="wz-help-first-time">扫码后进入控制台。后台服务、开机自启等可在控制台「设置」里调整。</p>
-            <p class="wz-help" id="wz-help-additive" hidden>扫码绑定的账号会出现在「绑定账号」列表里，原有账号继续可用。</p>
+            <p class="wz-help">扫码后进入控制台。后台服务、开机自启等可在控制台「设置」里调整。</p>
 
             <div class="wz-foot wz-foot-pill">
               <span id="wizard-foot-dot" class="dot"></span>
@@ -106,13 +103,7 @@
                 </div>
                 <button class="toggle" id="autostart-toggle" type="button" data-toggle aria-pressed="false" aria-label="开机自启"></button>
               </div>
-              <div class="toggle-row">
-                <div>
-                  <div class="lab">关窗即终止 daemon (高级)</div>
-                  <div class="sub">默认关闭：关窗只关 GUI，daemon 继续跑。打开后关窗会停掉 daemon。</div>
-                </div>
-                <button class="toggle" id="close-stops-daemon-toggle" type="button" data-toggle aria-pressed="false" aria-label="关窗即终止 daemon"></button>
-              </div>
+              <p class="drawer-section-help">默认配置：daemon 在系统启动时自动跑，关闭窗口不会影响接收消息。</p>
             </section>
             <section class="drawer-section">
               <h3>行为</h3>

@@ -95,15 +95,12 @@ describe('apps/desktop shim — HTML structure', () => {
       'setup-error-details', 'setup-error-retry', 'setup-error-details-body',
       'wsl-tip',                                         // WSL notice
       'wizard-foot-dot', 'wizard-foot-text',             // wizard status pill
-      'wz-sub-first-time', 'wz-sub-additive',            // first-time vs additive subtitle
-      'wz-help-first-time', 'wz-help-additive',          // first-time vs additive helper
-      'setup-back-to-dashboard',                         // back link (additive flavor)
       // QR <dialog> (moved out of step 3)
       'qr-modal', 'qr-modal-close', 'qr-modal-title',
       'qr-box', 'qr-refresh', 'qr-message', 'qr-raw', 'qr-raw-toggle',
       // Settings drawer (replaces step 4 toggles)
       'settings-drawer', 'settings-close', 'settings-open',
-      'autostart-toggle', 'close-stops-daemon-toggle',
+      'autostart-toggle',
       'unattended-toggle', 'guard-toggle', 'guard-status-line',
       // Dashboard (unchanged by this refactor)
       'hero-card', 'hero-headline',

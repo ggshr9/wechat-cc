@@ -11,33 +11,10 @@
 import { daemonStatusLine } from "../view.js"
 
 export function renderSetupPage(report) {
-  renderSetupFlavor(report)
   renderAgentCards(report)
   renderWslTip(report)
   refreshScanButton(report)
   updateFooterStatus(report.checks?.daemon)
-}
-
-function renderSetupFlavor(report) {
-  // Account count lives at report.checks.accounts.count (doctor --json
-  // shape — see src/cli/doctor.ts). Any positive count = "additive":
-  // a returning user opening setup to bind another WeChat account.
-  const count = report?.checks?.accounts?.count ?? 0
-  const additive = count > 0
-
-  const setSubAndHelper = (firstTimeShown) => {
-    document.getElementById("wz-sub-first-time")?.toggleAttribute("hidden", !firstTimeShown)
-    document.getElementById("wz-sub-additive")?.toggleAttribute("hidden", firstTimeShown)
-    document.getElementById("wz-help-first-time")?.toggleAttribute("hidden", !firstTimeShown)
-    document.getElementById("wz-help-additive")?.toggleAttribute("hidden", firstTimeShown)
-  }
-  setSubAndHelper(!additive)
-
-  // Back link only appears when user came from a populated dashboard.
-  // First-time users (no accounts yet) shouldn't see a "back" link to
-  // a dashboard they've never reached.
-  const back = document.getElementById("setup-back-to-dashboard")
-  if (back) back.hidden = !additive
 }
 
 function renderAgentCards(report) {
