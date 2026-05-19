@@ -18,27 +18,40 @@ import { invoke as ipcInvoke, formatInvokeError } from "./ipc.js"
 import { initialMode, restartButtonState } from "./view.js"
 import { createDoctorPoller } from "./doctor-poller.js"
 import { createConversationsPoller } from "./conversations-poller.js"
-import { renderDoctorWizard, refreshEnterDashboardButton, updateFooterStatus, showStep as wizardShowStep } from "./modules/wizard.js"
-import { refreshQr } from "./modules/qr.js"
-import { serviceAction, forceKillDaemon } from "./modules/service.js"
+import {
+  renderSetupPage,
+  refreshScanButton,
+  updateFooterStatus,
+  showSetupError,
+  clearSetupError,
+  showInstallStrip,
+  hideInstallStrip,
+} from "./modules/wizard.js"
+import { refreshQr, openQrModal } from "./modules/qr.js"
+import { serviceAction, forceKillDaemon, silentInstallAndStart } from "./modules/service.js"
 import { renderDashboard, renderRestartButton, setPending, updateClock, restartDaemon, stopDaemon, handleAccountRowClick } from "./modules/dashboard.js"
 import { renderConversations } from "./modules/conversations.js"
 import { loadMemoryPane, wireMemoryButtons, loadMemoryTopZone, loadMemoryDecisions, archiveObservation } from "./modules/memory.js"
 import { loadLogsPane, startLogsAutoRefresh, stopLogsAutoRefresh } from "./modules/logs.js"
 import { loadSessionsList, openProjectDetail, closeProjectDetail, toggleFavorite, exportProjectMarkdown, deleteProject, wireSearch, startSessionsAutoRefresh, stopSessionsAutoRefresh, stopDetailAutoRefresh, setSessionsDetailMode } from "./modules/sessions.js"
 import { loadUpdateProbe, applyUpdate } from "./modules/update.js"
+import { wireSettingsDrawer, openSettingsDrawer } from "./modules/settings-drawer.js"
 
 const state = {
   setup: /** @type {SetupQrJson | null} */ (null),
   currentBaseUrl: /** @type {string | null} */ (null),
   selectedProvider: "claude",
   unattended: true,
-  autoStart: false,
+  // Match the v0.6 backend default (true) so a loadAgentConfig failure
+  // leaves the UI consistent with the on-disk reality. The actual value
+  // is overwritten by loadAgentConfig() at boot when that call succeeds.
+  autoStart: true,
+  closeStopsDaemon: false,
   qrTimer: /** @type {ReturnType<typeof setTimeout> | null} */ (null),
+  qrConfirmTimer: /** @type {ReturnType<typeof setTimeout> | null} */ (null),
   qrErrors: 0,
   clockTimer: /** @type {ReturnType<typeof setInterval> | null} */ (null),
   mode: "loading",
-  currentStep: "doctor",
   updateProbed: false,
 }
 
@@ -99,18 +112,15 @@ const deps = {
   doctorPoller,
   mock,
   setPending,
-  // Dashboard's restart button routes to the wizard service step when no
-  // service is registered — needs a way to flip mode + step without
+  // Dashboard's restart button routes to the setup page when no
+  // service is registered — needs a way to flip mode without
   // direct-importing this file. Capture as a callback.
   routeToWizardService: () => {
     setMode("wizard")
-    showStep("service")
   },
-  // Dashboard's expired-account 重新扫码 button routes here. The
-  // wizard's bind/QR step is named "wechat" (see wizard.js STEP_ORDER).
+  // Dashboard's expired-account 重新扫码 button routes here.
   routeToWizardBind: () => {
     setMode("wizard")
-    showStep("wechat")
   },
 }
 
@@ -166,20 +176,55 @@ function setMode(mode) {
   }
 }
 
-/** @param {string} name */
-function showStep(name) {
-  wizardShowStep(state, name)
-  // Service step has the guard toggle — refresh status when entering so
-  // the line shows current IP + reachability without waiting for a click.
-  if (name === "service") refreshGuardStatus()
+// ─── scan-bind orchestration ─────────────────────────────────────────
+
+async function handleScanClick() {
+  const btn = /** @type {HTMLButtonElement | null} */ (document.getElementById("scan-bind"))
+  if (!btn || btn.disabled) return
+
+  clearSetupError()
+  btn.disabled = true
+  showInstallStrip("安装后台服务…")
+
+  const result = await silentInstallAndStart(deps, (label) => showInstallStrip(label))
+
+  hideInstallStrip()
+
+  if (!result.ok) {
+    // Re-enable only on failure so the user can retry. On success the
+    // QR modal is opening and the button must stay disabled — otherwise
+    // a stray click during the modal flow re-runs install→QR concurrently.
+    btn.disabled = false
+    const fail = /** @type {{ ok: false, stage: string, error: string, details: string | null }} */ (/** @type {unknown} */ (result))
+    const stageLabel = /** @type {Record<string, string>} */ ({
+      install: "安装后台服务失败",
+      start: "启动后台服务失败",
+      alive: "daemon 启动超时",
+    })[fail.stage] || "安装失败"
+    showSetupError(stageLabel, fail.details || fail.error)
+    return
+  }
+
+  // Service running. Open QR modal; on bind success, route to dashboard.
+  // Button stays disabled through the QR flow. Re-enable in finally so
+  // it's clickable again if the user closes the modal without binding
+  // (then they'd need to retry — re-enabling lets them).
+  try {
+    await openQrModal({ invoke, mock }, state, {
+      onBound: () => {
+        setMode("dashboard")
+        doctorPoller.refresh()
+      },
+    })
+  } finally {
+    btn.disabled = false
+  }
 }
 
 // ─── doctor subscribers ──────────────────────────────────────────────
 
 function wireDoctorSubscribers() {
-  doctorPoller.subscribe(renderDoctorWizard)
-  doctorPoller.subscribe(refreshEnterDashboardButton)
-  doctorPoller.subscribe(report => updateFooterStatus(report.checks.daemon))
+  doctorPoller.subscribe(renderSetupPage)
   doctorPoller.subscribe(renderDashboardIfActive)
   doctorPoller.subscribe(renderRestartButton)
   doctorPoller.subscribe(checkExpiredDiff)
@@ -222,31 +267,14 @@ function renderDashboardIfActive(report) {
   renderDashboard(report)
 }
 
-// ─── agent picker ────────────────────────────────────────────────────
-
-/** @param {string} provider */
-function applyProviderUI(provider) {
-  state.selectedProvider = provider
-  document.querySelectorAll(".agent[data-provider]").forEach(btn => {
-    const el = /** @type {HTMLElement} */ (btn)
-    el.classList.toggle("selected", el.dataset.provider === provider)
-  })
-}
-
-/** @param {string} provider */
-async function commitProvider(provider) {
-  applyProviderUI(provider)
-  const args = ["provider", "set", provider, "--unattended", state.unattended ? "true" : "false"]
-  await invoke("wechat_cli_text", { args })
-  if (state.mode === "dashboard") doctorPoller.refresh()
-}
+// ─── agent config ────────────────────────────────────────────────────
 
 async function loadAgentConfig() {
   const config = /** @type {ProviderConfig} */ (await invoke("wechat_cli_json", { args: ["provider", "show", "--json"] }))
-  const provider = config.provider === "codex" ? "codex" : "claude"
   state.unattended = config.dangerouslySkipPermissions !== false
   state.autoStart = config.autoStart === true
-  applyProviderUI(provider)
+  // closeStopsDaemon: optional field, default false. Task 10 adds it.
+  state.closeStopsDaemon = (/** @type {any} */ (config)).closeStopsDaemon === true
   setToggle("unattended-toggle", state.unattended)
   setToggle("autostart-toggle", state.autoStart)
 }
@@ -303,10 +331,6 @@ function switchPane(name) {
 // ─── DOM event wiring ────────────────────────────────────────────────
 
 function wireEvents() {
-  document.querySelectorAll(".steps .step").forEach(btn => {
-    const el = /** @type {HTMLElement} */ (btn)
-    el.addEventListener("click", () => showStep(el.dataset.step ?? ""))
-  })
   // Single delegated handler for any [data-copy] button — used by the
   // doctor row fix-hints (`复制` button next to npm install commands).
   // Delegated so newly-rendered rows stay live without re-binding.
@@ -320,50 +344,47 @@ function wireEvents() {
       setTimeout(() => { t.textContent = orig }, 1200)
     } catch { /* clipboard denied → silent; the command is visible in the code block */ }
   })
-  document.getElementById("continue-provider")?.addEventListener("click", () => showStep("provider"))
-  document.getElementById("continue-wechat")?.addEventListener("click", () => showStep("wechat"))
-  document.getElementById("continue-service")?.addEventListener("click", () => showStep("service"))
+
+  // Single-page setup: one CTA (#scan-bind) sequences install → start → QR.
+  // Failures surface inline in the error strip and the user retries from there.
+  document.getElementById("scan-bind")?.addEventListener("click", () => handleScanClick())
+  document.getElementById("setup-error-retry")?.addEventListener("click", () => {
+    clearSetupError()
+    handleScanClick()
+  })
+  document.getElementById("setup-error-details")?.addEventListener("click", () => {
+    const body = document.getElementById("setup-error-details-body")
+    if (body) body.hidden = !body.hidden
+  })
+
+  // QR modal "重新生成" button — only useful while the modal is open.
   document.getElementById("qr-refresh")?.addEventListener("click", () => refreshQr({ invoke, mock }, state))
-  document.getElementById("service-install")?.addEventListener("click", () => serviceAction(deps, state, "install"))
-  document.getElementById("post-stop-kill")?.addEventListener("click", () => forceKillDaemon(deps))
-  document.getElementById("enter-dashboard")?.addEventListener("click", () => setMode("dashboard"))
-  document.getElementById("copy-diagnostics")?.addEventListener("click", async () => {
-    await navigator.clipboard?.writeText(JSON.stringify(doctorPoller.current, null, 2))
-  })
 
-  document.querySelectorAll(".agent[data-provider]").forEach(btn => {
-    const el = /** @type {HTMLElement} */ (btn)
-    el.addEventListener("click", () => commitProvider(el.dataset.provider ?? ""))
-  })
-
-  document.querySelectorAll("[data-toggle]").forEach(t => {
-    const el = /** @type {HTMLElement} */ (t)
-    el.addEventListener("click", async () => {
-      el.classList.toggle("on")
-      const on = el.classList.contains("on")
-      el.setAttribute("aria-pressed", on ? "true" : "false")
-      if (el.id === "unattended-toggle") state.unattended = on
-      if (el.id === "autostart-toggle") state.autoStart = on
-      if (el.id === "guard-toggle") {
-        // Persist immediately — guard config lives in its own JSON.
-        // The daemon's scheduler reads loadGuardConfig() each tick so
-        // the change takes effect on the next 30s poll. Refresh
-        // doctor too so the status line picks up the new probe.
+  wireSettingsDrawer({
+    onToggleChange: async (id, on) => {
+      if (id === "unattended-toggle") {
+        state.unattended = on
         try {
-          /** @type {GuardEnable | GuardDisable} */
-          const _guardResult = await invoke("wechat_cli_json", { args: ["guard", on ? "enable" : "disable", "--json"] })
-          void _guardResult
+          await invoke("wechat_cli_text", { args: ["provider", "set", state.selectedProvider || "claude", "--unattended", on ? "true" : "false"] })
+        } catch (err) { console.error("unattended set failed:", err) }
+      } else if (id === "autostart-toggle") {
+        state.autoStart = on
+        try {
+          await invoke("wechat_cli_text", { args: ["provider", "set", state.selectedProvider || "claude", "--auto-start", on ? "true" : "false"] })
+        } catch (err) { console.error("autoStart set failed:", err) }
+      } else if (id === "guard-toggle") {
+        try {
+          await invoke("wechat_cli_json", { args: ["guard", on ? "enable" : "disable", "--json"] })
           refreshGuardStatus()
-        } catch { /* best-effort — toggle stays in the UI either way */ }
+        } catch (err) { console.error("guard toggle failed:", err) }
       }
-    })
+    },
   })
+
+  document.getElementById("settings-open")?.addEventListener("click", openSettingsDrawer)
 
   document.getElementById("qr-raw-toggle")?.addEventListener("click", () => {
     document.getElementById("qr-raw")?.classList.toggle("show")
-  })
-  document.getElementById("service-plan-toggle")?.addEventListener("click", () => {
-    document.getElementById("service-plan")?.classList.toggle("show")
   })
 
   document.getElementById("dash-refresh")?.addEventListener("click", (e) =>
@@ -445,6 +466,14 @@ function wireEvents() {
   document.getElementById("update-apply-btn")?.addEventListener("click", () => applyUpdate(deps))
 
   document.getElementById("accounts-body")?.addEventListener("click", ev => handleAccountRowClick(deps, ev))
+
+  document.getElementById("add-account-btn")?.addEventListener("click", () => {
+    openQrModal({ invoke, mock }, state, {
+      onBound: () => {
+        doctorPoller.refresh()
+      },
+    })
+  })
 
   document.querySelectorAll("[data-action='open-wizard']").forEach(btn =>
     btn.addEventListener("click", () => setMode("wizard"))
@@ -739,7 +768,6 @@ async function boot() {
     return
   }
   const decision = initialMode(report)
-  if (decision.mode === "wizard" && decision.step) showStep(decision.step)
   setMode(decision.mode)
 }
 

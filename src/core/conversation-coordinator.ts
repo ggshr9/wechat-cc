@@ -85,7 +85,7 @@ export interface ConversationCoordinatorDeps {
    */
   haikuEval?: (prompt: string) => Promise<string>
   /**
-   * Throttle window (ms) for the "AI 暂时不可用" notice the coordinator
+   * Throttle window (ms) for the per-provider "登录已过期" notice the coordinator
    * emits when a provider reports `errorCode: 'auth_failed'`. The first
    * failure in a chat sends one notice; further failures within this
    * window are silent (avoids spamming the user while their AI session
@@ -100,10 +100,14 @@ export interface ConversationCoordinatorDeps {
   now?: () => number
 }
 
-/** User-facing notice when a provider reports auth_failed. Deliberately
- *  generic — no terminal commands, no "/login" instruction. The recovery
- *  surface is the desktop dashboard, not this chat. */
-const AUTH_FAIL_NOTICE = '⚠ AI 暂时不可用，请在 wechat-cc 桌面端检查并重新连接。'
+/** User-facing notice when a provider reports auth_failed.
+ *  Per-provider phrasing: the user already authenticated once; the
+ *  session lapsed and they need to re-run the provider's login command
+ *  on the same machine. */
+function authFailNotice(providerId: ProviderId): string {
+  if (providerId === 'codex') return '⚠ Codex 登录已过期，请在电脑上跑 `codex login` 后再发消息。'
+  return '⚠ Claude 登录已过期，请在电脑上跑 `claude login` 后再发消息。'
+}
 
 export interface ConversationCoordinator {
   dispatch(msg: InboundMsg): Promise<void>
@@ -170,7 +174,7 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     const last = authFailLastNotifyAt.get(chatId) ?? 0
     if (nowMs() - last < authFailThrottleMs) return
     authFailLastNotifyAt.set(chatId, nowMs())
-    await deps.sendAssistantText?.(chatId, AUTH_FAIL_NOTICE)
+    await deps.sendAssistantText?.(chatId, authFailNotice(providerId))
   }
   // v0.5.9 — chatroom is now a persistent session per chatId. History
   // accumulates across user messages until the user switches mode away

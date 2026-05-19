@@ -1,76 +1,134 @@
-// Wizard smoke tests — driven against test-shim.ts (DRY_RUN=1).
+// Setup-page smoke tests — driven against test-shim.ts (DRY_RUN=1).
 //
-// Wizard DOM structure (from index.html audit):
-//   <main class="wizard"> — wrapper for wizard mode; shown when [data-mode="wizard"]
-//     <div class="steps">
-//       <button data-step="doctor">  — step 1: env check
-//       <button data-step="provider"> — step 2: agent
-//       <button data-step="wechat">  — step 3: bind WeChat / QR  ← default on this machine
-//       <button data-step="service"> — step 4: background service
-//     <section id="screen-doctor" class="screen [active]">
-//       <div id="checks" class="env-list"> — doctor/env-check list renders here
-//     <section id="screen-wechat" class="screen [active]">
-//       <button id="qr-refresh">生成二维码</button>
-//       <div id="qr-poll"> — polling status indicator
-//       <button id="continue-service" disabled>继续</button>
+// Single-page DOM structure (from index.html as of feat/setup-single-page):
+//   <main class="wizard">                            wizard mode wrapper
+//     <section id="wizard" class="wizard-single">
+//       <div class="setup-page">
+//         <div class="agent-cards">
+//           <div id="agent-card-claude" class="agent-card">
+//             <div id="agent-state-claude">✓ 已安装 | ✗ 未安装
+//             <div id="claude-meta">/path/to/claude
+//           <div id="agent-card-codex" class="agent-card">…
+//         <button id="scan-bind">扫码绑定微信 →</button>
+//         <div id="install-strip" hidden>
+//         <div id="setup-error" hidden>
+//   <dialog id="qr-modal">              sibling: QR <dialog>
+//   <aside id="settings-drawer">        sibling: settings drawer (slide-in)
 //
 // On startup, boot() calls doctorPoller.refresh() then initialMode(report).
-// With DRY_RUN CLI: provider.ok=true, no accounts → wizard step "wechat".
-// So after page load stabilises, #screen-wechat.active is the active screen.
+// With DRY_RUN CLI: depending on agent installs, mode goes wizard / dashboard.
+// Wizard mode means: setup-page is visible, scan-bind exists.
 
 import { test, expect } from './fixtures'
 
-test('wizard renders without crashing', async ({ page, shimUrl }) => {
+test('setup page renders agent cards', async ({ page, shimUrl }) => {
   await page.goto(shimUrl)
-  // Verify the page title
-  await expect(page).toHaveTitle(/wechat-cc/i)
-  // The wizard main element must be in the DOM
-  await expect(page.locator('main.wizard')).toBeAttached()
-  // Step navigation buttons must exist
-  await expect(page.locator('button[data-step="doctor"]')).toBeAttached()
-  await expect(page.locator('button[data-step="wechat"]')).toBeAttached()
-})
-
-test('wizard shows an active screen after boot', async ({ page, shimUrl }) => {
-  await page.goto(shimUrl)
-  // Wait for the page to exit "loading" mode and enter wizard mode.
-  // After boot(), data-mode is set to "wizard" (or "dashboard").
-  // On a DRY_RUN CI machine (no accounts), wizard mode is expected.
+  // Wait for boot to finish: data-mode set to wizard or dashboard.
   await page.waitForFunction(
-    () => document.documentElement.dataset.mode === 'wizard' || document.documentElement.dataset.mode === 'dashboard',
+    () => ['wizard', 'dashboard'].includes(document.documentElement.dataset.mode ?? ''),
     { timeout: 15_000 }
   )
-  // At least one screen section must be active inside the wizard
-  // (screen-doctor, screen-provider, screen-wechat, or screen-service)
-  const activeScreen = page.locator('.wizard .screen.active')
-  await expect(activeScreen).toBeAttached()
+  // Both agent cards exist (regardless of installed state).
+  await expect(page.locator('#agent-card-claude')).toBeAttached()
+  await expect(page.locator('#agent-card-codex')).toBeAttached()
+})
 
-  // In DRY_RUN with provider.ok=true and no accounts, boot routes to wechat step.
-  // Verify the QR-bind screen is the active step.
-  const mode = await page.evaluate(() => document.documentElement.dataset.mode)
-  if (mode === 'wizard') {
-    // The #checks container must be in DOM regardless of active step
-    await expect(page.locator('#checks')).toBeAttached()
-    // The QR refresh button must be present (wizard includes it in HTML even if step hidden)
-    await expect(page.locator('#qr-refresh')).toBeAttached()
-  }
+test('scan-bind button exists with the new id (single-page contract)', async ({ page, shimUrl }) => {
+  await page.goto(shimUrl)
+  await page.waitForFunction(
+    () => ['wizard', 'dashboard'].includes(document.documentElement.dataset.mode ?? ''),
+    { timeout: 15_000 }
+  )
+  // The CTA button replaces the old continue-* / service-install / enter-dashboard
+  // chain. Its presence is the load-bearing test that the new wiring is in place.
+  await expect(page.locator('#scan-bind')).toBeAttached()
+  // Label text — Chinese copy from the spec
+  await expect(page.locator('#scan-bind .label')).toHaveText(/扫码绑定微信/)
+})
+
+test('install-strip and setup-error start hidden', async ({ page, shimUrl }) => {
+  await page.goto(shimUrl)
+  await page.waitForFunction(
+    () => ['wizard', 'dashboard'].includes(document.documentElement.dataset.mode ?? ''),
+    { timeout: 15_000 }
+  )
+  // The transient state UIs (install progress + error strip) must start hidden.
+  // They only appear during/after a scan-bind click. Asserting their initial
+  // hidden state proves the page isn't showing stale state on first paint.
+  await expect(page.locator('#install-strip')).toBeHidden()
+  await expect(page.locator('#setup-error')).toBeHidden()
+})
+
+test('QR modal exists as a <dialog> sibling of the wizard', async ({ page, shimUrl }) => {
+  await page.goto(shimUrl)
+  await page.waitForFunction(
+    () => ['wizard', 'dashboard'].includes(document.documentElement.dataset.mode ?? ''),
+    { timeout: 15_000 }
+  )
+  // <dialog id="qr-modal"> must be in the DOM and start closed.
+  const dialog = page.locator('dialog#qr-modal')
+  await expect(dialog).toBeAttached()
+  const isOpen = await dialog.evaluate((el) => (el as HTMLDialogElement).open)
+  expect(isOpen).toBe(false)
+})
+
+test('settings drawer exists and starts closed (no .is-open class)', async ({ page, shimUrl }) => {
+  await page.goto(shimUrl)
+  await page.waitForFunction(
+    () => ['wizard', 'dashboard'].includes(document.documentElement.dataset.mode ?? ''),
+    { timeout: 15_000 }
+  )
+  const drawer = page.locator('#settings-drawer')
+  await expect(drawer).toBeAttached()
+  // Drawer uses .is-open class for slide-in (not hidden attribute) — verify
+  // initial state has no .is-open class. Off-screen via transform.
+  await expect(drawer).not.toHaveClass(/is-open/)
+})
+
+test('old step-nav DOM is gone (regression guard)', async ({ page, shimUrl }) => {
+  // Catches accidental re-introduction of removed wizard steps.
+  await page.goto(shimUrl)
+  await page.waitForFunction(
+    () => ['wizard', 'dashboard'].includes(document.documentElement.dataset.mode ?? ''),
+    { timeout: 15_000 }
+  )
+  await expect(page.locator('button[data-step="doctor"]')).toHaveCount(0)
+  await expect(page.locator('#screen-doctor')).toHaveCount(0)
+  await expect(page.locator('#continue-service')).toHaveCount(0)
+  await expect(page.locator('#service-install')).toHaveCount(0)
+  await expect(page.locator('#enter-dashboard')).toHaveCount(0)
+})
+
+test('add-account-btn opens QR modal in-place without switching mode', async ({ page, shimUrl }) => {
+  await page.goto(shimUrl)
+  await page.waitForFunction(
+    () => ['wizard', 'dashboard'].includes(document.documentElement.dataset.mode ?? ''),
+    { timeout: 15_000 }
+  )
+  await expect(page.locator('#add-account-btn')).toBeAttached()
+  await expect(page.locator('#add-account-btn')).toHaveText(/绑定新账号/)
+  // Capture mode before click — should not change after click.
+  const beforeMode = await page.evaluate(() => document.documentElement.dataset.mode)
+  await page.locator('#add-account-btn').click()
+  // Mode must be unchanged — no setMode("wizard") call.
+  const afterMode = await page.evaluate(() => document.documentElement.dataset.mode)
+  expect(afterMode).toBe(beforeMode)
+  // QR <dialog> should be open.
+  const dialogOpen = await page.locator('dialog#qr-modal').evaluate((el) => (el as HTMLDialogElement).open)
+  expect(dialogOpen).toBe(true)
 })
 
 test('wizard QR step: setup-poll returns confirmed after auto-complete', async ({ shim }) => {
   // Direct shim API test — verifies the DRY_RUN QR auto-pass mock (P-T12).
-  // Reset mock state so qrScanComplete is false (guards against shim reuse across runs).
+  // This is preserved from the previous wizard.spec.ts since the underlying
+  // shim/CLI flow is unchanged by the wizard refactor.
   await shim.invoke('demo.seed')
-  // Step 1: initial poll returns "wait" (qrScanComplete is now false)
   const initial = await shim.invoke('wechat_cli_json', { args: ['setup-poll', '--qrcode', 'fake-token', '--json'] }) as { result?: { status?: string } }
   expect(initial.result?.status).toBe('wait')
 
-  // Step 2: trigger setup --qr-json which schedules qrScanComplete after 1s
   await shim.invoke('wechat_cli_json', { args: ['setup', '--qr-json'] })
-
-  // Step 3: wait 1.2s for the auto-complete timeout inside the shim
   await new Promise(r => setTimeout(r, 1200))
 
-  // Step 4: poll again — should now be confirmed with accountId 'mock-bot'
   const confirmed = await shim.invoke('wechat_cli_json', { args: ['setup-poll', '--qrcode', 'mock-qr-token', '--json'] }) as { result?: { status?: string; accountId?: string } }
   expect(confirmed.result?.status).toBe('confirmed')
   expect(confirmed.result?.accountId).toBe('mock-bot')

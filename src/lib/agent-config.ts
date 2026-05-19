@@ -13,9 +13,13 @@ export interface AgentConfig {
   dangerouslySkipPermissions: boolean
   // When true, `service install` registers the unit for auto-start at
   // login/boot (macOS RunAtLoad, systemd `enable`, schtasks ONLOGON).
-  // When false (default), the daemon is started this session only —
-  // opt-in design per user request 2026-04-26.
+  // v0.6 default: true — first-time GUI users expect the daemon to
+  // survive reboot without an extra step.
   autoStart: boolean
+  // When true, closing the desktop window terminates the daemon. Default
+  // false (advanced setting): the GUI is the daemon's launcher, not its
+  // host — closing the window should not stop inbound message handling.
+  closeStopsDaemon: boolean
 }
 
 const CONFIG_FILE = 'agent-config.json'
@@ -25,7 +29,8 @@ export function loadAgentConfig(stateDir: string): AgentConfig {
     const raw = readFileSync(join(stateDir, CONFIG_FILE), 'utf8')
     const parsed = JSON.parse(raw) as Partial<AgentConfig> & { keepAlive?: boolean }
     const dangerouslySkipPermissions = parsed.dangerouslySkipPermissions ?? true
-    const autoStart = parsed.autoStart ?? false
+    const autoStart = parsed.autoStart ?? true
+    const closeStopsDaemon = parsed.closeStopsDaemon ?? false
     const provider: AgentProviderKind = parsed.provider === 'codex' ? 'codex' : 'claude'
     // Preserve `model` for both providers. Pre-2026-05-08 only codex
     // honored it; claude inherited the spawned CLI's default which read
@@ -33,10 +38,10 @@ export function loadAgentConfig(stateDir: string): AgentConfig {
     // interactive alias was something the SDK subprocess couldn't resolve
     // (e.g. fast-mode `opus[1m]` returning 404 from 2.1.133).
     return parsed.model
-      ? { provider, model: parsed.model, dangerouslySkipPermissions, autoStart }
-      : { provider, dangerouslySkipPermissions, autoStart }
+      ? { provider, model: parsed.model, dangerouslySkipPermissions, autoStart, closeStopsDaemon }
+      : { provider, dangerouslySkipPermissions, autoStart, closeStopsDaemon }
   } catch {
-    return { provider: 'claude', dangerouslySkipPermissions: true, autoStart: false }
+    return { provider: 'claude', dangerouslySkipPermissions: true, autoStart: true, closeStopsDaemon: false }
   }
 }
 

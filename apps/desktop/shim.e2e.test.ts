@@ -85,22 +85,34 @@ describe('apps/desktop shim — HTML structure', () => {
     // presence here means a structural HTML regression fails CI fast
     // instead of surfacing as an empty wizard a user reports later.
     const requiredIds = [
-      'checks',                      // wizard env-check list
-      'hero-card', 'hero-headline',  // dashboard hero
-      'accounts-body',               // bound-accounts table
-      'update-card', 'update-headline', 'update-body',  // update card
-      'update-check-btn', 'update-apply-btn',           // update buttons
-      'memory-sidebar', 'memory-rendered',              // memory pane
-      'memory-editor', 'memory-status',                 // memory edit mode
+      // Single-page setup (replaces the old 4-step wizard env list)
+      'agent-card-claude', 'agent-card-codex',
+      'agent-state-claude', 'agent-state-codex',
+      'claude-meta', 'codex-meta',
+      'scan-bind',                                       // primary CTA
+      'install-strip', 'install-strip-label',            // transient install progress
+      'setup-error', 'setup-error-msg',                  // transient error strip
+      'setup-error-details', 'setup-error-retry', 'setup-error-details-body',
+      'wsl-tip',                                         // WSL notice
+      'wizard-foot-dot', 'wizard-foot-text',             // wizard status pill
+      // QR <dialog> (moved out of step 3)
+      'qr-modal', 'qr-modal-close', 'qr-modal-title',
+      'qr-box', 'qr-refresh', 'qr-message', 'qr-raw', 'qr-raw-toggle',
+      // Settings drawer (replaces step 4 toggles)
+      'settings-drawer', 'settings-close', 'settings-open',
+      'autostart-toggle',
+      'unattended-toggle', 'guard-toggle', 'guard-status-line',
+      // Dashboard (unchanged by this refactor)
+      'hero-card', 'hero-headline',
+      'add-account-btn',                                 // + 绑定新账号 in accounts card
+      'accounts-body',
+      'update-card', 'update-headline', 'update-body',
+      'update-check-btn', 'update-apply-btn',
+      'memory-sidebar', 'memory-rendered',
+      'memory-editor', 'memory-status',
       'memory-edit-btn', 'memory-save-btn', 'memory-cancel-btn',
-      'dash-stop', 'dash-restart', 'dash-refresh',      // dashboard actions
-      'qr-box', 'qr-refresh', 'qr-poll',                // setup QR
-      'service-install',                                // wizard install (stop lives on dashboard now)
-      'unattended-toggle', 'autostart-toggle',          // wizard toggles
-      'dash-rail-clock', 'dash-rail-text',              // rail-foot pid + clock
-      'wizard-step-of',                                 // wizard top-bar step indicator
-      'enter-dashboard', 'continue-provider', 'continue-wechat', 'continue-service',
-      'post-stop-alert', 'post-stop-pid', 'post-stop-kill',
+      'dash-stop', 'dash-restart', 'dash-refresh',
+      'dash-rail-clock', 'dash-rail-text',
       'dev-banner',
       // sessions pane (Task 9 — HTML scaffolding for v2.1)
       'sessions-search', 'sessions-body', 'sessions-detail', 'sessions-back',

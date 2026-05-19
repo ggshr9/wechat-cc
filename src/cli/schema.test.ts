@@ -210,7 +210,8 @@ const samplePlan = {
 const sampleAgentConfig = {
   provider: 'claude',
   dangerouslySkipPermissions: true,
-  autoStart: false,
+  autoStart: true,
+  closeStopsDaemon: false,
 }
 
 describe('ServiceStatusOutput', () => {
@@ -375,6 +376,7 @@ describe('ProviderShowOutput', () => {
       model: 'codex-mini-latest',
       dangerouslySkipPermissions: false,
       autoStart: true,
+      closeStopsDaemon: false,
     }).success).toBe(true)
   })
   it('rejects empty payload', () => {

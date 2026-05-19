@@ -23,6 +23,12 @@ import type { AgentEvent, AgentProject, AgentProvider, AgentSession } from './ag
  *   error                                       → { kind: 'error', message }
  */
 
+// Match common codex SDK auth-failure signatures. Conservative — we
+// only want to special-case the ones we're confident about, since
+// false positives mean the user gets "login expired" when their real
+// problem is something else.
+const AUTH_FAIL_RE = /(OPENAI_API_KEY|not authenticated|401 unauthorized|codex login|auth.*expired)/i
+
 /** Test-time injection for the Codex constructor. */
 export type CodexFactory = (opts: ConstructorParameters<typeof Codex>[0]) => Codex
 
@@ -175,11 +181,19 @@ export function createCodexAgentProvider(opts: CodexAgentProviderOptions = {}): 
                   } else if (ev.type === 'turn.failed') {
                     const m = ev.error.message
                     console.error(`wechat channel: [SESSION_RESULT] alias=${project.alias} provider=codex turn.failed=${m.slice(0, 400)}`)
-                    yield { kind: 'error', message: m }
+                    if (AUTH_FAIL_RE.test(m)) {
+                      yield { kind: 'error', code: 'auth_failed', message: m }
+                    } else {
+                      yield { kind: 'error', message: m }
+                    }
                   } else if (ev.type === 'error') {
                     const m = (ev as { type: 'error'; message: string }).message
                     console.error(`wechat channel: [SESSION_ERROR] alias=${project.alias} provider=codex stream-error=${m.slice(0, 400)}`)
-                    yield { kind: 'error', message: m }
+                    if (AUTH_FAIL_RE.test(m)) {
+                      yield { kind: 'error', code: 'auth_failed', message: m }
+                    } else {
+                      yield { kind: 'error', message: m }
+                    }
                   }
                 }
               } catch (err) {

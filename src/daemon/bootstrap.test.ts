@@ -155,7 +155,7 @@ describe('bootstrap', () => {
   it('reads provider selection from agent-config.json', () => {
     const stateDir = mkdtempSync(join(tmpdir(), 'wechat-bootstrap-'))
     try {
-      saveAgentConfig(stateDir, { provider: 'codex', model: 'gpt-5.3-codex', dangerouslySkipPermissions: true, autoStart: false })
+      saveAgentConfig(stateDir, { provider: 'codex', model: 'gpt-5.3-codex', dangerouslySkipPermissions: true, autoStart: false, closeStopsDaemon: false })
       const b = buildBootstrap({
       db: openTestDb(),
         stateDir,
