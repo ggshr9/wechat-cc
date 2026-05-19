@@ -65,7 +65,11 @@ const __mockState: {
   conversations: DaemonConversation[] | null
 } = { chats: [], observations: [], milestones: [], sessions: [], installProgress: null, installSimulationStep: 0, conversations: null }
 
-const POLYFILL = `<script>
+// Body served as /__tauri_polyfill.js so it works under CSP `script-src 'self'`
+// (inline scripts are blocked when WECHAT_CC_INJECT_CSP=1). The injected
+// reference in index.html toggles between inline <script>...</script> and
+// <script src="/__tauri_polyfill.js"></script> depending on the env flag.
+const POLYFILL_BODY = `
 window.__TAURI__ = window.__TAURI__ ?? { core: {
   invoke: async (command, args) => {
     const r = await fetch("/__invoke", {
@@ -80,7 +84,30 @@ window.__TAURI__ = window.__TAURI__ ?? { core: {
 }}
 window.__WECHAT_CC_SHIM__ = true
 window.__WECHAT_CC_DRY_RUN__ = ${dryRun ? 'true' : 'false'}
-</script>`
+`
+const POLYFILL_INLINE = `<script>${POLYFILL_BODY}</script>`
+const POLYFILL_EXTERNAL = `<script src="/__tauri_polyfill.js"></script>`
+
+// When WECHAT_CC_INJECT_CSP=1, read the production CSP from tauri.conf.json
+// and inject it as a <meta http-equiv> tag. Lets Playwright exercise the
+// frontend under the same policy the bundled Tauri app enforces — without
+// running Tauri itself. Inline scripts/styles that production allows via
+// 'unsafe-inline' for styles still work; inline scripts fall back to the
+// external polyfill above.
+const injectCsp = process.env.WECHAT_CC_INJECT_CSP === '1'
+let cspContent: string | null = null
+if (injectCsp) {
+  try {
+    const conf = JSON.parse(
+      require('node:fs').readFileSync(join(import.meta.dir, 'src-tauri', 'tauri.conf.json'), 'utf8'),
+    ) as { app?: { security?: { csp?: string | null } } }
+    cspContent = conf.app?.security?.csp ?? null
+    if (!cspContent) console.warn('shim: WECHAT_CC_INJECT_CSP=1 but tauri.conf.json has csp: null')
+  } catch (err) {
+    console.warn('shim: failed to read CSP from tauri.conf.json:', err)
+  }
+}
+const CSP_META = cspContent ? `<meta http-equiv="Content-Security-Policy" content="${cspContent}">` : ''
 
 async function runCli(args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
   const proc = spawn(['bun', join(ROOT, 'cli.ts'), ...args], {
@@ -451,11 +478,20 @@ Bun.serve({
     }
 
     const path = url.pathname === '/' ? '/index.html' : url.pathname
+
+    if (path === '/__tauri_polyfill.js') {
+      return new Response(POLYFILL_BODY, {
+        headers: { 'content-type': 'text/javascript; charset=utf-8' },
+      })
+    }
+
     const file = Bun.file(join(SRC, path))
     if (!(await file.exists())) return new Response('not found', { status: 404 })
     if (path === '/index.html') {
       const html = await file.text()
-      return new Response(html.replace('</head>', `${POLYFILL}\n</head>`), {
+      const polyfillTag = injectCsp ? POLYFILL_EXTERNAL : POLYFILL_INLINE
+      const injection = `${CSP_META}\n${polyfillTag}\n</head>`
+      return new Response(html.replace('</head>', injection), {
         headers: { 'content-type': 'text/html; charset=utf-8' },
       })
     }
