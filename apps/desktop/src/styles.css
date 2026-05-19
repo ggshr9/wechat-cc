@@ -499,18 +499,24 @@ input { font: inherit; color: inherit; }
 }
 .agent .logo {
   width: 28px; height: 28px;
-  border-radius: 7px;
-  background: var(--paper-2);
-  border: 1px solid var(--hair);
+  border-radius: 6px;
+  background: transparent;
+  border: 0;
   display: grid; place-items: center;
   font-weight: 700;
   font-size: 12px;
   color: var(--ink);
   font-family: var(--mono);
-  letter-spacing: -0.02em;
 }
-.agent .logo.cc { background: #f9efe2; border-color: #ecdcc1; color: #b85a17; }
-.agent .logo.cx { background: #1d1d1f; border-color: #1d1d1f; color: #fff; }
+.agent .logo-img {
+  overflow: hidden;
+}
+.agent .logo-img img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+}
 .agent .name { font-size: 13.5px; font-weight: 600; color: var(--ink); }
 .agent .pick {
   margin-left: auto;
@@ -695,6 +701,8 @@ input { font: inherit; color: inherit; }
 .agent-card.installed { border-color: var(--green-ink); }
 .agent-card.missing { opacity: 0.78; }
 .agent-card .logo { width: 36px; height: 36px; border-radius: 8px; display: grid; place-items: center; font-weight: 700; margin-bottom: 12px; }
+.agent-card .logo-img { overflow: hidden; background: transparent; border: 0; }
+.agent-card .logo-img img { width: 100%; height: 100%; display: block; object-fit: contain; }
 .agent-card .name { font-weight: 600; margin-bottom: 4px; }
 .agent-card .state { font-size: 12px; color: var(--ink-3); margin-bottom: 6px; }
 .agent-card.installed .state { color: var(--green-ink); }
@@ -851,15 +859,17 @@ input { font: inherit; color: inherit; }
   letter-spacing: -0.01em;
 }
 .dash-brand .mark {
-  width: 18px; height: 18px;
-  border-radius: 4px;
-  background: var(--green);
+  width: 28px; height: 28px;
+  border-radius: 6px;
   display: inline-grid; place-items: center;
-  color: #fff;
-  font-size: 9.5px;
-  font-weight: 700;
-  font-family: var(--mono);
-  letter-spacing: 0;
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+.dash-brand .mark img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
 }
 .dash-brand .name { color: var(--ink); }
 .dash-brand .ver {
