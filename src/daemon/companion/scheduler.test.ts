@@ -10,8 +10,7 @@ describe('startCompanionScheduler', () => {
     const stop = startCompanionScheduler({
       intervalMs: 1000,
       jitterRatio: 0,
-      isEnabled: () => true,
-      isSnoozed: () => false,
+      shouldRun: () => true,
       onTick,
       log: () => {},
     })
@@ -24,7 +23,7 @@ describe('startCompanionScheduler', () => {
     const onTick = vi.fn()
     const stop = startCompanionScheduler({
       intervalMs: 1000, jitterRatio: 0,
-      isEnabled: () => false, isSnoozed: () => false,
+      shouldRun: () => false,
       onTick, log: () => {},
     })
     await vi.advanceTimersByTimeAsync(1100)
@@ -36,7 +35,7 @@ describe('startCompanionScheduler', () => {
     const onTick = vi.fn()
     const stop = startCompanionScheduler({
       intervalMs: 1000, jitterRatio: 0,
-      isEnabled: () => true, isSnoozed: () => true,
+      shouldRun: () => false,
       onTick, log: () => {},
     })
     await vi.advanceTimersByTimeAsync(1100)
@@ -51,7 +50,7 @@ describe('startCompanionScheduler', () => {
     const log = vi.fn()
     const stop = startCompanionScheduler({
       intervalMs: 1000, jitterRatio: 0,
-      isEnabled: () => true, isSnoozed: () => false,
+      shouldRun: () => true,
       onTick, log,
     })
     await vi.advanceTimersByTimeAsync(1100)
@@ -66,7 +65,7 @@ describe('startCompanionScheduler', () => {
     const onTick = vi.fn()
     const stop = startCompanionScheduler({
       intervalMs: 1000, jitterRatio: 0,
-      isEnabled: () => true, isSnoozed: () => false,
+      shouldRun: () => true,
       onTick, log: () => {},
     })
     await stop()
@@ -78,7 +77,7 @@ describe('startCompanionScheduler', () => {
     const logs: string[] = []
     const stop = startCompanionScheduler({
       intervalMs: 1000, jitterRatio: 0,
-      isEnabled: () => false, isSnoozed: () => false,
+      shouldRun: () => false,
       onTick: async () => {},
       log: (tag, line) => logs.push(`${tag} ${line}`),
       name: 'push',
@@ -87,11 +86,30 @@ describe('startCompanionScheduler', () => {
     await stop()
   })
 
+  it('calls shouldRun exactly once per tick (atomic gate, not two separate reads)', async () => {
+    // Pre-PR D the scheduler called both isEnabled() and isSnoozed() per
+    // tick — two separate config reads with a race window between them
+    // where `开启 companion` + `别烦我` arriving in sequence could be
+    // misread. With one merged gate the scheduler hits it once per tick.
+    const shouldRun = vi.fn(() => true)
+    const stop = startCompanionScheduler({
+      intervalMs: 1000, jitterRatio: 0,
+      shouldRun,
+      onTick: async () => {},
+      log: () => {},
+    })
+    await vi.advanceTimersByTimeAsync(1100)
+    expect(shouldRun).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1100)
+    expect(shouldRun).toHaveBeenCalledTimes(2)
+    await stop()
+  })
+
   it('falls back to "companion" when no name provided', async () => {
     const logs: string[] = []
     const stop = startCompanionScheduler({
       intervalMs: 1000, jitterRatio: 0,
-      isEnabled: () => false, isSnoozed: () => false,
+      shouldRun: () => false,
       onTick: async () => {},
       log: (tag, line) => logs.push(`${tag} ${line}`),
     })

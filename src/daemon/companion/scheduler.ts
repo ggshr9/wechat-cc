@@ -16,10 +16,14 @@ export interface CompanionSchedulerDeps {
   intervalMs: number
   /** Fraction of intervalMs used as ± jitter (e.g. 0.3 → ±30%). */
   jitterRatio: number
-  /** Is proactive tick allowed? Checked on every tick (cheap). */
-  isEnabled: () => boolean
-  /** Is proactive tick suppressed right now? (user said "别烦我") */
-  isSnoozed: () => boolean
+  /**
+   * Combined gate: returns true if the tick should run right now. Wiring
+   * implementation reads companion config once and answers both
+   * "enabled?" and "not snoozed?" — avoids the prior two-call pattern
+   * which loaded the config twice and could race against `开启 companion`
+   * + `别烦我` arriving between the reads.
+   */
+  shouldRun: () => boolean
   /** Wake Claude up. Exceptions are swallowed + logged. */
   onTick: () => Promise<void>
   log: (tag: string, line: string) => void
@@ -41,7 +45,7 @@ export function startCompanionScheduler(deps: CompanionSchedulerDeps): () => Pro
       timer = null
       if (stopped) return
       try {
-        if (deps.isEnabled() && !deps.isSnoozed()) {
+        if (deps.shouldRun()) {
           await deps.onTick()
         }
       } catch (err) {

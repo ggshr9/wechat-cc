@@ -177,6 +177,17 @@ export class SessionManager {
     await s.handle.close()
   }
 
+  /**
+   * True when (alias, providerId) has at least one dispatch iterator
+   * currently running. Caller can use this to gate background work
+   * (companion ticks, etc.) so it doesn't contend with a user-initiated
+   * turn on the same session. Counter is incremented at iterator entry
+   * and decremented in finally — accurate without external locking.
+   */
+  isInFlight(alias: string, providerId: ProviderId): boolean {
+    return (this.inFlight.get(key(providerId, alias)) ?? 0) > 0
+  }
+
   list() {
     return Array.from(this.sessions.values()).map(s => ({
       alias: s.handle.alias,

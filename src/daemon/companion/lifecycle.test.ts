@@ -4,8 +4,7 @@ import { registerCompanionPush, registerCompanionIntrospect } from './lifecycle'
 describe('registerCompanionPush', () => {
   it('returns a Lifecycle with name=companion-push', () => {
     const lc = registerCompanionPush({
-      isEnabled: () => false,
-      isSnoozed: () => false,
+      shouldRun: () => false,
       log: () => {},
       onTick: async () => {},
     })
@@ -15,8 +14,7 @@ describe('registerCompanionPush', () => {
 
   it('stop() is idempotent', async () => {
     const lc = registerCompanionPush({
-      isEnabled: () => false,
-      isSnoozed: () => false,
+      shouldRun: () => false,
       log: () => {},
       onTick: async () => {},
     })
@@ -28,8 +26,7 @@ describe('registerCompanionPush', () => {
 describe('registerCompanionIntrospect', () => {
   it('returns a Lifecycle with name=companion-introspect', () => {
     const lc = registerCompanionIntrospect({
-      isEnabled: () => false,
-      isSnoozed: () => false,
+      shouldRun: () => false,
       log: () => {},
       onTick: async () => {},
     })
