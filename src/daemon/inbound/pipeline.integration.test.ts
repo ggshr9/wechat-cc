@@ -90,6 +90,22 @@ describe('inbound pipeline (integration)', () => {
     expect(spy.dispatch).not.toHaveBeenCalled()
   })
 
+  it('guard runs BEFORE permission-reply: network-down drops a y/n reply', async () => {
+    // Network is down AND the inbound looks like a permission reply. The
+    // user-visible expectation is the guard's "🛑 出口 IP" notice, NOT a
+    // silent forwarding of the approval to an in-flight Claude tool call
+    // that probably needs network. Asserts the build.ts ordering.
+    const { deps, spy } = fakeDeps({
+      guardEnabled: true,
+      guardReachable: false,
+      permConsumes: true,
+    })
+    const ctx = mkCtx()
+    await buildInboundPipeline(deps)(ctx)
+    expect(ctx.consumedBy).toBe('guard')
+    expect(spy.dispatch).not.toHaveBeenCalled()
+  })
+
   it('dispatch error is caught by trace; pipeline does not reject', async () => {
     const { deps } = fakeDeps()
     deps.dispatch.coordinator.dispatch = async () => { throw new Error('coord-boom') }

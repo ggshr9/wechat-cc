@@ -41,8 +41,12 @@ export function buildInboundPipeline(d: InboundPipelineDeps): PipelineRun {
     makeMwAdmin(d.admin),
     makeMwMode(d.mode),
     makeMwOnboarding(d.onboarding),
-    makeMwPermissionReply(d.permissionReply),
+    // Guard runs BEFORE permission-reply: when the network is down we want
+    // the "🛑 出口 IP" notice to surface, not a silent forwarding of a
+    // `y/n abc12` approval into an in-flight tool call that probably needs
+    // the network we just lost.
     makeMwGuard(d.guard),
+    makeMwPermissionReply(d.permissionReply),
     makeMwAttachments(d.attachments),
     makeMwActivity(d.activity),
     makeMwMilestone(d.milestone),
