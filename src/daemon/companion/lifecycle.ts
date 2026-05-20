@@ -2,8 +2,14 @@ import type { Lifecycle } from '../../lib/lifecycle'
 import { startCompanionScheduler } from './scheduler'
 
 export interface CompanionPushDeps {
-  isEnabled(): boolean
-  isSnoozed(): boolean
+  /**
+   * Single combined gate — returns true if the tick should fire. Wiring
+   * loads companion config once and answers both "enabled?" and
+   * "not snoozed?". Replaces the prior split isEnabled+isSnoozed pair
+   * which loaded config twice per tick and could race against state
+   * changes between the two reads.
+   */
+  shouldRun(): boolean
   log: (tag: string, line: string) => void
   onTick(): Promise<void>
 }
@@ -17,8 +23,7 @@ export function registerCompanionPush(deps: CompanionPushDeps): Lifecycle {
     name: 'push',
     intervalMs: PUSH_INTERVAL_MS,
     jitterRatio: JITTER,
-    isEnabled: deps.isEnabled,
-    isSnoozed: deps.isSnoozed,
+    shouldRun: deps.shouldRun,
     log: deps.log,
     onTick: deps.onTick,
   })
@@ -36,8 +41,7 @@ export function registerCompanionIntrospect(deps: CompanionIntrospectDeps): Life
     name: 'introspect',
     intervalMs: INTROSPECT_INTERVAL_MS,
     jitterRatio: JITTER,
-    isEnabled: deps.isEnabled,
-    isSnoozed: deps.isSnoozed,
+    shouldRun: deps.shouldRun,
     log: deps.log,
     onTick: deps.onTick,
   })

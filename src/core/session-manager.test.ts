@@ -206,6 +206,81 @@ describe('SessionManager', () => {
     await mgr.shutdown()
   })
 
+  it('isInFlight reflects active dispatch iterator state', async () => {
+    // Companion ticks consult isInFlight before running so they don't
+    // contend with a user-initiated dispatch on the same session. The
+    // counter is maintained by the SessionManager's dispatch wrapper.
+    type ResolveNext = (v: IteratorResult<unknown>) => void
+    const pending: ResolveNext[] = []
+    const buffered: unknown[] = []
+    let ended = false
+    function push(ev: unknown) {
+      const r = pending.shift()
+      if (r) r({ value: ev, done: false })
+      else buffered.push(ev)
+    }
+    function end() {
+      ended = true
+      while (pending.length > 0) {
+        const r = pending.shift()!
+        r({ value: undefined, done: true })
+      }
+    }
+    const session = {
+      dispatch() {
+        return {
+          [Symbol.asyncIterator]() {
+            return {
+              next() {
+                if (buffered.length > 0) return Promise.resolve({ value: buffered.shift(), done: false }) as Promise<IteratorResult<unknown>>
+                if (ended) return Promise.resolve({ value: undefined, done: true }) as Promise<IteratorResult<unknown>>
+                return new Promise<IteratorResult<unknown>>(r => pending.push(r))
+              },
+            }
+          },
+        }
+      },
+      async close() {},
+    }
+    const spawn = vi.fn(async () => session as never)
+    const mgr = new SessionManager({
+      maxConcurrent: 10,
+      idleEvictMs: 60_000,
+      registry: registryWithProvider({ spawn } as unknown as AgentProvider),
+    })
+
+    // No session yet → false.
+    expect(mgr.isInFlight('a', 'claude')).toBe(false)
+    const h = await mgr.acquire('a', '/p', 'claude')
+    // Session acquired, no dispatch in flight → still false.
+    expect(mgr.isInFlight('a', 'claude')).toBe(false)
+
+    // Begin a dispatch and consume one event so the iterator's finally
+    // block hasn't fired yet.
+    const iter = h.dispatch('hi')[Symbol.asyncIterator]()
+    const firstPromise = iter.next()
+    push({ kind: 'init', sessionId: 's1' })
+    await firstPromise
+    expect(mgr.isInFlight('a', 'claude')).toBe(true)
+
+    // Finish the turn → counter decrements via the wrapper's finally.
+    const pendingNext = iter.next()
+    push({ kind: 'result', sessionId: 's1', numTurns: 1, durationMs: 0 })
+    await pendingNext
+    end()
+    while (true) {
+      const r = await iter.next()
+      if (r.done) break
+    }
+    expect(mgr.isInFlight('a', 'claude')).toBe(false)
+
+    // Different (alias, provider) is unaffected.
+    expect(mgr.isInFlight('a', 'codex')).toBe(false)
+    expect(mgr.isInFlight('b', 'claude')).toBe(false)
+
+    await mgr.shutdown()
+  })
+
   it('sweepIdle leaves a session alone while a dispatch is still in flight', async () => {
     // Without this guard, a long-running turn (e.g. claude doing heavy tool
     // work for 30+ min) gets killed mid-stream when lastUsedAt looks idle.

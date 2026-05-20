@@ -37,15 +37,20 @@ export function buildLifecycleDeps(opts: LifecycleDepsOpts, ticks: TickBodies): 
 } {
   const { stateDir, db, ilink, accounts, boot, dangerously, log } = opts
 
-  const isSnoozed = () => {
-    const s = loadCompanionConfig(stateDir).snooze_until
-    return !!s && Date.parse(s) > Date.now()
+  // Single combined gate — one config read answers both enabled +
+  // not-snoozed, avoiding the prior two-call pattern that loaded
+  // config twice and could race state changes between the reads.
+  const shouldRun = () => {
+    const cfg = loadCompanionConfig(stateDir)
+    if (!cfg.enabled) return false
+    const s = cfg.snooze_until
+    if (s && Date.parse(s) > Date.now()) return false
+    return true
   }
-  const isEnabled = () => loadCompanionConfig(stateDir).enabled
 
   return {
-    companionPushDeps: { isEnabled, isSnoozed, log, onTick: ticks.pushTick },
-    companionIntrospectDeps: { isEnabled, isSnoozed, log, onTick: ticks.introspectTick },
+    companionPushDeps: { shouldRun, log, onTick: ticks.pushTick },
+    companionIntrospectDeps: { shouldRun, log, onTick: ticks.introspectTick },
     guardDeps: {
       pollMs: 30_000,
       isEnabled: () => loadGuardConfig(stateDir).enabled,
