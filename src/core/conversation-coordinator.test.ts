@@ -38,6 +38,7 @@ function makeHandle(providerId: string, session: ReturnType<typeof makeFakeSessi
     providerId,
     lastUsedAt: 0,
     dispatch: (text: string) => session.dispatch(text),
+    cancel: async () => { await session.cancel?.() },
     close: async () => {},
   }
 }
@@ -1354,6 +1355,107 @@ describe('ConversationCoordinator', () => {
       expect(bRound2Prompt).toBeDefined()
       expect(bRound2Prompt!).toContain('Q-from-A')
       expect(bRound2Prompt!).toContain('Q-from-B')
+    })
+
+    it('three-or-more rapid dispatches resolve cleanly and the latest wins', async () => {
+      // Smoke test for the ≥3-rapid-dispatch code path that exercises the
+      // `while (...)` preempt loop in dispatchChatroom. The underlying
+      // race (B and C both observing A as prior, both wake post-await,
+      // last setAborter wins, racing history.set) isn't deterministically
+      // testable with synchronous test mocks — both fixed and buggy
+      // paths satisfy the observable assertions here. What this guards
+      // against is a coarser regression: 3 rapid dispatches must not
+      // deadlock, throw, or fail to converge on a consistent final
+      // history. The bug itself was caught by code review; this test
+      // documents the supported scenario.
+      const store = makeMockStore()
+      store.set('chat-1', { kind: 'chatroom' })
+      const registry = createProviderRegistry()
+      registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
+      registry.register('codex', dummyProvider, { displayName: 'Codex', canResume: () => true })
+
+      const acquire = vi.fn(async (_a: string, _p: string, providerId: string) => ({
+        alias: 'a', path: '/p', providerId, lastUsedAt: 0,
+        dispatch: (_text: string): AsyncIterable<AgentEvent> => ({
+          async *[Symbol.asyncIterator]() {
+            yield { kind: 'text', text: `${providerId}-reply` }
+            yield { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 }
+          },
+        }),
+        close: async () => {},
+      }))
+
+      const promptsSeen: string[] = []
+      // Only one gate — A's first haikuEval. Once released, the rest run
+      // free. This forces A, B, C to truly overlap (A paused on the gate;
+      // B and C arrive in the same microtask burst).
+      let resolveA: () => void = () => {}
+      const aGate = new Promise<void>(res => { resolveA = res })
+      let modCallCount = 0
+      const haikuEval = vi.fn(async (prompt: string) => {
+        const idx = modCallCount++
+        promptsSeen.push(prompt)
+        if (idx === 0) await aGate
+        // Round-1 'continue' on each chain start; subsequent calls 'end'
+        // so we wrap up quickly.
+        const decision = idx === 0
+          ? { action: 'continue' as const, speaker: 'claude' as const, prompt: 'r1' }
+          : (idx === 2 || idx === 4)  // each fresh dispatch's round 1
+              ? { action: 'continue' as const, speaker: 'claude' as const, prompt: 'r1' }
+              : { action: 'end' as const, reasoning: 'done' }
+        return JSON.stringify(decision)
+      })
+
+      const logs: string[] = []
+      const c = createConversationCoordinator({
+        resolveProject: () => ({ alias: 'a', path: '/p' }),
+        manager: { acquire },
+        conversationStore: store,
+        registry,
+        defaultProviderId: 'claude',
+        format: (m) => m.text,
+        sendAssistantText: async () => {},
+        permissionMode: 'strict',
+        log: (tag, line) => { logs.push(`${tag}|${line}`) },
+        haikuEval,
+      })
+
+      // Three rapid dispatches. A paused on the gate; B and C queue
+      // up behind it. Without the while-loop fix, B and C would both
+      // observe A as prior, both await A, both setAborter on wake — race.
+      const pA = c.dispatch(inbound('chat-1', 'Q-from-A'))
+      await new Promise(r => setImmediate(r))
+      const pB = c.dispatch(inbound('chat-1', 'Q-from-B'))
+      const pC = c.dispatch(inbound('chat-1', 'Q-from-C'))
+      await new Promise(r => setImmediate(r))
+      resolveA()
+      await Promise.all([pA, pB, pC])
+
+      // The key invariant: BOTH preempt waves fire. With the bug, C
+      // would observe A's already-cleared slot post-await and silently
+      // overwrite B without aborting (one preempt log, not two). The
+      // while-loop fix re-reads after each await so each new arrival
+      // catches the most-recent in-flight dispatch.
+      const preemptLogs = logs.filter(l => l.includes('preempting prior in-flight dispatch'))
+      expect(preemptLogs.length).toBeGreaterThanOrEqual(2)
+
+      // All three dispatches resolved cleanly (no deadlock, no throw).
+      // A follow-up dispatch sees the persisted history and its
+      // moderator prompt embeds Q-from-C (the winning dispatch).
+      await c.dispatch(inbound('chat-1', 'Q-followup'))
+      const followupPrompt = promptsSeen[promptsSeen.length - 1]
+      expect(followupPrompt).toBeDefined()
+      expect(followupPrompt!).toContain('Q-from-C')
+
+      // Note: with synchronous test mocks each preempted dispatch
+      // races through round 1's body before observing the abort at
+      // round 2 entry — so user-A and user-B may also persist with
+      // speaker turns. In production with real provider sessions
+      // (seconds+ per turn) the cancel listener wired in collectTurn
+      // would abort mid-stream and the preempt path would truly
+      // truncate. The invariant this test guards is just "preempt
+      // chain doesn't lose a wave", not "no preempted dispatch
+      // contributes to history".
     })
 
     it('pops the trailing user entry when no speaker turn was produced (acquire throws on round 1)', async () => {

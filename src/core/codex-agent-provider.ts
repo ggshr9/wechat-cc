@@ -197,8 +197,18 @@ export function createCodexAgentProvider(opts: CodexAgentProviderOptions = {}): 
                   }
                 }
               } catch (err) {
-                const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
-                console.error(`wechat channel: [SESSION_ERROR] alias=${project.alias} provider=codex dispatch threw: ${detail}`)
+                // Skip the SESSION_ERROR log on user/preempt-initiated
+                // aborts — both `/stop` and "new dispatch preempts prior"
+                // legitimately abort the in-flight runStreamed, and the
+                // coordinator already surfaces that path silently. Logging
+                // them at error severity would spam channel.log and
+                // obscure real SDK failures.
+                const isAbort = err instanceof Error
+                  && (err.name === 'AbortError' || turnAborter.signal.aborted)
+                if (!isAbort) {
+                  const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+                  console.error(`wechat channel: [SESSION_ERROR] alias=${project.alias} provider=codex dispatch threw: ${detail}`)
+                }
                 throw err
               } finally {
                 if (activeAborter === turnAborter) activeAborter = null

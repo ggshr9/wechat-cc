@@ -7,6 +7,8 @@ export interface MakeFakeSessionOpts {
   getEventsForTurn?: () => AgentEvent[]
   /** Optional spy invoked with each dispatched text. */
   onDispatch?: (text: string) => void
+  /** Optional spy invoked when `cancel()` is called. */
+  onCancel?: () => void
 }
 
 export function makeFakeSession(opts: MakeFakeSessionOpts): AgentSession {
@@ -24,6 +26,7 @@ export function makeFakeSession(opts: MakeFakeSessionOpts): AgentSession {
         },
       }
     },
+    async cancel() { opts.onCancel?.() },
     async close() { closed = true },
   }
 }

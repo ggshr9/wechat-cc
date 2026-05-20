@@ -30,9 +30,11 @@ export interface SessionHandle {
   dispatch(text: string): AsyncIterable<AgentEvent>
   /**
    * Interrupt the in-flight dispatch (if any) on this session. Forwards
-   * to the underlying AgentSession.cancel — see that interface for
-   * provider-specific semantics. Optional because not every provider
-   * implements per-turn interrupt.
+   * to the underlying `AgentSession.cancel?.()` — see that interface for
+   * provider-specific semantics. Always present on a real handle (the
+   * wrapper here no-ops when the session itself doesn't implement
+   * cancel). Marked optional so ad-hoc test mocks of SessionHandle can
+   * omit it; production code should treat it as always-present.
    */
   cancel?(): Promise<void>
   close(): Promise<void>

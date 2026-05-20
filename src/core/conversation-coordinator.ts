@@ -298,15 +298,26 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
 
     // PR C2 — preempt any in-flight dispatch for this same chat. Without
     // this, two rapid messages produce concurrent loops that race on
-    // chatroomHistories.set (last writer wins → lost user msgs). Abort
-    // the prior aborter (mid-stream cancel propagates through
-    // session.cancel + the coordinator's collectTurn abort listener),
-    // then await its dispatch promise so the prior loop has fully
-    // unwound (history persisted, finally cleanup done) before we read
-    // chatroomHistories.get for our own snapshot.
-    const priorAborter = inFlightAborters.get(msg.chatId)
-    const priorPromise = inFlightDispatchPromises.get(msg.chatId)
-    if (priorAborter) {
+    // chatroomHistories.set (last writer wins → lost user msgs).
+    //
+    // Loop is required for ≥3 rapid dispatches: when B and C both arrive
+    // while A is in flight, both read A as their prior and both await A.
+    // After A finishes, both wake; if only the FIRST checks-and-claims
+    // the slot, the SECOND would silently overwrite without aborting. We
+    // re-read after each await so each new wave gets preempted by the
+    // next arrival, all the way until the slot is empty (in single-
+    // threaded-JS sense — guaranteed by the synchronous map set below).
+    // Loop is required for ≥3 rapid dispatches: when B and C both arrive
+    // while A is in flight, both read A as their prior and both await A.
+    // After A finishes, both wake; if only the FIRST checks-and-claims
+    // the slot, the SECOND would silently overwrite without aborting. We
+    // re-read after each await so each new wave gets preempted by the
+    // next arrival, all the way until the slot is empty (in single-
+    // threaded-JS sense — guaranteed by the synchronous map set below).
+    while (true) {
+      const priorAborter = inFlightAborters.get(msg.chatId)
+      const priorPromise = inFlightDispatchPromises.get(msg.chatId)
+      if (!priorAborter) break
       deps.log('COORDINATOR_CHATROOM', `chat=${msg.chatId} → preempting prior in-flight dispatch`)
       priorAborter.abort()
       if (priorPromise) {
@@ -430,6 +441,12 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
         // the next round-entry check at the top of the loop.
         const onAbort = () => { void handle.cancel?.() }
         aborter.signal.addEventListener('abort', onAbort, { once: true })
+        // WHATWG: addEventListener on an already-aborted signal does NOT
+        // retroactively fire the handler. If abort landed between the
+        // `await acquire` above and this line, we'd skip the mid-stream
+        // cancel and the speaker turn would run to natural completion.
+        // Fire onAbort manually in that case.
+        if (aborter.signal.aborted) onAbort()
         try {
           result = await collectTurn(handle.dispatch(dispatchedPrompt))
         } finally {
