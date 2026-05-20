@@ -188,6 +188,12 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
   // loops. dispatchChatroom registers; coordinator.cancel() signals; /stop
   // in mode-commands triggers cancel before flipping mode.
   const inFlightAborters = new Map<string, AbortController>()
+  // PR C2 — per-chat promise that resolves when the active dispatchChatroom
+  // call has finished its finally block (history persisted, aborter slot
+  // cleared). A NEW chatroom dispatch in the same chat awaits this so the
+  // "latest user msg wins" preempt path doesn't race the prior loop's
+  // history.set with its own snapshot read.
+  const inFlightDispatchPromises = new Map<string, Promise<void>>()
 
   function validateMode(mode: Mode): void {
     // Reject unknown providers up front so the caller (mode-commands or
@@ -290,22 +296,41 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     }
     const [providerA, providerB] = parallelProviders as [ProviderId, ProviderId]
 
+    // PR C2 — preempt any in-flight dispatch for this same chat. Without
+    // this, two rapid messages produce concurrent loops that race on
+    // chatroomHistories.set (last writer wins → lost user msgs). Abort
+    // the prior aborter (mid-stream cancel propagates through
+    // session.cancel + the coordinator's collectTurn abort listener),
+    // then await its dispatch promise so the prior loop has fully
+    // unwound (history persisted, finally cleanup done) before we read
+    // chatroomHistories.get for our own snapshot.
+    const priorAborter = inFlightAborters.get(msg.chatId)
+    const priorPromise = inFlightDispatchPromises.get(msg.chatId)
+    if (priorAborter) {
+      deps.log('COORDINATOR_CHATROOM', `chat=${msg.chatId} → preempting prior in-flight dispatch`)
+      priorAborter.abort()
+      if (priorPromise) {
+        try { await priorPromise } catch { /* prior dispatch's own error path */ }
+      }
+    }
+
     // RFC 03 review #11 — per-chat AbortController so /stop can preempt
-    // an in-flight loop. Concurrent dispatches for the same chat will
-    // overwrite the slot — only the latest is cancellable.
+    // an in-flight loop. Single-flight per chat (see preempt step above).
     const aborter = new AbortController()
     inFlightAborters.set(msg.chatId, aborter)
+
+    let dispatchResolve!: () => void
+    const dispatchPromise = new Promise<void>(resolve => { dispatchResolve = resolve })
+    inFlightDispatchPromises.set(msg.chatId, dispatchPromise)
 
     // v0.5.9 — chatroom is a persistent session. Pull existing history
     // (from prior user msgs in this chatroom), append the new user msg,
     // and let the moderator see the whole sequence.
     //
-    // PR C1 — shallow-copy the stored array before mutating: keeps each
-    // dispatch's view of history isolated from any other dispatch that
-    // happens to land in the same chat before this one writes back. The
-    // separate "lost-write across concurrent dispatches" hazard needs
-    // proper abort semantics (PR C2 — AgentSession.cancel + aborting the
-    // prior in-flight loop before overwriting inFlightAborters).
+    // PR C1 — shallow-copy the stored array before mutating so each
+    // dispatch operates on its own snapshot. The preempt step above
+    // additionally serialises overlapping dispatches per chat, so the
+    // snapshot we read here is the latest persisted history.
     const history: ChatroomEntry[] = [...(chatroomHistories.get(msg.chatId) ?? [])]
     history.push({ role: 'user', text: deps.format(msg) })
 
@@ -398,8 +423,26 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
       let result: TurnSummary
       try {
         const handle = await deps.manager.acquire(proj.alias, proj.path, speaker)
-        result = await collectTurn(handle.dispatch(dispatchedPrompt))
+        // PR C2 — propagate the chatroom aborter into the speaker turn so
+        // /stop (and "new dispatch preempts prior") interrupt mid-stream
+        // rather than waiting for the current speaker turn to drain.
+        // Best effort — providers without cancel() still get aborted at
+        // the next round-entry check at the top of the loop.
+        const onAbort = () => { void handle.cancel?.() }
+        aborter.signal.addEventListener('abort', onAbort, { once: true })
+        try {
+          result = await collectTurn(handle.dispatch(dispatchedPrompt))
+        } finally {
+          aborter.signal.removeEventListener('abort', onAbort)
+        }
       } catch (err) {
+        // If we cancelled this turn ourselves, that's a clean exit — the
+        // user already saw the abort notice and any "[Display] (error)"
+        // we'd send would be noise.
+        if (aborter.signal.aborted) {
+          deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} aborted mid-stream — suppressing error reply`)
+          break
+        }
         const reason = err instanceof Error ? err.message : String(err)
         deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} threw: ${reason}`)
         const dn = deps.registry.get(speaker)?.opts.displayName ?? speaker
@@ -462,6 +505,10 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
       if (inFlightAborters.get(msg.chatId) === aborter) {
         inFlightAborters.delete(msg.chatId)
       }
+      if (inFlightDispatchPromises.get(msg.chatId) === dispatchPromise) {
+        inFlightDispatchPromises.delete(msg.chatId)
+      }
+      dispatchResolve()
     }
   }
 

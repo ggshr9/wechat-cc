@@ -190,6 +190,15 @@ export function createClaudeAgentProvider(opts: ClaudeAgentProviderOptions): Age
           } as SDKUserMessage)
           return queue.iterable()
         },
+        async cancel() {
+          if (closed) return
+          // Signal the SDK to interrupt the in-flight dispatch (if any).
+          // Don't close, don't end the queue — interrupt should cause the
+          // SDK to emit a final `result` which the background consumer
+          // surfaces and uses to wind down `activeEventQueue` naturally.
+          // Future dispatches on this same session keep working.
+          ;(q as unknown as { interrupt?: () => void }).interrupt?.()
+        },
         async close() {
           closed = true
           sdkQueue.end()

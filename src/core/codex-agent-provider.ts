@@ -206,6 +206,13 @@ export function createCodexAgentProvider(opts: CodexAgentProviderOptions = {}): 
             },
           }
         },
+        async cancel(): Promise<void> {
+          if (closed) return
+          // Abort the in-flight runStreamed without setting closed=true,
+          // so subsequent dispatches still work. The thread itself is
+          // long-lived; only the per-turn CLI invocation gets killed.
+          activeAborter?.abort()
+        },
         async close(): Promise<void> {
           closed = true
           // Codex SDK's Thread doesn't expose a `close()` — the underlying

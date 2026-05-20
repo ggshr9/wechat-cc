@@ -39,6 +39,17 @@ export interface AgentSession {
    * Codex provider runs each turn as a separate runStreamed.
    */
   dispatch(text: string): AsyncIterable<AgentEvent>
+  /**
+   * Interrupt the in-flight dispatch (if any) without closing the
+   * session — future dispatches still work. Wired into the chatroom
+   * loop's `/stop` and the "new dispatch preempts prior" paths.
+   *
+   * Optional because not every provider may have a per-turn interrupt
+   * mechanism. Coordinators should treat a missing implementation as
+   * "best effort" — the abort signal still propagates at round entry,
+   * mid-stream cancellation just isn't available.
+   */
+  cancel?(): Promise<void>
   close(): Promise<void>
 }
 

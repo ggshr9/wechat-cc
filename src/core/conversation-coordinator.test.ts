@@ -1259,14 +1259,18 @@ describe('ConversationCoordinator', () => {
       expect(sendAssistantText).toHaveBeenCalledWith('chat-1', expect.stringContaining('chatroom error'))
     })
 
-    it('concurrent dispatches in same chat: each dispatch keeps its own history snapshot for moderator prompts', async () => {
-      // Bug (pre-PR C1): chatroomHistories.get() returned the stored array
-      // ref, and both concurrent dispatches pushed into it. The second
-      // dispatch's user msg leaked into the first dispatch's round-2+
-      // moderator prompts. Fix: shallow-copy at dispatch start so each
-      // dispatch operates on its own snapshot. (Lost-write across
-      // concurrent dispatches is a separate concern — needs proper abort
-      // semantics, deferred to PR C2.)
+    it('rapid follow-up message in same chat preempts prior dispatch and serialises cleanly', async () => {
+      // PR C2 stress test — two chatroom messages arrive in the same chat
+      // before the first finishes. Expected behaviour: the second dispatch
+      // aborts the first (latest-user-msg-wins), waits for the first to
+      // unwind cleanly, then runs its own loop. Both messages contribute
+      // entries to the persisted history (no lost-write race).
+      //
+      // Pre-C2 bugs this guards against:
+      //   * concurrent loops racing on chatroomHistories.set (last writer
+      //     wins, prior user msgs silently dropped)
+      //   * dispatch B reading a stale snapshot that doesn't include A's
+      //     partial progress
       const store = makeMockStore()
       store.set('chat-1', { kind: 'chatroom' })
       const registry = createProviderRegistry()
@@ -1284,9 +1288,8 @@ describe('ConversationCoordinator', () => {
         close: async () => {},
       }))
 
-      // Each haikuEval call awaits releases[i] before resolving so we can
-      // interleave A and B precisely. We capture the prompt text per call
-      // to inspect what history view each call saw.
+      // haikuEval is gated per-call so we can pause A mid-flight and let
+      // B preempt.
       const promptsSeen: string[] = []
       const releases: Array<{ resolve: () => void; promise: Promise<void> }> = []
       for (let i = 0; i < 10; i++) {
@@ -1294,19 +1297,14 @@ describe('ConversationCoordinator', () => {
         const p = new Promise<void>((res) => { resolveFn = res })
         releases.push({ resolve: resolveFn, promise: p })
       }
-      // Scripted decisions per haikuEval call index:
-      //   0: prime  round 1 — continue, claude  (speaker turn runs)
-      //   1: prime  round 2 — end               (writes [user-prime, speaker] into the map)
-      //   2: A      round 1 — continue, claude
-      //   3: B      round 1 — continue, claude
-      //   4: A      round 2 — end
-      //   5: B      round 2 — end
+      // Scripted decisions per haikuEval call:
+      //   0  A round 1 — continue, claude (speaker runs; abort observed
+      //                  at round-2 entry → break)
+      //   1  B round 1 — continue, claude
+      //   2  B round 2 — end
       const decisions = [
-        { action: 'continue', speaker: 'claude', prompt: 'prime-r1' },
-        { action: 'end', reasoning: 'prime-done' },
         { action: 'continue', speaker: 'claude', prompt: 'A-r1' },
         { action: 'continue', speaker: 'claude', prompt: 'B-r1' },
-        { action: 'end', reasoning: 'A-done' },
         { action: 'end', reasoning: 'B-done' },
       ]
       let modCallCount = 0
@@ -1329,32 +1327,33 @@ describe('ConversationCoordinator', () => {
         haikuEval,
       })
 
-      // Prime: complete one dispatch so the stored map entry exists. Without
-      // this, A and B each get a fresh `?? []` array and the shared-reference
-      // bug can't manifest.
-      releases[0]!.resolve()
-      releases[1]!.resolve()
-      await c.dispatch(inbound('chat-1', 'Q-prime'))
-
-      // Dispatch A (paused at call 2).
+      // Start A — paused at call 0 (its round-1 haikuEval).
       const pA = c.dispatch(inbound('chat-1', 'Q-from-A'))
       await new Promise(r => setImmediate(r))
-      // Dispatch B (concurrent — paused at call 3). With the bug it shares
-      // the stored array ref with A; B's user-msg push leaks into A's view.
-      const pB = c.dispatch(inbound('chat-1', 'Q-from-B'))
-      await new Promise(r => setImmediate(r))
 
-      // Release remaining gates in order; both dispatches finish.
-      for (let i = 2; i < releases.length; i++) releases[i]!.resolve()
+      // Start B — coordinator preempts A (priorAborter.abort()) then
+      // awaits A's dispatch promise. Releasing all gates lets both
+      // dispatches unwind in order.
+      const pB = c.dispatch(inbound('chat-1', 'Q-from-B'))
+
+      // Release every gate so both dispatches can finish.
+      for (const r of releases) r.resolve()
       await Promise.all([pA, pB])
 
-      // A's round-2 moderator call is at index 4. With the bug its prompt
-      // includes "Q-from-B" (leaked across dispatches via the shared
-      // history ref); with the shallow-copy fix it does not.
-      const aRound2Prompt = promptsSeen[4]
-      expect(aRound2Prompt).toBeDefined()
-      expect(aRound2Prompt!).toContain('Q-from-A')
-      expect(aRound2Prompt!).not.toContain('Q-from-B')
+      // A ran round 1 (call 0 = 'A-r1') and pushed a speaker turn before
+      // observing abort at round 2 entry. B then ran its own loop —
+      // round 1 (call 1 = 'B-r1') saw A's persisted contribution in
+      // history, plus its own user msg.
+      expect(promptsSeen[0]!).toContain('Q-from-A')
+      const bRound1Prompt = promptsSeen[1]
+      expect(bRound1Prompt).toBeDefined()
+      expect(bRound1Prompt!).toContain('Q-from-A')   // A's persisted user msg
+      expect(bRound1Prompt!).toContain('Q-from-B')   // B's own user msg
+      // B's round-2 (the synthesis turn) also sees both contributions.
+      const bRound2Prompt = promptsSeen[2]
+      expect(bRound2Prompt).toBeDefined()
+      expect(bRound2Prompt!).toContain('Q-from-A')
+      expect(bRound2Prompt!).toContain('Q-from-B')
     })
 
     it('pops the trailing user entry when no speaker turn was produced (acquire throws on round 1)', async () => {

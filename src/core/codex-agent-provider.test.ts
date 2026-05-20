@@ -273,6 +273,63 @@ describe('Codex agent provider', () => {
     expect(r2?.numTurns).toBe(2)
   })
 
+  it('cancel() aborts in-flight turn without preventing future dispatches', async () => {
+    const signalsCaptured: AbortSignal[] = []
+    let dispatchCount = 0
+    const codex: Codex = {
+      startThread(): Thread {
+        return {
+          get id() { return 'tid' },
+          async run(): Promise<never> { throw new Error('not used') },
+          async runStreamed(_input: unknown, opts?: { signal?: AbortSignal }) {
+            if (opts?.signal) signalsCaptured.push(opts.signal)
+            dispatchCount++
+            // First dispatch hangs forever (so cancel can abort it);
+            // second dispatch completes immediately so we can assert the
+            // session still functions after cancel.
+            const myCount = dispatchCount
+            async function* gen(): AsyncGenerator<ThreadEvent> {
+              if (myCount === 1) {
+                await new Promise<void>(() => {})  // never resolves
+              } else {
+                yield { type: 'thread.started', thread_id: 'tid' } as unknown as ThreadEvent
+                yield {
+                  type: 'turn.completed',
+                  usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 },
+                } as unknown as ThreadEvent
+              }
+            }
+            return { events: gen() }
+          },
+        } as unknown as Thread
+      },
+      resumeThread(): Thread { throw new Error('not used') },
+    } as unknown as Codex
+
+    const p = createCodexAgentProvider({ codexFactory: () => codex })
+    const session = await p.spawn({ alias: 'a', path: '/p' })
+
+    // First dispatch hangs.
+    void session.dispatch('hangs')[Symbol.asyncIterator]().next().catch(() => undefined)
+    await new Promise(r => setTimeout(r, 5))
+    expect(signalsCaptured).toHaveLength(1)
+    expect(signalsCaptured[0]!.aborted).toBe(false)
+
+    // Cancel — aborts the first signal but does NOT mark session closed.
+    await session.cancel?.()
+    expect(signalsCaptured[0]!.aborted).toBe(true)
+
+    // Second dispatch still goes through.
+    const iter2 = session.dispatch('after-cancel')[Symbol.asyncIterator]()
+    const r = await iter2.next()
+    expect(r.done).toBe(false)
+    // drain the rest
+    while (!(await iter2.next()).done) { /* empty */ }
+    expect(signalsCaptured).toHaveLength(2)
+
+    await session.close()
+  })
+
   it('close() aborts in-flight turn via the AbortSignal passed to runStreamed', async () => {
     let signalCaptured: AbortSignal | undefined
     const codex: Codex = {

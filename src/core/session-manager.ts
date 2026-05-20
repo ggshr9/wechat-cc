@@ -28,6 +28,13 @@ export interface SessionHandle {
   readonly providerId: ProviderId
   lastUsedAt: number
   dispatch(text: string): AsyncIterable<AgentEvent>
+  /**
+   * Interrupt the in-flight dispatch (if any) on this session. Forwards
+   * to the underlying AgentSession.cancel — see that interface for
+   * provider-specific semantics. Optional because not every provider
+   * implements per-turn interrupt.
+   */
+  cancel?(): Promise<void>
   close(): Promise<void>
 }
 
@@ -146,6 +153,9 @@ export class SessionManager {
             }
           },
         }
+      },
+      async cancel() {
+        await session.cancel?.()
       },
       async close() {
         await session.close()
