@@ -20,6 +20,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => {
   let yieldFn: ((msg: any) => void) | null = null
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let endFn: (() => void) | null = null
+  let interruptCount = 0
 
   function makeStream() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -37,6 +38,9 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => {
       const r = resolvers.shift()
       if (r) r({ value: undefined, done: true })
     }
+    // Return an object that both implements AsyncIterable AND carries an
+    // `interrupt` method — mirrors the shape of @anthropic-ai/claude-agent-sdk's
+    // `query()` return value (Query is a Promise + AsyncIterable with helpers).
     return {
       [Symbol.asyncIterator]() {
         return {
@@ -47,6 +51,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => {
           },
         }
       },
+      interrupt() { interruptCount++ },
     }
   }
 
@@ -60,6 +65,8 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => {
     __test_yield: (msg: unknown) => yieldFn?.(msg),
     __test_end: () => endFn?.(),
     __test_sent: () => sentMessages,
+    __test_interrupt_count: () => interruptCount,
+    __test_reset_interrupt: () => { interruptCount = 0 },
   }
 })
 
@@ -261,6 +268,54 @@ describe('claude-agent-provider', () => {
     // Drain the rest
     for await (const _ of { [Symbol.asyncIterator]: () => firstIterator }) { /* drain */ }
     await session.close()
+  })
+
+  it('cancel() calls SDK interrupt without closing the session', async () => {
+    ;(sdk as unknown as { __test_reset_interrupt: () => void }).__test_reset_interrupt()
+    const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' })
+
+    // Start a dispatch and leave it in-flight.
+    const eventsPromise = drain(session.dispatch('first'))
+    await new Promise(r => setTimeout(r, 0))
+
+    // Cancel mid-stream — should hit SDK.interrupt exactly once.
+    await session.cancel?.()
+    expect((sdk as unknown as { __test_interrupt_count: () => number }).__test_interrupt_count()).toBe(1)
+
+    // The dispatch iterator stays open until the SDK emits a final event;
+    // in production the SDK responds to interrupt with a result message.
+    // Simulate that here so the iterator winds down.
+    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
+      type: 'result', subtype: 'success', session_id: 's-cancel', num_turns: 1, duration_ms: 5,
+    })
+    await eventsPromise
+
+    // Session is NOT closed — a second dispatch still works.
+    const eventsPromise2 = drain(session.dispatch('second'))
+    await new Promise(r => setTimeout(r, 0))
+    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
+      type: 'assistant', message: { content: [{ type: 'text', text: 'still alive' }] },
+    })
+    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
+      type: 'result', subtype: 'success', session_id: 's-cancel', num_turns: 2, duration_ms: 5,
+    })
+    const events2 = await eventsPromise2
+    expect(events2.some(e => e.kind === 'text' && e.text === 'still alive')).toBe(true)
+
+    await session.close()
+  })
+
+  it('cancel() is a no-op after close()', async () => {
+    ;(sdk as unknown as { __test_reset_interrupt: () => void }).__test_reset_interrupt()
+    const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' })
+    await session.close()
+    // close() itself calls interrupt — record that baseline, then verify
+    // cancel() does NOT add another call.
+    const baseline = (sdk as unknown as { __test_interrupt_count: () => number }).__test_interrupt_count()
+    await session.cancel?.()
+    expect((sdk as unknown as { __test_interrupt_count: () => number }).__test_interrupt_count()).toBe(baseline)
   })
 
   it('assistant text arriving with no active queue is dropped with [STREAM_DROP] warn', async () => {

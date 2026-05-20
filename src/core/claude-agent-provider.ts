@@ -190,6 +190,25 @@ export function createClaudeAgentProvider(opts: ClaudeAgentProviderOptions): Age
           } as SDKUserMessage)
           return queue.iterable()
         },
+        async cancel() {
+          if (closed) return
+          // Signal the SDK to interrupt the in-flight dispatch (if any).
+          // Don't close, don't end the queue — we rely on the SDK to emit
+          // a final `result` (or `error`) message in response to interrupt,
+          // which the background consumer translates into a queue end and
+          // clears `activeEventQueue`. Future dispatches on this same
+          // session keep working.
+          //
+          // SDK assumption: this contract is observed by
+          // @anthropic-ai/claude-agent-sdk's binary harness but is NOT
+          // documented in the SDK's public types. If a future SDK version
+          // silently drops interrupts (or the underlying claude process
+          // exits without flushing), the symptom would be a `collectTurn`
+          // call hanging until close() is invoked. Caller mitigates by
+          // also wiring the abort signal at the coordinator level so the
+          // next round-entry check still terminates the loop.
+          ;(q as unknown as { interrupt?: () => void }).interrupt?.()
+        },
         async close() {
           closed = true
           sdkQueue.end()
