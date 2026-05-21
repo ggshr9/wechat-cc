@@ -406,20 +406,25 @@ describe('Codex agent provider', () => {
       writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString())
       return true
     })
-    const fakeCodex = makeFakeCodex()
-    fakeCodex.fake.thread.pushTurn([
-      { type: 'thread.started', thread_id: 'tid-log-test' },
-      { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } },
-    ])
-    const { provider: p } = provider({}, fakeCodex)
-    const session = await p.spawn({ alias: 'logtest', path: '/p' })
+    try {
+      const fakeCodex = makeFakeCodex()
+      fakeCodex.fake.thread.pushTurn([
+        { type: 'thread.started', thread_id: 'tid-log-test' },
+        { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } },
+      ])
+      const { provider: p } = provider({}, fakeCodex)
+      const session = await p.spawn({ alias: 'logtest', path: '/p' })
 
-    await drain(session.dispatch('hi'))
+      await drain(session.dispatch('hi'))
 
-    const all = writes.join('')
-    expect(all).toContain('SESSION_INIT')
-    expect(all).toContain('tid-log-test')
-    writeSpy.mockRestore()
+      const all = writes.join('')
+      expect(all).toContain('SESSION_INIT')
+      expect(all).toContain('tid-log-test')
+    } finally {
+      // Restore even if any assertion above throws — without this a
+      // failing test would leak the spy into the rest of the file.
+      writeSpy.mockRestore()
+    }
   })
 
   it('emits code=auth_failed when turn.failed message matches auth-shape', async () => {

@@ -36,6 +36,15 @@ const LOG_ROTATE_SIZE = 10 * 1024 * 1024
 const LOG_ROTATE_CHECK_INTERVAL = 100
 let _logCallsSinceCheck = 0
 
+/**
+ * Opt-out for tests + any code path that imports `log` purely for the
+ * type / formatter exports but doesn't want the eager file-rotation
+ * check or the per-call appendFileSync to touch the real STATE_DIR.
+ * Set via env var so vitest setup can flip it once for the whole suite
+ * without touching every test file.
+ */
+const FILE_DISABLED = process.env['WECHAT_DISABLE_LOG_FILE'] === '1'
+
 function maybeRotate(file: string): void {
   try {
     const st = statSync(file)
@@ -52,6 +61,7 @@ function maybeRotate(file: string): void {
 }
 
 function maybeRotateAll(): void {
+  if (FILE_DISABLED) return
   maybeRotate(LOG_FILE)
   maybeRotate(LOG_FILE_JSONL)
 }
@@ -100,6 +110,7 @@ export function log(tag: string, msg: string, fields?: LogFields): void {
   const ts = new Date().toISOString()
   const humanLine = formatHumanLine(ts, tag, msg)
   process.stderr.write(`wechat channel: ${humanLine}`)
+  if (FILE_DISABLED) return
   try { appendFileSync(LOG_FILE, humanLine) } catch {}
 
   if (fields !== undefined) {

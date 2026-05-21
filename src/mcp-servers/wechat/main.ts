@@ -155,33 +155,6 @@ server.registerTool(
   },
 )
 
-server.registerTool(
-  'memory_delete',
-  {
-    title: 'Delete a memory file',
-    description:
-      '删除 memory/ 下的一个 .md 文件（路径相对于 memory 根）。用于清理过时观察 / 不再相关的 profile 节点。' +
-      '硬删除，不进回收站；想保留请用 memory_write 重写内容（例如标注 [archived]）。' +
-      '路径上限 512 字符，必须在 sandbox 内（同 memory_read/write 的边界）。',
-    inputSchema: {
-      path: z.string()
-        .max(512, 'path must be <= 512 chars')
-        .refine(s => !s.includes('\0'), { message: 'path must not contain null bytes' }),
-    },
-  },
-  async ({ path }) => {
-    try {
-      const resp = await client.request<{ ok: boolean; error?: string }>(
-        'POST', '/v1/memory/delete', { path },
-      )
-      return { content: [{ type: 'text', text: JSON.stringify(resp) }] }
-    } catch (err) {
-      return passthroughErrorResult(err, 'memory_delete')
-    }
-  },
-)
-
-
 // ─── projects + user name (RFC 03 P1.B B3) ───────────────────────────────
 // Legacy descriptions kept verbatim — agent's mental model unchanged.
 
