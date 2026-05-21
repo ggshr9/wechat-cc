@@ -155,6 +155,32 @@ server.registerTool(
   },
 )
 
+server.registerTool(
+  'memory_delete',
+  {
+    title: 'Delete a memory file',
+    description:
+      '删除 memory/ 下的一个 .md 文件（路径相对于 memory 根）。用于清理过时观察 / 不再相关的 profile 节点。' +
+      '硬删除，不进回收站；想保留请用 memory_write 重写内容（例如标注 [archived]）。' +
+      '路径上限 512 字符，必须在 sandbox 内（同 memory_read/write 的边界）。',
+    inputSchema: {
+      path: z.string()
+        .max(512, 'path must be <= 512 chars')
+        .refine(s => !s.includes('\0'), { message: 'path must not contain null bytes' }),
+    },
+  },
+  async ({ path }) => {
+    try {
+      const resp = await client.request<{ ok: boolean; error?: string }>(
+        'POST', '/v1/memory/delete', { path },
+      )
+      return { content: [{ type: 'text', text: JSON.stringify(resp) }] }
+    } catch (err) {
+      return passthroughErrorResult(err, 'memory_delete')
+    }
+  },
+)
+
 
 // ─── projects + user name (RFC 03 P1.B B3) ───────────────────────────────
 // Legacy descriptions kept verbatim — agent's mental model unchanged.
@@ -511,14 +537,27 @@ function passthroughErrorResult(err: unknown, tool: string): { content: Array<{ 
   // block. Keeps the legacy "tool never throws" promise that the
   // in-process versions enforced — agent sees a structured failure
   // result, not an MCP exception.
-  const detail = formatError(err)
-  logErr(`${tool} transport failed: ${detail}`)
-  return { content: [{ type: 'text', text: JSON.stringify({ error: detail }) }] }
+  //
+  // STDERR log gets the short, body-free form (status + endpoint only)
+  // — Phase 4 polish. The downstream JSON returned to the agent still
+  // carries the full detail; we just don't spam channel-log readers
+  // with redacted-feeling response bodies.
+  logErr(`${tool} transport failed: ${formatErrorShort(err)}`)
+  return { content: [{ type: 'text', text: JSON.stringify({ error: formatError(err) }) }] }
 }
 
 function formatError(err: unknown): string {
   if (err instanceof InternalApiError) {
     return `internal-api ${err.status}: ${JSON.stringify(err.body).slice(0, 200)}`
+  }
+  return err instanceof Error ? err.message : String(err)
+}
+
+function formatErrorShort(err: unknown): string {
+  // Body-free form for stderr logging — omits response payload so
+  // sensitive content doesn't end up in operator log scrollback.
+  if (err instanceof InternalApiError) {
+    return `internal-api ${err.status} ${err.path}`
   }
   return err instanceof Error ? err.message : String(err)
 }

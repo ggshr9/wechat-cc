@@ -71,7 +71,14 @@ export function chunk(text: string, limit: number): string[] {
     const para = rest.lastIndexOf('\n\n', limit)
     const line = rest.lastIndexOf('\n', limit)
     const space = rest.lastIndexOf(' ', limit)
-    const cut = para > limit / 2 ? para : line > limit / 2 ? line : space > 0 ? space : limit
+    // `space > 1` guards against the degenerate case where space is at
+    // position 0 (would slice an empty string and infinite-loop). When
+    // no good boundary exists, cut at `limit` — losing word boundaries
+    // is better than hanging.
+    const cut = para > limit / 2 ? para
+      : line > limit / 2 ? line
+      : space > 1 ? space
+      : limit
     out.push(rest.slice(0, cut))
     rest = rest.slice(cut).replace(/^\n+/, '')
   }

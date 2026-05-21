@@ -93,8 +93,8 @@ export async function loadLogsPane(deps) {
   // reaching for the scrollbar. Skip if user scrolled up manually within
   // the last refresh (we don't track that yet; revisit if it gets noisy).
   body.scrollTop = body.scrollHeight
-  document.getElementById("logs-meta").textContent =
-    `${result.entries.length}/${result.totalLines} 行 · ${result.logFile.split("/").pop()}`
+  const meta = document.getElementById("logs-meta")
+  if (meta) meta.textContent = `${result.entries.length}/${result.totalLines} 行 · ${result.logFile.split("/").pop()}`
   const navCount = document.getElementById("logs-count")
   if (navCount) navCount.textContent = result.entries.length > 0 ? String(result.entries.length) : ""
 }

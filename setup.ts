@@ -83,7 +83,10 @@ while (Date.now() < deadline) {
             // reload via signal as before.
             if (platform() === 'win32') {
               console.log(`检测到运行中的 daemon (pid ${pid})。请重启服务以加载新账号:`)
-              console.log('  schtasks /End /TN wechat-cc && schtasks /Run /TN wechat-cc')
+              // PowerShell ScheduledTask cmdlets — more reliable than
+              // schtasks for tasks created by the desktop installer
+              // (which uses the newer Task Scheduler 2.0 API).
+              console.log('  Stop-ScheduledTask -TaskName wechat-cc; Start-ScheduledTask -TaskName wechat-cc')
             } else {
               process.kill(pid, 'SIGUSR1')
               console.log(`已通知运行中的 daemon (pid ${pid}) 热加载新账号`)

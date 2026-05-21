@@ -1,5 +1,6 @@
 import { query, type Options, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AgentEvent, AgentProject, AgentProvider, AgentSession } from './agent-provider'
+import { log } from '../lib/log'
 
 export interface ClaudeAgentProviderOptions {
   sdkOptionsForProject: (alias: string, path: string) => Options
@@ -144,7 +145,9 @@ export function createClaudeAgentProvider(opts: ClaudeAgentProviderOptions): Age
             const aq = activeEventQueue as AsyncQueue<AgentEvent>
 
             if (msg.type === 'system' && msg.subtype === 'init') {
-              console.error(`wechat channel: [SESSION_INIT] alias=${project.alias} session_id=${msg.session_id ?? ''}`)
+              // Routed via log() (info-level) so the line lands in
+              // channel.log + dashboard, not just stderr.
+              log('SESSION_INIT', `alias=${project.alias} session_id=${msg.session_id ?? ''}`)
               aq.push({ kind: 'init', sessionId: msg.session_id ?? '' })
             } else if (msg.type === 'assistant') {
               const content = msg.message?.content

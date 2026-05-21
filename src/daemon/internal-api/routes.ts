@@ -12,7 +12,7 @@ import { errMsg, type InternalApiDeps, type InternalApiDelegateDep, type RouteTa
 import { lookup } from '../../core/capability-matrix'
 import type { Mode } from '../../core/conversation'
 import type {
-  MemoryReadRequestT, MemoryWriteRequestT,
+  MemoryReadRequestT, MemoryWriteRequestT, MemoryDeleteRequestT,
   ProjectsSwitchRequestT, ProjectsAddRequestT, ProjectsRemoveRequestT,
   UserSetNameRequestT,
   SharePageRequestT, ShareResurfaceRequestT,
@@ -64,6 +64,16 @@ export function makeRoutes({ deps, getDelegate, maybePrefix }: MakeRoutesContext
         return { status: 200, body: { files: deps.memory.list(dir ?? undefined) } }
       } catch (err) {
         return { status: 200, body: { error: errMsg(err) } }
+      }
+    },
+    'POST /v1/memory/delete': (_q, body) => {
+      if (!deps.memory) return { status: 503, body: { error: 'memory_fs_not_wired' } }
+      const { path } = body as MemoryDeleteRequestT
+      try {
+        deps.memory.delete(path)
+        return { status: 200, body: { ok: true } }
+      } catch (err) {
+        return { status: 200, body: { ok: false, error: errMsg(err) } }
       }
     },
 

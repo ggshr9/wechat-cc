@@ -2,6 +2,7 @@ import { Codex, type Thread, type ThreadEvent, type ThreadItem } from '@openai/c
 import { tmpdir } from 'node:os'
 import type { AgentEvent, AgentProject, AgentProvider, AgentSession } from './agent-provider'
 import { resolveCodexCheapModel } from './codex-cheap-model'
+import { log } from '../lib/log'
 
 /**
  * codex-agent-provider — Codex SDK companion to claude-agent-provider, using
@@ -165,7 +166,7 @@ export function createCodexAgentProvider(opts: CodexAgentProviderOptions = {}): 
         : codex.startThread(threadOptions)
 
       if (spawnOpts?.resumeSessionId) {
-        console.error(`wechat channel: [SESSION_RESUME] alias=${project.alias} thread_id=${spawnOpts.resumeSessionId} provider=codex`)
+        log('SESSION_RESUME', `alias=${project.alias} thread_id=${spawnOpts.resumeSessionId} provider=codex`)
       }
 
       let turnCount = 0
@@ -201,7 +202,7 @@ export function createCodexAgentProvider(opts: CodexAgentProviderOptions = {}): 
                 for await (const ev of events as AsyncGenerator<ThreadEvent>) {
                   if (ev.type === 'thread.started') {
                     if (!initEmitted) {
-                      console.error(`wechat channel: [SESSION_INIT] alias=${project.alias} thread_id=${ev.thread_id} provider=codex`)
+                      log('SESSION_INIT', `alias=${project.alias} thread_id=${ev.thread_id} provider=codex`)
                       initEmitted = true
                     }
                     yield { kind: 'init', sessionId: ev.thread_id }

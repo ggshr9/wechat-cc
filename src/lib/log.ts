@@ -40,6 +40,12 @@ function maybeRotate(file: string): void {
   try {
     const st = statSync(file)
     if (st.size > LOG_ROTATE_SIZE) {
+      // Two-generation rotation: file.1 → file.2 (overwrites any
+      // existing .2), then file → file.1. Without the .2 step, a
+      // single big rotation event would lose the prior generation
+      // forever. Two generations is enough to debug "what happened
+      // 20 min ago" after a crash; more would risk filling disk.
+      try { renameSync(`${file}.1`, `${file}.2`) } catch {}
       try { renameSync(file, `${file}.1`) } catch {}
     }
   } catch {}

@@ -1103,7 +1103,19 @@ export async function exportProjectMarkdown(deps) {
     // Plain stdout truncates at MB-scale for bun --compile binaries.
     const resp = /** @type {SessionsReadJsonl} */ (await deps.invoke("wechat_cli_json_via_file", { args: ["sessions", "read-jsonl", alias, "--json"] }))
     if (!resp.ok) {
-      alert(`导出失败：${resp.error || '未知错误'}`)
+      // alert() blocks the webview thread + looks like a popup virus
+      // on macOS. Inline error strip is consistent with how the rest
+      // of the dashboard surfaces transient failures.
+      const strip = document.getElementById('sessions-export-error')
+      if (strip) {
+        strip.textContent = `导出失败：${resp.error || '未知错误'}`
+        strip.hidden = false
+        setTimeout(() => { strip.hidden = true }, 5000)
+      } else {
+        // Fallback: log to console if the strip element isn't in the DOM
+        // (happens in older index.html that hasn't been updated yet).
+        console.error(`sessions export failed: ${resp.error || '未知错误'}`)
+      }
       return
     }
     const mode = readSessionsDetailMode()

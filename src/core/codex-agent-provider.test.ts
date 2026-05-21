@@ -397,8 +397,15 @@ describe('Codex agent provider', () => {
     expect(factoryArgs[0]).toMatchObject({ codexPathOverride: '/opt/codex/bin/codex' })
   })
 
-  it('console.error logs SESSION_INIT on thread.started', async () => {
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+  it('log() emits SESSION_INIT on thread.started (PR P4 — was console.error)', async () => {
+    // Phase 4 routed SESSION_INIT through src/lib/log which writes to
+    // process.stderr.write (and channel.log on disk). Spy that channel
+    // instead of console.error.
+    const writes: string[] = []
+    const writeSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString())
+      return true
+    })
     const fakeCodex = makeFakeCodex()
     fakeCodex.fake.thread.pushTurn([
       { type: 'thread.started', thread_id: 'tid-log-test' },
@@ -409,9 +416,10 @@ describe('Codex agent provider', () => {
 
     await drain(session.dispatch('hi'))
 
-    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('SESSION_INIT'))
-    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('tid-log-test'))
-    errSpy.mockRestore()
+    const all = writes.join('')
+    expect(all).toContain('SESSION_INIT')
+    expect(all).toContain('tid-log-test')
+    writeSpy.mockRestore()
   })
 
   it('emits code=auth_failed when turn.failed message matches auth-shape', async () => {

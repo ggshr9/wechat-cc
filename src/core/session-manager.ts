@@ -1,6 +1,7 @@
 import type { ProviderId, SessionStore } from './session-store'
 import type { AgentEvent, AgentSession } from './agent-provider'
 import type { ProviderRegistry } from './provider-registry'
+import { log } from '../lib/log'
 
 export interface SessionManagerOptions {
   maxConcurrent: number
@@ -109,7 +110,7 @@ export class SessionManager {
       const jsonlStillThere = regOpts.canResume(path, record.session_id)
       if (age < ttl && jsonlStillThere) {
         resumeSessionId = record.session_id
-        console.error(`wechat channel: [SESSION_RESUME] alias=${alias} sid=${record.session_id} provider=${providerId} age=${Math.round(age / 1000)}s`)
+        log('SESSION_RESUME', `alias=${alias} sid=${record.session_id} provider=${providerId} age=${Math.round(age / 1000)}s`)
       } else {
         // stale — forget THIS provider's row only. delete(alias) would
         // also wipe the sibling provider's still-valid resume point on
