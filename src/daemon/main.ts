@@ -7,6 +7,7 @@ import { openDb } from '../lib/db'
 import { LifecycleSet, wireRef } from '../lib/lifecycle'
 import { log } from '../lib/log'
 import { dedupeAccountsByUserId } from '../lib/dedupe-accounts'
+import { loadAccess, AccessConfigCorruptError } from '../lib/access'
 import { buildBootstrap } from './bootstrap'
 import { makeMemoryFS } from './memory/fs-api'
 import { makeConversationStore } from '../core/conversation-store'
@@ -36,6 +37,19 @@ export async function bootDaemon(opts: BootDaemonOpts): Promise<DaemonHandle> {
   // dedupe archives stale dirs to `<botId>.superseded.<iso>` and loadAllAccounts
   // skips that infix. Idempotent on already-clean state.
   dedupeAccountsByUserId(join(stateDir, 'accounts'), {}, { log: (t, l) => log(t, l) })
+  // Validate access.json eagerly. If the file is unparseable we refuse
+  // to boot — preserves the prior process.exit(1) behavior from
+  // readAccessFile, but now goes through the typed exception so tests
+  // can catch it instead of needing process.exit interception.
+  try { loadAccess() }
+  catch (err) {
+    if (err instanceof AccessConfigCorruptError) {
+      releaseInstanceLock(PID_PATH)
+      process.stderr.write(`wechat channel: FATAL ${err.message}\n`)
+      process.exit(1)
+    }
+    throw err
+  }
   const accounts = await loadAllAccounts(stateDir)
   if (accounts.length === 0) { releaseInstanceLock(PID_PATH); throw new Error('[wechat-cc] no accounts bound. Run `wechat-cc setup` first.') }
   const db = openDb({ path: join(stateDir, 'wechat-cc.db') })

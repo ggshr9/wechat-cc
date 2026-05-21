@@ -334,6 +334,10 @@ async function runCleanup(deps: AdminCommandsDeps, adminChatId: string, target: 
       // background poll's still-open long-poll fetch may try to
       // re-read state from the account dir we're about to delete,
       // racing with rmSync. Replaces the fire-and-forget stopAccount.
+      //
+      // stopAccountAndWait itself swallows the loop's exceptions
+      // (logged inside runLoop), so the outer catch below ONLY catches
+      // rmSync / sessionState.clear failures — not stop failures.
       await deps.pollHandle.stopAccountAndWait(v.id)
       rmSync(join(deps.stateDir, 'accounts', v.id), { recursive: true, force: true })
       deps.sessionState.clear(v.id)

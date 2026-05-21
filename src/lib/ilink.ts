@@ -166,17 +166,21 @@ export function assertIlinkOk(endpoint: string, rawResponse: string): void {
  */
 export function isRetryableSendError(err: Error): boolean {
   if (err.name === 'AbortError') return true
-  // ilinkPost throws `${endpoint} ${status}: ${body}` on !res.ok. The
-  // prior regex `/\s5\d\d:/` only matched when the body was followed
-  // by a colon, which the trailing literal ":" in the throw guarantees
-  // — but the WHITESPACE before the digit only matches when the body
-  // text starts with a space character (it usually doesn't). Loosen to
-  // `/\b5\d\d\b/` so a real `404` doesn't accidentally trigger
-  // (word-boundary anchors prevent matching mid-number like 5004) but
-  // any genuine 5xx status code in the error string does.
-  if (/\b5\d\d\b/.test(err.message)) return true
+  // errcode checks run BEFORE the 5xx regex so a body that happens to
+  // contain a number like "500ms" doesn't override the explicit
+  // session-expired (-14) or auth-fail (-6) signal. The prior order
+  // had this same hazard but was less likely to trip with the stricter
+  // `\s5\d\d:` pattern. With the looser `\b5\d\d\b` we now check
+  // errcodes first.
   if (/errcode=(-14|-6)\b/.test(err.message)) return false
   if (/errcode=/.test(err.message)) return true
+  // ilinkPost throws `${endpoint} ${status}: ${body}` on !res.ok. The
+  // prior regex `/\s5\d\d:/` only matched when the body was followed
+  // by a colon — but the WHITESPACE before the digit only matches when
+  // the body text starts with a space character (it usually doesn't).
+  // `\b5\d\d\b` matches a real 500/502/503/504 status code while
+  // word-boundary anchors prevent matching mid-number like 5004.
+  if (/\b5\d\d\b/.test(err.message)) return true
   return false
 }
 
