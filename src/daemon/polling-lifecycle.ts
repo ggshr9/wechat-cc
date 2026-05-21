@@ -26,6 +26,12 @@ export interface PollingLifecycle extends Lifecycle {
   reconcile(): Promise<void>
   /** Used by admin commands (`/health` cleanup of expired bot sessions). */
   stopAccount(accountId: string): Promise<void>
+  /**
+   * Stop AND await full unwind for one account — caller can be sure
+   * the loop's resources (sockets, file handles) are released before
+   * proceeding with destructive followups (e.g. rmSync of account dir).
+   */
+  stopAccountAndWait(accountId: string): Promise<void>
   /** Returns currently-running account ids. */
   running(): string[]
   /** Add a freshly-bound account to the polling loop without restart. */
@@ -74,6 +80,7 @@ export function registerPolling(deps: PollingDeps): PollingLifecycle {
       deps.log('RECONCILE', `picked up ${fresh.length} new account(s): ${fresh.map(a => a.id).join(', ')}`)
     },
     stopAccount: (id) => { handle.stopAccount(id); return Promise.resolve() },
+    stopAccountAndWait: (id) => handle.stopAccountAndWait(id),
     running: () => handle.running(),
     addAccount: (a) => handle.addAccount(a),
   }

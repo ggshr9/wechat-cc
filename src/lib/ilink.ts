@@ -91,7 +91,16 @@ export async function ilinkPost(baseUrl: string, endpoint: string, body: object,
     })
     if (!res.ok) throw new Error(`${endpoint} ${res.status}: ${await res.text()}`)
     return await res.text()
-  } finally { clearTimeout(t) }
+  } finally {
+    // Always abort + clear in finally — when fetch rejects with anything
+    // other than the timer's own AbortError (DNS fail, TLS error, body
+    // read fail), the underlying socket stays in fetch's resource graph
+    // until the timer eventually aborts it `timeoutMs` later, even
+    // though clearTimeout already ran. Aborting unconditionally
+    // releases the socket immediately.
+    ctrl.abort()
+    clearTimeout(t)
+  }
 }
 
 // ── API calls ─────────────────────────────────────────────────────────────
@@ -157,7 +166,15 @@ export function assertIlinkOk(endpoint: string, rawResponse: string): void {
  */
 export function isRetryableSendError(err: Error): boolean {
   if (err.name === 'AbortError') return true
-  if (/\s5\d\d:/.test(err.message)) return true
+  // ilinkPost throws `${endpoint} ${status}: ${body}` on !res.ok. The
+  // prior regex `/\s5\d\d:/` only matched when the body was followed
+  // by a colon, which the trailing literal ":" in the throw guarantees
+  // — but the WHITESPACE before the digit only matches when the body
+  // text starts with a space character (it usually doesn't). Loosen to
+  // `/\b5\d\d\b/` so a real `404` doesn't accidentally trigger
+  // (word-boundary anchors prevent matching mid-number like 5004) but
+  // any genuine 5xx status code in the error string does.
+  if (/\b5\d\d\b/.test(err.message)) return true
   if (/errcode=(-14|-6)\b/.test(err.message)) return false
   if (/errcode=/.test(err.message)) return true
   return false

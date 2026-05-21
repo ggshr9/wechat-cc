@@ -211,6 +211,15 @@ export interface PollLoopHandle {
   addAccount(account: Account): void
   /** Stop the loop for one account (idempotent; no-op if not running). */
   stopAccount(accountId: string): void
+  /**
+   * Stop the loop for one account AND await its full unwind. Use when
+   * the caller needs to know the loop has released any in-flight
+   * resources (sockets, file handles) before proceeding — e.g. admin
+   * cleanup deletes the account dir and relies on the loop having
+   * closed its long-poll fetch first. Resolves immediately if the
+   * account isn't running.
+   */
+  stopAccountAndWait(accountId: string): Promise<void>
   /** Signal all loops to exit and await them. */
   stop(): Promise<void>
   /** Read-only snapshot of currently-polling account ids. */
@@ -298,11 +307,22 @@ export function startLongPollLoops(opts: PollLoopOptions): PollLoopHandle {
     // Leave entry in map; runLoop.finally cleans up once it exits.
   }
 
+  async function stopAccountAndWait(accountId: string): Promise<void> {
+    const record = loops.get(accountId)
+    if (!record) return
+    record.abort.abort()
+    // Swallow throws: the loop's own try/catch already logs; the caller
+    // here only cares that the promise has SETTLED (so any in-flight
+    // sockets are closed), not how it ended.
+    try { await record.promise } catch { /* logged inside runLoop */ }
+  }
+
   for (const account of opts.accounts) addAccount(account)
 
   return {
     addAccount,
     stopAccount,
+    stopAccountAndWait,
     running: () => Array.from(loops.keys()),
     async stop(): Promise<void> {
       for (const record of loops.values()) record.abort.abort()

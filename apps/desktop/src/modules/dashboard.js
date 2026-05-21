@@ -15,9 +15,11 @@ export function renderDashboard(report) {
   const card = document.getElementById("hero-card")
   if (!card) return
   card.classList.toggle("warn", hero.tone !== "ok")
-  document.getElementById("hero-headline").textContent = `Daemon ${hero.headline}`
+  const headline = document.getElementById("hero-headline")
+  if (headline) headline.textContent = `Daemon ${hero.headline}`
   const metaParts = [`<b>${escapeHtml(hero.meta1)}</b>`, `<b>${escapeHtml(hero.meta2)}</b>`]
-  document.getElementById("hero-meta").innerHTML = metaParts.join('<span class="sep">·</span>')
+  const metaEl = document.getElementById("hero-meta")
+  if (metaEl) metaEl.innerHTML = metaParts.join('<span class="sep">·</span>')
 
   const accounts = report.checks.accounts.items || []
   const expired = report.expiredBots || []

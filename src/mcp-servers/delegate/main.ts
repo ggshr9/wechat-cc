@@ -39,6 +39,15 @@ if (!peer) {
   logErr('FATAL: WECHAT_DELEGATE_PEER env var is required (e.g. "claude" or "codex")')
   process.exit(2)
 }
+// Validate the peer id pattern — registered into the MCP tool name as
+// `delegate_${peer}`, so a value like `foo; rm -rf` could compose
+// surprises in downstream string concatenations. ProviderId is already
+// open-string by RFC 03 §3.3 (gemini, cursor, etc. allowed) so accept
+// any reasonable identifier-shape, NOT arbitrary input.
+if (!/^[a-z][a-z0-9_-]{0,30}$/.test(peer)) {
+  logErr(`FATAL: WECHAT_DELEGATE_PEER=${JSON.stringify(peer)} fails validation (must match ^[a-z][a-z0-9_-]{0,30}$)`)
+  process.exit(2)
+}
 
 const client = createInternalApiClient({
   baseUrl,

@@ -37,7 +37,7 @@ const migrations: Migration[] = [
   // v1 — session_state. PR7 commit 1.
   (db) => {
     db.exec(`
-      CREATE TABLE session_state (
+      CREATE TABLE IF NOT EXISTS session_state (
         bot_id TEXT PRIMARY KEY NOT NULL,
         first_seen_expired_at TEXT NOT NULL,
         last_reason TEXT
@@ -49,7 +49,7 @@ const migrations: Migration[] = [
   // independently (legacy v0.x format collapsed both into a single row).
   (db) => {
     db.exec(`
-      CREATE TABLE sessions (
+      CREATE TABLE IF NOT EXISTS sessions (
         alias TEXT NOT NULL,
         provider TEXT NOT NULL,
         session_id TEXT NOT NULL,
@@ -58,7 +58,7 @@ const migrations: Migration[] = [
         summary_updated_at TEXT,
         PRIMARY KEY (alias, provider)
       ) STRICT;
-      CREATE INDEX sessions_alias_last_used ON sessions(alias, last_used_at DESC);
+      CREATE INDEX IF NOT EXISTS sessions_alias_last_used ON sessions(alias, last_used_at DESC);
     `)
   },
   // v3 — conversations (chatId → Mode). PR7 commit 3.
@@ -68,7 +68,7 @@ const migrations: Migration[] = [
   // mode_primary; `parallel` / `chatroom` use neither.
   (db) => {
     db.exec(`
-      CREATE TABLE conversations (
+      CREATE TABLE IF NOT EXISTS conversations (
         chat_id TEXT PRIMARY KEY NOT NULL,
         mode_kind TEXT NOT NULL CHECK (mode_kind IN ('solo', 'primary_tool', 'parallel', 'chatroom')),
         mode_provider TEXT,
@@ -82,7 +82,7 @@ const migrations: Migration[] = [
   // evaluate the 7-day-streak milestone.
   (db) => {
     db.exec(`
-      CREATE TABLE activity (
+      CREATE TABLE IF NOT EXISTS activity (
         chat_id TEXT NOT NULL,
         date TEXT NOT NULL,            -- YYYY-MM-DD UTC
         first_msg_ts TEXT NOT NULL,    -- ISO 8601
@@ -96,7 +96,7 @@ const migrations: Migration[] = [
   // because demo seeding writes milestones without an associated event.
   (db) => {
     db.exec(`
-      CREATE TABLE milestones (
+      CREATE TABLE IF NOT EXISTS milestones (
         chat_id TEXT NOT NULL,
         id TEXT NOT NULL,
         ts TEXT NOT NULL,
@@ -110,7 +110,7 @@ const migrations: Migration[] = [
   // archived is INTEGER (0/1) per SQLite STRICT — no native bool type.
   (db) => {
     db.exec(`
-      CREATE TABLE observations (
+      CREATE TABLE IF NOT EXISTS observations (
         id TEXT PRIMARY KEY NOT NULL,
         chat_id TEXT NOT NULL,
         ts TEXT NOT NULL,
@@ -120,7 +120,7 @@ const migrations: Migration[] = [
         archived_at TEXT,
         event_id TEXT
       ) STRICT;
-      CREATE INDEX observations_chat_ts ON observations(chat_id, ts DESC);
+      CREATE INDEX IF NOT EXISTS observations_chat_ts ON observations(chat_id, ts DESC);
     `)
   },
   // v7 — events (per-chat append-only decision log). PR7 commit 7.
@@ -129,7 +129,7 @@ const migrations: Migration[] = [
   // dashboard's "last N decisions" query hits.
   (db) => {
     db.exec(`
-      CREATE TABLE events (
+      CREATE TABLE IF NOT EXISTS events (
         id TEXT PRIMARY KEY NOT NULL,
         chat_id TEXT NOT NULL,
         ts TEXT NOT NULL,
@@ -141,7 +141,7 @@ const migrations: Migration[] = [
         milestone_id TEXT,
         jsonl_session_id TEXT
       ) STRICT;
-      CREATE INDEX events_chat_ts ON events(chat_id, ts DESC);
+      CREATE INDEX IF NOT EXISTS events_chat_ts ON events(chat_id, ts DESC);
     `)
   },
   // v8 — tighten events.kind with a CHECK constraint mirroring the

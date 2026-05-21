@@ -12,6 +12,26 @@ import { STATE_DIR } from './config.ts'
 
 const ACCESS_FILE = join(STATE_DIR, 'access.json')
 
+/**
+ * Thrown by readAccessFile when access.json is present but unparseable.
+ * Bootstrap catches and decides whether to refuse boot (production) or
+ * fall back to defaults (tests / first-run setup wizards). Replaces
+ * the prior `process.exit(1)` in readAccessFile which made tests that
+ * exercise the corrupt-config path unloadable in-process.
+ */
+export class AccessConfigCorruptError extends Error {
+  constructor(public readonly originalError: unknown, public readonly movedTo: string) {
+    const detail = originalError instanceof Error ? originalError.message : String(originalError)
+    super(
+      `access.json is corrupt (${detail})\n` +
+      `  moved aside to: ${movedTo}\n` +
+      `  refusing to start with an empty allowlist (silent lockout).\n` +
+      `  recover by restoring a known-good copy, or delete the file and run /wechat:access to rebuild.`,
+    )
+    this.name = 'AccessConfigCorruptError'
+  }
+}
+
 export interface Access {
   dmPolicy: 'allowlist' | 'disabled'
   allowFrom: string[]
@@ -35,13 +55,11 @@ function readAccessFile(): Access {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return defaultAccess()
     const corruptPath = `${ACCESS_FILE}.corrupt-${Date.now()}`
     try { renameSync(ACCESS_FILE, corruptPath) } catch {}
-    process.stderr.write(
-      `wechat channel: FATAL access.json is corrupt (${err instanceof Error ? err.message : err})\n` +
-      `  moved aside to: ${corruptPath}\n` +
-      `  refusing to start with an empty allowlist (silent lockout).\n` +
-      `  recover by restoring a known-good copy, or delete the file and run /wechat:access to rebuild.\n`,
-    )
-    process.exit(1)
+    // Throw instead of process.exit so bootstrap can decide policy
+    // (production: log + exit; tests: catch and use default access).
+    // Move-aside happens before the throw so the next start finds an
+    // empty slate either way.
+    throw new AccessConfigCorruptError(err, corruptPath)
   }
 }
 

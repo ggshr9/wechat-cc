@@ -67,7 +67,11 @@ export function makeMemoryFS(opts: MemoryFSOptions): MemoryFS {
 
     const joined = resolve(root, relPath)
     const rel = relative(root, joined)
-    if (rel === '' || rel.startsWith('..') || rel.startsWith(`..${/[\\/]/.source}`)) {
+    // `rel.startsWith('..')` already covers both `..` alone and any
+    // `..<anything>` prefix (e.g. `../foo`, `..\foo`). The prior third
+    // condition `rel.startsWith(\`..${...}\`)` was a strict subset of
+    // that — dead code. Removed.
+    if (rel === '' || rel.startsWith('..')) {
       throw new MemoryPathError(`escape attempt: ${relPath}`)
     }
     return joined

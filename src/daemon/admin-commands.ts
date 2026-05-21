@@ -22,7 +22,11 @@ export interface AdminCommandsDeps {
   stateDir: string
   isAdmin: (chatId: string) => boolean
   sessionState: SessionStateStore
-  pollHandle: { stopAccount: (id: string) => void; running: () => string[] }
+  pollHandle: {
+    stopAccount: (id: string) => void
+    stopAccountAndWait: (id: string) => Promise<void>
+    running: () => string[]
+  }
   resolveUserName: (chatId: string) => string | undefined
   sendMessage: (chatId: string, text: string) => Promise<{ msgId: string; error?: string }>
   /** Optional. When wired, /hearth ingest publishes the plan as a share-page card. */
@@ -326,7 +330,11 @@ async function runCleanup(deps: AdminCommandsDeps, adminChatId: string, target: 
   const results: string[] = []
   for (const v of victims) {
     try {
-      deps.pollHandle.stopAccount(v.id)
+      // Await the loop's full unwind before rmSync — otherwise the
+      // background poll's still-open long-poll fetch may try to
+      // re-read state from the account dir we're about to delete,
+      // racing with rmSync. Replaces the fire-and-forget stopAccount.
+      await deps.pollHandle.stopAccountAndWait(v.id)
       rmSync(join(deps.stateDir, 'accounts', v.id), { recursive: true, force: true })
       deps.sessionState.clear(v.id)
       results.push(`  ✓ ${v.id}`)

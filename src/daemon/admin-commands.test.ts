@@ -14,6 +14,7 @@ describe('admin-commands', () => {
   let sessionState: ReturnType<typeof makeSessionStateStore>
   let sendMessage: ReturnType<typeof vi.fn>
   let stopAccount: ReturnType<typeof vi.fn>
+  let stopAccountAndWait: ReturnType<typeof vi.fn>
   let running: ReturnType<typeof vi.fn>
   let isAdmin: ReturnType<typeof vi.fn>
   let log: ReturnType<typeof vi.fn>
@@ -25,6 +26,7 @@ describe('admin-commands', () => {
     sessionState = makeSessionStateStore(db)
     sendMessage = vi.fn().mockResolvedValue({ msgId: 'm1' })
     stopAccount = vi.fn()
+    stopAccountAndWait = vi.fn(async () => {})
     running = vi.fn(() => ['bot-active-1', 'bot-active-2'])
     isAdmin = vi.fn(() => true)
     log = vi.fn()
@@ -46,6 +48,7 @@ describe('admin-commands', () => {
       sessionState,
       pollHandle: {
         stopAccount: stopAccount as unknown as AdminCommandsDeps['pollHandle']['stopAccount'],
+        stopAccountAndWait: stopAccountAndWait as unknown as AdminCommandsDeps['pollHandle']['stopAccountAndWait'],
         running: running as unknown as AdminCommandsDeps['pollHandle']['running'],
       },
       resolveUserName: () => undefined,
@@ -121,7 +124,9 @@ describe('admin-commands', () => {
     const cmds = make()
     await cmds.handle(msg('清理 bot-dead-im-bot'))
 
-    expect(stopAccount).toHaveBeenCalledWith('bot-dead-im-bot')
+    // Phase 3: now uses stopAccountAndWait so the loop's full unwind
+    // completes before the rmSync below.
+    expect(stopAccountAndWait).toHaveBeenCalledWith('bot-dead-im-bot')
     expect(existsSync(botDir)).toBe(false)
     expect(sessionState.isExpired('bot-dead-im-bot')).toBe(false)
     expect(sentBody()).toContain('清理完成')
@@ -136,7 +141,7 @@ describe('admin-commands', () => {
     const cmds = make()
     await cmds.handle(msg('清理所有过期'))
 
-    expect(stopAccount).toHaveBeenCalledTimes(2)
+    expect(stopAccountAndWait).toHaveBeenCalledTimes(2)
     expect(sessionState.listExpired()).toHaveLength(0)
     expect(sentBody()).toContain('清理完成 (2)')
   })
@@ -146,7 +151,7 @@ describe('admin-commands', () => {
     const cmds = make()
     await cmds.handle(msg('清理 bot-never-existed-im-bot'))
 
-    expect(stopAccount).not.toHaveBeenCalled()
+    expect(stopAccountAndWait).not.toHaveBeenCalled()
     expect(sessionState.isExpired('bot-dead-im-bot')).toBe(true)
     expect(sentBody()).toContain('不在过期列表')
   })

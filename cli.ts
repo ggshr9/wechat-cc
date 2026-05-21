@@ -1426,7 +1426,20 @@ const modeSetCmd = defineCommand({
 
     if (!resp!.ok) {
       const text = await resp!.text().catch(() => '')
-      if (resp!.status === 401) emitError('unauthorized — token mismatch (restart the daemon?)')
+      if (resp!.status === 401) {
+        // Distinguish stale CLI token from daemon auth rejection: the
+        // 401 happens for both, but operator action differs. A stale
+        // token means rotating the file under .claude/channels/wechat
+        // (or a daemon restart that rotates it); an auth rejected
+        // response from a fresh token means the daemon's identity
+        // store is out of sync with the CLI's. Surface the body so
+        // both cases are obvious.
+        const looksStale = /token mismatch|stale|expired/i.test(text)
+        const hint = looksStale
+          ? 'stale token — restart the daemon to rotate, OR delete ~/.claude/channels/wechat/internal-token and re-run.'
+          : 'daemon rejected authentication. The CLI loaded the current token but the daemon refused it; check daemon logs for [AUTH] entries.'
+        emitError(`unauthorized: ${hint}`)
+      }
       emitError(`daemon returned ${resp!.status}: ${text}`)
     }
 

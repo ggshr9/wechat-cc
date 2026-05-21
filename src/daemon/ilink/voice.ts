@@ -63,8 +63,17 @@ export function makeVoice(ctx: IlinkContext): WechatVoiceDep {
           // as a file attachment so the user at least receives a playable
           // WAV/MP3. buildVoiceItemFromWav kept in media.ts for forward-
           // enablement.
-          const item = await buildMediaItemFromFile(tmpPath, chatId, acct.baseUrl, acct.token)
           const ctxToken = ctxStore.get(chatId)
+          if (!ctxToken) {
+            // Mirror the send-reply.ts guard added in PR B — voice's
+            // ilink/sendmessage will fail server-side without
+            // context_token, but with a generic "errcode" the user
+            // can't decode. Surface the actionable hint instead, AND
+            // skip the CDN upload (~50-100ms wasted otherwise).
+            log('VOICE', `replyVoice REJECTED chat=${chatId}: no context_token cached — user must send a fresh message`)
+            return { ok: false as const, reason: 'error' }
+          }
+          const item = await buildMediaItemFromFile(tmpPath, chatId, acct.baseUrl, acct.token)
           await ilinkSendMessage(acct.baseUrl, acct.token, {
             to_user_id: chatId,
             message_type: 2,

@@ -304,31 +304,48 @@ export function showPostStopAlert(pid) {
 export async function silentInstallAndStart(deps, onProgress) {
   const fail = (/** @type {string} */ stage, /** @type {string} */ error, /** @type {string | null} */ details) => ({ ok: false, stage, error, details })
 
+  // Per-step try/catch with the CORRECT stage in the failure envelope.
+  // Previously a wrapping try/catch attributed any throw to `install`,
+  // masking failures that actually happened in start / alive / doctor —
+  // the dashboard's "fix it" guidance was misleading as a result.
+  let installResp
   try {
     onProgress("安装后台服务…")
-    const installResp = /** @type {{ ok?: boolean, kind?: string, error?: string, stderr?: string }} */ (
+    installResp = /** @type {{ ok?: boolean, kind?: string, error?: string, stderr?: string }} */ (
       await deps.invoke("wechat_cli_json", { args: ["service", "install", "--json"] })
     )
-    if (!installResp?.ok) return fail("install", installResp?.error || "install failed", installResp?.stderr ?? null)
-
-    onProgress("启动后台服务…")
-    const startResp = /** @type {{ ok?: boolean, error?: string, stderr?: string }} */ (
-      await deps.invoke("wechat_cli_json", { args: ["service", "start", "--json"] })
-    )
-    if (!startResp?.ok) return fail("start", startResp?.error || "start failed", startResp?.stderr ?? null)
-
-    onProgress("等待 daemon 启动…")
-    const aliveOk = await waitDaemonAlive(deps, 15_000)
-    if (!aliveOk) return fail("alive", "daemon 启动超时", "internal HTTP API did not respond within 15s")
-
-    const pidResp = /** @type {{ pid?: number, checks?: { daemon?: { pid?: number } } } | null} */ (
-      await deps.invoke("wechat_cli_json", { args: ["doctor", "--json"] }).catch(() => null)
-    )
-    const daemonPid = pidResp?.checks?.daemon?.pid ?? pidResp?.pid ?? null
-    return { ok: true, serviceKind: installResp.kind ?? null, daemonPid }
   } catch (e) {
     return fail("install", e instanceof Error ? e.message : String(e), null)
   }
+  if (!installResp?.ok) return fail("install", installResp?.error || "install failed", installResp?.stderr ?? null)
+
+  let startResp
+  try {
+    onProgress("启动后台服务…")
+    startResp = /** @type {{ ok?: boolean, error?: string, stderr?: string }} */ (
+      await deps.invoke("wechat_cli_json", { args: ["service", "start", "--json"] })
+    )
+  } catch (e) {
+    return fail("start", e instanceof Error ? e.message : String(e), null)
+  }
+  if (!startResp?.ok) return fail("start", startResp?.error || "start failed", startResp?.stderr ?? null)
+
+  let aliveOk = false
+  try {
+    onProgress("等待 daemon 启动…")
+    aliveOk = await waitDaemonAlive(deps, 15_000)
+  } catch (e) {
+    return fail("alive", e instanceof Error ? e.message : String(e), null)
+  }
+  if (!aliveOk) return fail("alive", "daemon 启动超时", "internal HTTP API did not respond within 15s")
+
+  // doctor lookup for pid is best-effort — failure here doesn't fail
+  // the overall install/start path (daemon is already alive).
+  const pidResp = /** @type {{ pid?: number, checks?: { daemon?: { pid?: number } } } | null} */ (
+    await deps.invoke("wechat_cli_json", { args: ["doctor", "--json"] }).catch(() => null)
+  )
+  const daemonPid = pidResp?.checks?.daemon?.pid ?? pidResp?.pid ?? null
+  return { ok: true, serviceKind: installResp.kind ?? null, daemonPid }
 }
 
 /**

@@ -51,6 +51,7 @@ export function buildPipelineDeps(opts: PipelineDepsOpts, refs: PipelineDepsRefs
     sessionState: ilink.sessionState,
     pollHandle: {
       stopAccount: (id) => refs.polling.current?.stopAccount(id) ?? Promise.resolve(),
+      stopAccountAndWait: async (id) => { await refs.polling.current?.stopAccountAndWait(id) },
       running: () => refs.polling.current?.running() ?? [],
     },
     resolveUserName: (cid) => ilink.resolveUserName(cid),

@@ -125,6 +125,14 @@ function cloudflaredAssetUrl(): string {
 async function downloadCloudflared(): Promise<string> {
   const url = cloudflaredAssetUrl()
   process.stderr.write(`wechat channel: downloading cloudflared from ${url} ...\n`)
+  // TODO(security): SHA-256 verification against a published checksum.
+  // Cloudflare does NOT publish per-asset .sha256 files or a stable
+  // CHECKSUMS endpoint at the `latest/download` path (verified
+  // 2026-05-21 — both .sha256 sibling and checksum.txt 404). Would
+  // need to resolve the latest tag via GitHub API, then look for a
+  // per-release checksum file, then parse. Today TLS+redirect-follow
+  // is the only integrity check; document the gap rather than ship a
+  // half-baked unreliable verification.
   const res = await fetch(url, { redirect: 'follow' })
   if (!res.ok) throw new Error(`cloudflared download failed: HTTP ${res.status}`)
   const buf = Buffer.from(await res.arrayBuffer())
@@ -133,7 +141,7 @@ async function downloadCloudflared(): Promise<string> {
     // macOS path — extract the single binary from the universal tarball.
     const tarGzPath = join(BIN_DIR, 'cloudflared.tgz')
     writeFileSync(tarGzPath, buf, { mode: 0o600 })
-    const extract = spawnSync('tar', ['-xzf', tarGzPath, '-C', BIN_DIR], { stdio: 'pipe' })
+    const extract = spawnSync('tar', ['-xzf', tarGzPath, '-C', BIN_DIR], { stdio: 'pipe', windowsHide: true })
     if (extract.status !== 0) {
       throw new Error(`cloudflared tgz extract failed: ${extract.stderr?.toString() ?? 'unknown'}`)
     }

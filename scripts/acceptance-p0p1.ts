@@ -181,7 +181,7 @@ process.on('exit', () => { for (const c of cleanup) try { Promise.resolve(c()).c
     stateDir,
     isAdmin: () => true,
     sessionState: ilink.sessionState,
-    pollHandle: { stopAccount: () => {}, running: () => [] },
+    pollHandle: { stopAccount: () => {}, stopAccountAndWait: async () => {}, running: () => [] },
     resolveUserName: () => undefined,
     sendMessage: async (cid, text) => { adminSends.push([cid, text]); return { msgId: 'm' } },
     log,

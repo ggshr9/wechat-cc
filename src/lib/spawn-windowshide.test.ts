@@ -48,11 +48,27 @@ function lineNumberAt(text: string, index: number): number {
   return text.slice(0, index).split('\n').length
 }
 
+// Scan roots: src/ (the bulk of the codebase) plus the root-level
+// bin scripts that compile into the same wechat-cc-cli binary. The
+// root files (docs.ts, cli.ts, setup.ts, log-viewer.ts) ship with
+// the GUI-subsystem flip too, so any unguarded spawnSync there has
+// the same flashing-console regression risk.
+const SCAN_ROOTS = ['src']
+const SCAN_ROOT_FILES = ['docs.ts', 'cli.ts', 'setup.ts', 'log-viewer.ts']
+
+function* scanFiles(): Generator<string> {
+  for (const root of SCAN_ROOTS) yield* walkTsFiles(join(REPO_ROOT, root))
+  for (const f of SCAN_ROOT_FILES) {
+    const p = join(REPO_ROOT, f)
+    try { statSync(p) } catch { continue }
+    yield p
+  }
+}
+
 describe('spawnSync windowsHide:true lint (subsystem=2 daemon prerequisite)', () => {
   it('every production spawnSync sets windowsHide in its options', () => {
     const violations: string[] = []
-    const srcRoot = join(REPO_ROOT, 'src')
-    for (const file of walkTsFiles(srcRoot)) {
+    for (const file of scanFiles()) {
       const text = readFileSync(file, 'utf8')
       // Find each `spawnSync(` call. The options bag may span up to ~400
       // chars of arguments + multiline options object; 600 is generous.
@@ -75,14 +91,14 @@ describe('spawnSync windowsHide:true lint (subsystem=2 daemon prerequisite)', ()
   // pass the test for the wrong reason.
   it('lint scanner finds the known spawnSync sites (regression guard for the guard)', () => {
     let total = 0
-    for (const file of walkTsFiles(join(REPO_ROOT, 'src'))) {
+    for (const file of scanFiles()) {
       const text = readFileSync(file, 'utf8')
       const matches = text.match(/spawnSync\s*\(/g)
       if (matches) total += matches.length
     }
-    // As of v0.5.4: 3 in service-manager.ts + 1 in util.ts + 2 in
-    // daemon-kill.ts + 1 in single-instance.ts + 1 in media.ts +
-    // 2 in update.ts + 1 in powershell-validator.ts = 11. Allow growth.
+    // As of v0.5.4 + Phase 3 scan expansion (root-level bin scripts):
+    // 11 in src/ (see prior count) + spawnSync calls in docs.ts (tar
+    // extract). Allow growth.
     expect(total).toBeGreaterThanOrEqual(11)
   })
 })

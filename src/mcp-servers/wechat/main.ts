@@ -131,7 +131,16 @@ server.registerTool(
   {
     title: 'List memory files',
     description: '列 memory/ 下所有 .md 文件（递归）。传 dir 只列该子目录。返回相对路径数组。',
-    inputSchema: { dir: z.string().optional() },
+    // Refine `dir`: cap length + reject null bytes. Defense-in-depth for
+    // the downstream /v1/memory/list URL — encodeURIComponent doesn't
+    // protect against URL-shape attacks at the daemon's HTTP layer if
+    // the daemon ever trusts the path beyond its sandboxed memory root.
+    inputSchema: {
+      dir: z.string()
+        .max(512, 'dir must be <= 512 chars')
+        .refine(s => !s.includes('\0'), { message: 'dir must not contain null bytes' })
+        .optional(),
+    },
   },
   async ({ dir }) => {
     try {

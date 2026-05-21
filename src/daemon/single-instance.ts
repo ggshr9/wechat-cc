@@ -35,10 +35,31 @@ function isOurDaemon(pid: number): boolean {
   const pf = platform()
   if (pf === 'linux') return matchLinuxComm(pid)
   if (pf === 'win32') return matchWindowsImage(pid)
-  // macOS / others: process exists check only — PID-reuse window is small
-  // because launchd recycles slowly and there's no /proc-equivalent in
-  // a stable cross-version path. Acceptable until a user reports a hit.
+  if (pf === 'darwin') return matchDarwinComm(pid)
+  // Other Unixes — process exists check only; PID-reuse is the same hazard
+  // but no portable comm lookup. Acceptable until a user reports a hit.
   return true
+}
+
+// macOS: ps -p $pid -o comm= prints the process's executable command path,
+// trimmed of header. Mirrors Linux's /proc/PID/comm. Without this, a stale
+// pidfile from a power-loss leaves the daemon unable to start until the
+// user manually deletes server.pid — because PID reuse on macOS is common
+// enough that some Spotlight / WindowServer process eventually inherits
+// the recycled PID and looks "alive" via kill(pid, 0).
+function matchDarwinComm(pid: number): boolean {
+  try {
+    const r = spawnSync('ps', ['-p', String(pid), '-o', 'comm='], { encoding: 'utf8', windowsHide: true })
+    if (r.status !== 0 || !r.stdout) return false
+    // `ps -o comm=` returns the full path on macOS (e.g.
+    // `/Users/x/.bun/bin/bun`); take basename for the match.
+    const full = r.stdout.trim()
+    if (!full) return false
+    const basename = full.split('/').pop() ?? full
+    return basename === 'bun' || basename === 'wechat-cc-cli' || basename === 'node'
+  } catch {
+    return false
+  }
 }
 
 function matchLinuxComm(pid: number): boolean {
