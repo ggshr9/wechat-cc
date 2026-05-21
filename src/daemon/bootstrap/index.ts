@@ -27,7 +27,7 @@ import { buildSystemPrompt } from '../../core/prompt-builder'
 import type { ProviderId } from '../../core/conversation'
 import { makeResolver } from '../../core/project-resolver'
 import { makeCanUseTool } from '../../core/permission-relay'
-import { lookup, type PermissionMode } from '../../core/capability-matrix'
+import { lookup, assertMatrixComplete, type PermissionMode } from '../../core/capability-matrix'
 import { formatInbound } from '../../core/prompt-format'
 import type { IlinkAdapter } from '../ilink-glue'
 import type { Options } from '@anthropic-ai/claude-agent-sdk'
@@ -196,11 +196,29 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
 
   const permissionMode: PermissionMode = deps.dangerouslySkipPermissions ? 'dangerously' : 'strict'
 
+  // Hoisted from below: canUseTool's per-dispatch mode lookup reads
+  // from this store. Bootstrap's later code uses the SAME instance —
+  // assigning it here just brings the creation up so the closure has a
+  // live reference instead of one needing a forward declaration.
+  const conversationStore = deps.conversationStore ?? makeConversationStore(
+    deps.db,
+    { migrateFromFile: join(deps.stateDir, 'conversations.json') },
+  )
+
   const canUseTool = makeCanUseTool({
     askUser: deps.ilink.askUser,
     defaultChatId: () => deps.lastActiveChatId(),
     log: deps.log,
-    mode: 'solo',
+    // Per-dispatch mode lookup: read the chat's current mode from the
+    // conversation store at the moment the tool call arrives. Falls back
+    // to 'solo' if no chat is active or no mode persisted. Previously
+    // hardcoded to 'solo' at boot — wrong for chatroom / parallel /
+    // primary_tool chats which have different capability-matrix rows.
+    mode: () => {
+      const chatId = deps.lastActiveChatId()
+      if (!chatId) return 'solo'
+      return conversationStore.get(chatId)?.mode.kind ?? 'solo'
+    },
     provider: 'claude',
     permissionMode,
   })
@@ -379,6 +397,12 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     deps.log('BOOT', 'codex binary not found in PATH or ~/.nvm — codex provider not registered. Install `npm i -g @openai/codex` to enable /codex /both /chat modes.')
   }
 
+  // Fail-fast at boot if any registered provider is missing matrix rows.
+  // Was previously a module-load self-call in capability-matrix with a
+  // hardcoded ['claude', 'codex'] — added providers (gemini, cursor, …)
+  // would silently slip past and only throw at first use in production.
+  assertMatrixComplete(registry.list())
+
   const sessionManager = new SessionManager({
     maxConcurrent: 6,
     idleEvictMs: 30 * 60_000,
@@ -403,15 +427,12 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
   idleSweepTimer.unref()
 
   // Per-chat conversation mode (RFC 03 P2). Default for new chats =
-  // `solo` with the daemon-configured provider. `/cc` `/codex` `/solo`
+  // `conversationStore` is created earlier in this function (hoisted so
+  // the canUseTool closure has a live reference). `/cc` `/codex` `/solo`
   // commands flip individual chats; persisted in conversations.json.
   // Caller may inject a shared instance so internal-api (which needs
   // to look up modes for reply-prefixing in P3 parallel mode) sees
   // the same flips. When absent, we own one rooted at <stateDir>.
-  const conversationStore = deps.conversationStore ?? makeConversationStore(
-    deps.db,
-    { migrateFromFile: join(deps.stateDir, 'conversations.json') },
-  )
 
   const coordinator = createConversationCoordinator({
     resolveProject: resolve,

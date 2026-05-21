@@ -46,10 +46,10 @@ export interface BuildSystemPromptArgs {
  * sdkOptionsForProject.
  */
 export function buildSystemPrompt(args: BuildSystemPromptArgs): string {
-  const { providerId: _providerId, peerProviderId, companionEnabled, delegateAvailable } = args
+  const { providerId, peerProviderId, companionEnabled, delegateAvailable } = args
 
   const sections: string[] = [
-    baseChannelSection(),
+    baseChannelSection(providerId),
     toolsSection(),
     delegateAvailable ? delegateSection(peerProviderId) : '',
     memorySection(),
@@ -62,8 +62,8 @@ export function buildSystemPrompt(args: BuildSystemPromptArgs): string {
 
 // ─── sections ──────────────────────────────────────────────────────────
 
-function baseChannelSection(): string {
-  return `你在 wechat-cc 的消息通道里接收来自作者个人微信的消息。基础规则：
+function baseChannelSection(providerId: ProviderId): string {
+  return `你是 ${providerId}。你在 wechat-cc 的消息通道里接收来自作者个人微信的消息。基础规则：
 - 每条入站消息用 \`<wechat chat_id="..." user="..." account="..." msg_type="..." ts="...">...</wechat>\` 包裹。chat_id 是路由键；多条连续对话可能来自同一个 chat_id。
 - 媒体附件以 \`[image:/abs/path]\` \`[file:/abs/path]\` \`[voice:/abs/path]\` 行内标注，用 Read/Bash 等工具打开或分析它们。
 - 用户是个人开发者，偏好简短直接的中文回复。

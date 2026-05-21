@@ -6,7 +6,16 @@ export interface PermissionRelayDeps {
   askUser: (chatId: string, prompt: string, hash: string, timeoutMs: number) => Promise<'allow' | 'deny' | 'timeout'>
   defaultChatId: () => string | null
   log: (tag: string, line: string) => void
-  mode: Mode['kind']
+  /**
+   * Resolve the chat's CURRENT mode at the moment of the tool call.
+   * Previously a static value captured at boot time which always read
+   * 'solo' even for chats actually in chatroom/parallel/primary_tool —
+   * caused the capability-matrix lookup to consult the wrong row and
+   * could let through (or wrongly deny) tools depending on which mode
+   * the chat was actually in. Callback shape lets bootstrap wire it
+   * to `conversationStore.get(chatId)?.mode.kind`.
+   */
+  mode: () => Mode['kind']
   provider: ProviderId
   permissionMode: PermissionMode
 }
@@ -15,7 +24,7 @@ const DEFAULT_TIMEOUT_MS = 10 * 60_000
 
 export function makeCanUseTool(deps: PermissionRelayDeps): CanUseTool {
   return async (toolName, input, opts) => {
-    const cap = lookup(deps.mode, deps.provider, deps.permissionMode)
+    const cap = lookup(deps.mode(), deps.provider, deps.permissionMode)
     if (cap.askUser === 'never') {
       return { behavior: 'allow' } satisfies PermissionResult
     }
