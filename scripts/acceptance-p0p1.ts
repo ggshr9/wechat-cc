@@ -319,28 +319,26 @@ process.on('exit', () => { for (const c of cleanup) try { Promise.resolve(c()).c
   else fail('LEAK in chatroom mode')
 
   // ───────────────────────────────────────────────────────────────
-  // #7 moderator haikuEval AUTH_FAIL throws + logs [AUTH_FAILED]
+  // #7 cheapEval AUTH_FAIL detection throws + logs [AUTH_FAILED]
   // ───────────────────────────────────────────────────────────────
-  header('#7 chatroom moderator: stale credentials throw + emit structured log')
-  const { makeHaikuEval } = await import('../src/daemon/bootstrap/haiku-eval')
+  // PR F: makeHaikuEval was deleted; auth-fail detection now lives in
+  // assertNotAuthFailed in core/agent-provider.ts and is wrapped around
+  // ProviderRegistry.getCheapEval() at the bootstrap layer.
+  header('#7 cheap-eval moderator: stale credentials throw + emit structured log')
+  const { assertNotAuthFailed } = await import('../src/core/agent-provider')
   const modLogs: string[] = []
-  const haikuQuery = (() => {
-    async function* gen() {
-      yield { type: 'assistant', message: { content: [{ type: 'text', text: 'Not logged in · Please run /login' }] } }
-    }
-    return gen()
-  }) as never
-  const haiku = makeHaikuEval({ log: (tag, line) => modLogs.push(`[${tag}] ${line}`), queryImpl: haikuQuery as never })
   let threw = false
-  try { await haiku('any prompt') } catch (e) {
+  try {
+    assertNotAuthFailed('Not logged in · Please run /login', (tag, line) => modLogs.push(`[${tag}] ${line}`), 'cheap-eval moderator')
+  } catch (e) {
     threw = true
     const msg = e instanceof Error ? e.message : String(e)
-    if (/auth_failed/.test(msg)) pass(`haikuEval threw with auth_failed marker: ${msg.slice(0, 80)}`)
-    else fail('haikuEval threw but message lacked auth_failed marker', msg)
+    if (/auth_failed/.test(msg)) pass(`assertNotAuthFailed threw with auth_failed marker: ${msg.slice(0, 80)}`)
+    else fail('assertNotAuthFailed threw but message lacked auth_failed marker', msg)
   }
-  if (!threw) fail('haikuEval did NOT throw on stale credentials — would silently degrade')
-  if (modLogs.some(l => l.startsWith('[AUTH_FAILED]'))) pass('haikuEval emitted [AUTH_FAILED] log for operators')
-  else fail('no [AUTH_FAILED] log from haikuEval', modLogs)
+  if (!threw) fail('assertNotAuthFailed did NOT throw on stale credentials — would silently degrade')
+  if (modLogs.some(l => l.startsWith('[AUTH_FAILED]'))) pass('assertNotAuthFailed emitted [AUTH_FAILED] log for operators')
+  else fail('no [AUTH_FAILED] log from assertNotAuthFailed', modLogs)
 
   console.log('\n' + (process.exitCode ? '✗ some checks failed' : '✓ all acceptance checks passed'))
 })().catch(err => {

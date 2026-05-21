@@ -35,7 +35,9 @@ interface FakeRunRecord {
 interface FakeThread {
   id: string | null
   runStreamedCalls: FakeRunRecord[]
+  runCalls: { input: string }[]
   pushTurn(events: ThreadEvent[]): void
+  pushRunResult(items: unknown[]): void
 }
 
 interface FakeCodex {
@@ -46,12 +48,19 @@ interface FakeCodex {
 
 function makeFakeCodex(initialThreadId: string | null = null): { codex: Codex; fake: FakeCodex } {
   const queuedTurns: ThreadEvent[][] = []
+  const queuedRunItems: unknown[][] = []
   const runStreamedCalls: FakeRunRecord[] = []
+  const runCalls: { input: string }[] = []
   let threadId: string | null = initialThreadId
 
   const fakeThread: Thread = {
     get id(): string | null { return threadId },
-    async run(): Promise<never> { throw new Error('FakeThread.run not used by provider; use runStreamed') },
+    async run(input: unknown) {
+      const inputStr = typeof input === 'string' ? input : JSON.stringify(input)
+      runCalls.push({ input: inputStr })
+      const items = queuedRunItems.shift() ?? []
+      return { items } as unknown as ReturnType<Thread['run']>
+    },
     async runStreamed(input: unknown, turnOptions?: { signal?: AbortSignal }) {
       const inputStr = typeof input === 'string' ? input : JSON.stringify(input)
       const events = queuedTurns.shift() ?? []
@@ -75,7 +84,9 @@ function makeFakeCodex(initialThreadId: string | null = null): { codex: Codex; f
     thread: {
       get id() { return threadId },
       runStreamedCalls,
+      runCalls,
       pushTurn(events) { queuedTurns.push(events) },
+      pushRunResult(items) { queuedRunItems.push(items) },
     },
   }
 
@@ -445,5 +456,54 @@ describe('Codex agent provider', () => {
     const errs = events.filter((e) => e.kind === 'error')
     expect(errs).toHaveLength(1)
     expect((errs[0] as { code?: string }).code).toBeUndefined()
+  })
+
+  describe('cheapEval (PR F)', () => {
+    it('builds an ephemeral one-shot thread with minimal reasoning + no tools/network/sandbox-write', async () => {
+      const { provider: p, fake } = provider()
+      fake.thread.pushRunResult([
+        { type: 'agent_message', text: '8' },
+      ])
+      const out = await p.cheapEval?.('what is 9-1?')
+      expect(out).toBe('8')
+
+      // Each cheapEval call starts a fresh thread (no persistence).
+      expect(fake.startThreadCalls).toHaveLength(1)
+      const o = fake.startThreadCalls[0]!
+      // Resolver picks something — exact value depends on local cache;
+      // here we just assert it's set, the helper has its own tests.
+      expect(typeof o.model).toBe('string')
+      expect(o.modelReasoningEffort).toBe('minimal')
+      expect(o.sandboxMode).toBe('read-only')
+      expect(o.approvalPolicy).toBe('never')
+      expect(o.webSearchEnabled).toBe(false)
+      expect(o.webSearchMode).toBe('disabled')
+      expect(o.networkAccessEnabled).toBe(false)
+      expect(o.skipGitRepoCheck).toBe(true)
+
+      // run() called once, not runStreamed (we don't need events).
+      expect(fake.thread.runCalls).toHaveLength(1)
+      expect(fake.thread.runCalls[0]?.input).toBe('what is 9-1?')
+      expect(fake.thread.runStreamedCalls).toHaveLength(0)
+    })
+
+    it('concatenates multiple agent_message items, skipping other item types', async () => {
+      const { provider: p, fake } = provider()
+      fake.thread.pushRunResult([
+        { type: 'reasoning', text: 'thinking...' },  // filtered out
+        { type: 'agent_message', text: 'part 1' },
+        { type: 'mcp_tool_call', server: 'x', tool: 'y' },  // filtered out
+        { type: 'agent_message', text: ' part 2' },
+      ])
+      expect(await p.cheapEval?.('hi')).toBe('part 1 part 2')
+    })
+
+    it('returns empty string when the model produced no agent_message items', async () => {
+      const { provider: p, fake } = provider()
+      fake.thread.pushRunResult([
+        { type: 'reasoning', text: 'only reasoning, no answer' },
+      ])
+      expect(await p.cheapEval?.('hi')).toBe('')
+    })
   })
 })

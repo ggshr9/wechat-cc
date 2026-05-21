@@ -46,7 +46,7 @@ import { buildDelegateDispatch, type DelegateDispatch } from './delegate'
 import { makeSendAssistantText } from './fallback-reply'
 import { findCodexBinary } from '../../lib/find-codex-binary'
 import { checkCodexVersion } from './codex-version-check'
-import { makeHaikuEval } from './haiku-eval'
+import { assertNotAuthFailed, type CheapEval } from '../../core/agent-provider'
 // JSON import — version field is read at module init. resolveJsonModule is
 // on in tsconfig, and `with { type: 'json' }` is the spec'd syntax.
 import codexCliPkg from '@openai/codex/package.json' with { type: 'json' }
@@ -186,6 +186,32 @@ export interface Bootstrap {
 // available tools. The prompt-builder also encodes mode-awareness so
 // the agent doesn't get confused by chatroom envelopes.
 
+/**
+ * PR F — wrap a CheapEval so the auth-failed sentinel (Claude's "Not
+ * logged in / Please run /login" emitted as assistant text; Codex's
+ * "401 unauthorized" etc.) is converted into a thrown error instead of
+ * leaking to downstream JSON parsers. The chatroom moderator's
+ * existing `haiku eval threw` branch then falls back to forced
+ * alternation, and the auth-failed log line surfaces in channel.log
+ * alongside solo/parallel auth-failures (single vocabulary across paths).
+ *
+ * Returns undefined when the registry has no cheapEval — the coordinator
+ * treats `haikuEval: undefined` as "use the always-throws stub" path,
+ * which evaluateRound's catch branch handles by going straight to
+ * fallback.
+ */
+function wrapCheapEvalWithAuthFailCheck(
+  cheapEval: CheapEval | null,
+  log: BootstrapDeps['log'],
+): ((prompt: string) => Promise<string>) | undefined {
+  if (!cheapEval) return undefined
+  return async (prompt: string) => {
+    const text = await cheapEval(prompt)
+    assertNotAuthFailed(text, (tag, line) => log(tag, line), 'cheap-eval moderator')
+    return text
+  }
+}
+
 export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
   hydrateClaudeAuthEnvFromUserSettings(deps.log)
 
@@ -317,7 +343,13 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
   const registry = createProviderRegistry()
   registry.register(
     'claude',
-    createClaudeAgentProvider({ sdkOptionsForProject }),
+    createClaudeAgentProvider({
+      sdkOptionsForProject,
+      // Threaded into cheapEval's query() call so the bun-compile
+      // findClaudePath() trap doesn't bite the chatroom moderator path
+      // (same protection the legacy haiku-eval helper provided).
+      ...(claudeBin ? { claudeBin } : {}),
+    }),
     {
       displayName: 'Claude',
       canResume: (cwd, sid) => existsSync(claudeSessionJsonlPath(HOME, cwd, sid)),
@@ -455,12 +487,16 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     // dashboard logs panel + the inbound flow.
     sendAssistantText: makeSendAssistantText({ sendMessage: deps.ilink.sendMessage, log: deps.log }),
     log: deps.log,
-    // v0.5.8 — chatroom moderator. One-shot haiku-4-5 eval per round.
-    // Extracted to ./haiku-eval so the AUTH_FAIL sentinel interception is
-    // testable: stale moderator credentials throw with a structured error
-    // + emit a loud [AUTH_FAILED] log, instead of silently degrading to
-    // alternation via the parse-failed branch of evaluateRound.
-    haikuEval: makeHaikuEval({ log: deps.log, ...(claudeBin ? { claudeBin } : {}) }),
+    // PR F — chatroom moderator now resolves a provider-agnostic cheap
+    // eval via ProviderRegistry.getCheapEval(). Each registered provider
+    // implements its own cheapest one-shot LLM call (claude → haiku via
+    // SDK query(); codex → ephemeral Thread.run with minimal reasoning).
+    // The auth-failed sentinel detection that lived in the prior
+    // ./haiku-eval helper moves to a shared agent-provider helper
+    // applied at the callsite — so stale creds throw a structured
+    // error and the moderator's existing catch branch falls back to
+    // forced alternation. Codex-only users no longer hard-fail here.
+    haikuEval: wrapCheapEvalWithAuthFailCheck(registry.getCheapEval(), deps.log),
   })
 
   // RFC 03 P4 — bare delegate providers + one-shot dispatcher.

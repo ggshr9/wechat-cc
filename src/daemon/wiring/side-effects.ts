@@ -13,7 +13,6 @@ import { makeMilestonesStore } from '../milestones/store'
 import { makeEventsStore } from '../events/store'
 import { makeActivityStore } from '../activity/store'
 import { makeObservationsStore } from '../observations/store'
-import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 
 export interface SideEffectDeps {
   stateDir: string
@@ -56,19 +55,6 @@ export function makeMaybeWriteWelcomeObservation(deps: SideEffectDeps): (chatId:
   }
 }
 
-/** Isolated single-shot Haiku eval — used by introspect tick. No tools. */
-export function makeIsolatedSdkEval(): (prompt: string) => Promise<string> {
-  return async (prompt: string) => {
-    const q = query({ prompt, options: { model: 'claude-haiku-4-5', maxTurns: 1 } })
-    let text = ''
-    for await (const raw of q as AsyncGenerator<SDKMessage>) {
-      const msg = raw as unknown as { type: string; message?: { content?: unknown } }
-      if (msg.type === 'assistant' && Array.isArray(msg.message?.content)) {
-        for (const part of msg.message.content as Array<{ type?: string; text?: string }>) {
-          if (part.type === 'text' && typeof part.text === 'string') text += part.text
-        }
-      }
-    }
-    return text
-  }
-}
+// PR F: makeIsolatedSdkEval deleted. Introspect tick now resolves a
+// cheap eval via ProviderRegistry.getCheapEval() so it works with
+// whichever providers the user has registered (claude / codex / future).

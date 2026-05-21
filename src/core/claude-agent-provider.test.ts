@@ -306,6 +306,45 @@ describe('claude-agent-provider', () => {
     await session.close()
   })
 
+  it('cheapEval returns concatenated assistant text (PR F)', async () => {
+    const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
+    const cheapPromise = provider.cheapEval?.('what is 9-1?')
+    await new Promise(r => setTimeout(r, 0))
+    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
+      type: 'assistant', message: { content: [{ type: 'text', text: '8' }] },
+    })
+    ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
+      type: 'result', subtype: 'success', session_id: 'c1', num_turns: 1, duration_ms: 50,
+    })
+    // Mock's stream doesn't auto-close after `result` — manually end so
+    // the for-await loop inside cheapEval can return.
+    ;(sdk as unknown as { __test_end: () => void }).__test_end()
+    const text = await cheapPromise
+    expect(text).toBe('8')
+  })
+
+  it('cheapEval respects WECHAT_CLAUDE_CHEAP_MODEL env override (PR F)', async () => {
+    const prior = process.env['WECHAT_CLAUDE_CHEAP_MODEL']
+    process.env['WECHAT_CLAUDE_CHEAP_MODEL'] = 'claude-haiku-99-experimental'
+    try {
+      const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
+      expect(provider.cheapEval).toBeDefined()
+      const cheapPromise = provider.cheapEval?.('hi')
+      await new Promise(r => setTimeout(r, 0))
+      ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
+        type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] },
+      })
+      ;(sdk as unknown as { __test_yield: (m: unknown) => void }).__test_yield({
+        type: 'result', subtype: 'success', session_id: 'c2', num_turns: 1, duration_ms: 50,
+      })
+      ;(sdk as unknown as { __test_end: () => void }).__test_end()
+      expect(await cheapPromise).toBe('ok')
+    } finally {
+      if (prior === undefined) delete process.env['WECHAT_CLAUDE_CHEAP_MODEL']
+      else process.env['WECHAT_CLAUDE_CHEAP_MODEL'] = prior
+    }
+  })
+
   it('cancel() is a no-op after close()', async () => {
     ;(sdk as unknown as { __test_reset_interrupt: () => void }).__test_reset_interrupt()
     const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })

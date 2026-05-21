@@ -3,7 +3,17 @@ import type { AgentEvent, AgentProject, AgentProvider, AgentSession } from './ag
 
 export interface ClaudeAgentProviderOptions {
   sdkOptionsForProject: (alias: string, path: string) => Options
+  /**
+   * Path to the `claude` binary, threaded into cheapEval's query() call.
+   * Optional — when omitted the SDK's bundled discovery runs. Used in
+   * production to bypass the bun-compile findClaudePath() trap that
+   * affected the chatroom moderator's haiku eval (see haiku-eval.ts
+   * history before its deletion in PR F).
+   */
+  claudeBin?: string
 }
+
+const CLAUDE_CHEAP_MODEL_DEFAULT = 'claude-haiku-4-5'
 
 // Local mirror of the SDK message variants this provider actually reads.
 // The SDK's full union (`SDKMessage`) covers many more variants but our
@@ -66,6 +76,29 @@ function parseToolUseToEvent(block: { name?: string }): AgentEvent {
 
 export function createClaudeAgentProvider(opts: ClaudeAgentProviderOptions): AgentProvider {
   return {
+    async cheapEval(prompt: string): Promise<string> {
+      // One-shot haiku-class eval with no tools, no MCP, no session
+      // continuation. Used by chatroom moderator + companion introspect
+      // via ProviderRegistry.getCheapEval(). Env override lets users
+      // pin to a newer haiku without a code change.
+      const model = process.env['WECHAT_CLAUDE_CHEAP_MODEL'] || CLAUDE_CHEAP_MODEL_DEFAULT
+      const q = query({
+        prompt,
+        options: {
+          model,
+          maxTurns: 1,
+          ...(opts.claudeBin ? { pathToClaudeCodeExecutable: opts.claudeBin } : {}),
+        } as Options,
+      })
+      let text = ''
+      for await (const raw of q as AsyncGenerator<SDKMessage>) {
+        const msg = narrow(raw)
+        if (msg?.type === 'assistant') {
+          text += extractText(msg.message?.content)
+        }
+      }
+      return text
+    },
     async spawn(project: AgentProject, spawnOpts?: { resumeSessionId?: string }): Promise<AgentSession> {
       const sdkQueue = new AsyncQueue<SDKUserMessage>()
       const options = opts.sdkOptionsForProject(project.alias, project.path)

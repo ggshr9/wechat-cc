@@ -53,6 +53,9 @@ function setupDeps(opts: {
     boot: {
       sessionManager: { acquire, isInFlight } as never,
       defaultProviderId: 'claude' as never,
+      // Default: no provider has cheapEval. Introspect-specific tests
+      // override via deps.boot.registry directly.
+      registry: { getCheapEval: () => null } as never,
     } as never,
     log: (tag, line) => { logs.push(`${tag}|${line}`) },
   }
@@ -96,5 +99,41 @@ describe('buildTickBodies / pushTick — companion isolation (PR D)', () => {
     await pushTick()
     expect(s.isInFlight).not.toHaveBeenCalled()
     expect(s.acquire).not.toHaveBeenCalled()
+  })
+})
+
+describe('buildTickBodies / introspectTick — provider-agnostic cheap eval (PR F)', () => {
+  let cleanup: string[]
+  beforeEach(() => { cleanup = [] })
+  afterEach(() => {
+    for (const d of cleanup) {
+      try { rmSync(d, { recursive: true, force: true }) } catch { /* best effort */ }
+    }
+  })
+
+  it('skips the tick when no registered provider implements cheapEval', async () => {
+    const s = setupDeps({ defaultChatId: 'chat-1', inFlight: false })
+    cleanup.push(s.stateDir)
+    // setupDeps already wires registry.getCheapEval to return null.
+    const { introspectTick } = buildTickBodies(s.deps)
+    await introspectTick()
+    expect(s.logs.some(l => l.includes('skip tick — no registered provider implements cheapEval'))).toBe(true)
+  })
+
+  it('resolves cheapEval via registry per-tick (proves no hardcoded Claude SDK call)', async () => {
+    // Spy on getCheapEval to verify introspect goes through the
+    // provider-agnostic registry path. Returning null causes the tick
+    // to skip immediately — we don't need a real db just to assert
+    // resolver invocation.
+    const getCheapEval = vi.fn(() => null)
+    const s = setupDeps({ defaultChatId: 'chat-introspect', inFlight: false })
+    cleanup.push(s.stateDir)
+    s.deps.boot = {
+      ...s.deps.boot,
+      registry: { getCheapEval } as never,
+    }
+    const { introspectTick } = buildTickBodies(s.deps)
+    await introspectTick()
+    expect(getCheapEval).toHaveBeenCalledTimes(1)
   })
 })

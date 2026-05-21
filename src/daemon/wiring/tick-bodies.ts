@@ -14,7 +14,6 @@ import { makeEventsStore } from '../events/store'
 import { makeObservationsStore } from '../observations/store'
 import { runIntrospectTick } from '../companion/introspect'
 import { resolveIntrospectChatId, makeIntrospectAgent } from '../companion/introspect-runtime'
-import { makeIsolatedSdkEval } from './side-effects'
 
 function errMsg(err: unknown): string { return err instanceof Error ? err.message : String(err) }
 
@@ -33,7 +32,6 @@ export interface TickBodies {
 
 export function buildTickBodies(deps: TickDeps): TickBodies {
   const launchCwd = process.cwd()
-  const isolatedSdkEval = makeIsolatedSdkEval()
 
   async function pushTick(): Promise<void> {
     const cfg = loadCompanionConfig(deps.stateDir)
@@ -81,6 +79,17 @@ export function buildTickBodies(deps: TickDeps): TickBodies {
   async function introspectTick(): Promise<void> {
     const chatId = resolveIntrospectChatId(deps.stateDir)
     if (!chatId) { deps.log('INTROSPECT', 'skip tick — no default_chat_id'); return }
+    // PR F — resolve cheap eval per tick via the registry. Picks the
+    // cheapest available provider (claude haiku, then codex-mini, then
+    // anything else registered). null if no registered provider
+    // implements cheapEval → skip the tick with a log line instead of
+    // hard-failing. Per-tick (not boot-time) so a user who installs
+    // claude after daemon boot picks it up on the next 24h tick.
+    const sdkEval = deps.boot.registry.getCheapEval()
+    if (!sdkEval) {
+      deps.log('INTROSPECT', 'skip tick — no registered provider implements cheapEval')
+      return
+    }
     const memoryRoot = join(deps.stateDir, 'memory')
     const events = makeEventsStore(deps.db, chatId, { migrateFromFile: join(memoryRoot, chatId, 'events.jsonl') })
     const observations = makeObservationsStore(deps.db, chatId, { migrateFromFile: join(memoryRoot, chatId, 'observations.jsonl') })
@@ -89,7 +98,7 @@ export function buildTickBodies(deps: TickDeps): TickBodies {
       memorySnapshot: () => buildMemorySnapshot(deps.stateDir, chatId),
       // Matches legacy main.ts v0.4.1 — recentInboundForChat() also returned [].
       recentInboundMessages: () => Promise.resolve([] as string[]),
-      sdkEval: isolatedSdkEval,
+      sdkEval,
     })
     await runIntrospectTick({ events, observations, agent, chatId, log: deps.log })
     await saveCompanionConfig(deps.stateDir, { ...loadCompanionConfig(deps.stateDir), last_introspect_at: new Date().toISOString() })

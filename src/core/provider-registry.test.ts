@@ -49,4 +49,51 @@ describe('ProviderRegistry', () => {
     r.register('gemini-experimental', stub, { displayName: 'Gemini', canResume: () => true })
     expect(r.has('gemini-experimental')).toBe(true)
   })
+
+  describe('getCheapEval — provider-agnostic resolution (PR F)', () => {
+    const stubWithCheap = (label: string): AgentProvider => ({
+      spawn: async () => makeFakeSession({
+        events: [{ kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 }],
+      }),
+      cheapEval: async () => label,
+    })
+
+    it('returns null when no registered provider implements cheapEval', () => {
+      const r = createProviderRegistry()
+      r.register('claude', stub, { displayName: 'Claude', canResume: () => true })
+      expect(r.getCheapEval()).toBeNull()
+    })
+
+    it('returns cheapEval when registered provider implements it', async () => {
+      const r = createProviderRegistry()
+      r.register('codex', stubWithCheap('codex-text'), { displayName: 'Codex', canResume: () => true })
+      const ce = r.getCheapEval()
+      expect(ce).not.toBeNull()
+      expect(await ce!('prompt')).toBe('codex-text')
+    })
+
+    it('prefers claude over codex when both registered', async () => {
+      const r = createProviderRegistry()
+      // Register codex FIRST to verify preference is not insertion-order.
+      r.register('codex', stubWithCheap('codex-text'), { displayName: 'Codex', canResume: () => true })
+      r.register('claude', stubWithCheap('claude-text'), { displayName: 'Claude', canResume: () => true })
+      const ce = r.getCheapEval()
+      expect(await ce!('prompt')).toBe('claude-text')
+    })
+
+    it('falls back to codex when claude registered without cheapEval', async () => {
+      const r = createProviderRegistry()
+      r.register('claude', stub, { displayName: 'Claude', canResume: () => true })
+      r.register('codex', stubWithCheap('codex-text'), { displayName: 'Codex', canResume: () => true })
+      const ce = r.getCheapEval()
+      expect(await ce!('prompt')).toBe('codex-text')
+    })
+
+    it('falls back to any registered provider when neither claude nor codex registered', async () => {
+      const r = createProviderRegistry()
+      r.register('gemini', stubWithCheap('gemini-text'), { displayName: 'Gemini', canResume: () => true })
+      const ce = r.getCheapEval()
+      expect(await ce!('prompt')).toBe('gemini-text')
+    })
+  })
 })
