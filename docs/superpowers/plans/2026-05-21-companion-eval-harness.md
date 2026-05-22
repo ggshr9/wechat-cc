@@ -183,17 +183,22 @@ Add to `src/daemon/companion/lifecycle.test.ts`:
 ```ts
 import { describe, it, expect, vi } from 'vitest'
 
+// 1B ms ≈ 11.5 days. Chosen so even after the scheduler's ±30% jitter the
+// resulting setTimeout delay (≤1.3B ms) stays under int32 max (~2.15B ms).
+// Passing the raw int32 max would overflow when multiplied by jitter and
+// Node would clamp the timer to ~1ms — defeating the suppression intent.
+const SAFE_INFINITY_MS = 1_000_000_000
+
 it('honors an intervalMs override (push)', () => {
   const onTick = vi.fn(async () => {})
-  // SAFE_INFINITY-style large value so the scheduler never fires within the test.
   const lc = registerCompanionPush({
     shouldRun: () => true,
     log: () => {},
     onTick,
-    intervalMs: 2 ** 31 - 1,
+    intervalMs: SAFE_INFINITY_MS,
   })
   // No assertion on tick count — just verify the call doesn't crash and the
-  // scheduler accepts the override. setTimeout with INT32_MAX is well-formed.
+  // scheduler accepts the override.
   expect(lc.name).toBe('companion-push')
   return lc.stop()
 })
@@ -204,7 +209,7 @@ it('honors an intervalMs override (introspect)', () => {
     shouldRun: () => true,
     log: () => {},
     onTick,
-    intervalMs: 2 ** 31 - 1,
+    intervalMs: SAFE_INFINITY_MS,
   })
   expect(lc.name).toBe('companion-introspect')
   return lc.stop()
@@ -910,8 +915,10 @@ describe('clock helpers', () => {
     expect(() => parseIso('not a date')).toThrow(/parseIso/)
   })
 
-  it('SAFE_INFINITY_MS fits in int32 (largest setTimeout-safe value)', () => {
-    expect(SAFE_INFINITY_MS).toBe(2 ** 31 - 1)
+  it('SAFE_INFINITY_MS leaves jitter headroom under int32 setTimeout cap', () => {
+    expect(SAFE_INFINITY_MS).toBe(1_000_000_000)
+    // 1.3x jitter still fits in int32 (2^31 - 1 ≈ 2.147B)
+    expect(SAFE_INFINITY_MS * 1.3).toBeLessThan(2 ** 31 - 1)
   })
 })
 ```
@@ -927,11 +934,14 @@ Create `eval/companion/engine/clock.ts`:
 
 ```ts
 /**
- * Max value Node/Bun's setTimeout accepts without immediately firing — any
- * larger and the timer fires instantly. Used as the scheduler interval
- * override in eval so the companion scheduler is effectively dormant.
+ * Effective "dormant" interval for the companion scheduler. 1 billion ms
+ * ≈ 11.5 days. The scheduler applies ±30% jitter so the actual setTimeout
+ * delay is up to intervalMs * 1.3 — we must stay under int32 max
+ * (~2.15B ms) or Node clamps the timer to ~1ms and the scheduler fires
+ * immediately. Using 2**31-1 directly would overflow; 1B gives margin.
+ * Eval runs in minutes, so 11.5 days is effectively infinite.
  */
-export const SAFE_INFINITY_MS = 2 ** 31 - 1
+export const SAFE_INFINITY_MS = 1_000_000_000
 
 export function parseIso(s: string): Date {
   const d = new Date(s)
