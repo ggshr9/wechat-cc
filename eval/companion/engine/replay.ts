@@ -8,6 +8,11 @@ import { parseIso } from './clock'
 import { captureSnapshot, type StateSnapshot } from './snapshot'
 import { captureProbe } from './probes'
 import { runAssertions } from './assertions'
+import type { Judge } from './judge'
+
+export interface ReplayOpts {
+  judge: Judge
+}
 
 export interface EventResult {
   index: number
@@ -44,7 +49,7 @@ export interface ReplayContext {
   lastTickOutcome: { decision: 'send' | 'silent'; text?: string } | null
 }
 
-export async function replay(trajectory: Trajectory): Promise<EventResult[]> {
+export async function replay(trajectory: Trajectory, opts: ReplayOpts): Promise<EventResult[]> {
   const daemon = await startEvalDaemon({
     knownUsers: { [trajectory.contact.chat_id]: trajectory.contact.user_name },
     companion: {
@@ -110,6 +115,22 @@ export async function replay(trajectory: Trajectory): Promise<EventResult[]> {
             actual: result.actual,
             snapshot: snap,
           })
+          if (event.dimensions.length > 0) {
+            try {
+              result.judgeScores = await opts.judge.score({
+                trajectoryHistoryToProbe: renderHistoryToIndex(trajectory, i),
+                expected: event.expected,
+                actual: result.actual,
+                dimensions: event.dimensions,
+              })
+            } catch (err) {
+              result.judgeScores = []
+              result.assertions = [
+                ...result.assertions,
+                { label: 'judge_error', passed: false, detail: err instanceof Error ? err.message : String(err) },
+              ]
+            }
+          }
         }
       } finally { db.close() }
 
@@ -132,6 +153,17 @@ function seedMemoryFiles(stateDir: string, trajectory: Trajectory): void {
     mkdirSync(join(target, '..'), { recursive: true })
     writeFileSync(target, content)
   }
+}
+
+function renderHistoryToIndex(t: Trajectory, idx: number): string {
+  const lines: string[] = []
+  for (let j = 0; j <= idx; j++) {
+    const ev = t.events[j]!
+    if (ev.kind === 'user_message') lines.push(`[${ev.at}] USER: ${ev.text}`)
+    else if (ev.kind === 'tick') lines.push(`[${ev.at}] TICK (${ev.tick_kind})`)
+    else lines.push(`[${ev.at}] PROBE (${ev.probe_kind})`)
+  }
+  return lines.join('\n')
 }
 
 function seedObservations(stateDir: string, trajectory: Trajectory): void {
