@@ -2,12 +2,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { buildTickBodies, buildTickText, type TickDeps } from './tick-bodies'
+import { buildTickBodies, buildPushTickText, type TickDeps } from './tick-bodies'
 
-describe('buildTickText', () => {
+describe('buildPushTickText', () => {
   it('formats a push tick envelope with the supplied nowIso + chatId', () => {
-    const out = buildTickText({
-      kind: 'push',
+    const out = buildPushTickText({
       nowIso: '2026-05-13T01:30:00.000Z',
       defaultChatId: 'chat_test_1',
     })

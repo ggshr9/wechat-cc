@@ -31,8 +31,7 @@ export interface TickBodies {
   introspectTick: (opts?: { nowIso?: string }) => Promise<void>  // introspect ignores nowIso for MVP — keeps signatures symmetric
 }
 
-export interface BuildTickTextOpts {
-  kind: 'push'
+export interface BuildPushTickTextOpts {
   nowIso: string
   defaultChatId: string
 }
@@ -42,7 +41,7 @@ export interface BuildTickTextOpts {
  * pushTick so the eval harness can drive the body with a virtual `ts`
  * without going through the scheduler. Production code path is unchanged.
  */
-export function buildTickText(opts: BuildTickTextOpts): string {
+export function buildPushTickText(opts: BuildPushTickTextOpts): string {
   return (
     `<companion_tick ts="${opts.nowIso}" default_chat_id="${opts.defaultChatId}" />\n` +
     `定时唤醒。先 memory_list + memory_read 你觉得相关的文件。` +
@@ -80,8 +79,7 @@ export function buildTickBodies(deps: TickDeps): TickBodies {
       return
     }
     const handle = await deps.boot.sessionManager.acquire(proj.alias, proj.path, deps.boot.defaultProviderId)
-    const tickText = buildTickText({
-      kind: 'push',
+    const tickText = buildPushTickText({
       nowIso: opts?.nowIso ?? new Date().toISOString(),
       defaultChatId: cfg.default_chat_id,
     })
