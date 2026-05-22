@@ -27,7 +27,8 @@ export interface LifecycleDepsOpts {
   /**
    * Optional override for both push + introspect scheduler intervals.
    * When set, both schedulers use this value instead of their defaults.
-   * Eval harness passes 2 ** 31 - 1 to suppress auto-fire.
+   * Eval harness passes `1_000_000_000` (≈11.5 days; jitter-safe under
+   * setTimeout's int32 cap) to suppress auto-fire.
    */
   schedulerIntervalMs?: number
 }
@@ -55,14 +56,8 @@ export function buildLifecycleDeps(opts: LifecycleDepsOpts, ticks: TickBodies): 
   }
 
   return {
-    companionPushDeps: {
-      shouldRun, log, onTick: ticks.pushTick,
-      ...(opts.schedulerIntervalMs !== undefined ? { intervalMs: opts.schedulerIntervalMs } : {}),
-    },
-    companionIntrospectDeps: {
-      shouldRun, log, onTick: ticks.introspectTick,
-      ...(opts.schedulerIntervalMs !== undefined ? { intervalMs: opts.schedulerIntervalMs } : {}),
-    },
+    companionPushDeps: { shouldRun, log, onTick: ticks.pushTick, intervalMs: opts.schedulerIntervalMs },
+    companionIntrospectDeps: { shouldRun, log, onTick: ticks.introspectTick, intervalMs: opts.schedulerIntervalMs },
     guardDeps: {
       pollMs: 30_000,
       isEnabled: () => loadGuardConfig(stateDir).enabled,
