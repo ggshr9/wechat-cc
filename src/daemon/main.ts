@@ -21,6 +21,7 @@ import { registerIlink } from './ilink-lifecycle'
 import { buildInboundPipeline } from './inbound/build'
 import { runStartupSweeps } from './startup-sweeps'
 import { wireMain } from './wiring'
+import type { TickBodies } from './wiring/tick-bodies'
 
 export interface BootDaemonOpts {
   stateDir: string
@@ -34,7 +35,19 @@ export interface BootDaemonOpts {
    */
   schedulerIntervalMs?: number
 }
-export interface DaemonHandle { shutdown(): Promise<void>; pollingReconcile?(): Promise<void> }
+export interface DaemonHandle {
+  shutdown(): Promise<void>
+  pollingReconcile?(): Promise<void>
+  /**
+   * Eval-harness seam — manually fire one tick of the named kind, with the
+   * given virtual timestamp baked into the envelope. Bypasses the scheduler
+   * gates (shouldRun + jitter). Returns when the tick body completes.
+   *
+   * Production callers never use this; production uses the periodic scheduler
+   * registered via registerCompanionPush / registerCompanionIntrospect.
+   */
+  fireTick(kind: 'push' | 'introspect', at: Date): Promise<void>
+}
 
 export async function bootDaemon(opts: BootDaemonOpts): Promise<DaemonHandle> {
   const { stateDir, dangerously } = opts
@@ -64,6 +77,7 @@ export async function bootDaemon(opts: BootDaemonOpts): Promise<DaemonHandle> {
   const lc = new LifecycleSet((tag, line) => log(tag, line))
   let shuttingDown = false; let didStartup = false
   let pollingLcRef: { reconcile(): Promise<void> } | null = null
+  let ticksRef: TickBodies | null = null
 
   const shutdown = async () => {
     if (shuttingDown) return
@@ -104,6 +118,7 @@ export async function bootDaemon(opts: BootDaemonOpts): Promise<DaemonHandle> {
       log: (t, l) => log(t, l),
       schedulerIntervalMs: opts.schedulerIntervalMs,
     })
+    ticksRef = wired.ticks
     const pipeline = buildInboundPipeline(wired.pipelineDeps)
     wireRef(wired.refs.pipeline, pipeline)
     // 4. register lifecycles (LIFO stop = startup order reversed)
@@ -125,7 +140,16 @@ export async function bootDaemon(opts: BootDaemonOpts): Promise<DaemonHandle> {
     await shutdown(); throw err
   }
 
-  return { shutdown, pollingReconcile: pollingLcRef ? () => pollingLcRef!.reconcile() : undefined }
+  return {
+    shutdown,
+    pollingReconcile: pollingLcRef ? () => pollingLcRef!.reconcile() : undefined,
+    fireTick: async (kind, at) => {
+      if (!ticksRef) throw new Error('[wechat-cc] fireTick called before daemon startup completed')
+      const nowIso = at.toISOString()
+      if (kind === 'push') await ticksRef.pushTick({ nowIso })
+      else await ticksRef.introspectTick({ nowIso })
+    },
+  }
 }
 
 // CLI entry — sets up signal handlers, calls bootDaemon, waits. Exported so
