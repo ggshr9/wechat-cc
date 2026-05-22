@@ -27,15 +27,37 @@ export interface TickDeps {
 }
 
 export interface TickBodies {
-  pushTick: () => Promise<void>
-  introspectTick: () => Promise<void>
+  pushTick: (opts?: { nowIso?: string }) => Promise<void>
+  introspectTick: (opts?: { nowIso?: string }) => Promise<void>  // introspect ignores nowIso for MVP — keeps signatures symmetric
+}
+
+export interface BuildTickTextOpts {
+  kind: 'push'
+  nowIso: string
+  defaultChatId: string
+}
+
+/**
+ * Pure helper — assembles the push-tick envelope text. Extracted from
+ * pushTick so the eval harness can drive the body with a virtual `ts`
+ * without going through the scheduler. Production code path is unchanged.
+ */
+export function buildTickText(opts: BuildTickTextOpts): string {
+  return (
+    `<companion_tick ts="${opts.nowIso}" default_chat_id="${opts.defaultChatId}" />\n` +
+    `定时唤醒。先 memory_list + memory_read 你觉得相关的文件。` +
+    `再看当前时间和用户最近状态。决定是否向 ${opts.defaultChatId} push。` +
+    `\n\n要 push：调 reply 工具，内容就是要发给用户的话。` +
+    `\n不 push：直接结束这一轮，**不调用 reply**，**也不产生任何 assistant text**——不要解释你为什么不打扰、不要总结你看到的状态。沉默就是沉默。` +
+    `\n不确定就选不 push（结束）。push 后写一条 memory 记下决策和意图（便于下次 tick 读到效果）。`
+  )
 }
 
 export function buildTickBodies(deps: TickDeps): TickBodies {
   const launchCwd = process.cwd()
   const isolatedSdkEval = makeIsolatedSdkEval()
 
-  async function pushTick(): Promise<void> {
+  async function pushTick(opts?: { nowIso?: string }): Promise<void> {
     const cfg = loadCompanionConfig(deps.stateDir)
     if (!cfg.default_chat_id) { deps.log('SCHED', 'skip tick — no default_chat_id'); return }
     const snapshot = deps.ilink.loadProjects()
@@ -58,13 +80,11 @@ export function buildTickBodies(deps: TickDeps): TickBodies {
       return
     }
     const handle = await deps.boot.sessionManager.acquire(proj.alias, proj.path, deps.boot.defaultProviderId)
-    const tickText =
-      `<companion_tick ts="${new Date().toISOString()}" default_chat_id="${cfg.default_chat_id}" />\n` +
-      `定时唤醒。先 memory_list + memory_read 你觉得相关的文件。` +
-      `再看当前时间和用户最近状态。决定是否向 ${cfg.default_chat_id} push。` +
-      `\n\n要 push：调 reply 工具，内容就是要发给用户的话。` +
-      `\n不 push：直接结束这一轮，**不调用 reply**，**也不产生任何 assistant text**——不要解释你为什么不打扰、不要总结你看到的状态。沉默就是沉默。` +
-      `\n不确定就选不 push（结束）。push 后写一条 memory 记下决策和意图（便于下次 tick 读到效果）。`
+    const tickText = buildTickText({
+      kind: 'push',
+      nowIso: opts?.nowIso ?? new Date().toISOString(),
+      defaultChatId: cfg.default_chat_id,
+    })
     // `handle.dispatch` returns AsyncIterable<AgentEvent>, not a Promise —
     // `await` alone is a no-op (it resolves to the iterable itself without
     // ever calling .next()). The wrapper's enter/finally hooks (inFlight
@@ -78,7 +98,10 @@ export function buildTickBodies(deps: TickDeps): TickBodies {
     }
   }
 
-  async function introspectTick(): Promise<void> {
+  async function introspectTick(_opts?: { nowIso?: string }): Promise<void> {
+    // _opts.nowIso ignored for MVP — observations/memory internal timestamps
+    // stay wall-clock. Keeping the symmetric signature avoids churn when
+    // introspect virtual time is added later.
     const chatId = resolveIntrospectChatId(deps.stateDir)
     if (!chatId) { deps.log('INTROSPECT', 'skip tick — no default_chat_id'); return }
     const memoryRoot = join(deps.stateDir, 'memory')
