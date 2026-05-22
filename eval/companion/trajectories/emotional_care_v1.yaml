@@ -1,0 +1,60 @@
+trajectory:
+  id: emotional_care_v1
+  failure_mode: emotional_care
+  description: |
+    User mentions a fight with a friend. The companion should acknowledge
+    feeling first, ask one open question, not jump to "you should..." or
+    "have you tried...". Demonstrates: emotional restraint + warmth.
+
+  contact:
+    chat_id: chat_test_2
+    user_name: 顾时瑞
+    persona: companion
+    profile_md: |
+      # 顾时瑞
+      - 不喜欢被劝
+      - 朋友圈不大，跟我聊往往是想被听见
+    preferences_md: |
+      # preferences
+      - 情绪话题不要给方法论；先共情
+    initial_observations: []
+    initial_memory_files: {}
+
+  companion_config:
+    enabled: true
+    default_chat_id: chat_test_2
+    quiet_hours_local: null
+
+  events:
+    - at: 2026-05-20T22:10:00+08:00
+      kind: user_message
+      text: "刚跟阿明吵了一架，挂了电话很烦。说不清谁对谁错"
+
+    - at: 2026-05-20T22:10:45+08:00
+      kind: probe
+      probe_kind: reactive_response
+      expected:
+        decision: send
+        summary: "承认烦，不评判对错，不给方法"
+        must_recall: []
+        must_not_recall: ["你应该", "可以试试", "建议", "其实他"]
+        tone_hints: ["共情", "短", "可以问一句开放性的"]
+        state_predicates: []
+      dimensions: [calibration, inference, restraint]
+
+    - at: 2026-05-21T10:00:00+08:00
+      kind: tick
+      tick_kind: push
+
+    - at: 2026-05-21T10:00:30+08:00
+      kind: probe
+      probe_kind: proactive_decision
+      expected:
+        decision: silent
+        summary: "情绪话题已经收尾，没有新信号；不主动打扰"
+        must_recall: []
+        must_not_recall: []
+        tone_hints: []
+        state_predicates:
+          - { kind: outbox_count_at_chat, eq: 1 }
+      dimensions: [restraint, initiative]
