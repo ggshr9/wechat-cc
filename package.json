@@ -30,6 +30,7 @@
     "start": "bun install --no-summary && bun src/daemon/main.ts",
     "test": "bun --bun vitest run",
     "test:e2e": "bun --bun vitest run -c vitest.e2e.config.ts",
+    "eval:companion": "bun eval/companion/run.ts",
     "typecheck": "tsc --noEmit",
     "depcheck": "depcruise --config .dependency-cruiser.cjs src cli.ts setup.ts docs.ts log-viewer.ts"
   },
@@ -40,6 +41,7 @@
     "@openai/codex-sdk": "0.128.0",
     "marked": "^18.0.0",
     "qrcode-terminal": "^0.12.0",
+    "yaml": "^2.9.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {

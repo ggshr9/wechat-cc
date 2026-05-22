@@ -51,3 +51,7 @@ apps/desktop/playwright-report/
 docs/spike/phase0-rfc03/02-codex-events/events.jsonl
 docs/spike/phase0-rfc03/03-codex-perms/scratch/
 docs/spike/phase0-rfc03/03-codex-perms/matrix.json
+
+# Companion eval harness — per-run artifacts (markdown reports + jsonl dumps).
+# Trajectory YAMLs + judge config are checked in; outputs are not.
+eval/companion/runs/
