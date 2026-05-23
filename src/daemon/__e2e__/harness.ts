@@ -18,7 +18,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { startFakeIlink, type FakeIlinkHandle, type OutboundMsg } from './fake-ilink-server'
-import { installFakeClaude, installClaudeSpawnRecorder, installFakeCodex, installCodexSpawnRecorder, installFakeModerator, type FakeSdkScript, type ModeratorScript } from './fake-sdk'
+import { installFakeClaude, installClaudeSpawnRecorder, installFakeCodex, installCodexSpawnRecorder, installFakeCursor, installCursorSpawnRecorder, installFakeModerator, type FakeSdkScript, type ModeratorScript } from './fake-sdk'
 // Side-effect import: registers vi.mock('../media') so attachments
 // materialize to local stub files instead of hitting the real ilink CDN.
 // MUST come before bootDaemon imports to take effect.
@@ -37,6 +37,7 @@ export interface TestDaemonAccount {
 export interface TestDaemonOpts {
   claudeScript?: FakeSdkScript
   codexScript?: FakeSdkScript
+  cursorScript?: FakeSdkScript
   /**
    * Scripted decisions for the chatroom haiku moderator (single-shot
    * `query({ prompt: string })` calls). Returns the JSON decision string
@@ -71,6 +72,18 @@ export interface TestDaemonOpts {
    * naturally only fires on the session-spawn path.
    */
   recordCodexSpawnOptions?: (options: Record<string, unknown>) => void
+  /**
+   * Optional callback fired with the AgentOptions object passed to
+   * `Agent.create()` / `Agent.resume()` for each spawned cursor
+   * AgentSession. Used by tier-permissions e2e tests to assert that
+   * admin / trusted / guest chats produce different sandboxOptions
+   * shapes on the cursor side.
+   *
+   * Unlike Claude and Codex, Cursor has no cheap-eval path — every
+   * cursor invocation goes through Agent.create / Agent.resume, so
+   * this recorder fires on all cursor spawns.
+   */
+  recordCursorSpawnOptions?: (options: Record<string, unknown>) => void
   /** preset companion config — default: disabled */
   companion?: { enabled?: boolean; default_chat_id?: string }
   /** preset bot accounts — default: 1 fake bot pointing at fake ilink */
@@ -179,6 +192,10 @@ export async function startTestDaemon(opts: TestDaemonOpts = {}): Promise<Daemon
     const { uninstall } = installFakeCodex(opts.codexScript)
     cleanups.push(uninstall)
   }
+  if (opts.cursorScript) {
+    const { uninstall } = installFakeCursor(opts.cursorScript)
+    cleanups.push(uninstall)
+  }
   if (opts.moderatorScript) {
     const { uninstall } = installFakeModerator(opts.moderatorScript)
     cleanups.push(uninstall)
@@ -189,6 +206,10 @@ export async function startTestDaemon(opts: TestDaemonOpts = {}): Promise<Daemon
   }
   if (opts.recordCodexSpawnOptions) {
     const { uninstall } = installCodexSpawnRecorder(opts.recordCodexSpawnOptions)
+    cleanups.push(uninstall)
+  }
+  if (opts.recordCursorSpawnOptions) {
+    const { uninstall } = installCursorSpawnRecorder(opts.recordCursorSpawnOptions)
     cleanups.push(uninstall)
   }
 
