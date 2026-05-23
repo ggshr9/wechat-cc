@@ -5,15 +5,15 @@
  *   - returns the raw stateDir so the engine can seed memory files +
  *     observations BEFORE the daemon boots (avoids races with introspect)
  *
- * Side-effect import of '../../../src/daemon/__e2e__/fake-media' replaces
- * materializeAttachments with a local-file stub so eval doesn't hit the
- * ilink CDN. Real CDN access from a regression test would be flaky and slow.
+ * We do NOT pull in src/daemon/__e2e__/fake-media — it uses vi.mock which
+ * only exists inside vitest. Trajectories send text-only messages, so the
+ * real materializeAttachments early-returns and never touches the CDN.
+ * Add real attachment fixtures only if a future trajectory needs them.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { startFakeIlink, type FakeIlinkHandle, type OutboundMsg } from '../../../src/daemon/__e2e__/fake-ilink-server'
-import '../../../src/daemon/__e2e__/fake-media'
 import type { RawUpdate } from '../../../src/daemon/poll-loop'
 import type { DaemonHandle } from '../../../src/daemon/main'
 import { SAFE_INFINITY_MS } from './clock'
@@ -61,11 +61,15 @@ export async function startEvalDaemon(opts: EvalDaemonOpts): Promise<EvalDaemon>
   writeFileSync(join(stateDir, 'user_account_ids.json'), JSON.stringify(userAccountIds))
 
   mkdirSync(join(stateDir, 'companion'), { recursive: true })
+  // last_introspect_at: now ensures startup-sweeps' runIntrospectCatchUp
+  // returns early (24h-since-last check). Otherwise it fires an introspect
+  // tick on every boot — that competes with the first user_message dispatch
+  // for the SDK session and breaks eval timing assumptions.
   writeFileSync(join(stateDir, 'companion', 'config.json'), JSON.stringify({
     enabled: opts.companion.enabled,
     default_chat_id: opts.companion.default_chat_id,
     snooze_until: null,
-    last_introspect_at: null,
+    last_introspect_at: new Date().toISOString(),
     timezone: 'UTC',
   }, null, 2))
 
@@ -74,10 +78,15 @@ export async function startEvalDaemon(opts: EvalDaemonOpts): Promise<EvalDaemon>
   process.env.WECHAT_CC_STATE_DIR = stateDir
   process.env.WECHAT_STATE_DIR = stateDir
 
+  // dangerously: true makes lookup().askUser === 'never' for every tool call,
+  // skipping the permission relay. Without this the daemon sends a "Claude
+  // wants to run X" message to the chat for every tool — and since eval has
+  // no user to reply, the tool gets denied, no model reply ever materializes,
+  // and waitForReplyTo captures the permission prompt as if it were the reply.
   const { bootDaemon } = await import('../../../src/daemon/main')
   const daemonHandle = await bootDaemon({
     stateDir,
-    dangerously: false,
+    dangerously: true,
     schedulerIntervalMs: SAFE_INFINITY_MS,
   })
 
@@ -110,7 +119,11 @@ export async function startEvalDaemon(opts: EvalDaemonOpts): Promise<EvalDaemon>
       return ilink.outbox().filter(m => m.endpoint === 'sendmessage' && m.chatId === chatId)
     },
     async stop() {
-      await daemonHandle.shutdown()
+      // SDK ProcessTransport sometimes throws "not ready for writing" during
+      // session.interrupt() in shutdown — the report is already written by
+      // this point, so swallow it. Real shutdown errors are still surfaced
+      // via the daemon log.
+      try { await daemonHandle.shutdown() } catch { /* ignore */ }
       if (origStateDir === undefined) delete process.env.WECHAT_CC_STATE_DIR
       else process.env.WECHAT_CC_STATE_DIR = origStateDir
       if (origWechatStateDir === undefined) delete process.env.WECHAT_STATE_DIR
