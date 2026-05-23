@@ -71,12 +71,11 @@ export function buildDelegateDispatch(deps: DelegateBuildDeps): DelegateDispatch
     ...(process.env.CODEX_MODEL || configuredAgent.model
       ? { model: process.env.CODEX_MODEL ?? configuredAgent.model }
       : {}),
-    // Task 6: sandboxMode + approvalPolicy moved out of CodexAgentProviderOptions —
-    // they're now derived per-spawn from spawnOpts.tierProfile inside the provider.
-    // The dispatchDelegate path below passes TIER_PROFILES.admin (delegate runs
-    // as daemon, not a user-bound chat). Note: this is a behaviour shift from the
-    // pre-Task-6 "delegate is read-mostly" stance (admin → danger-full-access);
-    // Task 9/10 will pick a dedicated delegate tier if a tighter posture is needed.
+    // sandboxMode + approvalPolicy moved out of CodexAgentProviderOptions in
+    // Task 6 — they're now derived per-spawn from spawnOpts.tierProfile inside
+    // the provider. See the dispatchDelegate call below for the tier choice
+    // and its rationale.
+    //
     // Deliberately NO mcpServers — bare-bones is the structural
     // recursion-prevention guarantee.
   })
