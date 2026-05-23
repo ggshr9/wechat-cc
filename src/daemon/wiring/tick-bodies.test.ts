@@ -2,7 +2,20 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { buildTickBodies, type TickDeps } from './tick-bodies'
+import { buildTickBodies, buildPushTickText, type TickDeps } from './tick-bodies'
+
+describe('buildPushTickText', () => {
+  it('formats a push tick envelope with the supplied nowIso + chatId', () => {
+    const out = buildPushTickText({
+      nowIso: '2026-05-13T01:30:00.000Z',
+      defaultChatId: 'chat_test_1',
+    })
+    expect(out).toContain('<companion_tick ts="2026-05-13T01:30:00.000Z" default_chat_id="chat_test_1" />')
+    expect(out).toContain('定时唤醒')
+    expect(out).toContain('不调用 reply')
+    expect(out).toContain('沉默就是沉默')
+  })
+})
 
 // Minimal pushTick test — verifies the PR D guard that companion ticks
 // skip when the same (alias, providerId) session has an in-flight user

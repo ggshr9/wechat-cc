@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   test: {
-    exclude: ['**/node_modules/**', '**/__e2e__/**', '**/playwright/**'],
+    exclude: ['**/node_modules/**', '**/__e2e__/**', '**/playwright/**', '**/eval/**'],
     // Tests should never touch the operator's real ~/.claude/channels/wechat
     // channel.log. PR Phase 4 routed SESSION_INIT through src/lib/log which
     // appendFileSyncs to STATE_DIR; without this opt-out a vitest run

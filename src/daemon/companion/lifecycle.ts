@@ -12,6 +12,12 @@ export interface CompanionPushDeps {
   shouldRun(): boolean
   log: (tag: string, line: string) => void
   onTick(): Promise<void>
+  /**
+   * Override base interval (ms). Defaults to PUSH_INTERVAL_MS (20 min).
+   * Eval harness passes a SAFE_INFINITY-style value to prevent auto-fire
+   * so the engine can drive ticks deterministically.
+   */
+  intervalMs?: number
 }
 
 const PUSH_INTERVAL_MS = 20 * 60 * 1000
@@ -21,7 +27,7 @@ const JITTER = 0.3
 export function registerCompanionPush(deps: CompanionPushDeps): Lifecycle {
   const stop = startCompanionScheduler({
     name: 'push',
-    intervalMs: PUSH_INTERVAL_MS,
+    intervalMs: deps.intervalMs ?? PUSH_INTERVAL_MS,
     jitterRatio: JITTER,
     shouldRun: deps.shouldRun,
     log: deps.log,
@@ -39,7 +45,7 @@ export interface CompanionIntrospectDeps extends CompanionPushDeps {}
 export function registerCompanionIntrospect(deps: CompanionIntrospectDeps): Lifecycle {
   const stop = startCompanionScheduler({
     name: 'introspect',
-    intervalMs: INTROSPECT_INTERVAL_MS,
+    intervalMs: deps.intervalMs ?? INTROSPECT_INTERVAL_MS,
     jitterRatio: JITTER,
     shouldRun: deps.shouldRun,
     log: deps.log,

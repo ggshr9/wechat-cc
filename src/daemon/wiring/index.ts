@@ -18,7 +18,7 @@ import type { PollingDeps } from '../polling-lifecycle'
 import type { StartupSweepDeps } from '../startup-sweeps'
 import { buildPipelineDeps } from './pipeline-deps'
 import { buildLifecycleDeps } from './lifecycle-deps'
-import { buildTickBodies } from './tick-bodies'
+import { buildTickBodies, type TickBodies } from './tick-bodies'
 
 export interface WireMainOpts {
   stateDir: string
@@ -30,6 +30,8 @@ export interface WireMainOpts {
   /** `--dangerously` flag — read by startup-sweeps for notification text. */
   dangerously: boolean
   log: (tag: string, line: string, fields?: Record<string, unknown>) => void
+  /** Forwarded to buildLifecycleDeps — eval harness override. */
+  schedulerIntervalMs?: number
 }
 
 export interface WiredDeps {
@@ -41,6 +43,12 @@ export interface WiredDeps {
   ilinkDeps: IlinkLifecycleDeps
   pollingDeps: Omit<PollingDeps, 'runPipeline'>
   startupDeps: StartupSweepDeps
+  /**
+   * The same TickBodies object used by the lifecycle onTick callbacks.
+   * Exposed so bootDaemon can wire DaemonHandle.fireTick directly to it —
+   * eval harness calls fireTick to drive ticks deterministically.
+   */
+  ticks: TickBodies
   /**
    * Late-bound references — main.ts populates via wireRef() after the
    * corresponding lifecycle is registered. Closures (admin handler's
@@ -65,6 +73,7 @@ export function wireMain(opts: WireMainOpts): WiredDeps {
   return {
     pipelineDeps,
     ...lifecycleDeps,
+    ticks,
     refs,
   }
 }

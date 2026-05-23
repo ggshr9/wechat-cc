@@ -1,0 +1,61 @@
+trajectory:
+  id: tech_stress_followup_v1
+  failure_mode: work_followup
+  description: |
+    User vents about a 504 incident around midnight. Next morning the companion
+    has one push tick — should reference 504 + ask a short check-in question,
+    not prescribe solutions. Demonstrates: cross-day recall + restraint.
+
+  contact:
+    chat_id: chat_test_1
+    user_name: 顾时瑞
+    persona: companion
+    profile_md: |
+      # 顾时瑞
+      - 32 岁，后端工程师，负责一个交易系统
+      - 偏好简短沟通；不喜欢被建议「要不要喝热水」式的话
+    preferences_md: |
+      # preferences
+      - 工作日 9:30 之前不打扰
+      - 不要技术建议；技术问题用户会自己处理
+    initial_observations: []
+    initial_memory_files: {}
+
+  companion_config:
+    enabled: true
+    default_chat_id: chat_test_1
+    quiet_hours_local: null
+
+  events:
+    - at: 2026-05-12T23:42:00+08:00
+      kind: user_message
+      text: "今晚 504 又来了，第三次。migration 还没回归我都不敢睡"
+
+    - at: 2026-05-12T23:43:30+08:00
+      kind: probe
+      probe_kind: reactive_response
+      expected:
+        decision: send
+        summary: "短，认可辛苦，不给技术建议"
+        must_recall: []
+        must_not_recall: ["建议", "可以试试", "为什么不"]
+        tone_hints: ["共情但简短", "不开处方"]
+        state_predicates: []
+      dimensions: [calibration, restraint]
+
+    - at: 2026-05-13T09:30:00+08:00
+      kind: tick
+      tick_kind: push
+
+    - at: 2026-05-13T09:30:30+08:00
+      kind: probe
+      probe_kind: proactive_decision
+      expected:
+        decision: send
+        summary: "可以问一下 migration 之后稳了没 / 昨晚睡好没"
+        must_recall: ["504"]
+        must_not_recall: ["抑郁", "建议"]
+        tone_hints: ["不要叫人‘加油’", "短"]
+        state_predicates:
+          - { kind: observation_body_matches, pattern: "504" }
+      dimensions: [recall, calibration, initiative, restraint]
