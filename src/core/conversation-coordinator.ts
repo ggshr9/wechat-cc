@@ -22,6 +22,7 @@ import type { InboundMsg } from './prompt-format'
 import { evaluateRound as evaluateModeratorRound, type ModeratorDecision, type ChatroomEntry } from './chatroom-moderator'
 import { assertSupported, UnsupportedCombinationError, type PermissionMode } from './capability-matrix'
 import { collectTurn, type TurnSummary } from './agent-provider'
+import { TIER_PROFILES } from './user-tier'
 
 export class ModeNotImplementedError extends Error {
   constructor(public readonly modeKind: Mode['kind']) {
@@ -167,7 +168,11 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     // notice. release() being absent from the manager dep (e.g. in test
     // fixtures that don't exercise the recycle path) is also tolerated.
     try {
-      await deps.manager.release?.(alias, providerId)
+      // TODO(Task 10/11): chatId + tier still come from inbound msg in
+      // dispatchSolo; thread them down here when the coordinator gains
+      // per-chat tier awareness. For now release under '_legacy' so we
+      // match what acquire() registered.
+      await deps.manager.release?.({ alias, providerId, chatId: '_legacy' })
     } catch (err) {
       deps.log('AUTH_FAILED', `release ${alias}/${providerId} threw: ${err instanceof Error ? err.message : err}`)
     }
@@ -236,7 +241,17 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
       project_alias: proj.alias,
       provider: providerId,
     })
-    const handle = await deps.manager.acquire(proj.alias, proj.path, providerId)
+    // TODO(Task 10/11): replace '_legacy' + admin with msg.chatId + the
+    // tier resolved from access.json for msg.chatId. Today every chat
+    // gets the same legacy session under admin — same behaviour as
+    // before AcquireRequest landed.
+    const handle = await deps.manager.acquire({
+      alias: proj.alias,
+      path: proj.path,
+      providerId,
+      chatId: '_legacy',
+      tierProfile: TIER_PROFILES.admin,
+    })
     const text = deps.format(msg)
     const summary = await collectTurn(handle.dispatch(text))
     const assistantTexts = summary.assistantText
@@ -433,7 +448,14 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
 
       let result: TurnSummary
       try {
-        const handle = await deps.manager.acquire(proj.alias, proj.path, speaker)
+        // TODO(Task 10/11): per-chat chatId + tier — see dispatchSolo.
+        const handle = await deps.manager.acquire({
+          alias: proj.alias,
+          path: proj.path,
+          providerId: speaker,
+          chatId: '_legacy',
+          tierProfile: TIER_PROFILES.admin,
+        })
         // PR C2 — propagate the chatroom aborter into the speaker turn so
         // /stop (and "new dispatch preempts prior") interrupt mid-stream
         // rather than waiting for the current speaker turn to drain.
@@ -543,8 +565,15 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     proj: { alias: string; path: string },
   ): Promise<void> {
     deps.log('COORDINATOR', `parallel chat=${msg.chatId} → project=${proj.alias} providers=${parallelProviders.join(',')}`)
+    // TODO(Task 10/11): per-chat chatId + tier — see dispatchSolo.
     const handles = await Promise.all(
-      parallelProviders.map(p => deps.manager.acquire(proj.alias, proj.path, p)),
+      parallelProviders.map(p => deps.manager.acquire({
+        alias: proj.alias,
+        path: proj.path,
+        providerId: p,
+        chatId: '_legacy',
+        tierProfile: TIER_PROFILES.admin,
+      })),
     )
     const text = deps.format(msg)
     const settled = await Promise.allSettled(handles.map(h => collectTurn(h.dispatch(text))))

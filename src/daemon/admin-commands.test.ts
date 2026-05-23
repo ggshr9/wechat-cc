@@ -185,10 +185,10 @@ describe('admin-commands', () => {
       expect(await cmds.handle(msg('/reset'))).toBe(true)
       // One release call per registered provider, keyed to the chat's alias.
       expect(release).toHaveBeenCalledTimes(2)
-      expect(release).toHaveBeenCalledWith('foo', 'claude')
-      expect(release).toHaveBeenCalledWith('foo', 'codex')
+      expect(release).toHaveBeenCalledWith({ alias: 'foo', providerId: 'claude', chatId: '_legacy' })
+      expect(release).toHaveBeenCalledWith({ alias: 'foo', providerId: 'codex', chatId: '_legacy' })
       // Persisted resume id is wiped so the next dispatch starts fresh.
-      // chatId='_legacy' is the placeholder until Task 9 threads the real chatId.
+      // chatId='_legacy' is the placeholder until Tasks 10/11 thread the real chatId.
       expect(del).toHaveBeenCalledWith({ alias: 'foo', chatId: '_legacy' })
       // User-facing confirmation mentions reset + the chat alias.
       const body = sentBody()
@@ -205,7 +205,7 @@ describe('admin-commands', () => {
         sessionStore: { get: () => null, delete: () => {} },
       })
       expect(await cmds.handle(msg('/重置'))).toBe(true)
-      expect(release).toHaveBeenCalledWith('bar', 'claude')
+      expect(release).toHaveBeenCalledWith({ alias: 'bar', providerId: 'claude', chatId: '_legacy' })
     })
 
     it('reports a clear message and no side effects when the chat has no project mapped', async () => {

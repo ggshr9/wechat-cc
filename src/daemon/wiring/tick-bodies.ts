@@ -14,6 +14,7 @@ import { makeEventsStore } from '../events/store'
 import { makeObservationsStore } from '../observations/store'
 import { runIntrospectTick } from '../companion/introspect'
 import { resolveIntrospectChatId, makeIntrospectAgent } from '../companion/introspect-runtime'
+import { TIER_PROFILES } from '../../core/user-tier'
 
 function errMsg(err: unknown): string { return err instanceof Error ? err.message : String(err) }
 
@@ -72,11 +73,22 @@ export function buildTickBodies(deps: TickDeps): TickBodies {
     // unpredictable interleaving). Plan recommends skip + warn over
     // abort because aborting the user's turn for a push tick is
     // user-hostile.
-    if (deps.boot.sessionManager.isInFlight(proj.alias, deps.boot.defaultProviderId)) {
+    // TODO(Task 10/11): the companion push targets default_chat_id; once
+    // the coordinator threads real chatIds through acquire(), pass
+    // cfg.default_chat_id here so the companion shares its session with
+    // that chat's user-initiated turns (rather than running under a
+    // sibling '_legacy' bucket).
+    if (deps.boot.sessionManager.isInFlight({ alias: proj.alias, providerId: deps.boot.defaultProviderId, chatId: '_legacy' })) {
       deps.log('SCHED', `[companion] skipping push tick: user session in-flight (alias=${proj.alias} provider=${deps.boot.defaultProviderId})`)
       return
     }
-    const handle = await deps.boot.sessionManager.acquire(proj.alias, proj.path, deps.boot.defaultProviderId)
+    const handle = await deps.boot.sessionManager.acquire({
+      alias: proj.alias,
+      path: proj.path,
+      providerId: deps.boot.defaultProviderId,
+      chatId: '_legacy',
+      tierProfile: TIER_PROFILES.admin,
+    })
     const tickText = buildPushTickText({
       nowIso: opts?.nowIso ?? new Date().toISOString(),
       defaultChatId: cfg.default_chat_id,

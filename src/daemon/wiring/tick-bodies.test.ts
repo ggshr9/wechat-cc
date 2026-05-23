@@ -52,7 +52,7 @@ function setupDeps(opts: {
   const dispatch = vi.fn(() => ({
     async *[Symbol.asyncIterator]() { /* empty turn — no events */ },
   }))
-  const acquire = vi.fn(async (_alias: string, _path: string, _providerId: string) => ({
+  const acquire = vi.fn(async () => ({
     alias: 'a', path: '/p', providerId: 'claude', lastUsedAt: 0,
     dispatch, close: async () => {},
   }))
@@ -89,7 +89,7 @@ describe('buildTickBodies / pushTick — companion isolation (PR D)', () => {
     cleanup.push(s.stateDir)
     const { pushTick } = buildTickBodies(s.deps)
     await pushTick()
-    expect(s.isInFlight).toHaveBeenCalledWith('_default', 'claude')
+    expect(s.isInFlight).toHaveBeenCalledWith({ alias: '_default', providerId: 'claude', chatId: '_legacy' })
     expect(s.acquire).not.toHaveBeenCalled()
     expect(s.dispatch).not.toHaveBeenCalled()
     expect(s.logs.some(l => l.includes('skipping push tick: user session in-flight'))).toBe(true)
@@ -100,7 +100,7 @@ describe('buildTickBodies / pushTick — companion isolation (PR D)', () => {
     cleanup.push(s.stateDir)
     const { pushTick } = buildTickBodies(s.deps)
     await pushTick()
-    expect(s.isInFlight).toHaveBeenCalledWith('_default', 'claude')
+    expect(s.isInFlight).toHaveBeenCalledWith({ alias: '_default', providerId: 'claude', chatId: '_legacy' })
     expect(s.acquire).toHaveBeenCalledOnce()
     expect(s.dispatch).toHaveBeenCalledOnce()
   })

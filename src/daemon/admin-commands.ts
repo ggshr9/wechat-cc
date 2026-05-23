@@ -370,14 +370,15 @@ async function runReset(deps: AdminCommandsDeps, adminChatId: string): Promise<v
   const providers = deps.registry.list()
   for (const p of providers) {
     try {
-      await deps.sessionManager.release(proj.alias, p)
+      // TODO(Task 10/11): adminChatId is the chatId for /reset; until
+      // coordinator + tick-bodies thread real chatIds through acquire(),
+      // every session lives under the '_legacy' bucket — so release that.
+      await deps.sessionManager.release({ alias: proj.alias, providerId: p, chatId: '_legacy' })
     } catch (err) {
       deps.log('ADMIN_CMD', `/reset release ${proj.alias}/${p} failed: ${err instanceof Error ? err.message : err}`)
     }
   }
-  // TODO: replaced in Task 9 — adminChatId is the chatId for /reset; until
-  // session-manager threads chatId through acquire() we tracking under the
-  // '_legacy' placeholder, so wipe that.
+  // Matches the release() bucket above — wipe the legacy chat_id row.
   deps.sessionStore.delete({ alias: proj.alias, chatId: '_legacy' })
   deps.log('ADMIN_CMD', `/reset chat=${adminChatId} alias=${proj.alias} providers=${providers.join(',')}`)
   await deps.sendMessage(
@@ -398,7 +399,9 @@ async function sendAiHealthReport(deps: AdminCommandsDeps, adminChatId: string):
     lines.push('(无已注册的 provider — 检查 daemon 启动日志)')
   } else {
     for (const p of providers) {
-      // TODO: replaced in Task 9 — Task 8 placeholder, '_legacy' until chatId threads through.
+      // TODO(Task 10/11): adminChatId is the chatId for /health ai;
+      // until coordinator threads real chatIds through acquire(), every
+      // session lives under '_legacy' — so read from there.
       const rec = deps.sessionStore.get({ alias: proj.alias, provider: p, chatId: '_legacy' })
       if (rec) {
         const age = humanAge(Date.parse(rec.last_used_at))

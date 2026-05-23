@@ -28,6 +28,7 @@ import { buildBootstrap } from '../src/daemon/bootstrap'
 import { openTestDb } from '../src/lib/db'
 import { makeAdminCommands } from '../src/daemon/admin-commands'
 import { isAdmin } from '../src/lib/access'
+import type { AcquireRequest } from '../src/core/session-manager'
 
 function makeIlinkStub() {
   return {
@@ -121,7 +122,7 @@ process.on('exit', () => { for (const c of cleanup) try { Promise.resolve(c()).c
   // real claude provider's interceptor produces under the hood).
   const sendAssistantText = vi.fn(async (_chatId: string, _text: string) => {})
   const releaseSpy = vi.fn(async () => {})
-  const fakeAcquire = vi.fn(async (alias: string, _path: string, providerId: string) => {
+  const fakeAcquire = vi.fn(async ({ alias, providerId }: AcquireRequest) => {
     return {
       alias, path: '/p', providerId, lastUsedAt: Date.now(),
       async *dispatch() {
@@ -194,7 +195,8 @@ process.on('exit', () => { for (const c of cleanup) try { Promise.resolve(c()).c
 
   // Seed a stored session for the chat so /health ai has something to render.
   // session-store is triple-keyed (alias, provider, chatId) as of Task 8;
-  // admin commands still use chat_id='_legacy' until Task 9.
+  // admin commands still use chat_id='_legacy' until Tasks 10/11 thread
+  // real chatIds through acquire().
   boot.sessionStore.set({ alias: 'P', provider: 'claude', chatId: '_legacy', sessionId: 'sid-test' })
 
   // /health ai
@@ -234,7 +236,7 @@ process.on('exit', () => { for (const c of cleanup) try { Promise.resolve(c()).c
   const parallelRegistry = (await import('../src/core/provider-registry')).createProviderRegistry()
   parallelRegistry.register('claude', { spawn: async () => ({ dispatch: () => ({ async *[Symbol.asyncIterator]() {} }), close: async () => {} }) }, { displayName: 'Claude', canResume: () => true })
   parallelRegistry.register('codex', { spawn: async () => ({ dispatch: () => ({ async *[Symbol.asyncIterator]() {} }), close: async () => {} }) }, { displayName: 'Codex', canResume: () => true })
-  const parallelAcquire = vi.fn(async (_alias: string, _path: string, providerId: string) => {
+  const parallelAcquire = vi.fn(async ({ providerId }: AcquireRequest) => {
     return {
       alias: 'P', path: '/p', providerId, lastUsedAt: Date.now(),
       async *dispatch() {
@@ -263,8 +265,15 @@ process.on('exit', () => { for (const c of cleanup) try { Promise.resolve(c()).c
   })
   await parallelCoord.dispatch({ chatId: 'par-chat', userId: 'par-chat', text: 'hi', msgType: 'text', createTimeMs: Date.now(), accountId: 'acct' })
   const parallelTexts = parallelSends.mock.calls.map(c => (c as unknown as [string, string])[1])
-  const releasedClaude = parallelRelease.mock.calls.some(c => (c as unknown as [string, string])[0] === 'P' && (c as unknown as [string, string])[1] === 'claude')
-  const releasedCodex = parallelRelease.mock.calls.some(c => (c as unknown as [string, string])[0] === 'P' && (c as unknown as [string, string])[1] === 'codex')
+  type ReleaseArg = { alias: string; providerId: string; chatId: string }
+  const releasedClaude = parallelRelease.mock.calls.some(c => {
+    const arg = (c as unknown as [ReleaseArg])[0]
+    return arg?.alias === 'P' && arg?.providerId === 'claude'
+  })
+  const releasedCodex = parallelRelease.mock.calls.some(c => {
+    const arg = (c as unknown as [ReleaseArg])[0]
+    return arg?.alias === 'P' && arg?.providerId === 'codex'
+  })
   if (releasedClaude && !releasedCodex) pass('release fired ONLY for the failing provider (claude), not the healthy one')
   else fail(`release wiring wrong: claude=${releasedClaude} codex=${releasedCodex}`)
   if (parallelTexts.some(t => t === '[Codex] codex reply')) pass('healthy codex reply forwarded with [Codex] prefix')
@@ -286,7 +295,7 @@ process.on('exit', () => { for (const c of cleanup) try { Promise.resolve(c()).c
     modCalls++
     return JSON.stringify({ action: 'continue', speaker: 'claude', prompt: '开场', reasoning: '' })
   })
-  const roomAcquire = vi.fn(async (_alias: string, _path: string, providerId: string) => ({
+  const roomAcquire = vi.fn(async ({ providerId }: AcquireRequest) => ({
     alias: 'P', path: '/p', providerId, lastUsedAt: Date.now(),
     async *dispatch() {
       yield { kind: 'error' as const, code: 'auth_failed', message: 'stale moderator-picked speaker' }

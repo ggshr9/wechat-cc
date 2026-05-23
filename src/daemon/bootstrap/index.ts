@@ -288,7 +288,7 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     // Task 6: tierProfile is threaded through the signature so Task 13 can
     // wire `canUseTool` per tier. Today the closure still derives permission
     // mode from the daemon-level `dangerouslySkipPermissions` flag for
-    // behaviour parity; Task 9/13 will migrate to tier-driven options here.
+    // behaviour parity; Task 13 will migrate to tier-driven options here.
     const cstatus = deps.ilink.companion.status()
     const systemPrompt = buildSystemPrompt({
       providerId: 'claude',

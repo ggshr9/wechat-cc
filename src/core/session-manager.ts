@@ -1,7 +1,7 @@
 import type { ProviderId, SessionStore } from './session-store'
 import type { AgentEvent, AgentSession } from './agent-provider'
 import type { ProviderRegistry } from './provider-registry'
-import { TIER_PROFILES } from './user-tier'
+import type { TierProfile } from './user-tier'
 import { log } from '../lib/log'
 
 export interface SessionManagerOptions {
@@ -16,12 +16,39 @@ export interface SessionManagerOptions {
   registry: ProviderRegistry
   /**
    * When present, the manager persists the SDK-reported session_id per
-   * (alias, provider) and passes it back as `resume` on the next spawn
-   * — slashing daemon-restart cold-start from ~10 s to <3 s.
+   * (alias, provider, chatId) and passes it back as `resume` on the next
+   * spawn — slashing daemon-restart cold-start from ~10 s to <3 s.
    */
   sessionStore?: SessionStore
   /** Stored session_id older than this is treated as stale. Default 7 d. */
   resumeTTLMs?: number
+}
+
+/**
+ * Options-object argument to `SessionManager.acquire`. The triple
+ * (providerId, alias, chatId) is the cache + in-flight key — two chats
+ * on the same alias+provider get independent sessions (separate
+ * session_ids, separate jsonl files). `tierProfile` is forwarded to
+ * `provider.spawn` so the SDK boots with the right permission knobs for
+ * this particular chat's caller.
+ */
+export interface AcquireRequest {
+  alias: string
+  path: string
+  providerId: ProviderId
+  chatId: string
+  tierProfile: TierProfile
+}
+
+/**
+ * Options-object argument for the read/write methods that consult the
+ * cache but don't need a path/tier (release, isInFlight). Same triple
+ * as `AcquireRequest` minus the spawn-time-only fields.
+ */
+export interface InFlightKey {
+  alias: string
+  providerId: ProviderId
+  chatId: string
 }
 
 export interface SessionHandle {
@@ -45,28 +72,29 @@ export interface SessionHandle {
 interface Internal {
   handle: SessionHandle
   session: AgentSession
+  chatId: string
 }
 
-/** Composite key for the (provider, alias) session map. */
-function key(providerId: ProviderId, alias: string): string {
-  return `${providerId}:${alias}`
+/** Composite key for the (provider, alias, chatId) session map. */
+function sessionKey(k: { alias: string; providerId: ProviderId; chatId: string }): string {
+  return `${k.providerId}|${k.alias}|${k.chatId}`
 }
 
 export class SessionManager {
   private readonly opts: SessionManagerOptions
   private readonly sessions = new Map<string, Internal>()
-  // In-flight spawn promises keyed by (provider, alias). acquire() inserts
-  // the spawn promise here BEFORE awaiting provider.spawn(), so a second
-  // concurrent acquire on the same key returns the in-flight promise
-  // instead of forking a duplicate subprocess. Without this, the companion
-  // tick + an inbound message racing on alias `_default` would both miss
-  // the cache and both spawn — first one ends up orphaned.
+  // In-flight spawn promises keyed by (provider, alias, chatId). acquire()
+  // inserts the spawn promise here BEFORE awaiting provider.spawn(), so a
+  // second concurrent acquire on the same triple returns the in-flight
+  // promise instead of forking a duplicate subprocess. Without this, the
+  // companion tick + an inbound message racing on the same chat would both
+  // miss the cache and both spawn — first one ends up orphaned.
   private readonly pending = new Map<string, Promise<SessionHandle>>()
-  // In-flight dispatch counter keyed by (provider, alias). Each dispatch()
-  // iterator increments on first .next() entry and decrements in its
-  // finally block. sweepIdle skips any session with count > 0 — a 30 min+
-  // turn must not be killed mid-stream just because lastUsedAt looks
-  // stale. release() / shutdown / enforceCapacity ignore the counter
+  // In-flight dispatch counter keyed by (provider, alias, chatId). Each
+  // dispatch() iterator increments on first .next() entry and decrements
+  // in its finally block. sweepIdle skips any session with count > 0 — a
+  // 30 min+ turn must not be killed mid-stream just because lastUsedAt
+  // looks stale. release() / shutdown / enforceCapacity ignore the counter
   // (those are operator-triggered or capacity-enforced and must be
   // unconditional).
   private readonly inFlight = new Map<string, number>()
@@ -76,13 +104,15 @@ export class SessionManager {
   }
 
   /**
-   * Get or spawn an agent session for (providerId, alias). The same call
-   * with different providerIds returns independent sessions — supports
-   * RFC 03 P2 solo-mode where chat A is on claude and chat B is on codex
-   * but both reference the same project.
+   * Get or spawn an agent session for (providerId, alias, chatId). The
+   * same call with different providerIds returns independent sessions
+   * — supports RFC 03 P2 solo-mode where chat A is on claude and chat B
+   * is on codex but both reference the same project. Different chatIds
+   * on the same (alias, provider) also return independent sessions —
+   * required for per-chat tier policy + per-chat conversation isolation.
    */
-  async acquire(alias: string, path: string, providerId: ProviderId): Promise<SessionHandle> {
-    const k = key(providerId, alias)
+  async acquire(req: AcquireRequest): Promise<SessionHandle> {
+    const k = sessionKey({ alias: req.alias, providerId: req.providerId, chatId: req.chatId })
     const existing = this.sessions.get(k)
     if (existing) {
       existing.handle.lastUsedAt = Date.now()
@@ -90,62 +120,57 @@ export class SessionManager {
     }
     const inFlight = this.pending.get(k)
     if (inFlight) return inFlight
-    const promise = this.spawn(alias, path, providerId).finally(() => {
+    const promise = this.spawn(req).finally(() => {
       this.pending.delete(k)
     })
     this.pending.set(k, promise)
     return promise
   }
 
-  private async spawn(alias: string, path: string, providerId: ProviderId): Promise<SessionHandle> {
-    const entry = this.opts.registry.get(providerId)
-    if (!entry) throw new Error(`unknown provider: ${providerId} (registered: ${this.opts.registry.list().join(', ')})`)
+  private async spawn(req: AcquireRequest): Promise<SessionHandle> {
+    const entry = this.opts.registry.get(req.providerId)
+    if (!entry) throw new Error(`unknown provider: ${req.providerId} (registered: ${this.opts.registry.list().join(', ')})`)
     const { provider, opts: regOpts } = entry
 
     // Check for a recent session_id to resume — cut cold-start latency.
     const ttl = this.opts.resumeTTLMs ?? 7 * 24 * 60 * 60_000
-    // TODO: replaced in Task 9 — acquire() will gain a chatId arg and
-    // thread it through here. Until then the session-store row lives
-    // under chat_id='_legacy', matching legacy single-chat semantics.
-    const chatId = '_legacy'
-    const record = this.opts.sessionStore?.get({ alias, provider: providerId, chatId }) ?? null
+    const record = this.opts.sessionStore?.get({ alias: req.alias, provider: req.providerId, chatId: req.chatId }) ?? null
     let resumeSessionId: string | undefined
     if (record) {
       const age = Date.now() - Date.parse(record.last_used_at)
-      const jsonlStillThere = regOpts.canResume(path, record.session_id)
+      const jsonlStillThere = regOpts.canResume(req.path, record.session_id)
       if (age < ttl && jsonlStillThere) {
         resumeSessionId = record.session_id
-        log('SESSION_RESUME', `alias=${alias} sid=${record.session_id} provider=${providerId} age=${Math.round(age / 1000)}s`)
+        log('SESSION_RESUME', `alias=${req.alias} chat=${req.chatId} sid=${record.session_id} provider=${req.providerId} age=${Math.round(age / 1000)}s`)
       } else {
-        // stale — forget THIS provider's row only. delete() would also
-        // wipe the sibling provider's still-valid resume point on a chat
-        // that uses both /cc and /codex.
-        this.opts.sessionStore?.deleteOne({ alias, provider: providerId, chatId })
+        // stale — forget THIS (provider, chatId) row only. delete() would
+        // also wipe sibling rows for the same chat under other providers.
+        this.opts.sessionStore?.deleteOne({ alias: req.alias, provider: req.providerId, chatId: req.chatId })
       }
     }
 
-    const project = { alias, path }
+    const project = { alias: req.alias, path: req.path }
     const session = await provider.spawn(project, {
       ...(resumeSessionId ? { resumeSessionId } : {}),
-      // Hard-coded admin tier — Task 9 threads real tier through acquire().
-      tierProfile: TIER_PROFILES.admin,
+      tierProfile: req.tierProfile,
     })
 
     const sessionStore = this.opts.sessionStore
-    const k = key(providerId, alias)
+    const k = sessionKey({ alias: req.alias, providerId: req.providerId, chatId: req.chatId })
     const inFlight = this.inFlight
     const handle: SessionHandle = {
-      alias,
-      path,
-      providerId,
+      alias: req.alias,
+      path: req.path,
+      providerId: req.providerId,
       lastUsedAt: Date.now(),
       dispatch(text: string): AsyncIterable<AgentEvent> {
         handle.lastUsedAt = Date.now()
         const inner = session.dispatch(text)
-        // Track in-flight under (provider, alias) so sweepIdle can skip
-        // busy sessions. Wrap unconditionally — even when sessionStore is
-        // absent — otherwise an iterator started without persistence won't
-        // bump the counter and a long turn gets evicted mid-stream.
+        // Track in-flight under (provider, alias, chatId) so sweepIdle
+        // can skip busy sessions. Wrap unconditionally — even when
+        // sessionStore is absent — otherwise an iterator started without
+        // persistence won't bump the counter and a long turn gets evicted
+        // mid-stream.
         return {
           async *[Symbol.asyncIterator]() {
             inFlight.set(k, (inFlight.get(k) ?? 0) + 1)
@@ -153,8 +178,7 @@ export class SessionManager {
               for await (const ev of inner) {
                 yield ev
                 if (ev.kind === 'result' && ev.sessionId && sessionStore) {
-                  // TODO: replaced in Task 9 — chatId threaded through acquire().
-                  sessionStore.set({ alias, provider: providerId, chatId: '_legacy', sessionId: ev.sessionId })
+                  sessionStore.set({ alias: req.alias, provider: req.providerId, chatId: req.chatId, sessionId: ev.sessionId })
                 }
               }
             } finally {
@@ -173,28 +197,29 @@ export class SessionManager {
       },
     }
 
-    this.sessions.set(key(providerId, alias), { handle, session })
+    this.sessions.set(k, { handle, session, chatId: req.chatId })
     await this.enforceCapacity()
     return handle
   }
 
-  async release(alias: string, providerId: ProviderId): Promise<void> {
-    const k = key(providerId, alias)
-    const s = this.sessions.get(k)
+  async release(k: InFlightKey): Promise<void> {
+    const key = sessionKey(k)
+    const s = this.sessions.get(key)
     if (!s) return
-    this.sessions.delete(k)
+    this.sessions.delete(key)
     await s.handle.close()
   }
 
   /**
-   * True when (alias, providerId) has at least one dispatch iterator
-   * currently running. Caller can use this to gate background work
-   * (companion ticks, etc.) so it doesn't contend with a user-initiated
-   * turn on the same session. Counter is incremented at iterator entry
-   * and decremented in finally — accurate without external locking.
+   * True when (alias, providerId, chatId) has at least one dispatch
+   * iterator currently running. Caller can use this to gate background
+   * work (companion ticks, etc.) so it doesn't contend with a
+   * user-initiated turn on the same session. Counter is incremented at
+   * iterator entry and decremented in finally — accurate without
+   * external locking.
    */
-  isInFlight(alias: string, providerId: ProviderId): boolean {
-    return (this.inFlight.get(key(providerId, alias)) ?? 0) > 0
+  isInFlight(k: InFlightKey): boolean {
+    return (this.inFlight.get(sessionKey(k)) ?? 0) > 0
   }
 
   list() {
@@ -202,30 +227,35 @@ export class SessionManager {
       alias: s.handle.alias,
       path: s.handle.path,
       providerId: s.handle.providerId,
+      chatId: s.chatId,
       lastUsedAt: s.handle.lastUsedAt,
     }))
   }
 
   async shutdown(): Promise<void> {
-    const handles = Array.from(this.sessions.values()).map(s => s.handle)
-    await Promise.all(handles.map(h => this.release(h.alias, h.providerId)))
+    const entries = Array.from(this.sessions.values())
+    await Promise.all(entries.map(s => this.release({
+      alias: s.handle.alias,
+      providerId: s.handle.providerId,
+      chatId: s.chatId,
+    })))
   }
 
   private async enforceCapacity(): Promise<void> {
     while (this.sessions.size > this.opts.maxConcurrent) {
       const lru = this.pickLru()
       if (!lru) break
-      await this.release(lru.alias, lru.providerId)
+      await this.release(lru)
     }
   }
 
-  private pickLru(): { alias: string; providerId: ProviderId } | null {
-    let worst: { alias: string; providerId: ProviderId } | null = null
+  private pickLru(): InFlightKey | null {
+    let worst: InFlightKey | null = null
     let worstAt = Infinity
     for (const s of this.sessions.values()) {
       if (s.handle.lastUsedAt < worstAt) {
         worstAt = s.handle.lastUsedAt
-        worst = { alias: s.handle.alias, providerId: s.handle.providerId }
+        worst = { alias: s.handle.alias, providerId: s.handle.providerId, chatId: s.chatId }
       }
     }
     return worst
@@ -237,10 +267,10 @@ export class SessionManager {
       // Never evict a session with an active dispatch — killing it mid-
       // stream would leave the coordinator's collectTurn loop hanging on
       // a queue that's about to be nulled out.
-      const k = key(s.handle.providerId, s.handle.alias)
+      const k = sessionKey({ alias: s.handle.alias, providerId: s.handle.providerId, chatId: s.chatId })
       if ((this.inFlight.get(k) ?? 0) > 0) continue
       if (now - s.handle.lastUsedAt >= this.opts.idleEvictMs) {
-        await this.release(s.handle.alias, s.handle.providerId)
+        await this.release({ alias: s.handle.alias, providerId: s.handle.providerId, chatId: s.chatId })
       }
     }
   }
