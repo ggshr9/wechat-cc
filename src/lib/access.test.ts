@@ -95,3 +95,26 @@ describe('saveAccess + loadAccess round-trip', () => {
     expect(loaded.admins).toEqual(['alice@im.wechat'])
   })
 })
+
+describe('trusted field', () => {
+  it('parses trusted array when present', () => {
+    writeAccess({
+      dmPolicy: 'allowlist',
+      allowFrom: ['u1', 'u2'],
+      admins: ['u1'],
+      trusted: ['u2'],
+    })
+    const loaded = loadAccess()
+    expect(loaded.trusted).toEqual(['u2'])
+  })
+
+  it('parses as undefined when trusted is omitted (not empty array)', () => {
+    writeAccess({
+      dmPolicy: 'allowlist',
+      allowFrom: ['u1'],
+      admins: ['u1'],
+    })
+    const loaded = loadAccess()
+    expect(loaded.trusted).toBeUndefined()
+  })
+})

@@ -36,6 +36,14 @@ export interface Access {
   dmPolicy: 'allowlist' | 'disabled'
   allowFrom: string[]
   admins?: string[]
+  /**
+   * Trusted users get every capability admin has EXCEPT destructive
+   * operations (rm / git reset --hard / memory_delete / etc.) — those
+   * trigger a permission prompt to the admin chat. Optional field;
+   * missing or empty means no users have trusted tier and the operator
+   * must explicitly opt people in.
+   */
+  trusted?: string[]
 }
 
 function defaultAccess(): Access {
@@ -49,7 +57,8 @@ function readAccessFile(): Access {
     return {
       dmPolicy: parsed.dmPolicy ?? 'allowlist',
       allowFrom: parsed.allowFrom ?? [],
-      admins: parsed.admins,
+      ...(parsed.admins ? { admins: parsed.admins } : {}),
+      ...(parsed.trusted ? { trusted: parsed.trusted } : {}),
     }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return defaultAccess()
