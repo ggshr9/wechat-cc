@@ -184,6 +184,7 @@ remembers its choice across daemon restarts (`conversations.json`).
 |---|---|---|---|
 | `/cc`            | **Solo · Claude** | Claude only | Single reply |
 | `/codex`         | **Solo · Codex**  | Codex only  | Single reply |
+| `/cursor`        | **Solo · Cursor** | Cursor only (if `@cursor/sdk` + `CURSOR_API_KEY` are present) | Single reply |
 | `/both`          | **Parallel** | Claude + Codex independently | `[Claude] ...` + `[Codex] ...` (two replies) |
 | `/cc + codex`    | **Primary + Tool** | Claude main, Codex on call | Single reply; Claude self-decides when to invoke `delegate_codex` |
 | `/codex + cc`    | **Primary + Tool** | Codex main, Claude on call | Same shape, roles swapped |
@@ -206,9 +207,10 @@ ends when one of them just `@user`s a final answer, or when `max_rounds=4`
 is hit. `/stop` aborts immediately.
 
 The architecture is **open** — providers are an open string brand registered
-through `ProviderRegistry`, not a Claude+Codex enum. Adding a third SDK
-(Cursor / Gemini / your own) is a new file in `src/core/` plus a registry
-entry. See [`docs/rfc/03-multi-agent-architecture.md`](docs/rfc/03-multi-agent-architecture.md)
+through `ProviderRegistry`, not a Claude+Codex enum. **Cursor** ships as the
+third provider out of the box (env-var-only, see [Cursor setup](#cursor-optional-third-provider)
+below); adding a fourth SDK (Gemini / your own) is a new file in `src/core/`
+plus a registry entry. See [`docs/rfc/03-multi-agent-architecture.md`](docs/rfc/03-multi-agent-architecture.md)
 Appendix D.
 
 > **Auth-agnostic for Codex.** Whether you authed via `codex login`
@@ -347,9 +349,11 @@ restarted.
 - **Receive**: per-account long-polling `POST /ilink/bot/getupdates`
 - **Send**: `POST /ilink/bot/sendmessage` (requires the user's
   `context_token` — they must message the bot first)
-- **Drivers**: `@anthropic-ai/claude-agent-sdk` and `@openai/codex-sdk`,
-  registered side-by-side via `ProviderRegistry`. Adding a third provider
-  (Cursor / Gemini / your own) is a new file in `src/core/`. See
+- **Drivers**: `@anthropic-ai/claude-agent-sdk`, `@openai/codex-sdk`, and
+  (optionally, via `optionalDependencies`) `@cursor/sdk`, registered
+  side-by-side via `ProviderRegistry`. Cursor is enabled when `CURSOR_API_KEY`
+  is set and the SDK loads. Adding a fourth provider (Gemini / your own) is
+  a new file in `src/core/`. See
   [`docs/rfc/03-multi-agent-architecture.md`](docs/rfc/03-multi-agent-architecture.md)
 - **Tools**: 22 tools (reply / share_page / memory / companion / delegate /
   …) live in stdio MCP servers under `src/mcp-servers/`. Both providers
@@ -529,6 +533,26 @@ Caveat: destructive Bash detection is regex-based and conservative
 `dd if=… of=…`). A determined caller can obfuscate. Don't put untrusted
 people in `trusted` tier.
 
+### Cursor (optional third provider)
+
+To enable Cursor:
+
+1. `bun add @cursor/sdk` (if not already installed — it's in `optionalDependencies`,
+   so it usually installs by default)
+2. Set `CURSOR_API_KEY` in your shell or systemd unit
+3. Restart the daemon. `wechat-cc doctor` should show `cursor: ok`.
+4. Send `/cursor` in WeChat to route that chat to Cursor.
+
+You can persist Cursor as your default provider via:
+
+```bash
+wechat-cc provider set cursor --model composer-2
+```
+
+Tier behavior for Cursor follows the same [Permission tiers](#permission-tiers-v06)
+above, but with one caveat — see the "Cursor tier enforcement is the coarsest"
+entry under [Known limitations](#known-limitations).
+
 ---
 
 ## Demo data (for screenshots / first impressions)
@@ -573,6 +597,13 @@ Stable `obs_demo_*` / `ms_demo_*` ids make `unseed` reliable.
   `never` approval, which means destructive operations *within the workspace
   cwd* are still possible. The guest tier on Codex uses `read-only` sandbox,
   which is solid.
+- **Cursor tier enforcement is the coarsest of the three providers** — Cursor SDK
+  has only one permission knob (`local.sandboxOptions.enabled`). Admin tier disables
+  the sandbox; trusted + guest both enable it. There's no read-only-mode equivalent
+  to Codex's guest tier, so a guest using Cursor can write inside the project's
+  working directory. If you have guests you don't trust to write inside cwd, route
+  them to Claude (whose `disallowedTools` array enforces strict per-tool blocks
+  for guest tier).
 - **v0.6 sessions table schema is one-way** — migration v10 adds a `chat_id`
   column and rebuilds the primary key as `(alias, provider, chat_id)`. The
   upgrade is safe; the downgrade isn't. A v0.5 binary opening a post-v0.6
