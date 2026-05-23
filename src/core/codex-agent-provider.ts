@@ -2,7 +2,42 @@ import { Codex, type Thread, type ThreadEvent, type ThreadItem } from '@openai/c
 import { tmpdir } from 'node:os'
 import type { AgentEvent, AgentProject, AgentProvider, AgentSession } from './agent-provider'
 import { resolveCodexCheapModel } from './codex-cheap-model'
+import type { TierProfile } from './user-tier'
 import { log } from '../lib/log'
+
+export interface CodexTierSdkOpts {
+  sandboxMode: 'read-only' | 'workspace-write' | 'danger-full-access'
+  approvalPolicy: 'untrusted' | 'on-request' | 'never'
+}
+
+/**
+ * Pure translation from daemon TierProfile → Codex SDK options.
+ *
+ * Codex has no per-tool callback equivalent to Claude's canUseTool.
+ * Tier enforcement is therefore coarser:
+ *   - admin → full access
+ *   - trusted → workspace-write sandbox (no admin UI to field
+ *     'on-request' prompts, so we use 'never' approval — destructive
+ *     ops within the workspace cwd are still possible; documented
+ *     limitation)
+ *   - guest → read-only sandbox + untrusted approval (functionally
+ *     restricted to reading + replying)
+ *
+ * Distinguishing tiers by relay/deny size is a heuristic: a profile
+ * with no relay and no deny is treated as admin-equivalent; any deny
+ * presence means guest-equivalent; relay-only means trusted. This
+ * works for the three default profiles; if custom profiles get added
+ * later this needs revisiting.
+ */
+export function tierProfileToCodexSdkOpts(tp: TierProfile): CodexTierSdkOpts {
+  if (tp.relay.size === 0 && tp.deny.size === 0) {
+    return { sandboxMode: 'danger-full-access', approvalPolicy: 'never' }
+  }
+  if (tp.deny.size === 0) {
+    return { sandboxMode: 'workspace-write', approvalPolicy: 'never' }
+  }
+  return { sandboxMode: 'read-only', approvalPolicy: 'untrusted' }
+}
 
 /**
  * codex-agent-provider — Codex SDK companion to claude-agent-provider, using

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Codex, Thread, ThreadEvent, ThreadOptions } from '@openai/codex-sdk'
-import { createCodexAgentProvider, type CodexFactory } from './codex-agent-provider'
+import { createCodexAgentProvider, tierProfileToCodexSdkOpts, type CodexFactory } from './codex-agent-provider'
 import type { AgentEvent } from './agent-provider'
+import { TIER_PROFILES } from './user-tier'
 
 /**
  * Tests for codex-agent-provider (yield-event shape). Uses an injected
@@ -522,5 +523,25 @@ describe('Codex agent provider', () => {
       ])
       expect(await p.cheapEval?.('hi')).toBe('')
     })
+  })
+})
+
+describe('tierProfileToCodexSdkOpts', () => {
+  it('admin → danger-full-access + never', () => {
+    const out = tierProfileToCodexSdkOpts(TIER_PROFILES.admin)
+    expect(out.sandboxMode).toBe('danger-full-access')
+    expect(out.approvalPolicy).toBe('never')
+  })
+
+  it('trusted → workspace-write + never (NOT on-request, no admin UI to field)', () => {
+    const out = tierProfileToCodexSdkOpts(TIER_PROFILES.trusted)
+    expect(out.sandboxMode).toBe('workspace-write')
+    expect(out.approvalPolicy).toBe('never')
+  })
+
+  it('guest → read-only + untrusted', () => {
+    const out = tierProfileToCodexSdkOpts(TIER_PROFILES.guest)
+    expect(out.sandboxMode).toBe('read-only')
+    expect(out.approvalPolicy).toBe('untrusted')
   })
 })
