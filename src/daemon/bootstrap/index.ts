@@ -42,7 +42,7 @@ import { makeSessionStore } from '../../core/session-store'
 import type { Db } from '../../lib/db'
 import { homedir } from 'node:os'
 import { loadAgentConfig } from '../../lib/agent-config'
-import { loadAccess, type Access } from '../../lib/access'
+import { loadAccess, setSessionInvalidator, type Access } from '../../lib/access'
 import { loadCompanionConfig, type CompanionConfig } from '../companion/config'
 import { wechatStdioMcpSpec, delegateStdioMcpSpec, type McpStdioSpec } from './mcp-specs'
 import { claudeSessionJsonlPath, codexSessionJsonlPaths } from './session-paths'
@@ -494,6 +494,19 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     registry,
     sessionStore,
     resumeTTLMs: 7 * 24 * 60 * 60_000,
+  })
+
+  // Task 14 — when admins / trusted / allowFrom set membership changes in
+  // access.json, shut down all live sessions so the next acquire respawns
+  // under the new tier. Single-step rule: edit access.json → next inbound
+  // runs under new tier. Up to 5s lag while the in-process cache holds the
+  // old snapshot. Errors during shutdown are logged but swallowed (the
+  // access reader must never crash the caller).
+  setSessionInvalidator(() => {
+    deps.log('ACCESS', 'tier membership changed — invalidating all live sessions')
+    void sessionManager.shutdown().catch(err => {
+      deps.log('ACCESS', `invalidate shutdown error: ${err instanceof Error ? err.message : String(err)}`)
+    })
   })
 
   // Periodic idle sweep — without this, idleEvictMs is dead config (the

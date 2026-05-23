@@ -21,11 +21,13 @@ function writeAccess(obj: object): void {
   writeFileSync(ACCESS_FILE, JSON.stringify(obj, null, 2))
 }
 
-const { gate, isAdmin, loadAccess, saveAccess, _clearCache } = await import('./access')
+const { gate, isAdmin, loadAccess, saveAccess, _clearCache, setSessionInvalidator, _resetSnapshotForTest } = await import('./access')
 
 beforeEach(() => {
   try { rmSync(ACCESS_FILE) } catch {}
   _clearCache()
+  _resetSnapshotForTest()
+  setSessionInvalidator(null)
 })
 
 afterAll(() => {
@@ -116,5 +118,95 @@ describe('trusted field', () => {
     })
     const loaded = loadAccess()
     expect(loaded.trusted).toBeUndefined()
+  })
+})
+
+describe('session invalidator', () => {
+  it('emits invalidation when tier membership changes', () => {
+    let invalidated = 0
+    setSessionInvalidator(() => { invalidated++ })
+
+    // First load — initialises snapshot
+    writeAccess({ dmPolicy: 'allowlist', allowFrom: ['x'], admins: ['x'] })
+    loadAccess()
+    expect(invalidated).toBe(0)
+
+    // Rewrite with no change — no invalidation
+    _clearCache()
+    writeAccess({ dmPolicy: 'allowlist', allowFrom: ['x'], admins: ['x'] })
+    loadAccess()
+    expect(invalidated).toBe(0)
+
+    // Rewrite changing admins — invalidates
+    _clearCache()
+    writeAccess({ dmPolicy: 'allowlist', allowFrom: ['x', 'y'], admins: ['x', 'y'] })
+    loadAccess()
+    expect(invalidated).toBe(1)
+  })
+
+  it('does not invalidate on first load', () => {
+    let invalidated = 0
+    setSessionInvalidator(() => { invalidated++ })
+    writeAccess({ dmPolicy: 'allowlist', allowFrom: ['x'], admins: ['x'] })
+    loadAccess()
+    expect(invalidated).toBe(0)
+  })
+
+  it('treats admins/trusted/allowFrom as sets (order-insensitive)', () => {
+    let invalidated = 0
+    writeAccess({ dmPolicy: 'allowlist', allowFrom: ['a', 'b'], admins: ['a', 'b'], trusted: ['c', 'd'] })
+    loadAccess()
+    setSessionInvalidator(() => { invalidated++ })
+
+    _clearCache()
+    writeAccess({ dmPolicy: 'allowlist', allowFrom: ['b', 'a'], admins: ['b', 'a'], trusted: ['d', 'c'] })
+    loadAccess()
+    expect(invalidated).toBe(0)
+  })
+
+  it('does not invalidate on dmPolicy-only change', () => {
+    let invalidated = 0
+    writeAccess({ dmPolicy: 'allowlist', allowFrom: ['x'], admins: ['x'] })
+    loadAccess()
+    setSessionInvalidator(() => { invalidated++ })
+
+    _clearCache()
+    writeAccess({ dmPolicy: 'disabled', allowFrom: ['x'], admins: ['x'] })
+    loadAccess()
+    expect(invalidated).toBe(0)
+  })
+
+  it('invalidates on trusted-only change', () => {
+    let invalidated = 0
+    writeAccess({ dmPolicy: 'allowlist', allowFrom: ['x'], admins: ['x'], trusted: ['y'] })
+    loadAccess()
+    setSessionInvalidator(() => { invalidated++ })
+
+    _clearCache()
+    writeAccess({ dmPolicy: 'allowlist', allowFrom: ['x'], admins: ['x'], trusted: ['y', 'z'] })
+    loadAccess()
+    expect(invalidated).toBe(1)
+  })
+
+  it('invalidates on allowFrom-only change', () => {
+    let invalidated = 0
+    writeAccess({ dmPolicy: 'allowlist', allowFrom: ['x'], admins: ['x'] })
+    loadAccess()
+    setSessionInvalidator(() => { invalidated++ })
+
+    _clearCache()
+    writeAccess({ dmPolicy: 'allowlist', allowFrom: ['x', 'y'], admins: ['x'] })
+    loadAccess()
+    expect(invalidated).toBe(1)
+  })
+
+  it('swallows errors thrown by the invalidator', () => {
+    writeAccess({ dmPolicy: 'allowlist', allowFrom: ['x'], admins: ['x'] })
+    loadAccess()
+    setSessionInvalidator(() => { throw new Error('boom') })
+
+    _clearCache()
+    writeAccess({ dmPolicy: 'allowlist', allowFrom: ['x', 'y'], admins: ['x', 'y'] })
+    expect(() => loadAccess()).not.toThrow()
   })
 })
