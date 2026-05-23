@@ -6,6 +6,20 @@
  *   bun run eval:companion                                        # run all trajectories
  *   bun run eval:companion --trajectory tech_stress_followup_v1   # one
  */
+
+// SessionManager.shutdown uses Promise.all over multiple session.close() calls.
+// When the SDK's ProcessTransport throws "not ready for writing" during cleanup,
+// one rejection is caught by daemon-shim's try/catch but the parallel rejections
+// become unhandled — Bun then aborts the process before the report is written.
+// Swallow only that specific known message; let any other unhandled rejection
+// crash as it normally would.
+process.on('unhandledRejection', (reason) => {
+  const msg = reason instanceof Error ? reason.message : String(reason)
+  if (msg.includes('ProcessTransport is not ready')) return
+  console.error('[eval] unhandled rejection:', reason)
+  process.exit(1)
+})
+
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
