@@ -3,6 +3,7 @@ import {
   CAPABILITY_MATRIX,
   lookup,
   assertSupported,
+  assertMatrixComplete,
   UnsupportedCombinationError,
   type MatrixRow,
   type PermissionMode,
@@ -10,8 +11,8 @@ import {
 import type { Mode, ProviderId } from './conversation'
 
 describe('CAPABILITY_MATRIX', () => {
-  it('contains exactly 16 rows (4 modes × 2 providers × 2 perms)', () => {
-    expect(CAPABILITY_MATRIX).toHaveLength(16)
+  it('contains exactly 24 rows (4 modes × 3 providers × 2 perms)', () => {
+    expect(CAPABILITY_MATRIX).toHaveLength(24)
   })
 
   it.each(CAPABILITY_MATRIX)(
@@ -63,5 +64,31 @@ describe('assertSupported', () => {
     } finally {
       ;(row as { forbidden: boolean }).forbidden = original
     }
+  })
+})
+
+describe('capability-matrix — cursor rows', () => {
+  it('cursor solo strict: askUser=never, replyPrefix=never, no delegate', () => {
+    const cap = lookup('solo', 'cursor', 'strict')
+    expect(cap.askUser).toBe('never')
+    expect(cap.replyPrefix).toBe('never')
+    expect(cap.approvalPolicy).toBeNull()
+    expect(cap.delegate).toBe('unloaded')
+    expect(cap.forbidden).toBe(false)
+  })
+
+  it('cursor chatroom dangerously: askUser=never, replyPrefix=always', () => {
+    const cap = lookup('chatroom', 'cursor', 'dangerously')
+    expect(cap.askUser).toBe('never')
+    expect(cap.replyPrefix).toBe('always')
+  })
+
+  it('cursor primary_tool: delegate loaded', () => {
+    const cap = lookup('primary_tool', 'cursor', 'strict')
+    expect(cap.delegate).toBe('loaded')
+  })
+
+  it('assertMatrixComplete accepts cursor', () => {
+    expect(() => assertMatrixComplete(['claude', 'codex', 'cursor'])).not.toThrow()
   })
 })

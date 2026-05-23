@@ -118,8 +118,42 @@ export const CAPABILITY_MATRIX: ReadonlyArray<MatrixRow> = [
   { mode: 'chatroom', provider: 'codex', permissionMode: 'dangerously',
     askUser: 'never', replyPrefix: 'always', approvalPolicy: 'never',
     delegate: 'unloaded', forbidden: false, notes: '' },
+
+  // ─── solo · cursor ──────────────────────────────────────────────
+  { mode: 'solo', provider: 'cursor', permissionMode: 'strict',
+    askUser: 'never', replyPrefix: 'never', approvalPolicy: null,
+    delegate: 'unloaded', forbidden: false,
+    notes: 'cursor SDK no per-tool callback; sandboxOptions is the only knob (per-spawn from tierProfile)' },
+  { mode: 'solo', provider: 'cursor', permissionMode: 'dangerously',
+    askUser: 'never', replyPrefix: 'never', approvalPolicy: null,
+    delegate: 'unloaded', forbidden: false, notes: '' },
+
+  // ─── parallel · cursor ──────────────────────────────────────────
+  { mode: 'parallel', provider: 'cursor', permissionMode: 'strict',
+    askUser: 'never', replyPrefix: 'always', approvalPolicy: null,
+    delegate: 'unloaded', forbidden: false, notes: '' },
+  { mode: 'parallel', provider: 'cursor', permissionMode: 'dangerously',
+    askUser: 'never', replyPrefix: 'always', approvalPolicy: null,
+    delegate: 'unloaded', forbidden: false, notes: '' },
+
+  // ─── primary_tool · cursor ──────────────────────────────────────
+  { mode: 'primary_tool', provider: 'cursor', permissionMode: 'strict',
+    askUser: 'never', replyPrefix: 'on-fallback-only', approvalPolicy: null,
+    delegate: 'loaded', forbidden: false,
+    notes: 'primary=cursor; claude callable via delegate_claude' },
+  { mode: 'primary_tool', provider: 'cursor', permissionMode: 'dangerously',
+    askUser: 'never', replyPrefix: 'on-fallback-only', approvalPolicy: null,
+    delegate: 'loaded', forbidden: false, notes: '' },
+
+  // ─── chatroom · cursor ──────────────────────────────────────────
+  { mode: 'chatroom', provider: 'cursor', permissionMode: 'strict',
+    askUser: 'never', replyPrefix: 'always', approvalPolicy: null,
+    delegate: 'unloaded', forbidden: false, notes: '' },
+  { mode: 'chatroom', provider: 'cursor', permissionMode: 'dangerously',
+    askUser: 'never', replyPrefix: 'always', approvalPolicy: null,
+    delegate: 'unloaded', forbidden: false, notes: '' },
 ]
-// 4 modes × 2 providers × 2 permissionModes = 16 rows ✓
+// 4 modes × 3 providers × 2 permissionModes = 24 rows ✓
 
 export function lookup(
   mode: Mode['kind'],
