@@ -375,7 +375,10 @@ async function runReset(deps: AdminCommandsDeps, adminChatId: string): Promise<v
       deps.log('ADMIN_CMD', `/reset release ${proj.alias}/${p} failed: ${err instanceof Error ? err.message : err}`)
     }
   }
-  deps.sessionStore.delete(proj.alias)
+  // TODO: replaced in Task 9 — adminChatId is the chatId for /reset; until
+  // session-manager threads chatId through acquire() we tracking under the
+  // '_legacy' placeholder, so wipe that.
+  deps.sessionStore.delete({ alias: proj.alias, chatId: '_legacy' })
   deps.log('ADMIN_CMD', `/reset chat=${adminChatId} alias=${proj.alias} providers=${providers.join(',')}`)
   await deps.sendMessage(
     adminChatId,
@@ -395,7 +398,8 @@ async function sendAiHealthReport(deps: AdminCommandsDeps, adminChatId: string):
     lines.push('(无已注册的 provider — 检查 daemon 启动日志)')
   } else {
     for (const p of providers) {
-      const rec = deps.sessionStore.get(proj.alias, p)
+      // TODO: replaced in Task 9 — Task 8 placeholder, '_legacy' until chatId threads through.
+      const rec = deps.sessionStore.get({ alias: proj.alias, provider: p, chatId: '_legacy' })
       if (rec) {
         const age = humanAge(Date.parse(rec.last_used_at))
         lines.push(`  ${p}: 会话 ${rec.session_id.slice(0, 8)}… (${age} 前)`)

@@ -407,8 +407,19 @@ const sessionsListProjectsCmd = defineCommand({
     const db = openWechatDb(STATE_DIR)
     const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
     const all = store.all()
-    const projects = Object.entries(all).map(([alias, rec]) => ({
-      alias,
+    // v0.6 Task 8: all() is keyed by `${alias}|${provider}|${chatId}`.
+    // The legacy CLI surface presents one row per alias — dedupe to the
+    // most-recently-used (alias) row across providers/chats so existing
+    // dashboards keep rendering. Per-chat browsing is a v0.7+ feature.
+    const byAlias: Record<string, typeof all[string]> = {}
+    for (const rec of Object.values(all)) {
+      const prev = byAlias[rec.alias]
+      if (!prev || Date.parse(rec.last_used_at) > Date.parse(prev.last_used_at)) {
+        byAlias[rec.alias] = rec
+      }
+    }
+    const projects = Object.values(byAlias).map(rec => ({
+      alias: rec.alias,
       session_id: rec.session_id,
       last_used_at: rec.last_used_at,
       summary: rec.summary ?? null,
@@ -468,7 +479,14 @@ const sessionsReadJsonlCmd = defineCommand({
     const { openWechatDb } = await import('./src/lib/db')
     const db = openWechatDb(STATE_DIR)
     const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
-    const rec = store.get(args.alias)
+    // v0.6 Task 8: the store is now triple-keyed (alias, provider, chatId).
+    // The legacy CLI takes only an alias — pick the most-recent row across
+    // every provider/chat under that alias so existing scripts keep working.
+    let rec: ReturnType<typeof store.get> = null
+    for (const r of Object.values(store.all())) {
+      if (r.alias !== args.alias) continue
+      if (!rec || Date.parse(r.last_used_at) > Date.parse(rec.last_used_at)) rec = r
+    }
     if (!rec) {
       // v0.5.11 — error paths must also honour --out-file. Without this,
       // the dashboard's via-file shim path reads ENOENT instead of an
@@ -523,7 +541,13 @@ const sessionsDeleteCmd = defineCommand({
     const { openWechatDb } = await import('./src/lib/db')
     const db = openWechatDb(STATE_DIR)
     const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
-    store.delete(args.alias)
+    // v0.6 Task 8: store.delete needs (alias, chatId). The CLI deletes by
+    // alias only — walk every chat row matching this alias.
+    const chats = new Set<string>()
+    for (const rec of Object.values(store.all())) {
+      if (rec.alias === args.alias) chats.add(rec.chat_id)
+    }
+    for (const chatId of chats) store.delete({ alias: args.alias, chatId })
     await store.flush()
     console.log(args.json ? JSON.stringify(SessionsDeleteOutput.parse({ ok: true, deleted: args.alias }), null, 2) : `deleted ${args.alias}`)
   },

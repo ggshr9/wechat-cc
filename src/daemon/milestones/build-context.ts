@@ -38,7 +38,14 @@ export async function buildDetectorContext(deps: BuildContextDeps): Promise<Dete
   let turnCount = 0
   try {
     const sessions = makeSessionStore(deps.db, { migrateFromFile: join(deps.stateDir, 'sessions.json') })
-    const rec = sessions.get('_default')
+    // v0.6 Task 8: triple-keyed store. We want the _default alias regardless
+    // of which provider/chat it lives under — walk all() and pick the
+    // most-recent row.
+    let rec: ReturnType<typeof sessions.get> = null
+    for (const r of Object.values(sessions.all())) {
+      if (r.alias !== '_default') continue
+      if (!rec || Date.parse(r.last_used_at) > Date.parse(rec.last_used_at)) rec = r
+    }
     if (rec) {
       const path = resolveProjectJsonlPath('_default', rec.session_id)
       if (existsSync(path)) {

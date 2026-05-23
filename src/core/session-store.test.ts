@@ -5,6 +5,12 @@ import { tmpdir } from 'node:os'
 import { makeSessionStore } from './session-store'
 import { openTestDb, openDb, type Db } from '../lib/db'
 
+// Pre-tier (v0.5) rows migrated from the legacy sessions.json land
+// under chat_id='_legacy'. Most tests in this file pre-date the
+// per-chat split, so reusing that placeholder keeps assertions
+// focused on the (alias, provider) surface they were written for.
+const CHAT = '_legacy'
+
 describe('SessionStore', () => {
   let dir: string
   let db: Db
@@ -20,40 +26,40 @@ describe('SessionStore', () => {
 
   it('starts empty', () => {
     const s = makeSessionStore(db)
-    expect(s.get('compass')).toBeNull()
+    expect(s.get({ alias: 'compass', provider: 'claude', chatId: CHAT })).toBeNull()
     expect(s.all()).toEqual({})
   })
 
   it('set + get roundtrips', () => {
     const s = makeSessionStore(db)
-    s.set('compass', 'sid-123', 'claude')
-    const r = s.get('compass')
+    s.set({ alias: 'compass', provider: 'claude', chatId: CHAT, sessionId: 'sid-123' })
+    const r = s.get({ alias: 'compass', provider: 'claude', chatId: CHAT })
     expect(r?.session_id).toBe('sid-123')
     expect(typeof r?.last_used_at).toBe('string')
   })
 
   it('set with same session_id bumps last_used_at', async () => {
     const s = makeSessionStore(db)
-    s.set('compass', 'sid-1', 'claude')
-    const first = s.get('compass')!.last_used_at
+    s.set({ alias: 'compass', provider: 'claude', chatId: CHAT, sessionId: 'sid-1' })
+    const first = s.get({ alias: 'compass', provider: 'claude', chatId: CHAT })!.last_used_at
     await new Promise(r => setTimeout(r, 10))
-    s.set('compass', 'sid-1', 'claude')
-    const second = s.get('compass')!.last_used_at
+    s.set({ alias: 'compass', provider: 'claude', chatId: CHAT, sessionId: 'sid-1' })
+    const second = s.get({ alias: 'compass', provider: 'claude', chatId: CHAT })!.last_used_at
     expect(Date.parse(second)).toBeGreaterThan(Date.parse(first))
   })
 
   it('set with different session_id (same provider) replaces record', () => {
     const s = makeSessionStore(db)
-    s.set('compass', 'sid-1', 'claude')
-    s.set('compass', 'sid-2', 'claude')
-    expect(s.get('compass')?.session_id).toBe('sid-2')
+    s.set({ alias: 'compass', provider: 'claude', chatId: CHAT, sessionId: 'sid-1' })
+    s.set({ alias: 'compass', provider: 'claude', chatId: CHAT, sessionId: 'sid-2' })
+    expect(s.get({ alias: 'compass', provider: 'claude', chatId: CHAT })?.session_id).toBe('sid-2')
   })
 
   it('delete removes record', () => {
     const s = makeSessionStore(db)
-    s.set('compass', 'sid-1', 'claude')
-    s.delete('compass')
-    expect(s.get('compass')).toBeNull()
+    s.set({ alias: 'compass', provider: 'claude', chatId: CHAT, sessionId: 'sid-1' })
+    s.delete({ alias: 'compass', chatId: CHAT })
+    expect(s.get({ alias: 'compass', provider: 'claude', chatId: CHAT })).toBeNull()
   })
 
   it('persists across instances (same db file)', async () => {
@@ -61,22 +67,33 @@ describe('SessionStore', () => {
     const d1 = openDb({ path })
     try {
       const s1 = makeSessionStore(d1)
-      s1.set('compass', 'sid-persist', 'claude')
+      s1.set({ alias: 'compass', provider: 'claude', chatId: CHAT, sessionId: 'sid-persist' })
       await s1.flush()
     } finally { d1.close() }
 
     const d2 = openDb({ path })
     try {
       const s2 = makeSessionStore(d2)
-      expect(s2.get('compass')?.session_id).toBe('sid-persist')
+      expect(s2.get({ alias: 'compass', provider: 'claude', chatId: CHAT })?.session_id).toBe('sid-persist')
     } finally { d2.close() }
   })
 
-  it('all() returns snapshot', () => {
+  it('all() returns snapshot keyed by alias|provider|chatId', () => {
     const s = makeSessionStore(db)
-    s.set('a', 'sa', 'claude')
-    s.set('b', 'sb', 'claude')
-    expect(Object.keys(s.all()).sort()).toEqual(['a', 'b'])
+    s.set({ alias: 'a', provider: 'claude', chatId: CHAT, sessionId: 'sa' })
+    s.set({ alias: 'b', provider: 'claude', chatId: CHAT, sessionId: 'sb' })
+    const snap = s.all()
+    expect(Object.keys(snap).sort()).toEqual([`a|claude|${CHAT}`, `b|claude|${CHAT}`])
+    expect(snap[`a|claude|${CHAT}`]?.alias).toBe('a')
+    expect(snap[`b|claude|${CHAT}`]?.session_id).toBe('sb')
+  })
+
+  it('two chats on the same alias+provider get distinct rows', () => {
+    const s = makeSessionStore(db)
+    s.set({ alias: '_default', provider: 'claude', chatId: 'chatA', sessionId: 'sessA' })
+    s.set({ alias: '_default', provider: 'claude', chatId: 'chatB', sessionId: 'sessB' })
+    expect(s.get({ alias: '_default', provider: 'claude', chatId: 'chatA' })?.session_id).toBe('sessA')
+    expect(s.get({ alias: '_default', provider: 'claude', chatId: 'chatB' })?.session_id).toBe('sessB')
   })
 
   it('setSummary updates summary + summary_updated_at; persists across re-open', async () => {
@@ -84,15 +101,15 @@ describe('SessionStore', () => {
     const d1 = openDb({ path })
     try {
       const store = makeSessionStore(d1)
-      store.set('compass', 's_abc', 'claude')
-      store.setSummary('compass', '修了 ilink-glue')
+      store.set({ alias: 'compass', provider: 'claude', chatId: CHAT, sessionId: 's_abc' })
+      store.setSummary({ alias: 'compass', provider: 'claude', chatId: CHAT }, '修了 ilink-glue')
       await store.flush()
     } finally { d1.close() }
 
     const d2 = openDb({ path })
     try {
       const fresh = makeSessionStore(d2)
-      const rec = fresh.get('compass')
+      const rec = fresh.get({ alias: 'compass', provider: 'claude', chatId: CHAT })
       expect(rec?.summary).toBe('修了 ilink-glue')
       expect(rec?.summary_updated_at).toBeDefined()
       expect(typeof rec?.summary_updated_at).toBe('string')
@@ -101,17 +118,17 @@ describe('SessionStore', () => {
 
   it('setSummary on unknown alias is a no-op', async () => {
     const store = makeSessionStore(db)
-    store.setSummary('nope', 'whatever')
+    store.setSummary({ alias: 'nope', provider: 'claude', chatId: CHAT }, 'whatever')
     await store.flush()
-    expect(store.get('nope')).toBeNull()
+    expect(store.get({ alias: 'nope', provider: 'claude', chatId: CHAT })).toBeNull()
   })
 
   it('setSummary preserves existing session_id and last_used_at', () => {
     const store = makeSessionStore(db)
-    store.set('compass', 's_abc', 'claude')
-    const before = store.get('compass')
-    store.setSummary('compass', 'a summary')
-    const after = store.get('compass')
+    store.set({ alias: 'compass', provider: 'claude', chatId: CHAT, sessionId: 's_abc' })
+    const before = store.get({ alias: 'compass', provider: 'claude', chatId: CHAT })
+    store.setSummary({ alias: 'compass', provider: 'claude', chatId: CHAT }, 'a summary')
+    const after = store.get({ alias: 'compass', provider: 'claude', chatId: CHAT })
     expect(after?.session_id).toBe(before?.session_id)
     expect(after?.last_used_at).toBe(before?.last_used_at)
   })
@@ -122,54 +139,49 @@ describe('SessionStore', () => {
       const d1 = openDb({ path })
       try {
         const s1 = makeSessionStore(d1)
-        s1.set('compass', 'sid-claude', 'claude')
-        s1.set('mobile', 'sid-codex', 'codex')
+        s1.set({ alias: 'compass', provider: 'claude', chatId: CHAT, sessionId: 'sid-claude' })
+        s1.set({ alias: 'mobile', provider: 'codex', chatId: CHAT, sessionId: 'sid-codex' })
         await s1.flush()
       } finally { d1.close() }
       const d2 = openDb({ path })
       try {
         const s2 = makeSessionStore(d2)
-        expect(s2.get('compass')?.provider).toBe('claude')
-        expect(s2.get('mobile')?.provider).toBe('codex')
+        expect(s2.get({ alias: 'compass', provider: 'claude', chatId: CHAT })?.provider).toBe('claude')
+        expect(s2.get({ alias: 'mobile', provider: 'codex', chatId: CHAT })?.provider).toBe('codex')
       } finally { d2.close() }
     })
 
-    it('get() with expectedProvider returns null on mismatch', () => {
+    it('get() with wrong provider returns null', () => {
       const s = makeSessionStore(db)
-      s.set('compass', 'sid-claude', 'claude')
-      expect(s.get('compass', 'claude')?.session_id).toBe('sid-claude')
-      expect(s.get('compass', 'codex')).toBeNull()
+      s.set({ alias: 'compass', provider: 'claude', chatId: CHAT, sessionId: 'sid-claude' })
+      expect(s.get({ alias: 'compass', provider: 'claude', chatId: CHAT })?.session_id).toBe('sid-claude')
+      expect(s.get({ alias: 'compass', provider: 'codex', chatId: CHAT })).toBeNull()
     })
 
-    it('get() without expectedProvider returns the most-recent record across providers', async () => {
+    it('binding two providers on the same (alias, chatId) keeps both rows', () => {
       const s = makeSessionStore(db)
-      s.set('compass', 'sid-claude', 'claude')
-      await new Promise(r => setTimeout(r, 10))
-      s.set('compass', 'sid-codex', 'codex')
-      // Both rows now exist; latest by last_used_at = codex.
-      expect(s.get('compass')?.session_id).toBe('sid-codex')
-      // Each provider lookup still works independently.
-      expect(s.get('compass', 'claude')?.session_id).toBe('sid-claude')
-      expect(s.get('compass', 'codex')?.session_id).toBe('sid-codex')
+      s.set({ alias: 'compass', provider: 'claude', chatId: CHAT, sessionId: 'sid-claude' })
+      s.set({ alias: 'compass', provider: 'codex', chatId: CHAT, sessionId: 'sid-codex' })
+      expect(s.get({ alias: 'compass', provider: 'claude', chatId: CHAT })?.session_id).toBe('sid-claude')
+      expect(s.get({ alias: 'compass', provider: 'codex', chatId: CHAT })?.session_id).toBe('sid-codex')
     })
 
-    it('binding a different provider to the same alias keeps both rows', () => {
+    it('delete clears all provider rows for the (alias, chatId)', () => {
       const s = makeSessionStore(db)
-      s.set('compass', 'sid-claude', 'claude')
-      s.set('compass', 'sid-codex', 'codex')
-      // get(alias) without provider returns the latest (codex).
-      expect(s.get('compass')?.session_id).toBe('sid-codex')
-      // The claude row is still there for resume on /cc.
-      expect(s.get('compass', 'claude')?.session_id).toBe('sid-claude')
+      s.set({ alias: 'compass', provider: 'claude', chatId: CHAT, sessionId: 'sid-claude' })
+      s.set({ alias: 'compass', provider: 'codex', chatId: CHAT, sessionId: 'sid-codex' })
+      s.delete({ alias: 'compass', chatId: CHAT })
+      expect(s.get({ alias: 'compass', provider: 'claude', chatId: CHAT })).toBeNull()
+      expect(s.get({ alias: 'compass', provider: 'codex', chatId: CHAT })).toBeNull()
     })
 
-    it('delete clears all provider rows for the alias', () => {
+    it('delete on one chat leaves a sibling chat row intact', () => {
       const s = makeSessionStore(db)
-      s.set('compass', 'sid-claude', 'claude')
-      s.set('compass', 'sid-codex', 'codex')
-      s.delete('compass')
-      expect(s.get('compass', 'claude')).toBeNull()
-      expect(s.get('compass', 'codex')).toBeNull()
+      s.set({ alias: 'compass', provider: 'claude', chatId: 'chatA', sessionId: 'sid-A' })
+      s.set({ alias: 'compass', provider: 'claude', chatId: 'chatB', sessionId: 'sid-B' })
+      s.delete({ alias: 'compass', chatId: 'chatA' })
+      expect(s.get({ alias: 'compass', provider: 'claude', chatId: 'chatA' })).toBeNull()
+      expect(s.get({ alias: 'compass', provider: 'claude', chatId: 'chatB' })?.session_id).toBe('sid-B')
     })
 
     it('deleteOne removes only the specified provider row', () => {
@@ -178,18 +190,18 @@ describe('SessionStore', () => {
       // this, calling delete(alias) on a stale codex row also wiped the
       // still-valid claude row, forcing a cold start on /cc.
       const s = makeSessionStore(db)
-      s.set('compass', 'sid-claude', 'claude')
-      s.set('compass', 'sid-codex', 'codex')
-      s.deleteOne('compass', 'claude')
-      expect(s.get('compass', 'claude')).toBeNull()
-      expect(s.get('compass', 'codex')?.session_id).toBe('sid-codex')
+      s.set({ alias: 'compass', provider: 'claude', chatId: CHAT, sessionId: 'sid-claude' })
+      s.set({ alias: 'compass', provider: 'codex', chatId: CHAT, sessionId: 'sid-codex' })
+      s.deleteOne({ alias: 'compass', provider: 'claude', chatId: CHAT })
+      expect(s.get({ alias: 'compass', provider: 'claude', chatId: CHAT })).toBeNull()
+      expect(s.get({ alias: 'compass', provider: 'codex', chatId: CHAT })?.session_id).toBe('sid-codex')
     })
 
-    it('deleteOne on a non-existent (alias, provider) pair is a no-op', () => {
+    it('deleteOne on a non-existent triple is a no-op', () => {
       const s = makeSessionStore(db)
-      s.set('compass', 'sid-codex', 'codex')
-      s.deleteOne('compass', 'claude')  // no claude row exists
-      expect(s.get('compass', 'codex')?.session_id).toBe('sid-codex')
+      s.set({ alias: 'compass', provider: 'codex', chatId: CHAT, sessionId: 'sid-codex' })
+      s.deleteOne({ alias: 'compass', provider: 'claude', chatId: CHAT })  // no claude row exists
+      expect(s.get({ alias: 'compass', provider: 'codex', chatId: CHAT })?.session_id).toBe('sid-codex')
     })
   })
 
@@ -204,9 +216,10 @@ describe('SessionStore', () => {
         },
       }))
       const s = makeSessionStore(db, { migrateFromFile: file })
-      expect(s.get('compass')?.session_id).toBe('sid-claude')
-      expect(s.get('mobile')?.session_id).toBe('sid-codex')
-      expect(s.get('mobile')?.summary).toBe('mobile chat')
+      // Legacy rows land under chat_id='_legacy'.
+      expect(s.get({ alias: 'compass', provider: 'claude', chatId: '_legacy' })?.session_id).toBe('sid-claude')
+      expect(s.get({ alias: 'mobile', provider: 'codex', chatId: '_legacy' })?.session_id).toBe('sid-codex')
+      expect(s.get({ alias: 'mobile', provider: 'codex', chatId: '_legacy' })?.summary).toBe('mobile chat')
       expect(existsSync(file)).toBe(false)
       expect(existsSync(`${file}.migrated`)).toBe(true)
     })
@@ -218,9 +231,8 @@ describe('SessionStore', () => {
         sessions: { compass: { session_id: 'sid-legacy', last_used_at: '2026-04-01T00:00:00.000Z' } },
       }))
       const s = makeSessionStore(db, { migrateFromFile: file })
-      expect(s.get('compass')?.provider).toBe('claude')
-      expect(s.get('compass', 'claude')?.session_id).toBe('sid-legacy')
-      expect(s.get('compass', 'codex')).toBeNull()
+      expect(s.get({ alias: 'compass', provider: 'claude', chatId: '_legacy' })?.session_id).toBe('sid-legacy')
+      expect(s.get({ alias: 'compass', provider: 'codex', chatId: '_legacy' })).toBeNull()
     })
 
     it('preserves the file when JSON is corrupt', () => {
@@ -240,7 +252,7 @@ describe('SessionStore', () => {
       }))
       makeSessionStore(db, { migrateFromFile: file })
       const s2 = makeSessionStore(db, { migrateFromFile: file })
-      expect(s2.get('compass')?.session_id).toBe('sid')
+      expect(s2.get({ alias: 'compass', provider: 'claude', chatId: '_legacy' })?.session_id).toBe('sid')
     })
   })
 })

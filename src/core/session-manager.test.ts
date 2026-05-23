@@ -479,31 +479,40 @@ describe('SessionManager', () => {
   })
 
   describe('session resume', () => {
-    type MockRec = { session_id: string; last_used_at: string; provider: string }
-    // Test helper: SessionStore.provider is required as of PR7.8 — accept
-    // partial seeds without provider here and default to 'claude' so the
-    // existing tests stay terse. Real callers always pass provider.
-    function makeMockStore(initial: Record<string, { session_id: string; last_used_at: string; provider?: string }> = {}) {
-      const data: Record<string, MockRec> = {}
-      for (const [k, v] of Object.entries(initial)) {
-        data[k] = { ...v, provider: v.provider ?? 'claude' }
+    type MockRec = { alias: string; session_id: string; last_used_at: string; provider: string; chat_id: string }
+    // Test helper: session-manager passes chat_id='_legacy' until Task 9
+    // threads chatId through acquire(). The mock mirrors that — seeds
+    // default to provider='claude' and chatId='_legacy' so existing tests
+    // stay terse.
+    function makeMockStore(initial: Record<string, { session_id: string; last_used_at: string; provider?: string; chatId?: string }> = {}) {
+      const data = new Map<string, MockRec>()
+      const k = (alias: string, provider: string, chatId: string) => `${alias}|${provider}|${chatId}`
+      for (const [alias, v] of Object.entries(initial)) {
+        const provider = v.provider ?? 'claude'
+        const chatId = v.chatId ?? '_legacy'
+        data.set(k(alias, provider, chatId), {
+          alias, session_id: v.session_id, last_used_at: v.last_used_at, provider, chat_id: chatId,
+        })
       }
       return {
-        get: (alias: string, expectedProvider?: string): MockRec | null => {
-          const rec = data[alias]
-          if (!rec) return null
-          if (expectedProvider && rec.provider !== expectedProvider) return null
-          return rec
-        },
-        set: vi.fn((alias: string, sid: string, provider: string) => {
-          data[alias] = { session_id: sid, last_used_at: new Date().toISOString(), provider }
+        get: vi.fn(({ alias, provider, chatId }: { alias: string; provider: string; chatId: string }): MockRec | null => {
+          return data.get(k(alias, provider, chatId)) ?? null
+        }),
+        set: vi.fn(({ alias, provider, chatId, sessionId }: { alias: string; provider: string; chatId: string; sessionId: string }) => {
+          data.set(k(alias, provider, chatId), {
+            alias, session_id: sessionId, last_used_at: new Date().toISOString(), provider, chat_id: chatId,
+          })
         }),
         setSummary: vi.fn(),
-        delete: vi.fn((alias: string) => { delete data[alias] }),
-        deleteOne: vi.fn((alias: string, provider: string) => {
-          if (data[alias]?.provider === provider) delete data[alias]
+        delete: vi.fn(({ alias, chatId }: { alias: string; chatId: string }) => {
+          for (const [mapKey, rec] of data) {
+            if (rec.alias === alias && rec.chat_id === chatId) data.delete(mapKey)
+          }
         }),
-        all: () => ({ ...data }),
+        deleteOne: vi.fn(({ alias, provider, chatId }: { alias: string; provider: string; chatId: string }) => {
+          data.delete(k(alias, provider, chatId))
+        }),
+        all: () => Object.fromEntries(data),
         flush: async () => {},
       }
     }
@@ -544,7 +553,7 @@ describe('SessionManager', () => {
       expect(args.options.resume).toBeUndefined()
       // Stale-cleanup must target only the active provider's row, not
       // sibling rows (e.g. a still-valid codex row for the same alias).
-      expect(store.deleteOne).toHaveBeenCalledWith('compass', 'claude')
+      expect(store.deleteOne).toHaveBeenCalledWith({ alias: 'compass', provider: 'claude', chatId: '_legacy' })
       expect(store.delete).not.toHaveBeenCalled()
       await mgr.shutdown()
     })
@@ -563,7 +572,7 @@ describe('SessionManager', () => {
       await mgr.acquire('compass', '/p', 'claude')
       const args = firstQueryArgs()
       expect(args.options.resume).toBeUndefined()
-      expect(store.deleteOne).toHaveBeenCalledWith('compass', 'claude')
+      expect(store.deleteOne).toHaveBeenCalledWith({ alias: 'compass', provider: 'claude', chatId: '_legacy' })
       expect(store.delete).not.toHaveBeenCalled()
       await mgr.shutdown()
     })
@@ -587,7 +596,7 @@ describe('SessionManager', () => {
       expect(store.deleteOne).not.toHaveBeenCalled()
       expect(store.delete).not.toHaveBeenCalled()
       // Sibling row still intact.
-      expect(store.get('compass', 'codex')?.session_id).toBe('sid-old-codex')
+      expect(store.get({ alias: 'compass', provider: 'codex', chatId: '_legacy' })?.session_id).toBe('sid-old-codex')
       await mgr.shutdown()
     })
 
@@ -617,7 +626,7 @@ describe('SessionManager', () => {
       const h = await mgr.acquire('compass', '/p', 'claude')
       // Dispatch and drain so the result event is processed and session_id persisted.
       for await (const _ of h.dispatch('test')) { /* consume result */ }
-      expect(store.set).toHaveBeenCalledWith('compass', 'sid-new', 'claude')
+      expect(store.set).toHaveBeenCalledWith({ alias: 'compass', provider: 'claude', chatId: '_legacy', sessionId: 'sid-new' })
       await mgr.shutdown()
     })
 

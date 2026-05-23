@@ -188,7 +188,8 @@ describe('admin-commands', () => {
       expect(release).toHaveBeenCalledWith('foo', 'claude')
       expect(release).toHaveBeenCalledWith('foo', 'codex')
       // Persisted resume id is wiped so the next dispatch starts fresh.
-      expect(del).toHaveBeenCalledWith('foo')
+      // chatId='_legacy' is the placeholder until Task 9 threads the real chatId.
+      expect(del).toHaveBeenCalledWith({ alias: 'foo', chatId: '_legacy' })
       // User-facing confirmation mentions reset + the chat alias.
       const body = sentBody()
       expect(body).toMatch(/重置|reset/i)
@@ -231,9 +232,9 @@ describe('admin-commands', () => {
         registry: { list: () => ['claude', 'codex'] },
         sessionManager: { release: async () => {}, list: () => [] },
         sessionStore: {
-          get: (alias, provider) => {
+          get: ({ alias, provider }) => {
             if (alias === 'foo' && provider === 'claude') {
-              return { session_id: 'sid-1', last_used_at: fiveMinAgo, provider: 'claude' }
+              return { alias, session_id: 'sid-1', last_used_at: fiveMinAgo, provider: 'claude', chat_id: '_legacy' }
             }
             return null
           },

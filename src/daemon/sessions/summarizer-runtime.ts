@@ -59,8 +59,12 @@ export async function triggerStaleSummaryRefresh(deps: SummaryRefreshDeps): Prom
 
     const store = makeSessionStore(deps.db, { migrateFromFile: join(deps.stateDir, 'sessions.json') })
     const all = store.all()
-    for (const [alias, rec] of Object.entries(all)) {
+    // v0.6 Task 8: keys are `${alias}|${provider}|${chatId}` strings. Read
+    // alias/provider/chatId off the record itself — they're echoed back
+    // from the SQLite row.
+    for (const rec of Object.values(all)) {
       if (!needsRefresh(rec)) continue
+      const { alias, provider, chat_id: chatId } = rec
       try {
         const path = resolveProjectJsonlPath(alias, rec.session_id)
         if (!existsSync(path)) continue
@@ -77,7 +81,7 @@ export async function triggerStaleSummaryRefresh(deps: SummaryRefreshDeps): Prom
         const prompt = formatSummaryRequest(turns, memorySnapshot)
         const raw = await deps.sdkEval(prompt)
         const summary = raw.trim().replace(/^["「『]|["」』]$/g, '').slice(0, 50)
-        if (summary.length > 0) store.setSummary(alias, summary)
+        if (summary.length > 0) store.setSummary({ alias, provider, chatId }, summary)
       } catch (err) {
         deps.log?.('SUMMARY', `refresh failed for ${alias}: ${err instanceof Error ? err.message : err}`)
       }

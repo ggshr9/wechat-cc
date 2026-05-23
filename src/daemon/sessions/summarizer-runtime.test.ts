@@ -53,7 +53,9 @@ describe('triggerStaleSummaryRefresh', () => {
       await triggerStaleSummaryRefresh({ stateDir, db, sdkEval, log: vi.fn() })
       expect(sdkEval).toHaveBeenCalledOnce()
       const fresh2 = makeSessionStore(db)
-      expect(fresh2.get('compass')?.summary).toBe('修了 ilink-glue 的 token bug')
+      // Legacy JSON migration lands rows under chat_id='_legacy'; default
+      // provider is 'claude' when the field is absent.
+      expect(fresh2.get({ alias: 'compass', provider: 'claude', chatId: '_legacy' })?.summary).toBe('修了 ilink-glue 的 token bug')
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
@@ -68,7 +70,7 @@ describe('triggerStaleSummaryRefresh', () => {
       const sdkEval = vi.fn(async () => { throw new Error('SDK timeout') })
       await triggerStaleSummaryRefresh({ stateDir, db, sdkEval, log: vi.fn() })
       const after = makeSessionStore(db)
-      expect(after.get('compass')?.summary).toBe('old summary')
+      expect(after.get({ alias: 'compass', provider: 'claude', chatId: '_legacy' })?.summary).toBe('old summary')
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
@@ -84,7 +86,7 @@ describe('triggerStaleSummaryRefresh', () => {
       const sdkEval = vi.fn(async () => longQuoted)
       await triggerStaleSummaryRefresh({ stateDir, db, sdkEval, log: vi.fn() })
       const after = makeSessionStore(db)
-      const s = after.get('compass')?.summary
+      const s = after.get({ alias: 'compass', provider: 'claude', chatId: '_legacy' })?.summary
       expect(s).toBeDefined()
       expect(s!.length).toBeLessThanOrEqual(50)
       expect(s!.startsWith('「')).toBe(false)

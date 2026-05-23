@@ -61,9 +61,11 @@ describe('full state-dir migration — upgrading-user smoke', () => {
     rmSync(stateDir, { recursive: true, force: true })
   })
 
-  it('opens a fresh db with PRAGMA user_version = 9 and the 7 tables', () => {
+  it('opens a fresh db with PRAGMA user_version = 10 and the 7 tables', () => {
     const v = (db.query('PRAGMA user_version').get() as { user_version: number }).user_version
-    expect(v).toBe(9)
+    // v10 (Task 7 of the user-tier-permissions plan): sessions table
+    // rebuilt with the (alias, provider, chat_id) primary key.
+    expect(v).toBe(10)
     const tables = db.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as Array<{ name: string }>
     expect(tables.map(t => t.name)).toEqual([
       'activity', 'conversations', 'events', 'milestones', 'observations', 'session_state', 'sessions',
@@ -88,13 +90,14 @@ describe('full state-dir migration — upgrading-user smoke', () => {
     const botA = sessionState.listExpired().find(b => b.id === 'bot-A')
     expect(botA?.last_reason).toBe('errcode=-14')
 
-    // sessions — composite (alias, provider) PK; the fixture has 2 aliases:
+    // sessions — composite (alias, provider, chat_id) PK; legacy JSON has
+    // no chat_id field, so migrated rows land under chat_id='_legacy'.
+    // The fixture has 2 aliases:
     //   compass: claude session
     //   mobile:  codex session
-    expect(sessions.get('compass', 'claude')?.session_id).toBe('sid-claude-1')
-    expect(sessions.get('mobile', 'codex')?.session_id).toBe('sid-codex-1')
-    // get() without provider returns the most-recently-used row.
-    expect(sessions.get('compass')?.provider).toBe('claude')
+    expect(sessions.get({ alias: 'compass', provider: 'claude', chatId: '_legacy' })?.session_id).toBe('sid-claude-1')
+    expect(sessions.get({ alias: 'mobile', provider: 'codex', chatId: '_legacy' })?.session_id).toBe('sid-codex-1')
+    expect(sessions.get({ alias: 'compass', provider: 'claude', chatId: '_legacy' })?.provider).toBe('claude')
 
     // conversations — 3 chats, 3 modes.
     expect(conversations.get(CHAT_A.chatId)?.mode).toEqual({ kind: 'solo', provider: 'claude' })

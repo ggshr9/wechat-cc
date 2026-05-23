@@ -104,7 +104,11 @@ export class SessionManager {
 
     // Check for a recent session_id to resume — cut cold-start latency.
     const ttl = this.opts.resumeTTLMs ?? 7 * 24 * 60 * 60_000
-    const record = this.opts.sessionStore?.get(alias, providerId) ?? null
+    // TODO: replaced in Task 9 — acquire() will gain a chatId arg and
+    // thread it through here. Until then the session-store row lives
+    // under chat_id='_legacy', matching legacy single-chat semantics.
+    const chatId = '_legacy'
+    const record = this.opts.sessionStore?.get({ alias, provider: providerId, chatId }) ?? null
     let resumeSessionId: string | undefined
     if (record) {
       const age = Date.now() - Date.parse(record.last_used_at)
@@ -113,10 +117,10 @@ export class SessionManager {
         resumeSessionId = record.session_id
         log('SESSION_RESUME', `alias=${alias} sid=${record.session_id} provider=${providerId} age=${Math.round(age / 1000)}s`)
       } else {
-        // stale — forget THIS provider's row only. delete(alias) would
-        // also wipe the sibling provider's still-valid resume point on
-        // a chat that uses both /cc and /codex.
-        this.opts.sessionStore?.deleteOne(alias, providerId)
+        // stale — forget THIS provider's row only. delete() would also
+        // wipe the sibling provider's still-valid resume point on a chat
+        // that uses both /cc and /codex.
+        this.opts.sessionStore?.deleteOne({ alias, provider: providerId, chatId })
       }
     }
 
@@ -149,7 +153,8 @@ export class SessionManager {
               for await (const ev of inner) {
                 yield ev
                 if (ev.kind === 'result' && ev.sessionId && sessionStore) {
-                  sessionStore.set(alias, ev.sessionId, providerId)
+                  // TODO: replaced in Task 9 — chatId threaded through acquire().
+                  sessionStore.set({ alias, provider: providerId, chatId: '_legacy', sessionId: ev.sessionId })
                 }
               }
             } finally {

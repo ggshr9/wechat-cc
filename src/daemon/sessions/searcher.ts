@@ -41,7 +41,11 @@ export async function searchAcrossSessions(
   const hits: SearchHit[] = []
   const needle = query.toLowerCase()
 
-  for (const [alias, rec] of Object.entries(all)) {
+  // v0.6 Task 8: all() keys are `${alias}|${provider}|${chatId}` strings —
+  // read alias off the record. Multiple rows can share an alias (one per
+  // provider × chat); each jsonl gets searched independently.
+  for (const rec of Object.values(all)) {
+    const { alias } = rec
     const path = resolveProjectJsonlPath(alias, rec.session_id, opts.home ? { home: opts.home } : {})
     if (!existsSync(path)) continue
     const lines = readFileSync(path, 'utf8').split('\n').filter(l => l.length > 0)
