@@ -2,6 +2,7 @@ import type { PipelineRun } from './types'
 import { compose } from './compose'
 import { makeMwTrace, type TraceMwDeps } from './mw-trace'
 import { makeMwIdentity, type IdentityMwDeps } from './mw-identity'
+import { makeMwAccess, type AccessMwDeps } from './mw-access'
 import { makeMwCaptureCtx, type CaptureCtxMwDeps } from './mw-capture-ctx'
 import { makeMwTyping, type TypingMwDeps } from './mw-typing'
 import { makeMwAdmin, type AdminMwDeps } from './mw-admin'
@@ -18,6 +19,7 @@ import { makeMwDispatch, type DispatchMwDeps } from './mw-dispatch'
 export interface InboundPipelineDeps {
   trace: TraceMwDeps
   identity: IdentityMwDeps
+  access: AccessMwDeps
   capture: CaptureCtxMwDeps
   typing: TypingMwDeps
   admin: AdminMwDeps
@@ -36,6 +38,11 @@ export function buildInboundPipeline(d: InboundPipelineDeps): PipelineRun {
   return compose([
     makeMwTrace(d.trace),
     makeMwIdentity(d.identity),
+    // Access gate runs immediately after identity (so chatId is normalized
+    // and the trace records the drop) and BEFORE typing/admin/onboarding/
+    // welcome — non-allowlisted senders must not trigger any downstream
+    // side effects (no typing indicator, no welcome leak, no API tokens).
+    makeMwAccess(d.access),
     makeMwCaptureCtx(d.capture),
     makeMwTyping(d.typing),
     makeMwAdmin(d.admin),

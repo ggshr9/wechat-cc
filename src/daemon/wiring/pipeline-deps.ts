@@ -13,7 +13,7 @@ import type { GuardLifecycle } from '../guard/lifecycle'
 import type { PollingLifecycle } from '../polling-lifecycle'
 import type { InboundPipelineDeps } from '../inbound/build'
 import type { PipelineRun } from '../inbound/types'
-import { isAdmin } from '../../lib/access'
+import { isAdmin, loadAccess } from '../../lib/access'
 import { makeAdminCommands } from '../admin-commands'
 import { makeModeCommands } from '../mode-commands'
 import { makeOnboardingHandler } from '../onboarding'
@@ -101,6 +101,11 @@ export function buildPipelineDeps(opts: PipelineDepsOpts, refs: PipelineDepsRefs
     trace: { log },
     identity: {
       upsertIdentity: (cid, ids) => boot.conversationStore.upsertIdentity(cid, ids),
+    },
+    access: {
+      // loadAccess() has a 5s in-process TTL cache — safe to call per inbound.
+      loadAccess,
+      log,
     },
     capture: {
       markChatActive: (c, a) => ilink.markChatActive(c, a),

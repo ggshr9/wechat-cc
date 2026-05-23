@@ -14,6 +14,12 @@ function fakeDeps(over: Partial<{
   const deps: InboundPipelineDeps = {
     trace: { log },
     identity: { upsertIdentity: () => {} },
+    access: {
+      // Integration test default: allowlist contains the test chatId, so the
+      // gate passes. Individual tests can override via the deps if needed.
+      loadAccess: () => ({ dmPolicy: 'allowlist', allowFrom: ['c1'] }),
+      log,
+    },
     capture: { markChatActive: () => {}, captureContextToken: () => {} },
     typing: { sendTyping: async () => {} },
     admin: { adminHandler: { handle: async () => over.adminConsumes ?? false } },
