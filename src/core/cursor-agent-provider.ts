@@ -14,7 +14,7 @@
  *
  * See docs/superpowers/specs/2026-05-23-cursor-sdk-provider-design.md.
  */
-import type { AgentEvent } from './agent-provider'
+import type { AgentEvent, AgentProject, AgentProvider, AgentSession } from './agent-provider'
 import type { TierProfile } from './user-tier'
 
 export interface CursorTierSdkOpts {
@@ -159,4 +159,149 @@ export function* mapCursorMessage(
     return
   }
   // thinking / system / user (echo) / request / task — drop
+}
+
+/**
+ * Shape of the `@cursor/sdk` module's relevant exports — narrow
+ * enough that the factory can compile even when the SDK is absent.
+ * The dynamically-imported module is type-erased into this surface.
+ */
+export interface CursorSdkNamespace {
+  Agent: {
+    create(options: Record<string, unknown>): Promise<unknown>
+    resume?(agentId: string, options?: Record<string, unknown>): Promise<unknown>
+  }
+}
+
+/**
+ * Spec for an MCP server passed to Cursor. Mirrors the stdio variant
+ * of Cursor's McpServerConfig (command + args + env), which matches
+ * our existing McpStdioSpec from src/daemon/bootstrap/mcp-specs.ts.
+ */
+export interface CursorMcpStdioSpec {
+  command: string
+  args?: string[]
+  env?: Record<string, string>
+}
+
+export interface CursorAgentProviderOptions {
+  /** The dynamically-imported `@cursor/sdk` namespace (bootstrap loads it via `await import('@cursor/sdk')`). */
+  sdk: CursorSdkNamespace
+  /** Required — Cursor API key. Bootstrap reads from `process.env.CURSOR_API_KEY`. */
+  apiKey: string
+  /** Optional Cursor model id (e.g. `'composer-2'`). When omitted, SDK picks its default. */
+  model?: string
+  /** MCP servers passed into Agent.create — `wechat` + `delegate` come from the bootstrap. */
+  mcpServers?: Record<string, CursorMcpStdioSpec>
+}
+
+interface CursorAgentLike {
+  agentId: string
+  send(message: string): Promise<CursorRunLike>
+  close(): void
+}
+interface CursorRunLike {
+  id: string
+  agentId: string
+  stream(): AsyncIterable<unknown>
+  cancel?(): Promise<void>
+}
+
+export function createCursorAgentProvider(opts: CursorAgentProviderOptions): AgentProvider {
+  const mcpServerNames = new Set(Object.keys(opts.mcpServers ?? {}))
+  let firstToolNameLogged = false
+
+  return {
+    async spawn(project: AgentProject, spawnOpts) {
+      const tierOpts = tierProfileToCursorSdkOpts(spawnOpts.tierProfile)
+      const createOptions: Record<string, unknown> = {
+        apiKey: opts.apiKey,
+        ...(opts.model ? { model: { id: opts.model } } : {}),
+        ...(opts.mcpServers ? { mcpServers: opts.mcpServers } : {}),
+        local: {
+          cwd: project.path,
+          sandboxOptions: tierOpts.sandboxOptions,
+        },
+      }
+      const agent = (await opts.sdk.Agent.create(createOptions)) as CursorAgentLike
+
+      return makeCursorSession(agent, mcpServerNames, (rawName) => {
+        if (!firstToolNameLogged) {
+          firstToolNameLogged = true
+          // Single observability log: helps the next engineer notice if
+          // the SDK's tool name format diverges from our parser.
+          // eslint-disable-next-line no-console
+          console.log(`[CURSOR_TOOL] first observed tool name: ${rawName}`)
+        }
+      })
+    },
+  }
+}
+
+function makeCursorSession(
+  agent: CursorAgentLike,
+  mcpServerNames: ReadonlySet<string>,
+  onFirstToolName: (rawName: string) => void,
+): AgentSession {
+  let turnCounter = 0
+  return {
+    dispatch(text: string) {
+      const startMs = Date.now()
+      turnCounter++
+      const myTurns = turnCounter
+      return (async function* dispatchGenerator() {
+        let run: CursorRunLike
+        try {
+          run = await agent.send(text)
+        } catch (err) {
+          yield { kind: 'error', message: err instanceof Error ? err.message : String(err) } as const
+          return
+        }
+        let sawFinish = false
+        try {
+          for await (const raw of run.stream() as AsyncIterable<CursorMessageLike>) {
+            // Side-effect hook: log first observed tool name once
+            if (raw?.type === 'assistant' && Array.isArray(raw.message?.content)) {
+              for (const block of raw.message.content) {
+                if (block.type === 'tool_use' && typeof block.name === 'string') {
+                  onFirstToolName(block.name)
+                  break
+                }
+              }
+            }
+            // Special-case status: FINISHED — emit our own result with real timings.
+            if (raw?.type === 'status' && (raw as { status?: string }).status === 'FINISHED') {
+              sawFinish = true
+              yield {
+                kind: 'result',
+                sessionId: agent.agentId,
+                numTurns: myTurns,
+                durationMs: Date.now() - startMs,
+              } as const
+              continue
+            }
+            // All other variants → mapper handles them
+            for (const ev of mapCursorMessage(raw, mcpServerNames, agent.agentId)) {
+              yield ev
+            }
+          }
+          // Stream ended without explicit FINISHED status — emit a result event anyway
+          // so callers can see the dispatch concluded.
+          if (!sawFinish) {
+            yield {
+              kind: 'result',
+              sessionId: agent.agentId,
+              numTurns: myTurns,
+              durationMs: Date.now() - startMs,
+            } as const
+          }
+        } catch (err) {
+          yield { kind: 'error', message: err instanceof Error ? err.message : String(err) } as const
+        }
+      })()
+    },
+    async close() {
+      try { agent.close() } catch { /* swallow */ }
+    },
+  }
 }
