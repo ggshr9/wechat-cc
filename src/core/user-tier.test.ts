@@ -1,0 +1,82 @@
+import { describe, it, expect } from 'vitest'
+import { resolveTier, TIER_PROFILES, type UserTier, type ToolKind } from './user-tier'
+import type { Access } from '../lib/access'
+
+const baseAccess: Access = {
+  dmPolicy: 'allowlist',
+  allowFrom: ['admin1', 'trusted1', 'guest1'],
+  admins: ['admin1'],
+  trusted: ['trusted1'],
+}
+
+describe('resolveTier', () => {
+  it('returns admin when chatId is in admins', () => {
+    expect(resolveTier('admin1', baseAccess)).toBe('admin')
+  })
+
+  it('returns trusted when chatId is in trusted but not admins', () => {
+    expect(resolveTier('trusted1', baseAccess)).toBe('trusted')
+  })
+
+  it('returns guest for allowed-but-unclassified chats', () => {
+    expect(resolveTier('guest1', baseAccess)).toBe('guest')
+  })
+
+  it('returns guest when admins is empty', () => {
+    expect(resolveTier('any', { ...baseAccess, admins: [] })).toBe('guest')
+  })
+
+  it('admin takes precedence over trusted if both lists include the chatId', () => {
+    expect(resolveTier('dupe', {
+      ...baseAccess, admins: ['dupe'], trusted: ['dupe'],
+    })).toBe('admin')
+  })
+})
+
+describe('TIER_PROFILES', () => {
+  const ALL_KINDS: ToolKind[] = [
+    'reply', 'share_page', 'memory_read', 'memory_write', 'memory_delete',
+    'observations_read', 'observations_write',
+    'fs_read', 'fs_write', 'shell', 'shell_destructive', 'network', 'subagent',
+  ]
+
+  for (const tier of ['admin', 'trusted', 'guest'] as UserTier[]) {
+    it(`tier=${tier}: allow ∪ relay ∪ deny covers every ToolKind exactly once`, () => {
+      const p = TIER_PROFILES[tier]
+      const seen = new Set<ToolKind>()
+      for (const k of p.allow) seen.add(k)
+      for (const k of p.relay) {
+        expect(p.allow.has(k)).toBe(false)
+        seen.add(k)
+      }
+      for (const k of p.deny) {
+        expect(p.allow.has(k)).toBe(false)
+        expect(p.relay.has(k)).toBe(false)
+        seen.add(k)
+      }
+      for (const k of ALL_KINDS) {
+        expect(seen.has(k)).toBe(true)
+      }
+    })
+  }
+
+  it('admin allows everything', () => {
+    expect(TIER_PROFILES.admin.relay.size).toBe(0)
+    expect(TIER_PROFILES.admin.deny.size).toBe(0)
+  })
+
+  it('trusted relays shell_destructive and memory_delete', () => {
+    expect(TIER_PROFILES.trusted.relay.has('shell_destructive')).toBe(true)
+    expect(TIER_PROFILES.trusted.relay.has('memory_delete')).toBe(true)
+    expect(TIER_PROFILES.trusted.deny.size).toBe(0)
+  })
+
+  it('guest allows only reply/share_page/memory_read/observations_read', () => {
+    expect(TIER_PROFILES.guest.allow.has('reply')).toBe(true)
+    expect(TIER_PROFILES.guest.allow.has('share_page')).toBe(true)
+    expect(TIER_PROFILES.guest.allow.has('memory_read')).toBe(true)
+    expect(TIER_PROFILES.guest.allow.has('observations_read')).toBe(true)
+    expect(TIER_PROFILES.guest.allow.has('shell')).toBe(false)
+    expect(TIER_PROFILES.guest.allow.has('fs_write')).toBe(false)
+  })
+})
