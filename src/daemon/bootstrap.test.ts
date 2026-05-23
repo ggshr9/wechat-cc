@@ -2,10 +2,12 @@ import { describe, it, expect, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { buildBootstrap } from './bootstrap'
+import { buildBootstrap, resolveAdminChatId } from './bootstrap'
 import { saveAgentConfig } from '../lib/agent-config'
 import { openTestDb } from '../lib/db'
 import { TIER_PROFILES } from '../core/user-tier'
+import type { Access } from '../lib/access'
+import type { CompanionConfig } from './companion/config'
 
 function makeIlinkStub() {
   return {
@@ -84,7 +86,14 @@ describe('bootstrap', () => {
     expect(b.resolve('anyone')).toEqual({ alias: 'P', path: '/p' })
   })
 
-  it('with dangerouslySkipPermissions=true, sdkOptionsForProject uses bypassPermissions and no canUseTool', () => {
+  // Task 13: sdkOptionsForProject body migrated from
+  // `if (dangerouslySkipPermissions) bypassPermissions; else default+canUseTool`
+  // to tier-driven via tierProfileToClaudeSdkOpts(tierProfile). The
+  // dangerouslySkipPermissions flag now influences which tier is resolved
+  // (via the makeCanUseTool closure), not the SDK options shape directly.
+  // canUseTool is now always wired — under bypassPermissions the SDK simply
+  // never fires it.
+  it('admin tier produces bypassPermissions (matches the legacy --dangerously path)', () => {
     const b = buildBootstrap({
       db: openTestDb(),
       stateDir: '/tmp/state',
@@ -96,10 +105,12 @@ describe('bootstrap', () => {
     })
     const opts = b.sdkOptionsForProject('P', '/p', TIER_PROFILES.admin)
     expect(opts.permissionMode).toBe('bypassPermissions')
-    expect(opts.canUseTool).toBeUndefined()
+    // Task 13 — canUseTool wired even at admin tier; SDK won't fire it under
+    // bypassPermissions, but production code paths should not rely on that.
+    expect(typeof opts.canUseTool).toBe('function')
   })
 
-  it('with dangerouslySkipPermissions=false, sdkOptionsForProject keeps Phase 1 default + canUseTool', () => {
+  it('trusted tier produces permissionMode=default + canUseTool (no disallowedTools — relays via canUseTool)', () => {
     const b = buildBootstrap({
       db: openTestDb(),
       stateDir: '/tmp/state',
@@ -109,9 +120,33 @@ describe('bootstrap', () => {
       log: () => {},
       dangerouslySkipPermissions: false,
     })
-    const opts = b.sdkOptionsForProject('P', '/p', TIER_PROFILES.admin)
+    const opts = b.sdkOptionsForProject('P', '/p', TIER_PROFILES.trusted)
     expect(opts.permissionMode).toBe('default')
     expect(typeof opts.canUseTool).toBe('function')
+    // Trusted's relay set is shell_destructive/memory_delete — both gated
+    // by canUseTool input inspection, not via disallowedTools.
+    expect(opts.disallowedTools).toBeUndefined()
+  })
+
+  it('guest tier produces permissionMode=default + disallowedTools + canUseTool', () => {
+    const b = buildBootstrap({
+      db: openTestDb(),
+      stateDir: '/tmp/state',
+      ilink: makeIlinkStub() as any,
+      loadProjects: () => ({ projects: { P: { path: '/p', last_active: 0 } }, current: 'P' }),
+      lastActiveChatId: () => 'chat-1',
+      log: () => {},
+      dangerouslySkipPermissions: false,
+    })
+    const opts = b.sdkOptionsForProject('P', '/p', TIER_PROFILES.guest)
+    expect(opts.permissionMode).toBe('default')
+    expect(typeof opts.canUseTool).toBe('function')
+    // Guest denies fs_write / shell / network / subagent — the SDK sees the
+    // built-in names in disallowedTools (mcp__wechat__* gates inside canUseTool).
+    expect(Array.isArray(opts.disallowedTools)).toBe(true)
+    expect(opts.disallowedTools).toContain('Bash')
+    expect(opts.disallowedTools).toContain('Write')
+    expect(opts.disallowedTools).toContain('Edit')
   })
 
   it('defaults dangerouslySkipPermissions to false when omitted', () => {
@@ -123,8 +158,11 @@ describe('bootstrap', () => {
       lastActiveChatId: () => null,
       log: () => {},
     })
+    // With admin tier (the default for sdkOptionsForProject calls without
+    // a tier resolver), the result is bypassPermissions regardless of the
+    // flag. canUseTool is still wired.
     const opts = b.sdkOptionsForProject('P', '/p', TIER_PROFILES.admin)
-    expect(opts.permissionMode).toBe('default')
+    expect(opts.permissionMode).toBe('bypassPermissions')
     expect(typeof opts.canUseTool).toBe('function')
   })
 
@@ -254,6 +292,45 @@ describe('bootstrap', () => {
     })
     const opts = b.sdkOptionsForProject('P', '/p', TIER_PROFILES.admin)
     expect(opts.mcpServers).toEqual({})  // Both wechat and delegate skipped.
+  })
+
+  // ── Task 13 — resolveAdminChatId + tier-driven relay wiring ───────────
+
+  describe('resolveAdminChatId', () => {
+    it('returns companion default_chat_id if it is admin', () => {
+      expect(resolveAdminChatId(
+        { dmPolicy: 'allowlist', allowFrom: ['x', 'y'], admins: ['x', 'y'] } as Access,
+        { default_chat_id: 'x' } as CompanionConfig,
+      )).toBe('x')
+    })
+
+    it('falls back to admins[0] if default_chat_id is not admin', () => {
+      expect(resolveAdminChatId(
+        { dmPolicy: 'allowlist', allowFrom: ['x', 'y'], admins: ['y'] } as Access,
+        { default_chat_id: 'x' } as CompanionConfig,
+      )).toBe('y')
+    })
+
+    it('returns null when admins empty', () => {
+      expect(resolveAdminChatId(
+        { dmPolicy: 'allowlist', allowFrom: ['x'], admins: [] } as Access,
+        { default_chat_id: null } as CompanionConfig,
+      )).toBeNull()
+    })
+
+    it('returns null when admins undefined', () => {
+      expect(resolveAdminChatId(
+        { dmPolicy: 'allowlist', allowFrom: ['x'] } as Access,
+        { default_chat_id: null } as CompanionConfig,
+      )).toBeNull()
+    })
+
+    it('falls back to admins[0] when companion default_chat_id is null', () => {
+      expect(resolveAdminChatId(
+        { dmPolicy: 'allowlist', allowFrom: ['a', 'b'], admins: ['a', 'b'] } as Access,
+        { default_chat_id: null } as CompanionConfig,
+      )).toBe('a')
+    })
   })
 
   it('system prompt is the prompt-builder output (mentions delegate_codex for claude sessions)', () => {

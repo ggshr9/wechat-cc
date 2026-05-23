@@ -18,9 +18,10 @@
  *   - src/daemon/bootstrap.test.ts (integration tests)
  */
 import { SessionManager } from '../../core/session-manager'
-import { createClaudeAgentProvider } from '../../core/claude-agent-provider'
+import { createClaudeAgentProvider, tierProfileToClaudeSdkOpts } from '../../core/claude-agent-provider'
 import { createCodexAgentProvider } from '../../core/codex-agent-provider'
 import type { TierProfile } from '../../core/user-tier'
+import { resolveTier } from '../../core/user-tier'
 import { createProviderRegistry, type ProviderRegistry } from '../../core/provider-registry'
 import { createConversationCoordinator, type ConversationCoordinator } from '../../core/conversation-coordinator'
 import { makeConversationStore, type ConversationStore } from '../../core/conversation-store'
@@ -41,7 +42,8 @@ import { makeSessionStore } from '../../core/session-store'
 import type { Db } from '../../lib/db'
 import { homedir } from 'node:os'
 import { loadAgentConfig } from '../../lib/agent-config'
-import { loadAccess } from '../../lib/access'
+import { loadAccess, type Access } from '../../lib/access'
+import { loadCompanionConfig, type CompanionConfig } from '../companion/config'
 import { wechatStdioMcpSpec, delegateStdioMcpSpec, type McpStdioSpec } from './mcp-specs'
 import { claudeSessionJsonlPath, codexSessionJsonlPaths } from './session-paths'
 import { buildDelegateDispatch, type DelegateDispatch } from './delegate'
@@ -214,6 +216,28 @@ function wrapCheapEvalWithAuthFailCheck(
   }
 }
 
+/**
+ * Resolve which chat receives permission-relay prompts. Pre-Task-13 the
+ * relay routed to `lastActiveChatId` — a security hole, since a guest who
+ * could trigger a tool call could then approve their own request. Now the
+ * relay target is always an admin:
+ *
+ *   1. If companion.default_chat_id is set AND that chat is admin, use it
+ *      (operator can explicitly direct prompts to their preferred chat).
+ *   2. Otherwise fall back to `access.admins[0]` — first admin in config.
+ *   3. If no admins exist at all, return null (relay denies the request).
+ *
+ * Called per-tool-call inside the makeCanUseTool closure, so changes to
+ * either access.json or companion config take effect within one read TTL
+ * (5s for access; instant for companion).
+ */
+export function resolveAdminChatId(access: Access, companion: CompanionConfig): string | null {
+  if (companion.default_chat_id && access.admins?.includes(companion.default_chat_id)) {
+    return companion.default_chat_id
+  }
+  return access.admins?.[0] ?? null
+}
+
 export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
   hydrateClaudeAuthEnvFromUserSettings(deps.log)
 
@@ -235,7 +259,23 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
 
   const canUseTool = makeCanUseTool({
     askUser: deps.ilink.askUser,
-    defaultChatId: () => deps.lastActiveChatId(),
+    initiatingChatId: () => deps.lastActiveChatId(),
+    // Task 13 — permission prompts route to a configured admin chat, NOT
+    // the chat that initiated the dispatch. Closes a self-approval hole
+    // where a guest who could trigger a tool call could also click 'allow'
+    // on their own request.
+    adminChatId: () => resolveAdminChatId(loadAccess(), loadCompanionConfig(deps.stateDir)),
+    // Task 13 — tier resolution rules:
+    //   - dangerouslySkipPermissions=true  → every chat is admin tier
+    //     (global override; old default-allow path's new spelling).
+    //   - no active chat → admin (system-initiated work has no caller to gate).
+    //   - otherwise → access.json-derived tier (admin/trusted/guest).
+    resolveTier: () => {
+      if (deps.dangerouslySkipPermissions) return 'admin'
+      const cid = deps.lastActiveChatId()
+      if (!cid) return 'admin'
+      return resolveTier(cid, loadAccess())
+    },
     log: deps.log,
     // Per-dispatch mode lookup: read the chat's current mode from the
     // conversation store at the moment the tool call arrives. Falls back
@@ -285,11 +325,7 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     ? configuredAgent.model
     : 'claude-opus-4-7'
 
-  const sdkOptionsForProject = (_alias: string, path: string, _tierProfile: TierProfile): Options => {
-    // Task 6: tierProfile is threaded through the signature so Task 13 can
-    // wire `canUseTool` per tier. Today the closure still derives permission
-    // mode from the daemon-level `dangerouslySkipPermissions` flag for
-    // behaviour parity; Task 13 will migrate to tier-driven options here.
+  const sdkOptionsForProject = (_alias: string, path: string, tierProfile: TierProfile): Options => {
     const cstatus = deps.ilink.companion.status()
     const systemPrompt = buildSystemPrompt({
       providerId: 'claude',
@@ -321,10 +357,24 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
       settingSources: ['project', 'local'],
       ...(claudeBin ? { pathToClaudeCodeExecutable: claudeBin } : {}),
     }
-    if (deps.dangerouslySkipPermissions) {
-      return { ...common, permissionMode: 'bypassPermissions' }
+    // Task 13 — SDK permission knobs derived from the spawn-time tierProfile
+    // via the provider's pure translation helper. Pre-Task-13 this branched
+    // on `deps.dangerouslySkipPermissions`; post-Task-13 that flag only
+    // influences which tier is resolved (see the resolveTier closure in
+    // makeCanUseTool above), and the SDK options follow the tier.
+    //
+    // canUseTool is always wired — even at admin tier the relay may need
+    // to surface destructive-Bash or memory_delete prompts that the
+    // matrix's per-tool askUser flag asks for. Under bypassPermissions the
+    // SDK won't fire canUseTool; under default mode canUseTool is what
+    // gates everything not statically excluded via disallowedTools.
+    const tierOpts = tierProfileToClaudeSdkOpts(tierProfile)
+    return {
+      ...common,
+      permissionMode: tierOpts.permissionMode,
+      ...(tierOpts.disallowedTools ? { disallowedTools: tierOpts.disallowedTools } : {}),
+      canUseTool,
     }
-    return { ...common, permissionMode: 'default', canUseTool }
   }
 
   // Persistent session_id map — enables `resume` after daemon restart.
