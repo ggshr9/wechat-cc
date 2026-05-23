@@ -5,6 +5,7 @@
  * Recognised in P2:
  *   /cc                    → solo mode, provider=claude
  *   /codex                 → solo mode, provider=codex
+ *   /cursor                → solo mode, provider=cursor
  *   /solo                  → revert to daemon default (delete persisted mode)
  *   /mode                  → show current effective mode + registered providers
  *
@@ -54,6 +55,7 @@ export function makeModeCommands(deps: ModeCommandsDeps): ModeCommands {
     const lower = slashWord.toLowerCase()
     if (lower === 'cc') return 'claude'
     if (lower === 'codex') return 'codex'
+    if (lower === 'cursor') return 'cursor'
     return null
   }
 

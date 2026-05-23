@@ -67,6 +67,24 @@ describe('makeModeCommands', () => {
     expect(set).toHaveBeenCalledWith('chat-1', { kind: 'solo', provider: 'codex' })
   })
 
+  it('/cursor switches mode to solo+cursor', async () => {
+    const { cmds, set, sentMessages } = setup({ registered: ['claude', 'codex', 'cursor'] })
+    const consumed = await cmds.handle(inbound('/cursor'))
+    expect(consumed).toBe(true)
+    expect(set).toHaveBeenCalledWith('chat-1', { kind: 'solo', provider: 'cursor' })
+    expect(sentMessages[0]?.[1]).toContain('Cursor')
+    expect(sentMessages[0]?.[1]).toContain('solo')
+  })
+
+  it('/cursor rejects with helpful message when cursor is not registered', async () => {
+    const { cmds, set, sentMessages } = setup({ registered: ['claude', 'codex'] })
+    const consumed = await cmds.handle(inbound('/cursor'))
+    expect(consumed).toBe(true)
+    expect(set).not.toHaveBeenCalled()
+    expect(sentMessages[0]?.[1]).toContain('未注册')
+    expect(sentMessages[0]?.[1]).toContain('cursor')
+  })
+
   it('/cc and /codex are case-insensitive on the slash word', async () => {
     const { cmds, set } = setup()
     await cmds.handle(inbound('/CC'))
