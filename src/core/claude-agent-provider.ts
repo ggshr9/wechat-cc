@@ -1,6 +1,59 @@
 import { query, type Options, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AgentEvent, AgentProject, AgentProvider, AgentSession } from './agent-provider'
+import type { TierProfile, ToolKind } from './user-tier'
 import { log } from '../lib/log'
+
+/**
+ * Map ToolKind → the Claude Code built-in tool names that fall into it.
+ * MCP tools (mcp__wechat__*) are NOT listed — they're gated by canUseTool
+ * (a per-tool callback fires for every MCP invocation), which the
+ * permission-relay layer sets up.
+ */
+const TOOL_KIND_TO_CLAUDE_BUILTINS: Record<ToolKind, ReadonlyArray<string>> = {
+  reply: [],            // MCP-only
+  share_page: [],       // MCP-only
+  memory_read: [],      // MCP-only
+  memory_write: [],     // MCP-only
+  memory_delete: [],    // MCP-only
+  observations_read: [],  // MCP-only
+  observations_write: [], // MCP-only
+  fs_read: ['Read', 'Glob', 'Grep', 'LS'],
+  fs_write: ['Write', 'Edit', 'NotebookEdit'],
+  shell: ['Bash', 'KillShell'],
+  shell_destructive: [],   // virtual; same Bash tool, gated by canUseTool input inspection
+  network: ['WebFetch', 'WebSearch'],
+  subagent: ['Task'],
+}
+
+export interface ClaudeTierSdkOpts {
+  permissionMode: 'default' | 'bypassPermissions'
+  disallowedTools?: string[]
+}
+
+/**
+ * Pure translation from daemon TierProfile → Claude SDK options.
+ * The caller layers `canUseTool` on top of this — `disallowedTools` only
+ * covers built-ins (which the SDK knows by name); MCP tools and
+ * shell_destructive get filtered inside the canUseTool closure.
+ */
+export function tierProfileToClaudeSdkOpts(tp: TierProfile): ClaudeTierSdkOpts {
+  // admin → bypass everything (equivalent to old --dangerously path)
+  // Any allow-everything profile is treated this way; check by relay+deny size.
+  if (tp.relay.size === 0 && tp.deny.size === 0) {
+    return { permissionMode: 'bypassPermissions' }
+  }
+
+  // Build disallowedTools from the deny set's built-in tools only
+  const disallowed: string[] = []
+  for (const kind of tp.deny) {
+    for (const name of TOOL_KIND_TO_CLAUDE_BUILTINS[kind]) disallowed.push(name)
+  }
+
+  return {
+    permissionMode: 'default',
+    ...(disallowed.length > 0 ? { disallowedTools: disallowed } : {}),
+  }
+}
 
 export interface ClaudeAgentProviderOptions {
   sdkOptionsForProject: (alias: string, path: string) => Options

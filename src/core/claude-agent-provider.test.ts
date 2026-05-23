@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createClaudeAgentProvider } from './claude-agent-provider'
+import { createClaudeAgentProvider, tierProfileToClaudeSdkOpts } from './claude-agent-provider'
 import type { AgentEvent } from './agent-provider'
+import { TIER_PROFILES } from './user-tier'
 
 // Helper: drain an async iterable into an array for assertion.
 async function drain(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
@@ -385,6 +386,52 @@ describe('claude-agent-provider', () => {
     const baseline = (sdk as unknown as { __test_interrupt_count: () => number }).__test_interrupt_count()
     await session.cancel?.()
     expect((sdk as unknown as { __test_interrupt_count: () => number }).__test_interrupt_count()).toBe(baseline)
+  })
+
+  describe('tierProfileToClaudeSdkOpts', () => {
+    it('admin → permissionMode=bypassPermissions, no disallowedTools', () => {
+      const out = tierProfileToClaudeSdkOpts(TIER_PROFILES.admin)
+      expect(out.permissionMode).toBe('bypassPermissions')
+      expect(out.disallowedTools).toBeUndefined()
+    })
+
+    it('trusted → permissionMode=default, no disallowedTools (canUseTool relays destructive)', () => {
+      const out = tierProfileToClaudeSdkOpts(TIER_PROFILES.trusted)
+      expect(out.permissionMode).toBe('default')
+      // shell_destructive is relayed via canUseTool, not via disallowedTools —
+      // because disallowedTools blocks at the tool name level and we'd lose
+      // the ability to allow non-destructive Bash.
+      expect(out.disallowedTools).toBeUndefined()
+    })
+
+    it('guest → permissionMode=default + disallowedTools blocks non-allowed built-ins', () => {
+      const out = tierProfileToClaudeSdkOpts(TIER_PROFILES.guest)
+      expect(out.permissionMode).toBe('default')
+      expect(out.disallowedTools).toBeDefined()
+      expect(out.disallowedTools).toContain('Bash')
+      expect(out.disallowedTools).toContain('Write')
+    })
+
+    it('guest disallowedTools is exactly the built-in tools mapped to non-allow ToolKinds', () => {
+      const out = tierProfileToClaudeSdkOpts(TIER_PROFILES.guest)
+      const set = new Set(out.disallowedTools ?? [])
+      expect(set.has('Bash')).toBe(true)
+      expect(set.has('KillShell')).toBe(true)
+      expect(set.has('Write')).toBe(true)
+      expect(set.has('Edit')).toBe(true)
+      expect(set.has('NotebookEdit')).toBe(true)
+      expect(set.has('Read')).toBe(true)
+      expect(set.has('Glob')).toBe(true)
+      expect(set.has('Grep')).toBe(true)
+      expect(set.has('LS')).toBe(true)
+      expect(set.has('WebFetch')).toBe(true)
+      expect(set.has('WebSearch')).toBe(true)
+      expect(set.has('Task')).toBe(true)
+      // MCP tools are NOT included in disallowedTools — they're filtered by
+      // canUseTool instead (because the wechat MCP server exposes them
+      // dynamically; we can't pre-enumerate the names here without
+      // double-maintaining a list).
+    })
   })
 
   it('assistant text arriving with no active queue is dropped with [STREAM_DROP] warn', async () => {
