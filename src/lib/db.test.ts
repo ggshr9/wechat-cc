@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { openTestDb, openDb, renameMigrated } from './db'
+import { Database } from 'bun:sqlite'
+import { openTestDb, openDb, renameMigrated, runMigrations } from './db'
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -70,5 +71,56 @@ describe('renameMigrated', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('migration v10 — sessions.chat_id', () => {
+  it('adds chat_id column with _legacy default for pre-existing rows', () => {
+    const db = new Database(':memory:')
+    db.exec(`
+      PRAGMA user_version = 9;
+      CREATE TABLE sessions (
+        alias TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        last_used_at TEXT NOT NULL,
+        summary TEXT,
+        summary_updated_at TEXT,
+        PRIMARY KEY (alias, provider)
+      ) STRICT;
+      INSERT INTO sessions(alias, provider, session_id, last_used_at)
+        VALUES ('_default', 'claude', 'sess1', '${new Date().toISOString()}');
+    `)
+
+    runMigrations(db)
+
+    const cols = db.query("PRAGMA table_info('sessions')").all() as Array<{ name: string }>
+    expect(cols.map(c => c.name)).toContain('chat_id')
+
+    const row = db.query("SELECT chat_id FROM sessions WHERE alias = '_default'").get() as { chat_id: string }
+    expect(row.chat_id).toBe('_legacy')
+
+    const ver = db.query('PRAGMA user_version').get() as { user_version: number }
+    expect(ver.user_version).toBeGreaterThanOrEqual(10)
+  })
+
+  it('legacy rows older than 1 day are cleaned up', () => {
+    const db = new Database(':memory:')
+    const oldTs = new Date(Date.now() - 2 * 86_400_000).toISOString()
+    db.exec(`
+      PRAGMA user_version = 9;
+      CREATE TABLE sessions (
+        alias TEXT NOT NULL, provider TEXT NOT NULL, session_id TEXT NOT NULL,
+        last_used_at TEXT NOT NULL, summary TEXT, summary_updated_at TEXT,
+        PRIMARY KEY (alias, provider)
+      ) STRICT;
+      INSERT INTO sessions(alias, provider, session_id, last_used_at) VALUES
+        ('_default', 'claude', 'old_sess', '${oldTs}'),
+        ('_default', 'codex',  'fresh',    '${new Date().toISOString()}');
+    `)
+    runMigrations(db)
+    const remaining = db.query<{ session_id: string }, []>('SELECT session_id FROM sessions').all()
+    expect(remaining.map(r => r.session_id)).toContain('fresh')
+    expect(remaining.map(r => r.session_id)).not.toContain('old_sess')
   })
 })

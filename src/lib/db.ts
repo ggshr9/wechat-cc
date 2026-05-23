@@ -190,6 +190,36 @@ const migrations: Migration[] = [
       ALTER TABLE conversations ADD COLUMN last_user_name TEXT;
     `)
   },
+  // v10 — per-chat session keys. Pre-tier sessions get chat_id='_legacy'
+  // and are cleaned up if they're older than a day (most installs have
+  // nothing newer; the 1-day grace handles fresh upgrades mid-conversation).
+  // See docs/superpowers/specs/2026-05-22-user-tier-permissions-design.md.
+  (db) => {
+    // SQLite can't ALTER a PRIMARY KEY in place; rebuild the table.
+    // The column add + table rebuild + delete happen inside this migration
+    // function which runs in a single transaction in the runner.
+    db.exec(`
+      ALTER TABLE sessions ADD COLUMN chat_id TEXT NOT NULL DEFAULT '_legacy';
+      CREATE TABLE sessions_v10 (
+        alias TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        last_used_at TEXT NOT NULL,
+        summary TEXT,
+        summary_updated_at TEXT,
+        PRIMARY KEY (alias, provider, chat_id)
+      ) STRICT;
+      INSERT INTO sessions_v10(alias, provider, chat_id, session_id, last_used_at, summary, summary_updated_at)
+        SELECT alias, provider, chat_id, session_id, last_used_at, summary, summary_updated_at FROM sessions;
+      DROP TABLE sessions;
+      ALTER TABLE sessions_v10 RENAME TO sessions;
+      CREATE INDEX IF NOT EXISTS sessions_alias_last_used ON sessions(alias, last_used_at DESC);
+    `)
+    // Cleanup pre-tier rows older than 1 day. ISO 8601 string-comparable.
+    const cutoff = new Date(Date.now() - 86_400_000).toISOString()
+    db.exec(`DELETE FROM sessions WHERE chat_id = '_legacy' AND last_used_at < '${cutoff}'`)
+  },
 ]
 
 export interface OpenDbOpts {
@@ -225,11 +255,16 @@ export function openDb(opts: OpenDbOpts): Database {
   // bumps last_used_at). With WAL the conflict window is short; the
   // timeout makes it transparent.
   db.exec('PRAGMA busy_timeout = 5000;')
-  applyMigrations(db)
+  runMigrations(db)
   return db
 }
 
-function applyMigrations(db: Database): void {
+/**
+ * Apply any migrations whose index is greater than the database's current
+ * PRAGMA user_version. Exported so tests can drive the runner against a
+ * pre-populated in-memory db (e.g. simulating an upgrade from v9).
+ */
+export function runMigrations(db: Database): void {
   const row = db.query('PRAGMA user_version').get() as { user_version: number } | null
   const current = row?.user_version ?? 0
   for (let i = current; i < migrations.length; i++) {
