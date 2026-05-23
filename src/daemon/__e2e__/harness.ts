@@ -18,7 +18,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { startFakeIlink, type FakeIlinkHandle, type OutboundMsg } from './fake-ilink-server'
-import { installFakeClaude, installFakeCodex, installFakeModerator, type FakeSdkScript, type ModeratorScript } from './fake-sdk'
+import { installFakeClaude, installClaudeSpawnRecorder, installFakeCodex, installFakeModerator, type FakeSdkScript, type ModeratorScript } from './fake-sdk'
 // Side-effect import: registers vi.mock('../media') so attachments
 // materialize to local stub files instead of hitting the real ilink CDN.
 // MUST come before bootDaemon imports to take effect.
@@ -47,7 +47,18 @@ export interface TestDaemonOpts {
   /** --dangerously flag */
   dangerously?: boolean
   /** preset access.json — default: allowFrom: ['*'], admins: ['testadmin'] */
-  access?: { allowFrom?: string[]; admins?: string[] }
+  access?: { allowFrom?: string[]; admins?: string[]; trusted?: string[] }
+  /**
+   * Optional callback fired with the SDK options passed to `query()` for
+   * each streaming Claude spawn (AgentSession). Used by tier-permissions
+   * e2e tests to assert that admin / trusted / guest chats produce
+   * different `permissionMode` + `disallowedTools` shapes.
+   *
+   * Not called for cheapEval (single-shot string prompt) or moderator
+   * paths — only for the session-spawn path that goes through
+   * sdkOptionsForProject(alias, path, tierProfile).
+   */
+  recordClaudeSpawnOptions?: (options: Record<string, unknown>) => void
   /** preset companion config — default: disabled */
   companion?: { enabled?: boolean; default_chat_id?: string }
   /** preset bot accounts — default: 1 fake bot pointing at fake ilink */
@@ -103,9 +114,10 @@ export async function startTestDaemon(opts: TestDaemonOpts = {}): Promise<Daemon
   mkdirSync(join(stateDir, 'accounts'), { recursive: true })
 
   // 2. Write access.json
-  const access = {
+  const access: { allowFrom: string[]; admins: string[]; trusted?: string[] } = {
     allowFrom: opts.access?.allowFrom ?? ['*'],
     admins: opts.access?.admins ?? ['testadmin'],
+    ...(opts.access?.trusted ? { trusted: opts.access.trusted } : {}),
   }
   writeFileSync(join(stateDir, 'access.json'), JSON.stringify(access, null, 2))
 
@@ -157,6 +169,10 @@ export async function startTestDaemon(opts: TestDaemonOpts = {}): Promise<Daemon
   }
   if (opts.moderatorScript) {
     const { uninstall } = installFakeModerator(opts.moderatorScript)
+    cleanups.push(uninstall)
+  }
+  if (opts.recordClaudeSpawnOptions) {
+    const { uninstall } = installClaudeSpawnRecorder(opts.recordClaudeSpawnOptions)
     cleanups.push(uninstall)
   }
 

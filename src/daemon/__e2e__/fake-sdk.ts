@@ -60,9 +60,33 @@ let claudeScript: FakeSdkScript | null = null
 let codexScript: FakeSdkScript | null = null
 let moderatorScript: ModeratorScript | null = null
 
+/**
+ * Optional recorder fired on every fake `query({ prompt, options })` call
+ * with a streaming AsyncIterable prompt (i.e. the path
+ * claude-agent-provider.ts uses for spawned sessions — NOT cheapEval).
+ * Tests use this to assert the spawn-time SDK options (e.g.
+ * `permissionMode`, `disallowedTools`) match the user's tier.
+ *
+ * Stays null unless a test calls installFakeClaudeSpawnRecorder().
+ */
+let claudeSpawnRecorder: ((options: Record<string, unknown>) => void) | null = null
+
 export function installFakeClaude(script: FakeSdkScript): { uninstall(): void } {
   claudeScript = script
   return { uninstall() { claudeScript = null } }
+}
+
+/**
+ * Install a recorder that's called with the SDK options passed to
+ * `query()` for every streaming (AgentSession) spawn. Returns an
+ * uninstaller. Tests that want to verify tier → SDK options translation
+ * (Task 17 e2e) use this.
+ */
+export function installClaudeSpawnRecorder(
+  fn: (options: Record<string, unknown>) => void,
+): { uninstall(): void } {
+  claudeSpawnRecorder = fn
+  return { uninstall() { claudeSpawnRecorder = null } }
 }
 
 export function installFakeCodex(script: FakeSdkScript): { uninstall(): void } {
@@ -212,7 +236,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => {
    * Accepts both { prompt: string } and { prompt: AsyncIterable<SDKUserMessage> }.
    * Returns an AsyncGenerator of SDKMessage-shaped objects.
    */
-  const fakeQuery = (opts: { prompt: unknown }) => {
+  const fakeQuery = (opts: { prompt: unknown; options?: unknown }) => {
     return (async function* () {
       const { prompt } = opts
 
@@ -250,6 +274,13 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => {
       // Streaming iterable path (claude-agent-provider.ts).
       // Drain the prompt iterable; each message is one user dispatch.
       // The provider's queue emits SDKUserMessage objects.
+      //
+      // Fire the spawn recorder ONCE per `query()` invocation — the
+      // provider calls `query({ prompt: iterable, options })` once per
+      // spawn(), so this captures the spawn-time options snapshot.
+      if (claudeSpawnRecorder && opts.options && typeof opts.options === 'object') {
+        try { claudeSpawnRecorder(opts.options as Record<string, unknown>) } catch {}
+      }
       const iterable = prompt as AsyncIterable<{ message?: { content?: Array<{ type?: string; text?: string }> } }>
       for await (const userMsg of iterable) {
         // Extract the user text from the SDKUserMessage payload.
