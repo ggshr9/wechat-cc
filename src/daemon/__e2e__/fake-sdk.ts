@@ -58,6 +58,7 @@ export interface ModeratorScript {
 
 let claudeScript: FakeSdkScript | null = null
 let codexScript: FakeSdkScript | null = null
+let cursorScript: FakeSdkScript | null = null
 let moderatorScript: ModeratorScript | null = null
 
 /**
@@ -82,6 +83,18 @@ let claudeSpawnRecorder: ((options: Record<string, unknown>) => void) | null = n
  * Stays null unless a test calls installCodexSpawnRecorder().
  */
 let codexSpawnRecorder: ((options: Record<string, unknown>) => void) | null = null
+
+/**
+ * Optional recorder fired on every fake `Agent.create(options)` call —
+ * i.e. the cursor provider's spawn path. Tests use this to assert
+ * tier → cursor SDK options translation (parallel to
+ * installClaudeSpawnRecorder / installCodexSpawnRecorder); the
+ * `local.sandboxOptions.enabled` field is the entire permission
+ * surface so a single recorder snapshot is enough.
+ *
+ * Stays null unless a test calls installCursorSpawnRecorder().
+ */
+let cursorSpawnRecorder: ((options: Record<string, unknown>) => void) | null = null
 
 export function installFakeClaude(script: FakeSdkScript): { uninstall(): void } {
   claudeScript = script
@@ -123,6 +136,29 @@ export function installCodexSpawnRecorder(
 ): { uninstall(): void } {
   codexSpawnRecorder = fn
   return { uninstall() { codexSpawnRecorder = null } }
+}
+
+export function installFakeCursor(script: FakeSdkScript): { uninstall(): void } {
+  cursorScript = script
+  return { uninstall() { cursorScript = null } }
+}
+
+/**
+ * Install a recorder that's called with the options passed to
+ * `Agent.create(opts)` / `Agent.resume(id, opts)` for every spawned
+ * cursor session. Returns an uninstaller. Tests that want to verify
+ * tier → cursor SDK options translation (parallel to
+ * installClaudeSpawnRecorder / installCodexSpawnRecorder) use this.
+ *
+ * Unlike Claude and Codex, Cursor has no cheap-eval path — all
+ * Agent.create calls reflect a real spawn, so we don't need an
+ * "only-the-streaming-path" filter here.
+ */
+export function installCursorSpawnRecorder(
+  fn: (options: Record<string, unknown>) => void,
+): { uninstall(): void } {
+  cursorSpawnRecorder = fn
+  return { uninstall() { cursorSpawnRecorder = null } }
 }
 
 export function installFakeModerator(script: ModeratorScript): { uninstall(): void } {
@@ -479,4 +515,125 @@ vi.mock('@openai/codex-sdk', () => {
   }
 
   return { Codex: FakeCodex, default: FakeCodex }
+})
+
+// ---------------------------------------------------------------------------
+// Cursor SDK mock
+//
+// @cursor/sdk exports:
+//   Agent.create(options): Promise<Agent>
+//   Agent.resume(agentId, options?): Promise<Agent>
+//   Agent: { agentId: string; send(message): Promise<Run>; close(): void; reload?(): Promise<void> }
+//   Run:   { id: string; agentId: string; stream(): AsyncIterable<SDKMessage> }
+//
+// SDKMessage shapes consumed by cursor-agent-provider.ts:
+//   { type: 'assistant', message: { content: Array<{type:'text'|'tool_use', text?, name?, input?}> } }
+//   { type: 'status', status: 'FINISHED' | 'ERROR' | 'CANCELLED' | 'EXPIRED' | 'RUNNING' | 'CREATING',
+//                     error?: { message?: string } }
+//
+// The cursor provider has no cheap-eval path (cf. Claude/Codex), so every
+// Agent.create call is a real session spawn and is unconditionally recorded
+// when cursorSpawnRecorder is installed.
+// ---------------------------------------------------------------------------
+vi.mock('@cursor/sdk', () => {
+  function makeId(): string {
+    return Math.random().toString(36).slice(2, 10)
+  }
+
+  let agentSeq = 0
+
+  /**
+   * Build the SDKMessage stream for one send() call.
+   *
+   * Mirrors the Claude buildCycle shape — emit one assistant message per
+   * tool call (with a `tool_use` content block), one assistant message
+   * with the final text, then a `status: FINISHED` terminator so the
+   * provider emits a `result` event with real timings.
+   *
+   * Tool names get wrapped with `mcp__wechat__<name>` for reply-family
+   * tools (matching the Claude fake) so the bridge POSTs through to
+   * the daemon's internal-api.
+   */
+  async function* buildCursorStream(
+    dispatchResult: { toolCalls: Array<{ name: string; input: unknown }>; finalText: string },
+  ): AsyncGenerator<Record<string, unknown>> {
+    for (const tc of dispatchResult.toolCalls) {
+      const sdkToolName = REPLY_TOOL_TO_ROUTE[tc.name] && !tc.name.includes('__')
+        ? `mcp__wechat__${tc.name}`
+        : tc.name
+      yield {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', name: sdkToolName, input: tc.input }],
+        },
+      }
+      await bridgeToolCallToInternalApi(tc.name, tc.input)
+    }
+    if (dispatchResult.finalText) {
+      yield {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: dispatchResult.finalText }],
+        },
+      }
+    }
+    yield { type: 'status', status: 'FINISHED' }
+  }
+
+  class FakeCursorRun {
+    readonly id: string
+    readonly agentId: string
+    private readonly _text: string
+    constructor(agentId: string, text: string) {
+      this.id = `run_${makeId()}`
+      this.agentId = agentId
+      this._text = text
+    }
+    stream(): AsyncGenerator<Record<string, unknown>> {
+      const script = cursorScript
+      if (!script) {
+        // No script installed — emit a single FINISHED so the dispatch
+        // generator concludes (provider yields a `result` event).
+        return (async function* () {
+          yield { type: 'status', status: 'FINISHED' } as Record<string, unknown>
+        })()
+      }
+      const text = this._text
+      return (async function* () {
+        const result = await script.onDispatch(text)
+        for await (const msg of buildCursorStream(result)) yield msg
+      })()
+    }
+    async cancel(): Promise<void> { /* no-op */ }
+  }
+
+  class FakeCursorAgent {
+    readonly agentId: string
+    constructor(agentId: string) {
+      this.agentId = agentId
+    }
+    async send(message: string): Promise<FakeCursorRun> {
+      return new FakeCursorRun(this.agentId, message)
+    }
+    close(): void { /* no-op */ }
+    async reload(): Promise<void> { /* no-op */ }
+  }
+
+  const Agent = {
+    create: vi.fn(async (options: Record<string, unknown>): Promise<FakeCursorAgent> => {
+      if (cursorSpawnRecorder) {
+        try { cursorSpawnRecorder(options) } catch {}
+      }
+      agentSeq++
+      return new FakeCursorAgent(`fake-cursor-agent-${agentSeq}`)
+    }),
+    resume: vi.fn(async (agentId: string, options?: Record<string, unknown>): Promise<FakeCursorAgent> => {
+      if (cursorSpawnRecorder && options) {
+        try { cursorSpawnRecorder(options) } catch {}
+      }
+      return new FakeCursorAgent(agentId)
+    }),
+  }
+
+  return { Agent }
 })
