@@ -16,6 +16,7 @@ import { collectTurn } from '../../core/agent-provider'
 import type { Options } from '@anthropic-ai/claude-agent-sdk'
 import type { ProviderId } from '../../core/conversation'
 import { loadAgentConfig } from '../../lib/agent-config'
+import { TIER_PROFILES, type TierProfile } from '../../core/user-tier'
 
 export interface DelegateBuildDeps {
   /** State dir — used as the default cwd when caller doesn't pass one. */
@@ -46,7 +47,7 @@ export function buildDelegateDispatch(deps: DelegateBuildDeps): DelegateDispatch
     : 'claude-opus-4-7'
 
   const delegateClaude = createClaudeAgentProvider({
-    sdkOptionsForProject: (_alias: string, path: string): Options => {
+    sdkOptionsForProject: (_alias: string, path: string, _tierProfile: TierProfile): Options => {
       const o: Options = {
         cwd: path,
         model: claudeModel,
@@ -70,10 +71,12 @@ export function buildDelegateDispatch(deps: DelegateBuildDeps): DelegateDispatch
     ...(process.env.CODEX_MODEL || configuredAgent.model
       ? { model: process.env.CODEX_MODEL ?? configuredAgent.model }
       : {}),
-    approvalPolicy: 'never',
-    // Read-only sandbox: delegate is for "ask a question", not "do work".
-    // Spike 3 confirmed read-only blocks writes cleanly.
-    sandboxMode: 'read-only',
+    // Task 6: sandboxMode + approvalPolicy moved out of CodexAgentProviderOptions —
+    // they're now derived per-spawn from spawnOpts.tierProfile inside the provider.
+    // The dispatchDelegate path below passes TIER_PROFILES.admin (delegate runs
+    // as daemon, not a user-bound chat). Note: this is a behaviour shift from the
+    // pre-Task-6 "delegate is read-mostly" stance (admin → danger-full-access);
+    // Task 9/10 will pick a dedicated delegate tier if a tighter posture is needed.
     // Deliberately NO mcpServers — bare-bones is the structural
     // recursion-prevention guarantee.
   })
@@ -97,7 +100,13 @@ export function buildDelegateDispatch(deps: DelegateBuildDeps): DelegateDispatch
     const started = Date.now()
     let session: Awaited<ReturnType<typeof provider.spawn>> | null = null
     try {
-      session = await provider.spawn({ alias: '_delegate', path: cwd ?? deps.stateDir })
+      session = await provider.spawn(
+        { alias: '_delegate', path: cwd ?? deps.stateDir },
+        // Hard-coded admin tier — delegate is daemon-initiated, not chat-initiated,
+        // so no chat-driven tier exists. Task 9/10 may revisit if delegate needs
+        // its own tighter posture.
+        { tierProfile: TIER_PROFILES.admin },
+      )
       const result = await collectTurn(session.dispatch(prompt))
       const response = result.assistantText.join('\n').trim()
       return { ok: true, response, duration_ms: Date.now() - started }

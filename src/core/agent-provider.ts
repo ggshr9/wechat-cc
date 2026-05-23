@@ -1,3 +1,5 @@
+import type { TierProfile } from './user-tier'
+
 export interface AgentProject {
   alias: string
   path: string
@@ -65,7 +67,7 @@ export interface AgentSession {
 export type CheapEval = (prompt: string) => Promise<string>
 
 export interface AgentProvider {
-  spawn(project: AgentProject, opts?: { resumeSessionId?: string }): Promise<AgentSession>
+  spawn(project: AgentProject, opts: { resumeSessionId?: string; tierProfile: TierProfile }): Promise<AgentSession>
   /**
    * Optional one-shot eval. Coordinators that need cheap routing /
    * decision LLM calls should resolve via `ProviderRegistry.getCheapEval()`

@@ -113,33 +113,46 @@ function provider(opts: Parameters<typeof createCodexAgentProvider>[0] = {}, fak
 }
 
 describe('Codex agent provider', () => {
-  it('spawns a fresh thread by default with RFC-03 daemon-safe defaults', async () => {
+  it('spawns a fresh thread with tier-derived sandbox + approval policy (admin → danger-full-access)', async () => {
+    // Task 6: sandboxMode + approvalPolicy moved from CodexAgentProviderOptions to
+    // spawnOpts.tierProfile. Admin tier (passed here as the daemon's hard-coded
+    // stub via session-manager) maps to danger-full-access + never — matches the
+    // old --dangerously posture, which is what session-manager currently emits.
     const { provider: p, fake } = provider()
-    await p.spawn({ alias: 'compass', path: '/repo' })
+    await p.spawn({ alias: 'compass', path: '/repo' }, { tierProfile: TIER_PROFILES.admin })
     expect(fake.startThreadCalls).toHaveLength(1)
     const o = fake.startThreadCalls[0]!
     expect(o.workingDirectory).toBe('/repo')
     expect(o.skipGitRepoCheck).toBe(true)
-    expect(o.sandboxMode).toBe('workspace-write')
+    expect(o.sandboxMode).toBe('danger-full-access')
     expect(o.approvalPolicy).toBe('never')
   })
 
-  it('respects model / sandboxMode / approvalPolicy overrides', async () => {
-    const { provider: p, fake } = provider({
-      model: 'gpt-5-codex',
-      sandboxMode: 'read-only',
-      approvalPolicy: 'on-request',
-    })
-    await p.spawn({ alias: 'a', path: '/p' })
+  it('threads non-admin tiers into startThread sandbox + approval policy', async () => {
+    // Trusted → workspace-write + never; guest → read-only + untrusted. The
+    // tierProfile-to-codex translation lives in tierProfileToCodexSdkOpts;
+    // this test just verifies the spawn path actually plumbs it through.
+    const { provider: trustedProv, fake: trustedFake } = provider()
+    await trustedProv.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.trusted })
+    expect(trustedFake.startThreadCalls[0]!.sandboxMode).toBe('workspace-write')
+    expect(trustedFake.startThreadCalls[0]!.approvalPolicy).toBe('never')
+
+    const { provider: guestProv, fake: guestFake } = provider()
+    await guestProv.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.guest })
+    expect(guestFake.startThreadCalls[0]!.sandboxMode).toBe('read-only')
+    expect(guestFake.startThreadCalls[0]!.approvalPolicy).toBe('untrusted')
+  })
+
+  it('respects model override (sandboxMode/approvalPolicy now tier-driven, see test above)', async () => {
+    const { provider: p, fake } = provider({ model: 'gpt-5-codex' })
+    await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin })
     const o = fake.startThreadCalls[0]!
     expect(o.model).toBe('gpt-5-codex')
-    expect(o.sandboxMode).toBe('read-only')
-    expect(o.approvalPolicy).toBe('on-request')
   })
 
   it('routes resumeSessionId to resumeThread, NOT startThread', async () => {
     const { provider: p, fake } = provider()
-    await p.spawn({ alias: 'compass', path: '/repo' }, { resumeSessionId: 'thread-xyz' })
+    await p.spawn({ alias: 'compass', path: '/repo' }, { resumeSessionId: 'thread-xyz', tierProfile: TIER_PROFILES.admin })
     expect(fake.startThreadCalls).toHaveLength(0)
     expect(fake.resumeThreadCalls).toHaveLength(1)
     expect(fake.resumeThreadCalls[0]).toMatchObject({ id: 'thread-xyz' })
@@ -153,7 +166,7 @@ describe('Codex agent provider', () => {
       { type: 'turn.completed', usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5, reasoning_output_tokens: 0 } },
     ])
     const { provider: p } = provider({}, fakeCodex)
-    const session = await p.spawn({ alias: 'a', path: '/p' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin })
 
     const events = await drain(session.dispatch('hi'))
 
@@ -182,7 +195,7 @@ describe('Codex agent provider', () => {
       { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } },
     ])
     const { provider: p } = provider({}, fakeCodex)
-    const session = await p.spawn({ alias: 'a', path: '/p' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin })
 
     const events = await drain(session.dispatch('please reply'))
 
@@ -196,7 +209,7 @@ describe('Codex agent provider', () => {
       { type: 'turn.failed', error: { message: 'context limit exceeded' } },
     ])
     const { provider: p } = provider({}, fakeCodex)
-    const session = await p.spawn({ alias: 'a', path: '/p' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin })
 
     const events = await drain(session.dispatch('hi'))
 
@@ -212,7 +225,7 @@ describe('Codex agent provider', () => {
       { type: 'error', message: 'network timeout' } as unknown as ThreadEvent,
     ])
     const { provider: p } = provider({}, fakeCodex)
-    const session = await p.spawn({ alias: 'a', path: '/p' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin })
 
     const events = await drain(session.dispatch('hi'))
 
@@ -225,7 +238,7 @@ describe('Codex agent provider', () => {
     const fakeCodex = makeFakeCodex()
     // No turns pushed — close before dispatch
     const { provider: p } = provider({}, fakeCodex)
-    const session = await p.spawn({ alias: 'a', path: '/p' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin })
 
     await session.close()
     const events = await drain(session.dispatch('after close'))
@@ -245,7 +258,7 @@ describe('Codex agent provider', () => {
     ])
 
     const { provider: p } = provider({ appendInstructions: 'be terse' }, fakeCodex)
-    const session = await p.spawn({ alias: 'a', path: '/p' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin })
 
     // First dispatch — should inject instructions
     await drain(session.dispatch('hi'))
@@ -274,7 +287,7 @@ describe('Codex agent provider', () => {
       { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } },
     ])
     const { provider: p } = provider({}, fakeCodex)
-    const session = await p.spawn({ alias: 'a', path: '/p' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin })
 
     const firstEvents = await drain(session.dispatch('first'))
     const secondEvents = await drain(session.dispatch('second'))
@@ -319,7 +332,7 @@ describe('Codex agent provider', () => {
     } as unknown as Codex
 
     const p = createCodexAgentProvider({ codexFactory: () => codex })
-    const session = await p.spawn({ alias: 'a', path: '/p' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin })
 
     // First dispatch hangs.
     void session.dispatch('hangs')[Symbol.asyncIterator]().next().catch(() => undefined)
@@ -363,7 +376,7 @@ describe('Codex agent provider', () => {
     } as unknown as Codex
 
     const p = createCodexAgentProvider({ codexFactory: () => codex })
-    const session = await p.spawn({ alias: 'a', path: '/p' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin })
     // Don't await dispatch — it'll hang on the generator. Just trigger it
     // so runStreamed runs and our AbortSignal hook fires.
     void session.dispatch('hangs forever')[Symbol.asyncIterator]().next().catch(() => undefined)
@@ -379,7 +392,7 @@ describe('Codex agent provider', () => {
     const fake = makeFakeCodex()
     const factory: CodexFactory = (args) => { factoryArgs.push(args); return fake.codex }
     const p = createCodexAgentProvider({ codexFactory: factory })
-    await p.spawn({ alias: 'a', path: '/p' })
+    await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin })
     // PR F: factory is called twice — once at provider construction for
     // the hoisted cheapEval Codex instance, once per spawn() call.
     // Neither call should pass apiKey.
@@ -394,7 +407,7 @@ describe('Codex agent provider', () => {
     const fake = makeFakeCodex()
     const factory: CodexFactory = (args) => { factoryArgs.push(args); return fake.codex }
     const p = createCodexAgentProvider({ codexFactory: factory, codexPathOverride: '/opt/codex/bin/codex' })
-    await p.spawn({ alias: 'a', path: '/p' })
+    await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin })
     expect(factoryArgs[0]).toMatchObject({ codexPathOverride: '/opt/codex/bin/codex' })
   })
 
@@ -414,7 +427,7 @@ describe('Codex agent provider', () => {
         { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } },
       ])
       const { provider: p } = provider({}, fakeCodex)
-      const session = await p.spawn({ alias: 'logtest', path: '/p' })
+      const session = await p.spawn({ alias: 'logtest', path: '/p' }, { tierProfile: TIER_PROFILES.admin })
 
       await drain(session.dispatch('hi'))
 
@@ -435,7 +448,7 @@ describe('Codex agent provider', () => {
       { type: 'turn.failed', error: { message: 'OPENAI_API_KEY not set, run `codex login`' } },
     ])
     const { provider: p } = provider({}, fakeCodex)
-    const session = await p.spawn({ alias: 'a', path: '/p' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin })
 
     const events = await drain(session.dispatch('hi'))
 
@@ -451,7 +464,7 @@ describe('Codex agent provider', () => {
       { type: 'error', message: 'not authenticated, please run codex login' } as unknown as ThreadEvent,
     ])
     const { provider: p } = provider({}, fakeCodex)
-    const session = await p.spawn({ alias: 'a', path: '/p' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin })
 
     const events = await drain(session.dispatch('hi'))
 
@@ -467,7 +480,7 @@ describe('Codex agent provider', () => {
       { type: 'error', message: 'network timeout' } as unknown as ThreadEvent,
     ])
     const { provider: p } = provider({}, fakeCodex)
-    const session = await p.spawn({ alias: 'a', path: '/p' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin })
 
     const events = await drain(session.dispatch('hi'))
 

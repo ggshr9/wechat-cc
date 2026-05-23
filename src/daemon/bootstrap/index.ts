@@ -20,6 +20,7 @@
 import { SessionManager } from '../../core/session-manager'
 import { createClaudeAgentProvider } from '../../core/claude-agent-provider'
 import { createCodexAgentProvider } from '../../core/codex-agent-provider'
+import type { TierProfile } from '../../core/user-tier'
 import { createProviderRegistry, type ProviderRegistry } from '../../core/provider-registry'
 import { createConversationCoordinator, type ConversationCoordinator } from '../../core/conversation-coordinator'
 import { makeConversationStore, type ConversationStore } from '../../core/conversation-store'
@@ -27,7 +28,7 @@ import { buildSystemPrompt } from '../../core/prompt-builder'
 import type { ProviderId } from '../../core/conversation'
 import { makeResolver } from '../../core/project-resolver'
 import { makeCanUseTool } from '../../core/permission-relay'
-import { lookup, assertMatrixComplete, type PermissionMode } from '../../core/capability-matrix'
+import { assertMatrixComplete, type PermissionMode } from '../../core/capability-matrix'
 import { formatInbound } from '../../core/prompt-format'
 import type { IlinkAdapter } from '../ilink-glue'
 import type { Options } from '@anthropic-ai/claude-agent-sdk'
@@ -166,7 +167,7 @@ export interface Bootstrap {
   coordinator: ConversationCoordinator
   resolve: (chatId: string) => { alias: string; path: string } | null
   formatInbound: typeof formatInbound
-  sdkOptionsForProject: (alias: string, path: string) => Options
+  sdkOptionsForProject: (alias: string, path: string, tierProfile: TierProfile) => Options
   /** Daemon-default provider id — what new chats get until user runs `/cc` or `/codex`. */
   defaultProviderId: ProviderId
   /** Backward-compat alias for defaultProviderId. Pre-P2 callers expected this name. */
@@ -283,7 +284,11 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
     ? configuredAgent.model
     : 'claude-opus-4-7'
 
-  const sdkOptionsForProject = (_alias: string, path: string): Options => {
+  const sdkOptionsForProject = (_alias: string, path: string, _tierProfile: TierProfile): Options => {
+    // Task 6: tierProfile is threaded through the signature so Task 13 can
+    // wire `canUseTool` per tier. Today the closure still derives permission
+    // mode from the daemon-level `dangerouslySkipPermissions` flag for
+    // behaviour parity; Task 9/13 will migrate to tier-driven options here.
     const cstatus = deps.ilink.companion.status()
     const systemPrompt = buildSystemPrompt({
       providerId: 'claude',
@@ -385,17 +390,14 @@ export function buildBootstrap(deps: BootstrapDeps): Bootstrap {
         ...(process.env.CODEX_MODEL || configuredAgent.model
           ? { model: process.env.CODEX_MODEL ?? configuredAgent.model }
           : {}),
-        // RFC 03 §10 risk: daemon mode safe defaults — no user in the loop
-        // for individual tool approvals. Spike 3 confirms `on-request` likely
-        // hangs; `never` is the only viable headless setting.
-        // Use the capability matrix as the single source of truth for the policy.
-        approvalPolicy: lookup('solo', 'codex', permissionMode).approvalPolicy ?? 'never',
-        // v0.5.7 — when daemon runs --dangerously, mirror the same posture
-        // for codex: bypass MCP approval (else codex 0.128 cancels every
-        // mcp__wechat__reply with "user cancelled MCP tool call") and remove
-        // the workspace-write sandbox so the bypass is actually honoured.
-        // Without this combination the user sees "no reply" silently.
-        sandboxMode: permissionMode === 'dangerously' ? 'danger-full-access' : 'workspace-write',
+        // Task 6: sandboxMode + approvalPolicy moved out of CodexAgentProviderOptions —
+        // they're now derived per-spawn from spawnOpts.tierProfile inside the provider.
+        // admin tier maps to danger-full-access + never (matches the old --dangerously
+        // posture); trusted → workspace-write + never; guest → read-only + untrusted.
+        // The dangerouslyBypassApprovalsAndSandbox flag stays here because it's a
+        // provider-construction-time codex CLI config knob (not a per-thread option).
+        // v0.5.7 — when daemon runs --dangerously, bypass MCP approval (else codex 0.128
+        // cancels every mcp__wechat__reply with "user cancelled MCP tool call").
         dangerouslyBypassApprovalsAndSandbox: permissionMode === 'dangerously',
         // RFC 03 P5 review #4: Codex SDK has no system prompt slot, so we
         // inject the channel rules into the first user message of each

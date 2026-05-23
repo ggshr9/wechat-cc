@@ -56,7 +56,7 @@ export function tierProfileToClaudeSdkOpts(tp: TierProfile): ClaudeTierSdkOpts {
 }
 
 export interface ClaudeAgentProviderOptions {
-  sdkOptionsForProject: (alias: string, path: string) => Options
+  sdkOptionsForProject: (alias: string, path: string, tierProfile: TierProfile) => Options
   /**
    * Path to the `claude` binary, threaded into cheapEval's query() call.
    * Optional — when omitted the SDK's bundled discovery runs. Used in
@@ -153,10 +153,13 @@ export function createClaudeAgentProvider(opts: ClaudeAgentProviderOptions): Age
       }
       return text
     },
-    async spawn(project: AgentProject, spawnOpts?: { resumeSessionId?: string }): Promise<AgentSession> {
+    async spawn(
+      project: AgentProject,
+      spawnOpts: { resumeSessionId?: string; tierProfile: TierProfile },
+    ): Promise<AgentSession> {
       const sdkQueue = new AsyncQueue<SDKUserMessage>()
-      const options = opts.sdkOptionsForProject(project.alias, project.path)
-      if (spawnOpts?.resumeSessionId) {
+      const options = opts.sdkOptionsForProject(project.alias, project.path, spawnOpts.tierProfile)
+      if (spawnOpts.resumeSessionId) {
         ;(options as Options & { resume?: string }).resume = spawnOpts.resumeSessionId
       }
 

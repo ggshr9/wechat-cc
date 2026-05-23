@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { buildBootstrap } from './bootstrap'
 import { saveAgentConfig } from '../lib/agent-config'
 import { openTestDb } from '../lib/db'
+import { TIER_PROFILES } from '../core/user-tier'
 
 function makeIlinkStub() {
   return {
@@ -53,7 +54,7 @@ describe('bootstrap', () => {
       // expose any wechat tools — that's not a real production code path.
       internalApi: { baseUrl: 'http://127.0.0.1:0', tokenFilePath: '/tmp/token' },
     })
-    const opts = b.sdkOptionsForProject('P', '/p')
+    const opts = b.sdkOptionsForProject('P', '/p', TIER_PROFILES.admin)
     expect(opts.cwd).toBe('/p')
     expect(opts.mcpServers).toBeDefined()
     const wechatCfg = opts.mcpServers!['wechat']
@@ -93,7 +94,7 @@ describe('bootstrap', () => {
       log: () => {},
       dangerouslySkipPermissions: true,
     })
-    const opts = b.sdkOptionsForProject('P', '/p')
+    const opts = b.sdkOptionsForProject('P', '/p', TIER_PROFILES.admin)
     expect(opts.permissionMode).toBe('bypassPermissions')
     expect(opts.canUseTool).toBeUndefined()
   })
@@ -108,7 +109,7 @@ describe('bootstrap', () => {
       log: () => {},
       dangerouslySkipPermissions: false,
     })
-    const opts = b.sdkOptionsForProject('P', '/p')
+    const opts = b.sdkOptionsForProject('P', '/p', TIER_PROFILES.admin)
     expect(opts.permissionMode).toBe('default')
     expect(typeof opts.canUseTool).toBe('function')
   })
@@ -122,7 +123,7 @@ describe('bootstrap', () => {
       lastActiveChatId: () => null,
       log: () => {},
     })
-    const opts = b.sdkOptionsForProject('P', '/p')
+    const opts = b.sdkOptionsForProject('P', '/p', TIER_PROFILES.admin)
     expect(opts.permissionMode).toBe('default')
     expect(typeof opts.canUseTool).toBe('function')
   })
@@ -231,7 +232,7 @@ describe('bootstrap', () => {
       log: () => {},
       internalApi: { baseUrl: 'http://127.0.0.1:0', tokenFilePath: '/tmp/token' },
     })
-    const opts = b.sdkOptionsForProject('P', '/p')
+    const opts = b.sdkOptionsForProject('P', '/p', TIER_PROFILES.admin)
     expect(opts.mcpServers!['wechat']).toBeDefined()
     expect(opts.mcpServers!['delegate']).toBeDefined()
     // Delegate child env declares peer=codex (since this is the claude session config).
@@ -251,7 +252,7 @@ describe('bootstrap', () => {
       log: () => {},
       // No internalApi
     })
-    const opts = b.sdkOptionsForProject('P', '/p')
+    const opts = b.sdkOptionsForProject('P', '/p', TIER_PROFILES.admin)
     expect(opts.mcpServers).toEqual({})  // Both wechat and delegate skipped.
   })
 
@@ -265,7 +266,7 @@ describe('bootstrap', () => {
       log: () => {},
       internalApi: { baseUrl: 'http://127.0.0.1:0', tokenFilePath: '/tmp/token' },
     })
-    const opts = b.sdkOptionsForProject('P', '/p')
+    const opts = b.sdkOptionsForProject('P', '/p', TIER_PROFILES.admin)
     const sp = opts.systemPrompt as { type: 'preset'; preset: string; append?: string } | string
     if (typeof sp === 'string') throw new Error('expected preset+append form')
     expect(sp.type).toBe('preset')

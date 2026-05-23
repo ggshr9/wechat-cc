@@ -1,6 +1,7 @@
 import type { ProviderId, SessionStore } from './session-store'
 import type { AgentEvent, AgentSession } from './agent-provider'
 import type { ProviderRegistry } from './provider-registry'
+import { TIER_PROFILES } from './user-tier'
 import { log } from '../lib/log'
 
 export interface SessionManagerOptions {
@@ -120,9 +121,11 @@ export class SessionManager {
     }
 
     const project = { alias, path }
-    const session = resumeSessionId
-      ? await provider.spawn(project, { resumeSessionId })
-      : await provider.spawn(project)
+    const session = await provider.spawn(project, {
+      ...(resumeSessionId ? { resumeSessionId } : {}),
+      // Hard-coded admin tier — Task 9 threads real tier through acquire().
+      tierProfile: TIER_PROFILES.admin,
+    })
 
     const sessionStore = this.opts.sessionStore
     const k = key(providerId, alias)

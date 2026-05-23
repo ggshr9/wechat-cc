@@ -4,6 +4,7 @@ import { createClaudeAgentProvider } from './claude-agent-provider'
 import { createProviderRegistry, type ProviderRegistry } from './provider-registry'
 import { makeFakeSession } from './test-helpers'
 import type { AgentProvider } from './agent-provider'
+import { TIER_PROFILES } from './user-tier'
 import type { Options, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 
 // Module-level spy injected via vi.mock so SessionManager uses our fake query()
@@ -82,7 +83,11 @@ describe('SessionManager', () => {
     // drain the iterable to trigger onDispatch spy
     for await (const _ of h.dispatch('hello codex')) { /* consume */ }
 
-    expect(spawn).toHaveBeenCalledWith({ alias: 'codex-proj', path: '/repo' })
+    expect(spawn).toHaveBeenCalledWith(
+      { alias: 'codex-proj', path: '/repo' },
+      // session-manager stubs tierProfile to admin until Task 9 threads real tier through.
+      { tierProfile: TIER_PROFILES.admin },
+    )
     expect(dispatched).toEqual(['hello codex'])
     await mgr.shutdown()
     expect(close).toHaveBeenCalledOnce()
