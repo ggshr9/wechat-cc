@@ -527,6 +527,12 @@ Stable `obs_demo_*` / `ms_demo_*` ids make `unseed` reliable.
   history stays on your phone, but Claude doesn't replay it on restart.
   Per-project session resume keeps the *current* working session warm; it
   doesn't reconstruct earlier ones.
+- **Switching agents mid-chat doesn't carry recent turns** — `/cc` and
+  `/codex` each run on their own conversation. Long-term memory (notes,
+  preferences, observations the companion wrote about you) is shared, so
+  the new agent still knows *who you are*. But it won't know what the
+  other agent just said two messages ago — if that context matters,
+  paste it yourself.
 
 ---
 
