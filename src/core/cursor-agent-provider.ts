@@ -14,6 +14,7 @@
  *
  * See docs/superpowers/specs/2026-05-23-cursor-sdk-provider-design.md.
  */
+import type { AgentEvent } from './agent-provider'
 import type { TierProfile } from './user-tier'
 
 export interface CursorTierSdkOpts {
@@ -67,4 +68,95 @@ export function mapCursorToolName(
   }
   // Built-in tool or unrecognized — no server
   return { tool: rawName }
+}
+
+/**
+ * Narrow shape of `@cursor/sdk`'s SDKMessage discriminated union — only
+ * the variants we branch on. The full union has more variants
+ * (rate_limit, partial deltas, etc.); we drop them.
+ *
+ * Defined inline rather than importing from `@cursor/sdk` so this file
+ * remains type-resolvable when the SDK is uninstalled
+ * (`optionalDependencies`). The actual SDK types live alongside
+ * `Agent.create()` in the dynamically-imported module.
+ */
+export interface CursorMessageLike {
+  type: string
+  message?: {
+    content?: Array<{
+      type?: string
+      text?: string
+      name?: string
+      input?: unknown
+    }>
+  }
+  status?: string
+  error?: { message?: string }
+}
+
+/**
+ * Map one Cursor `SDKMessage` → zero-or-more `AgentEvent`s.
+ *
+ * Generator shape so an assistant message with multiple content
+ * blocks (text + tool_use + ...) yields each block as a separate
+ * AgentEvent. The dispatch loop forwards each yielded event verbatim.
+ *
+ * `agentId` is the persisted session id; emitted in `result` events
+ * so session-store can later resume via `Agent.resume(agentId)` (P1.1).
+ *
+ * Event-shape choices reflect the real `AgentEvent` discriminated
+ * union in agent-provider.ts (text / tool_call / init / result /
+ * error). Errors are surfaced as `{ kind: 'error', message }` —
+ * matching the codex provider's `turn.failed` mapping — rather than
+ * piggy-backing on `result`. CANCELLED / EXPIRED carry a stable
+ * `message` string so the coordinator can branch without inspecting
+ * the raw status enum.
+ *
+ * `numTurns` / `durationMs` are placeholders (0) when the mapper
+ * emits the terminal `result`; the dispatch loop (Task 6) tracks the
+ * real values and is free to substitute them. The pure mapper has no
+ * access to wall-clock state.
+ */
+export function* mapCursorMessage(
+  msg: CursorMessageLike,
+  mcpServerNames: ReadonlySet<string>,
+  agentId: string,
+): Generator<AgentEvent, void, void> {
+  if (msg.type === 'assistant' && Array.isArray(msg.message?.content)) {
+    for (const block of msg.message.content) {
+      if (block.type === 'text' && typeof block.text === 'string' && block.text.length > 0) {
+        yield { kind: 'text', text: block.text }
+      } else if (block.type === 'tool_use' && typeof block.name === 'string') {
+        const { server, tool } = mapCursorToolName(block.name, mcpServerNames)
+        if (server !== undefined) {
+          yield { kind: 'tool_call', server, tool }
+        } else {
+          yield { kind: 'tool_call', tool }
+        }
+      }
+    }
+    return
+  }
+  if (msg.type === 'status') {
+    if (msg.status === 'FINISHED') {
+      yield { kind: 'result', sessionId: agentId, numTurns: 0, durationMs: 0 }
+      return
+    }
+    if (msg.status === 'ERROR') {
+      const errMsg = msg.error?.message ?? 'cursor agent error'
+      yield { kind: 'error', message: errMsg }
+      return
+    }
+    if (msg.status === 'CANCELLED') {
+      yield { kind: 'error', message: 'cancelled' }
+      return
+    }
+    if (msg.status === 'EXPIRED') {
+      yield { kind: 'error', message: 'expired' }
+      return
+    }
+    // RUNNING / CREATING — drop
+    return
+  }
+  // thinking / system / user (echo) / request / task — drop
 }
