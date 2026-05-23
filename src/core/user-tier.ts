@@ -84,3 +84,64 @@ export function resolveTier(chatId: string, access: Access): UserTier {
   if (access.trusted?.includes(chatId)) return 'trusted'
   return 'guest'
 }
+
+/**
+ * Regex set for destructive Bash commands. Best-effort — a determined
+ * adversary can `eval` or obfuscate. The intent is preventing
+ * accidents and surface-level prompt injection, not stopping malice.
+ *
+ * Pattern guidelines:
+ *   - Anchor to word boundaries so we don't over-fire on "rm" inside a path
+ *     ("/var/farm/...") or git command embedded in a string.
+ *   - `\s+` between args so `rm  -rf` (multiple spaces) still matches.
+ *
+ * Extend by adding patterns; document the rationale next to each.
+ */
+const DESTRUCTIVE_BASH_PATTERNS: ReadonlyArray<RegExp> = [
+  /(?:^|[;&|`$()\s])rm(?:\s+-[a-zA-Z]*)*\s+/,     // rm, rm -rf, rm -f, etc.
+  /(?:^|[;&|`$()\s])git\s+reset\s+--hard/,        // git reset --hard
+  /(?:^|[;&|`$()\s])git\s+push\b[^|]*--force/,    // git push --force / --force-with-lease
+  /(?:^|[;&|`$()\s])git\s+branch\s+-D\b/,         // git branch -D
+  /(?:^|[;&|`$()\s])dd\s+(?:if|of)=/,             // dd if=… of=…
+]
+
+function isDestructiveBash(command: string): boolean {
+  return DESTRUCTIVE_BASH_PATTERNS.some(re => re.test(command))
+}
+
+/**
+ * Map (toolName, input) to a daemon ToolKind. Unknown tools collapse to
+ * 'subagent' (the most-restricted bucket) so adding a new tool without
+ * a classifier update fails safe.
+ */
+export function classifyToolUse(toolName: string, input: Record<string, unknown>): ToolKind {
+  // MCP-prefixed wechat tools
+  if (toolName.startsWith('mcp__wechat__')) {
+    const sub = toolName.slice('mcp__wechat__'.length)
+    if (sub === 'reply') return 'reply'
+    if (sub === 'share_page') return 'share_page'
+    if (sub === 'memory_list' || sub === 'memory_read') return 'memory_read'
+    if (sub === 'memory_write' || sub === 'memory_edit') return 'memory_write'
+    if (sub === 'memory_delete') return 'memory_delete'
+    if (sub === 'observations_list' || sub === 'observations_read') return 'observations_read'
+    if (sub === 'observations_write' || sub === 'observations_archive') return 'observations_write'
+    // Other wechat tools: classify as fs_read (safest non-reply default
+    // for new wechat MCP tools — they tend to be query-like).
+    return 'fs_read'
+  }
+
+  // Built-in Claude Code tools
+  if (toolName === 'Read' || toolName === 'Glob' || toolName === 'Grep' || toolName === 'LS') return 'fs_read'
+  if (toolName === 'Write' || toolName === 'Edit' || toolName === 'NotebookEdit') return 'fs_write'
+  if (toolName === 'Bash') {
+    const cmd = typeof input.command === 'string' ? input.command : ''
+    return isDestructiveBash(cmd) ? 'shell_destructive' : 'shell'
+  }
+  if (toolName === 'KillShell') return 'shell'
+  if (toolName === 'WebFetch' || toolName === 'WebSearch') return 'network'
+  if (toolName === 'Task') return 'subagent'
+
+  // Unknown — fail safe. Subagent is in `guest.deny`, so guests can't
+  // call a tool we haven't classified yet.
+  return 'subagent'
+}

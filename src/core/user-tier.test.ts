@@ -80,3 +80,73 @@ describe('TIER_PROFILES', () => {
     expect(TIER_PROFILES.guest.allow.has('fs_write')).toBe(false)
   })
 })
+
+import { classifyToolUse } from './user-tier'
+
+describe('classifyToolUse', () => {
+  it('reply → reply', () => {
+    expect(classifyToolUse('mcp__wechat__reply', {})).toBe('reply')
+  })
+  it('share_page → share_page', () => {
+    expect(classifyToolUse('mcp__wechat__share_page', {})).toBe('share_page')
+  })
+  it('memory_list / memory_read → memory_read', () => {
+    expect(classifyToolUse('mcp__wechat__memory_list', {})).toBe('memory_read')
+    expect(classifyToolUse('mcp__wechat__memory_read', {})).toBe('memory_read')
+  })
+  it('memory_write / memory_edit → memory_write', () => {
+    expect(classifyToolUse('mcp__wechat__memory_write', {})).toBe('memory_write')
+    expect(classifyToolUse('mcp__wechat__memory_edit', {})).toBe('memory_write')
+  })
+  it('memory_delete → memory_delete', () => {
+    expect(classifyToolUse('mcp__wechat__memory_delete', {})).toBe('memory_delete')
+  })
+  it('observations_list / observations_read → observations_read', () => {
+    expect(classifyToolUse('mcp__wechat__observations_list', {})).toBe('observations_read')
+    expect(classifyToolUse('mcp__wechat__observations_read', {})).toBe('observations_read')
+  })
+  it('observations_write / observations_archive → observations_write', () => {
+    expect(classifyToolUse('mcp__wechat__observations_write', {})).toBe('observations_write')
+    expect(classifyToolUse('mcp__wechat__observations_archive', {})).toBe('observations_write')
+  })
+  it('Read / Glob / Grep / LS → fs_read', () => {
+    expect(classifyToolUse('Read', {})).toBe('fs_read')
+    expect(classifyToolUse('Glob', {})).toBe('fs_read')
+    expect(classifyToolUse('Grep', {})).toBe('fs_read')
+    expect(classifyToolUse('LS', {})).toBe('fs_read')
+  })
+  it('Write / Edit / NotebookEdit → fs_write', () => {
+    expect(classifyToolUse('Write', {})).toBe('fs_write')
+    expect(classifyToolUse('Edit', {})).toBe('fs_write')
+    expect(classifyToolUse('NotebookEdit', {})).toBe('fs_write')
+  })
+  it('Bash with non-destructive command → shell', () => {
+    expect(classifyToolUse('Bash', { command: 'ls -la' })).toBe('shell')
+    expect(classifyToolUse('Bash', { command: 'git status' })).toBe('shell')
+    expect(classifyToolUse('Bash', { command: 'echo hello' })).toBe('shell')
+  })
+  it('Bash with destructive patterns → shell_destructive', () => {
+    expect(classifyToolUse('Bash', { command: 'rm -rf /tmp/foo' })).toBe('shell_destructive')
+    expect(classifyToolUse('Bash', { command: 'rm file.txt' })).toBe('shell_destructive')
+    expect(classifyToolUse('Bash', { command: 'git reset --hard HEAD~1' })).toBe('shell_destructive')
+    expect(classifyToolUse('Bash', { command: 'git push origin main --force' })).toBe('shell_destructive')
+    expect(classifyToolUse('Bash', { command: 'git push --force-with-lease' })).toBe('shell_destructive')
+    expect(classifyToolUse('Bash', { command: 'git branch -D feature' })).toBe('shell_destructive')
+  })
+  it('Bash with command that mentions rm in a string → shell (not destructive)', () => {
+    expect(classifyToolUse('Bash', { command: 'echo "rm is dangerous"' })).toBe('shell')
+  })
+  it('KillShell → shell', () => {
+    expect(classifyToolUse('KillShell', { shell_id: 'x' })).toBe('shell')
+  })
+  it('WebFetch / WebSearch → network', () => {
+    expect(classifyToolUse('WebFetch', {})).toBe('network')
+    expect(classifyToolUse('WebSearch', {})).toBe('network')
+  })
+  it('Task → subagent', () => {
+    expect(classifyToolUse('Task', {})).toBe('subagent')
+  })
+  it('unknown tool defaults to subagent (treated as untrusted)', () => {
+    expect(classifyToolUse('SomeNewToolNobodyDocumented', {})).toBe('subagent')
+  })
+})
