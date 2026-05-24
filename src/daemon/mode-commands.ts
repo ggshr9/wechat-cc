@@ -59,6 +59,20 @@ export function makeModeCommands(deps: ModeCommandsDeps): ModeCommands {
     return null
   }
 
+  // Mirrors the delegate-mcp wiring in src/daemon/bootstrap/index.ts:322-325.
+  // primary_tool mode persists ONLY `primary` on Mode — the peer is whichever
+  // provider this primary's session has delegate_<peer> wired for at boot time.
+  // So `/cc + cursor` can't actually work: Claude session exposes delegate_codex
+  // (not delegate_cursor), and the persisted Mode wouldn't carry the peer either.
+  // We surface that asymmetry up-front rather than silently substituting the
+  // wired peer behind the operator's back.
+  function defaultDelegatePeer(primary: ProviderId): ProviderId | null {
+    if (primary === 'claude') return 'codex'
+    if (primary === 'codex') return 'claude'
+    if (primary === 'cursor') return 'claude'
+    return null
+  }
+
   /**
    * Parse a token list (space-separated provider ids) into a validated
    * ProviderId[] or an error message describing why it's invalid. Used
@@ -122,11 +136,20 @@ export function makeModeCommands(deps: ModeCommandsDeps): ModeCommands {
           const peerSlash = peerMatch[1]!
           const peerProviderId = isProviderCommand(peerSlash)
           if (!peerProviderId) {
-            await reply(msg.chatId, `❓ 未知的 peer \`${peerSlash}\`。支持: cc, codex (例: /cc + codex / /codex + cc)`)
+            await reply(msg.chatId, `❓ 未知的 peer \`${peerSlash}\`。支持: cc, codex, cursor`)
             return true
           }
           if (peerProviderId === providerId) {
             await reply(msg.chatId, `❓ 主从模式两侧不能是同一个 provider (你写的是 ${peerSlash} + ${peerSlash})。`)
+            return true
+          }
+          const wiredPeer = defaultDelegatePeer(providerId)
+          if (wiredPeer && peerProviderId !== wiredPeer) {
+            const wiredSlash = wiredPeer === 'claude' ? 'cc' : wiredPeer
+            await reply(
+              msg.chatId,
+              `❌ ${slashWord} 的 delegate peer 在 bootstrap 里写死成 ${wiredPeer}（不是 ${peerProviderId}）。如果你想 ${providerId} 主导 + ${wiredPeer} 当工具，写 \`/${slashWord} + ${wiredSlash}\`。`,
+            )
             return true
           }
           try {

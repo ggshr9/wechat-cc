@@ -352,6 +352,40 @@ describe('makeModeCommands', () => {
     expect(sentMessages[0]?.[1]).toContain('missing: codex')
   })
 
+  it('/cc + cursor is rejected — delegate peer is wired to codex, not cursor (asymmetric bootstrap wiring)', async () => {
+    const { cmds, set, sentMessages } = setup({ registered: ['claude', 'codex', 'cursor'] })
+    const consumed = await cmds.handle(inbound('/cc + cursor'))
+    expect(consumed).toBe(true)
+    // setMode must NOT be called — would silently substitute the wrong peer.
+    expect(set).not.toHaveBeenCalled()
+    // Reply explains the wired peer.
+    expect(sentMessages[0]?.[1]).toContain('codex')
+    expect(sentMessages[0]?.[1]).toContain('cursor')
+  })
+
+  it('/codex + cursor is rejected — same asymmetry (codex session has delegate_claude)', async () => {
+    const { cmds, set, sentMessages } = setup({ registered: ['claude', 'codex', 'cursor'] })
+    const consumed = await cmds.handle(inbound('/codex + cursor'))
+    expect(consumed).toBe(true)
+    expect(set).not.toHaveBeenCalled()
+    expect(sentMessages[0]?.[1]).toContain('claude')
+  })
+
+  it('/cursor + cc succeeds — cursor session is wired to delegate_claude', async () => {
+    const { cmds, set } = setup({ registered: ['claude', 'codex', 'cursor'] })
+    const consumed = await cmds.handle(inbound('/cursor + cc'))
+    expect(consumed).toBe(true)
+    expect(set).toHaveBeenCalledWith('chat-1', { kind: 'primary_tool', primary: 'cursor' })
+  })
+
+  it('/cursor + codex is rejected — cursor session has delegate_claude (not delegate_codex)', async () => {
+    const { cmds, set, sentMessages } = setup({ registered: ['claude', 'codex', 'cursor'] })
+    const consumed = await cmds.handle(inbound('/cursor + codex'))
+    expect(consumed).toBe(true)
+    expect(set).not.toHaveBeenCalled()
+    expect(sentMessages[0]?.[1]).toContain('claude')
+  })
+
   it('returns false for unrecognised slash words like /health (lets admin-commands handle)', async () => {
     const { cmds, sendMessage } = setup()
     const consumed = await cmds.handle(inbound('/health'))
