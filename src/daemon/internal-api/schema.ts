@@ -292,6 +292,18 @@ export const DelegateResponse = z.union([
   z.object({ ok: z.literal(false), reason: z.string() }),
 ])
 
+// ── POST /v1/a2a/send ────────────────────────────────────────────────────────
+
+export const A2ASendRequest = z.object({
+  agent_id: z.string().min(1).max(64),
+  text: z.string().min(1),
+})
+export const A2ASendResponse = z.union([
+  z.object({ ok: z.literal(true), http_status: z.number().optional(), response: z.unknown().optional() }),
+  z.object({ ok: z.literal(false), error: z.string(), http_status: z.number().optional(), registered: z.array(z.string()).optional() }),
+])
+export type A2ASendRequestT = z.infer<typeof A2ASendRequest>
+
 // ── POST /v1/conversation/set-mode ──────────────────────────────────────────
 // chatId is camelCase — intentional divergence from other wechat routes.
 // Mode is a discriminated union matching the runtime Mode type in conversation.ts.
@@ -368,6 +380,8 @@ export type DelegateResponseT = z.infer<typeof DelegateResponse>
 export type ConversationSetModeRequestT = z.infer<typeof ConversationSetModeRequest>
 export type ConversationSetModeResponseT = z.infer<typeof ConversationSetModeResponse>
 
+export type A2ASendResponseT = z.infer<typeof A2ASendResponse>
+
 // ── Lookup tables ───────────────────────────────────────────────────────
 // REQUEST_SCHEMAS includes both POST body schemas (most routes) and GET
 // query schemas (e.g. /v1/memory/list?dir=...). The validation step in
@@ -413,6 +427,9 @@ export const REQUEST_SCHEMAS: Record<string, z.ZodTypeAny | undefined> = {
 
   // conversation
   'POST /v1/conversation/set-mode': ConversationSetModeRequest,
+
+  // a2a
+  'POST /v1/a2a/send': A2ASendRequest,
 }
 
 export const RESPONSE_SCHEMAS: Record<string, z.ZodTypeAny | undefined> = {
@@ -440,4 +457,5 @@ export const RESPONSE_SCHEMAS: Record<string, z.ZodTypeAny | undefined> = {
   'POST /v1/wechat/broadcast': WechatBroadcastResponse,
   'POST /v1/delegate': DelegateResponse,
   'POST /v1/conversation/set-mode': ConversationSetModeResponse,
+  'POST /v1/a2a/send': A2ASendResponse,
 }

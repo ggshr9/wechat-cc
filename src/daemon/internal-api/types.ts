@@ -138,6 +138,22 @@ export interface InternalApiDeps {
   conversation?: {
     setMode(chatId: string, mode: import('../../core/conversation').Mode): void
   }
+  /**
+   * Optional A2A deps — undefined when a2a_listen is not configured.
+   * When absent, POST /v1/a2a/send returns 503.
+   */
+  a2a?: {
+    registry: import('../../core/a2a-registry').A2ARegistry
+    client: import('../../core/a2a-client').A2AClient
+    recordEvent: (event: {
+      direction: 'in' | 'out'
+      agent_id: string
+      text: string
+      urgency?: 'normal' | 'critical'
+      status: 'ok' | 'auth_failed' | 'http_error' | 'timeout' | 'unknown_agent' | 'agent_paused'
+      http_status?: number
+    }) => void
+  }
   /** Optional log hook so api activity surfaces in channel.log. */
   /**
    * Optional `fields` arg lands in channel.log.jsonl when wired (the

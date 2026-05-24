@@ -30,11 +30,13 @@ export type ToolKind =
   | 'shell_destructive'  // virtual — set by classifyToolUse when Bash input matches a destructive pattern
   | 'network'
   | 'subagent'
+  | 'a2a_send'
 
 const ALL_KINDS: ReadonlySet<ToolKind> = new Set([
   'reply', 'share_page', 'memory_read', 'memory_write', 'memory_delete',
   'observations_read', 'observations_write',
   'fs_read', 'fs_write', 'shell', 'shell_destructive', 'network', 'subagent',
+  'a2a_send',
 ])
 
 export interface TierProfile {
@@ -52,7 +54,7 @@ function difference(a: ReadonlySet<ToolKind>, b: ReadonlySet<ToolKind>): Set<Too
   return out
 }
 
-const TRUSTED_RELAY = new Set<ToolKind>(['shell_destructive', 'memory_delete'])
+const TRUSTED_RELAY = new Set<ToolKind>(['shell_destructive', 'memory_delete', 'a2a_send'])
 
 const GUEST_ALLOW = new Set<ToolKind>(['reply', 'share_page', 'memory_read', 'observations_read'])
 
@@ -125,6 +127,7 @@ export function classifyToolUse(toolName: string, input: Record<string, unknown>
     if (sub === 'memory_delete') return 'memory_delete'
     if (sub === 'observations_list' || sub === 'observations_read') return 'observations_read'
     if (sub === 'observations_write' || sub === 'observations_archive') return 'observations_write'
+    if (sub === 'a2a_send') return 'a2a_send'
     // Other wechat tools: classify as fs_read (safest non-reply default
     // for new wechat MCP tools — they tend to be query-like).
     return 'fs_read'

@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createInternalApi, type InternalApi } from './internal-api'
 import { makeMemoryFS } from './memory/fs-api'
+import type { A2ARegistry } from '../core/a2a-registry'
+import type { A2AClient, SendResult } from '../core/a2a-client'
 
 describe('internal-api', () => {
   let stateDir: string
@@ -1616,5 +1618,182 @@ describe('internal-api request validation', () => {
     expect(resp.status).toBe(200)
     const body = await resp.json() as { files: string[] }
     expect(body.files).toBeDefined()
+  })
+
+  // ─── POST /v1/a2a/send route ───────────────────────────────────────────────
+
+  describe('POST /v1/a2a/send', () => {
+    interface RecordedEvent {
+      direction: 'in' | 'out'
+      agent_id: string
+      text: string
+      status: string
+      http_status?: number
+    }
+
+    function makeA2ADeps(opts: {
+      agents?: Array<{ id: string; url: string; outbound_api_key: string; paused?: boolean }>
+      sendResult?: SendResult
+    } = {}) {
+      const agents = opts.agents ?? []
+      const events: RecordedEvent[] = []
+
+      const registry: A2ARegistry = {
+        list: () => agents.map(a => ({
+          id: a.id,
+          name: a.id,
+          url: a.url,
+          outbound_api_key: a.outbound_api_key,
+          inbound_api_key: 'unused-inbound',
+          capabilities: [],
+          paused: a.paused ?? false,
+        })),
+        get: (id) => {
+          const a = agents.find(x => x.id === id)
+          if (!a) return null
+          return { id: a.id, name: a.id, url: a.url, outbound_api_key: a.outbound_api_key, inbound_api_key: 'unused-inbound', capabilities: [], paused: a.paused ?? false }
+        },
+        verifyBearer: () => null,
+        add: () => {},
+        remove: () => {},
+        setPaused: () => {},
+      }
+
+      const defaultSendResult: SendResult = opts.sendResult ?? { ok: true, http_status: 200, response: { received: true } }
+
+      const client: A2AClient = {
+        fetchAgentCard: async () => ({ name: 'test-agent' }),
+        send: async () => defaultSendResult,
+      }
+
+      const recordEvent = (event: RecordedEvent) => { events.push(event) }
+
+      return { registry, client, recordEvent, events }
+    }
+
+    it('returns 503 when a2a deps not wired', async () => {
+      api = createInternalApi({ stateDir, daemonPid: 1 })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/a2a/send`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ agent_id: 'x', text: 'hi' }),
+      })
+      expect(resp.status).toBe(503)
+      expect(await resp.json()).toMatchObject({ error: 'a2a_not_wired' })
+    })
+
+    it('returns ok=false + registered list when agent_id unknown', async () => {
+      const { registry, client, recordEvent } = makeA2ADeps({ agents: [{ id: 'bot-a', url: 'http://a', outbound_api_key: 'k1' }] })
+      api = createInternalApi({ stateDir, daemonPid: 1, a2a: { registry, client, recordEvent } })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/a2a/send`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ agent_id: 'no-such', text: 'hi' }),
+      })
+      expect(resp.status).toBe(200)
+      const body = await resp.json() as { ok: boolean; error: string; registered: string[] }
+      expect(body.ok).toBe(false)
+      expect(body.error).toBe('unknown_agent')
+      expect(body.registered).toEqual(['bot-a'])
+    })
+
+    it('returns ok=false agent_paused + records event with status=agent_paused', async () => {
+      const a2aDeps = makeA2ADeps({ agents: [{ id: 'bot-p', url: 'http://p', outbound_api_key: 'k2', paused: true }] })
+      api = createInternalApi({ stateDir, daemonPid: 1, a2a: a2aDeps })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/a2a/send`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ agent_id: 'bot-p', text: 'hello' }),
+      })
+      expect(resp.status).toBe(200)
+      const body = await resp.json() as { ok: boolean; error: string }
+      expect(body.ok).toBe(false)
+      expect(body.error).toBe('agent_paused')
+      expect(a2aDeps.events).toHaveLength(1)
+      expect(a2aDeps.events[0]).toMatchObject({ direction: 'out', agent_id: 'bot-p', text: 'hello', status: 'agent_paused' })
+    })
+
+    it('successful send returns ok=true + http_status + records event with status=ok', async () => {
+      const a2aDeps = makeA2ADeps({
+        agents: [{ id: 'bot-ok', url: 'http://ok', outbound_api_key: 'k3' }],
+        sendResult: { ok: true, http_status: 200, response: { received: true } },
+      })
+      api = createInternalApi({ stateDir, daemonPid: 1, a2a: a2aDeps })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/a2a/send`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ agent_id: 'bot-ok', text: 'ping' }),
+      })
+      expect(resp.status).toBe(200)
+      const body = await resp.json() as { ok: boolean; http_status: number; response: unknown }
+      expect(body.ok).toBe(true)
+      expect(body.http_status).toBe(200)
+      expect(a2aDeps.events).toHaveLength(1)
+      expect(a2aDeps.events[0]).toMatchObject({ direction: 'out', agent_id: 'bot-ok', text: 'ping', status: 'ok', http_status: 200 })
+    })
+
+    it('http_error from client returns ok=false + http_status + records event with status=http_error', async () => {
+      const a2aDeps = makeA2ADeps({
+        agents: [{ id: 'bot-err', url: 'http://err', outbound_api_key: 'k4' }],
+        sendResult: { ok: false, http_status: 500, error: 'http_500' },
+      })
+      api = createInternalApi({ stateDir, daemonPid: 1, a2a: a2aDeps })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/a2a/send`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ agent_id: 'bot-err', text: 'test' }),
+      })
+      expect(resp.status).toBe(200)
+      const body = await resp.json() as { ok: boolean; error: string; http_status: number }
+      expect(body.ok).toBe(false)
+      expect(body.error).toBe('http_500')
+      expect(body.http_status).toBe(500)
+      expect(a2aDeps.events).toHaveLength(1)
+      expect(a2aDeps.events[0]).toMatchObject({ direction: 'out', agent_id: 'bot-err', status: 'http_error', http_status: 500 })
+    })
+
+    it('timeout from client records event with status=timeout', async () => {
+      const a2aDeps = makeA2ADeps({
+        agents: [{ id: 'bot-slow', url: 'http://slow', outbound_api_key: 'k5' }],
+        sendResult: { ok: false, error: 'timeout after 10000ms' },
+      })
+      api = createInternalApi({ stateDir, daemonPid: 1, a2a: a2aDeps })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/a2a/send`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ agent_id: 'bot-slow', text: 'slow' }),
+      })
+      expect(resp.status).toBe(200)
+      const body = await resp.json() as { ok: boolean; error: string }
+      expect(body.ok).toBe(false)
+      expect(a2aDeps.events).toHaveLength(1)
+      expect(a2aDeps.events[0]).toMatchObject({ direction: 'out', agent_id: 'bot-slow', status: 'timeout' })
+    })
+
+    it('returns 400 when agent_id is empty string (schema validation)', async () => {
+      const a2aDeps = makeA2ADeps()
+      api = createInternalApi({ stateDir, daemonPid: 1, a2a: a2aDeps })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/a2a/send`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ agent_id: '', text: 'hi' }),
+      })
+      expect(resp.status).toBe(400)
+      expect(await resp.json()).toMatchObject({ error: 'invalid_request' })
+    })
   })
 })

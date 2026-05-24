@@ -23,6 +23,7 @@ const TOOL_KIND_TO_CLAUDE_BUILTINS: Record<ToolKind, ReadonlyArray<string>> = {
   shell_destructive: [],   // virtual; same Bash tool, gated by canUseTool input inspection
   network: ['WebFetch', 'WebSearch'],
   subagent: ['Task'],
+  a2a_send: [],            // MCP-only
 }
 
 export interface ClaudeTierSdkOpts {

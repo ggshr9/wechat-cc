@@ -22,6 +22,7 @@ import type {
   WechatEditMessageRequestT, WechatBroadcastRequestT,
   DelegateRequestT,
   ConversationSetModeRequestT,
+  A2ASendRequestT,
 } from './schema'
 
 export interface MakeRoutesContext {
@@ -390,6 +391,40 @@ export function makeRoutes({ deps, getDelegate, maybePrefix }: MakeRoutesContext
         return { status: 200, body: r }
       } catch (err) {
         return { status: 200, body: { ok: false, reason: 'unexpected_error', detail: errMsg(err) } }
+      }
+    },
+
+    // ── a2a outbound send ────────────────────────────────────────────────────
+    'POST /v1/a2a/send': async (_q, body) => {
+      if (!deps.a2a) return { status: 503, body: { error: 'a2a_not_wired' } }
+      // Body is pre-validated by index.ts via A2ASendRequest schema.
+      const { agent_id, text } = body as A2ASendRequestT
+      const agent = deps.a2a.registry.get(agent_id)
+      if (!agent) {
+        return { status: 200, body: {
+          ok: false, error: 'unknown_agent',
+          registered: deps.a2a.registry.list().map(a => a.id),
+        } }
+      }
+      if (agent.paused) {
+        deps.a2a.recordEvent({ direction: 'out', agent_id, text, status: 'agent_paused' })
+        return { status: 200, body: { ok: false, error: 'agent_paused' } }
+      }
+      const r = await deps.a2a.client.send({
+        url: agent.url,
+        bearer: agent.outbound_api_key,
+        body: { text, source: { agent_id: 'wechat-cc' } },
+      })
+      const status: 'ok' | 'http_error' | 'timeout' =
+        r.ok ? 'ok'
+          : (r.error?.match(/timeout|aborted/i) ? 'timeout' : 'http_error')
+      deps.a2a.recordEvent({
+        direction: 'out', agent_id, text, status,
+        ...(r.http_status !== undefined ? { http_status: r.http_status } : {}),
+      })
+      return { status: 200, body: r.ok
+        ? { ok: true, ...(r.http_status !== undefined ? { http_status: r.http_status } : {}), ...(r.response !== undefined ? { response: r.response } : {}) }
+        : { ok: false, error: r.error ?? 'unknown_error', ...(r.http_status !== undefined ? { http_status: r.http_status } : {}) }
       }
     },
   }

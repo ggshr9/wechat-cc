@@ -38,6 +38,7 @@ describe('TIER_PROFILES', () => {
     'reply', 'share_page', 'memory_read', 'memory_write', 'memory_delete',
     'observations_read', 'observations_write',
     'fs_read', 'fs_write', 'shell', 'shell_destructive', 'network', 'subagent',
+    'a2a_send',
   ]
 
   for (const tier of ['admin', 'trusted', 'guest'] as UserTier[]) {
@@ -148,5 +149,25 @@ describe('classifyToolUse', () => {
   })
   it('unknown tool defaults to subagent (treated as untrusted)', () => {
     expect(classifyToolUse('SomeNewToolNobodyDocumented', {})).toBe('subagent')
+  })
+})
+
+describe('user-tier — a2a_send', () => {
+  it('classifies mcp__wechat__a2a_send as ToolKind a2a_send', () => {
+    expect(classifyToolUse('mcp__wechat__a2a_send', { agent_id: 'x', text: 'hi' })).toBe('a2a_send')
+  })
+
+  it('admin tier allows a2a_send', () => {
+    expect(TIER_PROFILES.admin.allow.has('a2a_send')).toBe(true)
+  })
+
+  it('trusted tier relays a2a_send (requires approval)', () => {
+    expect(TIER_PROFILES.trusted.relay.has('a2a_send')).toBe(true)
+    expect(TIER_PROFILES.trusted.allow.has('a2a_send')).toBe(false)
+  })
+
+  it('guest tier denies a2a_send', () => {
+    expect(TIER_PROFILES.guest.allow.has('a2a_send')).toBe(false)
+    expect(TIER_PROFILES.guest.relay.has('a2a_send')).toBe(false)
   })
 })

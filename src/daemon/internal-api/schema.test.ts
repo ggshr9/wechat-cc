@@ -574,10 +574,10 @@ describe('ConversationSetModeResponse', () => {
 // ── schema lookup tables ─────────────────────────────────────────────────────
 
 describe('schema lookup tables', () => {
-  it('REQUEST_SCHEMAS has 18 entries (POST body + 1 GET query)', () => {
-    expect(Object.keys(REQUEST_SCHEMAS).length).toBe(18)
+  it('REQUEST_SCHEMAS has 19 entries (POST body + 1 GET query)', () => {
+    expect(Object.keys(REQUEST_SCHEMAS).length).toBe(19)
   })
-  it('RESPONSE_SCHEMAS has 24 entries (one per route)', () => {
-    expect(Object.keys(RESPONSE_SCHEMAS).length).toBe(24)
+  it('RESPONSE_SCHEMAS has 25 entries (one per route)', () => {
+    expect(Object.keys(RESPONSE_SCHEMAS).length).toBe(25)
   })
 })
