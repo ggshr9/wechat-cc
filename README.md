@@ -572,6 +572,59 @@ entry under [Known limitations](#known-limitations).
 
 ---
 
+## A2A integration (P3, opt-in)
+
+wechat-cc is an [A2A-protocol](https://github.com/google-deepmind/a2a) node — it
+can act as both **client** (calling external agents) and **server** (receiving
+notifications from them).
+
+**Receiving notifications from external agents.** The A2A HTTP server is
+**off by default**. Enable it via `agent-config.json:a2a_listen`. When enabled,
+it binds `127.0.0.1` unless you override `a2a_listen.host`. Each registered
+agent gets its own inbound API key that must be present on every
+`POST /a2a/notify` call — no shared secrets.
+
+**Registering an external agent.** `wechat-cc agent add <url>` fetches the
+Agent Card at `<url>/.well-known/agent.json`, generates an inbound API key
+locally, and writes the registration to `agent-config.json`. Share the
+generated key with the external agent so it can call your notify endpoint.
+
+**Replying to a notification.** Inbound notifications appear in chat as
+`[A2A:<agent-id>] …`. When you tell Claude/Codex/Cursor "tell them X", the
+agent calls the MCP tool `a2a_send(agent_id, text)`, which pushes the reply
+back via the A2A outbound URL.
+
+**Tier gating.** `a2a_send` follows the same shape as the `delegate_<peer>`
+tools: admin auto-allow, trusted relays through the standard WeChat permission
+prompt, guest forbidden.
+
+### CLI subcommands
+
+```
+wechat-cc agent inspect <url>   # fetch Agent Card, print metadata
+wechat-cc agent add <url>       # register agent, generate inbound API key
+wechat-cc agent list            # list all registered agents
+wechat-cc agent pause <id>      # mute inbound + outbound for this agent
+wechat-cc agent resume <id>     # un-mute
+wechat-cc agent remove <id>     # drop registration
+wechat-cc agent activity <id>   # recent A2A events for this agent
+```
+
+### Threat model
+
+- The A2A server is **off by default**; opt-in by setting `a2a_listen` in
+  `agent-config.json`.
+- When enabled, binds `127.0.0.1` unless `a2a_listen.host` is explicitly
+  changed.
+- Each registered agent has its own inbound API key, verified on every notify
+  request.
+- Outbound calls carry the agent-provided `outbound_api_key` from the Agent
+  Card.
+- TLS is the operator's responsibility — use a reverse proxy for HTTPS if you
+  expose the endpoint publicly.
+
+---
+
 ## Demo data (for screenshots / first impressions)
 
 A fresh install means empty memory and zero observations. To preview what a
