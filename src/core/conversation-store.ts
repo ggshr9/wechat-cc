@@ -16,7 +16,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { renameMigrated, type Db } from '../lib/db'
-import type { Mode, PersistedConversation } from './conversation'
+import type { Mode, PersistedConversation, ProviderId } from './conversation'
 
 export interface ConversationIdentity {
   user_id: string | null
@@ -50,6 +50,14 @@ export interface ConversationStore {
   /** All chat IDs whose row carries this account_id. Used to fan out
    *  account-expired notifications without an in-memory side index. */
   chatsForAccount(accountId: string): readonly string[]
+
+  /**
+   * Backfill or update the participants list for a parallel/chatroom row.
+   * No-op if the row doesn't exist. Throws on solo/primary_tool rows.
+   * Used by the coordinator's resolveParticipants helper to persist the
+   * legacy 2-way backfill on first dispatch under the new code.
+   */
+  setParticipants(chatId: string, participants: ProviderId[] | null): void
 }
 
 export interface ConversationStoreOpts {
@@ -74,36 +82,55 @@ interface Row {
   mode_kind: string
   mode_provider: string | null
   mode_primary: string | null
+  participants: string | null    // JSON array of ProviderId, or NULL
   user_id: string | null
   account_id: string | null
   last_user_name: string | null
 }
 
 function rowToMode(r: Row): Mode | null {
+  const participants = r.participants ? parseParticipants(r.participants) : undefined
   switch (r.mode_kind) {
     case 'solo':
       return r.mode_provider ? { kind: 'solo', provider: r.mode_provider } : null
     case 'primary_tool':
       return r.mode_primary ? { kind: 'primary_tool', primary: r.mode_primary } : null
     case 'parallel':
-      return { kind: 'parallel' }
+      return participants ? { kind: 'parallel', participants } : { kind: 'parallel' }
     case 'chatroom':
-      return { kind: 'chatroom' }
+      return participants ? { kind: 'chatroom', participants } : { kind: 'chatroom' }
     default:
       return null
   }
 }
 
-function modeColumns(mode: Mode): { kind: string; provider: string | null; primary: string | null } {
+function parseParticipants(json: string): ProviderId[] | undefined {
+  try {
+    const v = JSON.parse(json)
+    if (!Array.isArray(v)) return undefined
+    if (!v.every((p): p is string => typeof p === 'string')) return undefined
+    return v
+  } catch {
+    return undefined  // corrupt JSON → treat as legacy
+  }
+}
+
+function modeColumns(mode: Mode): { kind: string; provider: string | null; primary: string | null; participants: string | null } {
   switch (mode.kind) {
     case 'solo':
-      return { kind: 'solo', provider: mode.provider, primary: null }
+      return { kind: 'solo', provider: mode.provider, primary: null, participants: null }
     case 'primary_tool':
-      return { kind: 'primary_tool', provider: null, primary: mode.primary }
+      return { kind: 'primary_tool', provider: null, primary: mode.primary, participants: null }
     case 'parallel':
-      return { kind: 'parallel', provider: null, primary: null }
+      return {
+        kind: 'parallel', provider: null, primary: null,
+        participants: mode.participants ? JSON.stringify(mode.participants) : null,
+      }
     case 'chatroom':
-      return { kind: 'chatroom', provider: null, primary: null }
+      return {
+        kind: 'chatroom', provider: null, primary: null,
+        participants: mode.participants ? JSON.stringify(mode.participants) : null,
+      }
   }
 }
 
@@ -112,15 +139,21 @@ export function makeConversationStore(db: Db, opts: ConversationStoreOpts = {}):
   if (opts.migrateFromUserNamesFile) maybeBackfillUserNames(db, opts.migrateFromUserNamesFile)
 
   const stmtGet = db.query<Row, [string]>(
-    'SELECT chat_id, mode_kind, mode_provider, mode_primary, user_id, account_id, last_user_name FROM conversations WHERE chat_id = ?',
+    'SELECT chat_id, mode_kind, mode_provider, mode_primary, participants, user_id, account_id, last_user_name FROM conversations WHERE chat_id = ?',
   )
-  const stmtUpsert = db.query<unknown, [string, string, string | null, string | null, string]>(
-    'INSERT INTO conversations(chat_id, mode_kind, mode_provider, mode_primary, updated_at) VALUES (?, ?, ?, ?, ?) ' +
-    'ON CONFLICT(chat_id) DO UPDATE SET mode_kind = excluded.mode_kind, mode_provider = excluded.mode_provider, mode_primary = excluded.mode_primary, updated_at = excluded.updated_at',
+  const stmtUpsert = db.query<unknown, [string, string, string | null, string | null, string | null, string]>(
+    'INSERT INTO conversations(chat_id, mode_kind, mode_provider, mode_primary, participants, updated_at) VALUES (?, ?, ?, ?, ?, ?) ' +
+    'ON CONFLICT(chat_id) DO UPDATE SET mode_kind = excluded.mode_kind, mode_provider = excluded.mode_provider, mode_primary = excluded.mode_primary, participants = excluded.participants, updated_at = excluded.updated_at',
   )
   const stmtDelete = db.query<unknown, [string]>('DELETE FROM conversations WHERE chat_id = ?')
   const stmtAll = db.query<Row, []>(
-    'SELECT chat_id, mode_kind, mode_provider, mode_primary, user_id, account_id, last_user_name FROM conversations',
+    'SELECT chat_id, mode_kind, mode_provider, mode_primary, participants, user_id, account_id, last_user_name FROM conversations',
+  )
+  const stmtSetParticipants = db.query<unknown, [string | null, string, string]>(
+    'UPDATE conversations SET participants = ?, updated_at = ? WHERE chat_id = ?',
+  )
+  const stmtReadKind = db.query<{ mode_kind: string }, [string]>(
+    'SELECT mode_kind FROM conversations WHERE chat_id = ?',
   )
 
   const stmtGetIdentity = db.query<ConversationIdentity, [string]>(
@@ -158,11 +191,21 @@ export function makeConversationStore(db: Db, opts: ConversationStoreOpts = {}):
 
     set(chatId, mode) {
       const cols = modeColumns(mode)
-      stmtUpsert.run(chatId, cols.kind, cols.provider, cols.primary, new Date().toISOString())
+      stmtUpsert.run(chatId, cols.kind, cols.provider, cols.primary, cols.participants, new Date().toISOString())
     },
 
     delete(chatId) {
       stmtDelete.run(chatId)
+    },
+
+    setParticipants(chatId, participants) {
+      const row = stmtReadKind.get(chatId)
+      if (!row) return  // no-op on absent rows (operator can't backfill a chat that doesn't exist)
+      if (row.mode_kind !== 'parallel' && row.mode_kind !== 'chatroom') {
+        throw new Error(`setParticipants: chat ${chatId} has mode ${row.mode_kind}; only parallel/chatroom support participants`)
+      }
+      const json = participants ? JSON.stringify(participants) : null
+      stmtSetParticipants.run(json, new Date().toISOString(), chatId)
     },
 
     all() {

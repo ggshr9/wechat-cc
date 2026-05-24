@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, test } from 'vitest'
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -237,6 +237,70 @@ describe('ConversationStore', () => {
       store.upsertIdentity('c1', { accountId: 'a1' })
       expect(store.chatsForAccount('')).toEqual([])
     })
+  })
+})
+
+describe('conversation-store — participants', () => {
+  test('round-trips chatroom mode with explicit participants', () => {
+    const db = openDb({ path: ':memory:' })
+    const store = makeConversationStore(db)
+    store.set('chat-3way', { kind: 'chatroom', participants: ['claude', 'codex', 'cursor'] })
+    const got = store.get('chat-3way')
+    expect(got?.mode).toEqual({ kind: 'chatroom', participants: ['claude', 'codex', 'cursor'] })
+  })
+
+  test('round-trips parallel mode with explicit participants', () => {
+    const db = openDb({ path: ':memory:' })
+    const store = makeConversationStore(db)
+    store.set('chat-par', { kind: 'parallel', participants: ['claude', 'cursor'] })
+    const got = store.get('chat-par')
+    expect(got?.mode).toEqual({ kind: 'parallel', participants: ['claude', 'cursor'] })
+  })
+
+  test('omits participants field when undefined (no JSON in DB)', () => {
+    const db = openDb({ path: ':memory:' })
+    const store = makeConversationStore(db)
+    store.set('chat-default', { kind: 'parallel' })
+    const got = store.get('chat-default')
+    // Mode comes back without the participants key (undefined, not null).
+    expect(got?.mode).toEqual({ kind: 'parallel' })
+    expect('participants' in (got!.mode as object)).toBe(false)
+  })
+
+  test('hydrates legacy row (no participants column populated) as undefined', () => {
+    const db = openDb({ path: ':memory:' })
+    db.exec(
+      "INSERT INTO conversations(chat_id, mode_kind, mode_provider, mode_primary, updated_at) " +
+      "VALUES ('legacy', 'chatroom', NULL, NULL, '2026-05-22T00:00:00.000Z')"
+    )
+    const store = makeConversationStore(db)
+    const got = store.get('legacy')
+    expect(got?.mode).toEqual({ kind: 'chatroom' })
+  })
+
+  test('setParticipants updates only the participants column', () => {
+    const db = openDb({ path: ':memory:' })
+    const store = makeConversationStore(db)
+    store.set('chat-bf', { kind: 'chatroom' })
+    store.setParticipants('chat-bf', ['claude', 'codex'])
+    const got = store.get('chat-bf')
+    expect(got?.mode).toEqual({ kind: 'chatroom', participants: ['claude', 'codex'] })
+  })
+
+  test('setParticipants is a no-op on a chat with no row', () => {
+    const db = openDb({ path: ':memory:' })
+    const store = makeConversationStore(db)
+    // Should not throw, should not insert a synthetic row.
+    store.setParticipants('nonexistent', ['claude', 'codex'])
+    expect(store.get('nonexistent')).toBeNull()
+  })
+
+  test('rejects setParticipants on solo/primary_tool modes (only parallel/chatroom support it)', () => {
+    const db = openDb({ path: ':memory:' })
+    const store = makeConversationStore(db)
+    store.set('chat-solo', { kind: 'solo', provider: 'claude' })
+    expect(() => store.setParticipants('chat-solo', ['claude', 'codex']))
+      .toThrow(/only parallel\/chatroom/)
   })
 })
 
