@@ -4,7 +4,7 @@ import { createProviderRegistry } from './provider-registry'
 import * as capabilityMatrix from './capability-matrix'
 import { makeFakeSession } from './test-helpers'
 import type { AgentEvent, AgentProvider } from './agent-provider'
-import type { Mode } from './conversation'
+import type { Mode, ProviderId } from './conversation'
 import { formatInbound, type InboundMsg } from './prompt-format'
 import type { AcquireRequest } from './session-manager'
 import { TIER_PROFILES, type TierProfile } from './user-tier'
@@ -37,6 +37,17 @@ function makeMockStore() {
   return {
     get: (chatId: string) => data.get(chatId) ?? null,
     set: vi.fn((chatId: string, mode: Mode) => { data.set(chatId, { mode }) }),
+    setParticipants: vi.fn((chatId: string, participants: string[] | null) => {
+      const cur = data.get(chatId)
+      if (!cur) return
+      if (cur.mode.kind !== 'parallel' && cur.mode.kind !== 'chatroom') {
+        throw new Error(`setParticipants on ${cur.mode.kind}`)
+      }
+      const next = participants
+        ? { ...cur.mode, participants }
+        : (() => { const m = { ...cur.mode } as Mode & { participants?: string[] }; delete m.participants; return m })()
+      data.set(chatId, { mode: next as Mode })
+    }),
     _peek: () => data,
   }
 }
@@ -772,7 +783,12 @@ describe('ConversationCoordinator', () => {
       expect(sendAssistantText).toHaveBeenCalledWith('chat-1', '[Codex] codex still here')
     })
 
-    it('falls back to solo+default when one of the parallel providers is not registered', async () => {
+    it('falls back to solo+default when parallel resolves to a single participant', async () => {
+      // P3 N-way: when the registry has only 1 provider, resolveParticipants
+      // returns a 1-element list and dispatch degrades to solo (using that
+      // one provider directly — semantically equivalent to "no point fanning
+      // out to a single member"). Replaces the pre-P3 "missing provider"
+      // hard fallback path.
       const store = makeMockStore()
       store.set('chat-1', { kind: 'parallel' })
       // Only claude registered — codex missing
@@ -800,13 +816,16 @@ describe('ConversationCoordinator', () => {
         log,
       })
       await c.dispatch(inbound('chat-1', 'hi'))
-      // Acquired ONCE under solo+default, not twice
+      // Acquired ONCE under solo, not twice
       expect(acquire).toHaveBeenCalledTimes(1)
       expect(acquire.mock.calls[0]?.[0]?.providerId).toBe('claude')
-      expect(log).toHaveBeenCalledWith('COORDINATOR', expect.stringContaining('parallel mode missing providers'))
+      expect(log).toHaveBeenCalledWith('COORDINATOR', expect.stringContaining('degrading to solo'))
     })
 
-    it('setMode rejects parallel when a parallel provider is missing from registry', () => {
+    it('setMode rejects parallel when explicit participants include an unregistered provider', () => {
+      // P3 N-way: validateMode now only rejects when participants are
+      // explicitly stated AND include an unknown id. Undefined participants
+      // defers to dispatch-time resolution.
       const store = makeMockStore()
       const registry = createProviderRegistry()
       registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
@@ -822,8 +841,8 @@ describe('ConversationCoordinator', () => {
         loadAccess: adminAccess,
         log: () => {},
       })
-      expect(() => c.setMode('chat-1', { kind: 'parallel' }))
-        .toThrow(/missing: codex/)
+      expect(() => c.setMode('chat-1', { kind: 'parallel', participants: ['claude', 'codex'] }))
+        .toThrow(/unknown providers.*codex/)
     })
 
     it('honours custom parallelProviders list (e.g. for tests with non-default ids)', async () => {
@@ -1301,7 +1320,11 @@ describe('ConversationCoordinator', () => {
       expect(setup.sendAssistantText.mock.calls.some(([, t]) => t.includes('收到 /stop'))).toBe(true)
     })
 
-    it('falls back to solo+default when one of the chatroom providers is unregistered', async () => {
+    it('falls back to solo+default when chatroom resolves to a single participant', async () => {
+      // P3 N-way: when the registry has only 1 provider, resolveParticipants
+      // returns a 1-element list and dispatch degrades to solo (using that
+      // one provider directly). Replaces the pre-P3 "missing provider" hard
+      // fallback path.
       const store = makeMockStore()
       store.set('chat-1', { kind: 'chatroom' })
       // Only claude registered
@@ -1332,7 +1355,7 @@ describe('ConversationCoordinator', () => {
       // Solo dispatch — single acquire, claude.
       expect(acquire).toHaveBeenCalledTimes(1)
       expect(acquire.mock.calls[0]?.[0]?.providerId).toBe('claude')
-      expect(log).toHaveBeenCalledWith('COORDINATOR', expect.stringContaining('chatroom mode missing providers'))
+      expect(log).toHaveBeenCalledWith('COORDINATOR', expect.stringContaining('degrading to solo'))
     })
 
     it('one speaker throwing surfaces an error message to user and ends the loop', async () => {
@@ -1637,7 +1660,10 @@ describe('ConversationCoordinator', () => {
       expect(c.cancel('chat-1')).toBe(false)
     })
 
-    it('setMode rejects chatroom when one provider is missing', () => {
+    it('setMode rejects chatroom when explicit participants include an unregistered provider', () => {
+      // P3 N-way: validateMode only rejects when participants are explicitly
+      // stated AND include an unknown id. Undefined participants defers to
+      // dispatch-time resolution.
       const store = makeMockStore()
       const registry = createProviderRegistry()
       registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
@@ -1652,8 +1678,233 @@ describe('ConversationCoordinator', () => {
         loadAccess: adminAccess,
         log: () => {},
       })
-      expect(() => c.setMode('chat-1', { kind: 'chatroom' }))
-        .toThrow(/chatroom.*missing.*codex/)
+      expect(() => c.setMode('chat-1', { kind: 'chatroom', participants: ['claude', 'codex'] }))
+        .toThrow(/unknown providers.*codex/)
+    })
+  })
+
+  describe('N-way participants (P3)', () => {
+    /** Reusable per-test setup for N-way parallel dispatch tracking. */
+    function setupNway(registered: ProviderId[]) {
+      const store = makeMockStore()
+      const registry = createProviderRegistry()
+      for (const id of registered) {
+        registry.register(id, dummyProvider, { displayName: id, canResume: () => true })
+      }
+      const acquiredProviders: ProviderId[] = []
+      const acquire = vi.fn(async (req: AcquireRequest) => {
+        acquiredProviders.push(req.providerId)
+        const session = makeFakeSession({
+          events: [
+            { kind: 'tool_call', server: 'wechat', tool: 'reply' },
+            { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+          ],
+        })
+        return makeHandle(req.providerId, session)
+      })
+      const log = vi.fn()
+      const c = createConversationCoordinator({
+        resolveProject: () => ({ alias: 'a', path: '/p' }),
+        manager: { acquire },
+        conversationStore: store,
+        registry,
+        defaultProviderId: 'claude',
+        format: (m) => m.text,
+        sendAssistantText: vi.fn(async () => {}),
+        permissionMode: 'strict',
+        loadAccess: adminAccess,
+        log,
+      })
+      return { c, store, acquire, acquiredProviders, log }
+    }
+
+    it('explicit participants on parallel mode are passed verbatim (skips unlisted providers)', async () => {
+      const { c, store, acquiredProviders } = setupNway(['claude', 'codex', 'cursor'])
+      store.set('chat-1', { kind: 'parallel', participants: ['claude', 'cursor'] })
+      await c.dispatch(inbound('chat-1', 'hi'))
+      expect(acquiredProviders.sort()).toEqual(['claude', 'cursor'])
+    })
+
+    it('parallel mode with explicit full-registry participants fans out to all 3', async () => {
+      // Verifies that with 3+ registered providers and explicit
+      // participants matching the full registry, all 3 are acquired.
+      // (Per the legacy-backfill test below, undefined participants on a
+      // persisted parallel row backfills to first-2 — so the only way to
+      // exercise N=3 dispatch is via explicit participants.)
+      const { c, store, acquiredProviders } = setupNway(['claude', 'codex', 'cursor'])
+      store.set('chat-1', { kind: 'parallel', participants: ['claude', 'codex', 'cursor'] })
+      await c.dispatch(inbound('chat-1', 'hi'))
+      expect(acquiredProviders.sort()).toEqual(['claude', 'codex', 'cursor'])
+    })
+
+    it('legacy parallel row (participants undefined) backfills to first-two-registered and persists', async () => {
+      const { c, store, acquiredProviders } = setupNway(['claude', 'codex', 'cursor'])
+      // Simulate a pre-v11 row: parallel mode with no participants property.
+      store.set('chat-1', { kind: 'parallel' })
+      // First dispatch: backfills to first 2 (claude+codex).
+      await c.dispatch(inbound('chat-1', 'hi'))
+      expect(acquiredProviders.sort()).toEqual(['claude', 'codex'])
+      expect(store.setParticipants).toHaveBeenCalledWith('chat-1', ['claude', 'codex'])
+      // Second dispatch: now persisted with explicit participants. setParticipants NOT called again.
+      const callsAfterFirst = (store.setParticipants as ReturnType<typeof vi.fn>).mock.calls.length
+      acquiredProviders.length = 0
+      await c.dispatch(inbound('chat-1', 'hi again'))
+      expect(acquiredProviders.sort()).toEqual(['claude', 'codex'])
+      expect((store.setParticipants as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsAfterFirst)
+    })
+
+    it('>3 participants is capped at 3 with a log line', async () => {
+      const { c, store, acquiredProviders, log } = setupNway(['claude', 'codex', 'cursor', 'extra'])
+      store.set('chat-1', { kind: 'parallel', participants: ['claude', 'codex', 'cursor', 'extra'] })
+      await c.dispatch(inbound('chat-1', 'hi'))
+      // First 3 only.
+      expect(acquiredProviders.sort()).toEqual(['claude', 'codex', 'cursor'])
+      const sawCap = log.mock.calls.some(([, line]) => typeof line === 'string' && line.includes('capping'))
+      expect(sawCap).toBe(true)
+    })
+
+    it('participants filter silently drops unregistered providers with a log line', async () => {
+      const { c, store, acquiredProviders, log } = setupNway(['claude', 'codex'])
+      store.set('chat-1', { kind: 'parallel', participants: ['claude', 'codex', 'cursor'] })
+      await c.dispatch(inbound('chat-1', 'hi'))
+      expect(acquiredProviders.sort()).toEqual(['claude', 'codex'])
+      const sawFilter = log.mock.calls.some(([, line]) => typeof line === 'string' && line.includes('filtered'))
+      expect(sawFilter).toBe(true)
+    })
+
+    it('participants resolving to 0 degrades to solo+default', async () => {
+      const { c, store, acquiredProviders } = setupNway(['claude'])
+      store.set('chat-1', { kind: 'parallel', participants: ['codex', 'cursor'] })
+      // validateMode would reject this — bypass by writing directly via store.
+      // (Operator scenario: registry shrank after persist.)
+      await c.dispatch(inbound('chat-1', 'hi'))
+      // Degrades to solo+default (claude).
+      expect(acquiredProviders).toEqual(['claude'])
+    })
+
+    it('participants resolving to 1 degrades to solo with that 1', async () => {
+      const { c, store, acquiredProviders } = setupNway(['claude', 'codex', 'cursor'])
+      store.set('chat-1', { kind: 'parallel', participants: ['cursor'] })
+      await c.dispatch(inbound('chat-1', 'hi'))
+      expect(acquiredProviders).toEqual(['cursor'])
+    })
+
+    it('chatroom: 3 explicit participants dispatched without 2-tuple throw', async () => {
+      const store = makeMockStore()
+      const registry = createProviderRegistry()
+      for (const id of ['claude', 'codex', 'cursor']) {
+        registry.register(id, dummyProvider, { displayName: id, canResume: () => true })
+      }
+      store.set('chat-1', { kind: 'chatroom', participants: ['claude', 'codex', 'cursor'] })
+      const acquired: ProviderId[] = []
+      const acquire = vi.fn(async (req: AcquireRequest) => {
+        acquired.push(req.providerId)
+        return makeHandle(req.providerId, makeFakeSession({
+          events: [
+            { kind: 'text', text: `I am ${req.providerId}` },
+            { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+          ],
+        }))
+      })
+      // Scripted moderator: round 1 → cursor, round 2 → end.
+      let round = 0
+      const haikuEval = vi.fn(async () => {
+        round++
+        if (round === 1) return JSON.stringify({ action: 'continue', speaker: 'cursor', prompt: 'go', reasoning: 'r1' })
+        return JSON.stringify({ action: 'end', reasoning: 'done' })
+      })
+      const c = createConversationCoordinator({
+        resolveProject: () => ({ alias: 'a', path: '/p' }),
+        manager: { acquire },
+        conversationStore: store,
+        registry,
+        defaultProviderId: 'claude',
+        format: (m) => m.text,
+        sendAssistantText: vi.fn(async () => {}),
+        permissionMode: 'strict',
+        loadAccess: adminAccess,
+        chatroomMaxRounds: 4,
+        haikuEval,
+        log: () => {},
+      })
+      // Should not throw despite 3 participants (pre-P3 would throw 2-tuple).
+      await expect(c.dispatch(inbound('chat-1', 'hi'))).resolves.toBeUndefined()
+      // Cursor was the picked speaker.
+      expect(acquired).toContain('cursor')
+    })
+
+    it('chatroom: legacy row (no participants) backfills to first-two and persists', async () => {
+      const store = makeMockStore()
+      const registry = createProviderRegistry()
+      for (const id of ['claude', 'codex']) {
+        registry.register(id, dummyProvider, { displayName: id, canResume: () => true })
+      }
+      store.set('chat-1', { kind: 'chatroom' })
+      const acquire = vi.fn(async (req: AcquireRequest) =>
+        makeHandle(req.providerId, makeFakeSession({
+          events: [{ kind: 'text', text: 'x' }, { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 }],
+        })))
+      const haikuEval = vi.fn(async () => JSON.stringify({ action: 'end', reasoning: 'short' }))
+      const c = createConversationCoordinator({
+        resolveProject: () => ({ alias: 'a', path: '/p' }),
+        manager: { acquire },
+        conversationStore: store,
+        registry,
+        defaultProviderId: 'claude',
+        format: (m) => m.text,
+        sendAssistantText: vi.fn(async () => {}),
+        permissionMode: 'strict',
+        loadAccess: adminAccess,
+        chatroomMaxRounds: 4,
+        haikuEval,
+        log: () => {},
+      })
+      await c.dispatch(inbound('chat-1', 'hi'))
+      expect(store.setParticipants).toHaveBeenCalledWith('chat-1', ['claude', 'codex'])
+    })
+  })
+
+  describe('validateMode — N-way participants', () => {
+    function setupValidate(registered: ProviderId[]) {
+      const store = makeMockStore()
+      const registry = createProviderRegistry()
+      for (const id of registered) {
+        registry.register(id, dummyProvider, { displayName: id, canResume: () => true })
+      }
+      const c = createConversationCoordinator({
+        resolveProject: () => null,
+        manager: { acquire: vi.fn() },
+        conversationStore: store,
+        registry,
+        defaultProviderId: 'claude',
+        format: () => 'x',
+        permissionMode: 'strict',
+        loadAccess: adminAccess,
+        log: () => {},
+      })
+      return c
+    }
+
+    it('setMode(parallel) with explicit unknown provider throws naming the bad provider', () => {
+      const c = setupValidate(['claude', 'codex'])
+      expect(() => c.setMode('chat-1', { kind: 'parallel', participants: ['claude', 'unknown'] }))
+        .toThrow(/unknown.*unknown/i)
+    })
+
+    it('setMode(parallel) with all participants registered succeeds', () => {
+      const c = setupValidate(['claude', 'codex', 'cursor'])
+      expect(() => c.setMode('chat-1', { kind: 'parallel', participants: ['claude', 'cursor'] })).not.toThrow()
+    })
+
+    it('setMode(parallel) with undefined participants succeeds (deferred to dispatch)', () => {
+      const c = setupValidate(['claude', 'codex', 'cursor'])
+      expect(() => c.setMode('chat-1', { kind: 'parallel' })).not.toThrow()
+    })
+
+    it('setMode(chatroom) with participants.length < 2 throws', () => {
+      const c = setupValidate(['claude', 'codex', 'cursor'])
+      expect(() => c.setMode('chat-1', { kind: 'chatroom', participants: ['claude'] }))
+        .toThrow(/≥2|at least 2/)
     })
   })
 })
