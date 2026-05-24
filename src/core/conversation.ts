@@ -20,15 +20,15 @@ export type Mode =
   | { kind: 'solo'; provider: ProviderId }
   /** One primary agent; the other is exposed as a `mcp__delegate__*` tool. (P4 — not yet operational.) */
   | { kind: 'primary_tool'; primary: ProviderId }
-  /** Two agents reply concurrently to each inbound. (P3 — not yet operational.) */
-  | { kind: 'parallel' }
-  /** Two agents take turns with @addressing routing. (P5 — not yet operational.) */
-  | { kind: 'chatroom' }
+  /** N agents reply concurrently to each inbound (≥2). Undefined `participants` resolves to the registry's full list at dispatch time. */
+  | { kind: 'parallel'; participants?: ProviderId[] }
+  /** N agents take turns under moderator control (≥2). Undefined `participants` resolves to the registry's full list at dispatch time. */
+  | { kind: 'chatroom'; participants?: ProviderId[] }
 
 /**
  * The runtime view of a conversation. `participants` is the live set of
  * agent sessions; for solo mode there is exactly one. For parallel /
- * chatroom there are two (P3+).
+ * chatroom there are 2 or more, capped at 3 in P1.
  *
  * Conversation is value-typed for mode + chat_id + project; the live
  * `participants` field is excluded from persistence (it's reconstructed

@@ -248,3 +248,82 @@ describe('evaluateRound', () => {
     }
   })
 })
+
+describe('chatroom-moderator — N-way participants', () => {
+  it('accepts 3 participants and prompt names each one', async () => {
+    const captured: string[] = []
+    const haikuEval = async (prompt: string) => {
+      captured.push(prompt)
+      return JSON.stringify({ action: 'continue', speaker: 'cursor', prompt: 'go cursor', reasoning: 'pick3' })
+    }
+    const decision = await evaluateRound(
+      {
+        history: [{ role: 'user', text: 'hi everyone' }],
+        round: 1,
+        maxRounds: 4,
+        participants: ['claude', 'codex', 'cursor'],
+      },
+      { haikuEval },
+    )
+    expect(decision.action).toBe('continue')
+    expect(decision.action === 'continue' && decision.speaker).toBe('cursor')
+    // Prompt enumerates all three by name.
+    expect(captured[0]).toContain('claude')
+    expect(captured[0]).toContain('codex')
+    expect(captured[0]).toContain('cursor')
+  })
+
+  it('rejects speaker not in participants — coerces to peer (3-way)', async () => {
+    const haikuEval = async () => JSON.stringify({
+      action: 'continue', speaker: 'gemini',  // hallucinated, not in participants
+      prompt: 'p', reasoning: 'bad',
+    })
+    const decision = await evaluateRound(
+      {
+        history: [
+          { role: 'user', text: 'x' },
+          { role: 'speaker', speaker: 'claude', text: 'hi' },
+        ],
+        round: 2,
+        maxRounds: 4,
+        participants: ['claude', 'codex', 'cursor'],
+      },
+      { haikuEval },
+    )
+    expect(decision.action).toBe('continue')
+    // peerOf(lastSpeaker='claude', participants=['claude','codex','cursor']) → first non-claude → 'codex'
+    expect(decision.action === 'continue' && decision.speaker).toBe('codex')
+  })
+
+  it('peerOf with no lastSpeaker on 3-way returns first participant', async () => {
+    const haikuEval = async () => 'not-valid-json'  // forces fallback path
+    const decision = await evaluateRound(
+      {
+        history: [{ role: 'user', text: 'first ever message' }],
+        round: 1,
+        maxRounds: 4,
+        participants: ['claude', 'codex', 'cursor'],
+      },
+      { haikuEval },
+    )
+    expect(decision.action).toBe('continue')
+    expect(decision.action === 'continue' && decision.speaker).toBe('claude')  // first in list
+  })
+
+  it('still works for legacy 2-way input', async () => {
+    const haikuEval = async () => JSON.stringify({
+      action: 'continue', speaker: 'codex', prompt: 'go', reasoning: '2way',
+    })
+    const decision = await evaluateRound(
+      {
+        history: [{ role: 'user', text: 'hello' }],
+        round: 1,
+        maxRounds: 4,
+        participants: ['claude', 'codex'],
+      },
+      { haikuEval },
+    )
+    expect(decision.action).toBe('continue')
+    expect(decision.action === 'continue' && decision.speaker).toBe('codex')
+  })
+})

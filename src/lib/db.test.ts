@@ -124,3 +124,29 @@ describe('migration v10 — sessions.chat_id', () => {
     expect(remaining.map(r => r.session_id)).not.toContain('old_sess')
   })
 })
+
+describe('migration v11 — participants column', () => {
+  it('adds nullable TEXT participants column to conversations', () => {
+    const db = openDb({ path: ':memory:' })
+    const cols = db.query<{ name: string; type: string; notnull: number }, []>(
+      "SELECT name, type, [notnull] FROM pragma_table_info('conversations')"
+    ).all()
+    const col = cols.find(c => c.name === 'participants')
+    expect(col).toBeDefined()
+    expect(col!.type).toBe('TEXT')
+    expect(col!.notnull).toBe(0)
+  })
+
+  it('pre-v11 rows hydrate with NULL participants', () => {
+    const db = openDb({ path: ':memory:' })
+    db.exec(
+      "INSERT INTO conversations(chat_id, mode_kind, mode_provider, mode_primary, updated_at) " +
+      "VALUES ('legacy-chat', 'chatroom', NULL, NULL, '2026-05-22T00:00:00.000Z')"
+    )
+    const row = db.query<{ participants: string | null }, []>(
+      "SELECT participants FROM conversations WHERE chat_id = 'legacy-chat'"
+    ).get()
+    expect(row).toBeDefined()
+    expect(row!.participants).toBeNull()
+  })
+})

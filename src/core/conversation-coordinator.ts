@@ -35,7 +35,7 @@ export class ModeNotImplementedError extends Error {
 export interface ConversationCoordinatorDeps {
   resolveProject(chatId: string): { alias: string; path: string } | null
   manager: Pick<SessionManager, 'acquire'> & Partial<Pick<SessionManager, 'release'>>
-  conversationStore: Pick<ConversationStore, 'get' | 'set'>
+  conversationStore: Pick<ConversationStore, 'get' | 'set' | 'setParticipants'>
   registry: Pick<ProviderRegistry, 'has' | 'list' | 'get'>
   /**
    * Default provider id for chats with no explicit Mode set. Mirrors
@@ -45,11 +45,12 @@ export interface ConversationCoordinatorDeps {
    */
   defaultProviderId: ProviderId
   /**
-   * Provider ids to fan-out to in `parallel` mode (RFC 03 P3). Defaults
-   * to `['claude', 'codex']` — the two shipped providers. P3 mode is
-   * implicit-2-way; if either id isn't registered the parallel-mode
-   * setMode validation rejects up front. Also reused as the chatroom
-   * participant set in P5.
+   * Default provider ids for primary_tool peer validation. Defaults to
+   * `['claude', 'codex']` — the two providers shipped before cursor.
+   * Used ONLY by validateMode for primary_tool (the peer must be one
+   * of these). For parallel/chatroom, the active set is resolved
+   * per-dispatch from Mode.participants (or the registry as a fallback)
+   * via resolveParticipants — this dep is NOT consulted there.
    */
   parallelProviders?: ProviderId[]
   /**
@@ -156,6 +157,60 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
 
   const parallelProviders: ProviderId[] = deps.parallelProviders ?? ['claude', 'codex']
   const chatroomMaxRounds = deps.chatroomMaxRounds ?? 4
+
+  /**
+   * Resolve the active participant set for a parallel/chatroom dispatch.
+   *
+   * Priority:
+   *   1. Explicit mode.participants (the user wrote `/chat claude codex cursor`).
+   *   2. Legacy backfill — chat row pre-dates the participants column;
+   *      use the first 2 registered providers and persist so the user's
+   *      "this chat was 2-way" expectation survives a future operator
+   *      install of a 3rd provider.
+   *   3. Fresh-chat fallback — no row yet; use the full registry.list().
+   *
+   * Then filter against the current registry (silently drop providers
+   * that vanished from the registry post-persist), and hard-cap at 3
+   * in P1 with a log warning if exceeded.
+   *
+   * Returns the resolved list (≥0 elements). Caller is responsible for
+   * the ≤1 → solo+default degradation; this helper does not throw.
+   */
+  function resolveParticipants(
+    mode: (Mode & { kind: 'parallel' | 'chatroom' }),
+    chatId: string,
+  ): ProviderId[] {
+    let list: ProviderId[]
+    if (mode.participants !== undefined) {
+      list = mode.participants
+    } else if (deps.conversationStore.get(chatId)?.mode) {
+      // Row exists with no participants — legacy. Backfill to first-two.
+      list = deps.registry.list().slice(0, 2)
+      // Persist so this is a one-shot. setParticipants is a no-op if the
+      // row doesn't have parallel/chatroom kind, but we just read it as
+      // parallel/chatroom so the call is safe.
+      try {
+        deps.conversationStore.setParticipants(chatId, list)
+        deps.log('COORDINATOR', `chat=${chatId} legacy ${mode.kind} backfilled participants=${list.join(',')}`)
+      } catch (err) {
+        deps.log('COORDINATOR', `chat=${chatId} setParticipants failed: ${err instanceof Error ? err.message : err}`)
+      }
+    } else {
+      // No row yet — first-ever dispatch in this chat under parallel/chatroom.
+      list = deps.registry.list()
+    }
+    const filtered = list.filter(p => deps.registry.has(p))
+    if (filtered.length < list.length) {
+      deps.log('COORDINATOR', `chat=${chatId} participants filtered ${list.join(',')} → ${filtered.join(',')} (registry: ${deps.registry.list().join(',')})`)
+    }
+    if (filtered.length > 3) {
+      const capped = filtered.slice(0, 3)
+      deps.log('COORDINATOR', `chat=${chatId} participants > 3; capping at ${capped.join(',')}`)
+      return capped
+    }
+    return filtered
+  }
+
   const authFailThrottleMs = deps.authFailNotifyThrottleMs ?? 60 * 60_000
   const nowMs = deps.now ?? Date.now
   // chatId → last-notice-at; used to throttle the auth_failed notice.
@@ -231,11 +286,19 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
       }
     }
     if (mode.kind === 'parallel' || mode.kind === 'chatroom') {
-      // Both modes need every parallel-set provider registered.
-      const missing = parallelProviders.filter(p => !deps.registry.has(p))
-      if (missing.length > 0) {
-        throw new Error(`mode '${mode.kind}' requires providers ${parallelProviders.join(', ')}; missing: ${missing.join(', ')}`)
+      // Explicit participants must all be registered. Undefined defers
+      // to dispatch-time resolution (resolveParticipants).
+      if (mode.participants !== undefined) {
+        const unknown = mode.participants.filter(p => !deps.registry.has(p))
+        if (unknown.length > 0) {
+          throw new Error(`mode '${mode.kind}' has unknown providers: ${unknown.join(', ')} (registered: ${deps.registry.list().join(', ')})`)
+        }
+        if (mode.participants.length < 2) {
+          throw new Error(`mode '${mode.kind}' requires ≥2 participants; got ${mode.participants.length}`)
+        }
       }
+      // No else — undefined is fine; resolveParticipants handles fresh
+      // and legacy chats.
     }
   }
 
@@ -313,11 +376,10 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
   async function dispatchChatroom(
     msg: InboundMsg,
     proj: { alias: string; path: string },
+    participants: ProviderId[],
   ): Promise<void> {
-    if (parallelProviders.length !== 2) {
-      throw new Error(`chatroom mode requires exactly 2 parallel providers; got ${parallelProviders.length}`)
-    }
-    const [providerA, providerB] = parallelProviders as [ProviderId, ProviderId]
+    // P3 — N participants. Coordinator's resolveParticipants enforces ≥2
+    // and ≤3. Empty/single is degraded to solo upstream.
 
     // PR C2 — preempt any in-flight dispatch for this same chat. Without
     // this, two rapid messages produce concurrent loops that race on
@@ -376,7 +438,7 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     const history: ChatroomEntry[] = [...(chatroomHistories.get(msg.chatId) ?? [])]
     history.push({ role: 'user', text: deps.format(msg) })
 
-    deps.log('COORDINATOR', `chatroom chat=${msg.chatId} → start participants=${providerA},${providerB} max=${chatroomMaxRounds} history=${history.length} tier=${tier}`)
+    deps.log('COORDINATOR', `chatroom chat=${msg.chatId} → start participants=${participants.join(',')} max=${chatroomMaxRounds} history=${history.length} tier=${tier}`)
 
     try {
     for (let round = 1; round <= chatroomMaxRounds; round++) {
@@ -400,7 +462,7 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
             history,
             round,
             maxRounds: chatroomMaxRounds,
-            participants: [providerA, providerB],
+            participants,
           },
           { haikuEval, log: deps.log },
         )
@@ -578,12 +640,13 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
   async function dispatchParallel(
     msg: InboundMsg,
     proj: { alias: string; path: string },
+    participants: ProviderId[],
   ): Promise<void> {
     const tier = resolveTier(msg.chatId, deps.loadAccess())
     const tierProfile = TIER_PROFILES[tier]
-    deps.log('COORDINATOR', `parallel chat=${msg.chatId} → project=${proj.alias} providers=${parallelProviders.join(',')} tier=${tier}`)
+    deps.log('COORDINATOR', `parallel chat=${msg.chatId} → project=${proj.alias} providers=${participants.join(',')} tier=${tier}`)
     const handles = await Promise.all(
-      parallelProviders.map(p => deps.manager.acquire({
+      participants.map(p => deps.manager.acquire({
         alias: proj.alias,
         path: proj.path,
         providerId: p,
@@ -596,7 +659,7 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
 
     for (let i = 0; i < settled.length; i++) {
       const r = settled[i]!
-      const providerId = parallelProviders[i]!
+      const providerId = participants[i]!
       if (r.status === 'rejected') {
         deps.log('COORDINATOR_PARALLEL', `provider=${providerId} threw: ${r.reason instanceof Error ? r.reason.message : r.reason}`)
         continue
@@ -653,6 +716,22 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
       }
       const mode = getMode(msg.chatId)
 
+      // For parallel/chatroom, resolve the active participant set once.
+      // Then degrade-to-solo if the set is ≤1 (no point fanning out to 0
+      // or N=1) and use the resolved set for the capability-matrix check.
+      let participants: ProviderId[] | null = null
+      if (mode.kind === 'parallel' || mode.kind === 'chatroom') {
+        participants = resolveParticipants(mode, msg.chatId)
+        if (participants.length === 0) {
+          deps.log('COORDINATOR', `chat=${msg.chatId} ${mode.kind} resolved to empty participants; falling back to solo+${deps.defaultProviderId}`)
+          return dispatchSolo(msg, proj, deps.defaultProviderId)
+        }
+        if (participants.length === 1) {
+          deps.log('COORDINATOR', `chat=${msg.chatId} ${mode.kind} resolved to single participant ${participants[0]}; degrading to solo`)
+          return dispatchSolo(msg, proj, participants[0]!)
+        }
+      }
+
       // Capability-matrix guard: reject forbidden (mode × provider × permissionMode)
       // combinations before any session is acquired. All current rows have
       // forbidden=false so this is a forward-looking safety net — it will fire
@@ -662,7 +741,7 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
       const providersInUse: ProviderId[] =
         mode.kind === 'solo' ? [mode.provider] :
         mode.kind === 'primary_tool' ? [mode.primary] :
-        parallelProviders
+        participants!  // parallel/chatroom — never null here due to early-return above
       for (const p of providersInUse) {
         try {
           assertSupported(mode.kind, p, deps.permissionMode)
@@ -686,15 +765,7 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
           return dispatchSolo(msg, proj, mode.provider)
         }
         case 'parallel': {
-          const missing = parallelProviders.filter(p => !deps.registry.has(p))
-          if (missing.length > 0) {
-            // One of the parallel providers vanished post-persist.
-            // Degrade to solo+default rather than partial-parallel, which
-            // would silently change semantics ("both" → "one").
-            deps.log('COORDINATOR', `chat=${msg.chatId} parallel mode missing providers (${missing.join(', ')}); falling back to solo+${deps.defaultProviderId}`)
-            return dispatchSolo(msg, proj, deps.defaultProviderId)
-          }
-          return dispatchParallel(msg, proj)
+          return dispatchParallel(msg, proj, participants!)
         }
         case 'primary_tool': {
           // RFC 03 P4 — dispatch to the primary; the peer is reachable
@@ -710,13 +781,7 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
           return dispatchSolo(msg, proj, mode.primary)
         }
         case 'chatroom': {
-          // RFC 03 P5 — two agents take turns via @-tag routing.
-          const missing = parallelProviders.filter(p => !deps.registry.has(p))
-          if (missing.length > 0) {
-            deps.log('COORDINATOR', `chat=${msg.chatId} chatroom mode missing providers (${missing.join(', ')}); falling back to solo+${deps.defaultProviderId}`)
-            return dispatchSolo(msg, proj, deps.defaultProviderId)
-          }
-          return dispatchChatroom(msg, proj)
+          return dispatchChatroom(msg, proj, participants!)
         }
       }
     },
