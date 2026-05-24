@@ -59,6 +59,26 @@ export function makeModeCommands(deps: ModeCommandsDeps): ModeCommands {
     return null
   }
 
+  /**
+   * Parse a token list (space-separated provider ids) into a validated
+   * ProviderId[] or an error message describing why it's invalid. Used
+   * by /chat <p...> and /parallel <p...>.
+   */
+  function parseParticipantsTail(tail: string, modeName: string): { ok: true; participants: ProviderId[] } | { ok: false; error: string } {
+    const tokens = tail.split(/\s+/).filter(t => t.length > 0)
+    if (tokens.length < 2) {
+      return { ok: false, error: `❓ /${modeName} 需要 ≥2 个 participants (你写的: ${tokens.length}). 例：/${modeName} ${deps.registry.list().slice(0, 2).join(' ')}` }
+    }
+    const unknown = tokens.filter(t => !deps.registry.has(t))
+    if (unknown.length > 0) {
+      return { ok: false, error: `❌ 未知的 provider: ${unknown.join(', ')}. 已注册: ${deps.registry.list().join(', ')}` }
+    }
+    // Deduplicate while preserving order (operator typed the same provider twice → silent dedupe).
+    const seen = new Set<string>()
+    const dedup = tokens.filter(t => seen.has(t) ? false : (seen.add(t), true))
+    return { ok: true, participants: dedup }
+  }
+
   function describeMode(m: Mode): string {
     switch (m.kind) {
       case 'solo': return `solo · ${m.provider}`
@@ -149,38 +169,77 @@ export function makeModeCommands(deps: ModeCommandsDeps): ModeCommands {
           `已注册 provider: ${deps.registry.list().join(', ')}`,
           `默认: ${deps.defaultProviderId}`,
           '',
-          '可用命令: /cc /codex /both /chat /cc + codex /codex + cc /solo /stop /mode',
+          '可用命令: /cc /codex /cursor /both [p...] /chat [p...] /cc + codex /codex + cc /solo /stop /mode',
         ]
         await reply(msg.chatId, lines.join('\n'))
         return true
       }
 
-      // /both — parallel mode (RFC 03 P3 — both shipped providers reply concurrently)
-      if (slashWord.toLowerCase() === 'both' && tail === '') {
-        try {
-          deps.coordinator.setMode(msg.chatId, { kind: 'parallel' })
-        } catch (err) {
-          await reply(msg.chatId, `❌ /both 启用失败: ${err instanceof Error ? err.message : String(err)}`)
+      // /both — parallel mode (RFC 03 P3). Bare form uses all registered
+      // providers; explicit form (/both <p1> <p2> ...) takes participants.
+      // /parallel is a synonym for /both.
+      if (slashWord.toLowerCase() === 'both' || slashWord.toLowerCase() === 'parallel') {
+        if (tail === '') {
+          try {
+            deps.coordinator.setMode(msg.chatId, { kind: 'parallel' })
+          } catch (err) {
+            await reply(msg.chatId, `❌ /${slashWord} 启用失败: ${err instanceof Error ? err.message : String(err)}`)
+            return true
+          }
+          await reply(msg.chatId, '✅ 并行模式开启。下条消息开始 Claude 和 Codex 同时回复（每条会带 [Claude] / [Codex] 前缀）。')
+          deps.log('MODE_CMD', `chat=${msg.chatId} → parallel (no explicit participants)`)
           return true
         }
-        await reply(msg.chatId, '✅ 并行模式开启。下条消息开始 Claude 和 Codex 同时回复（每条会带 [Claude] / [Codex] 前缀）。')
-        deps.log('MODE_CMD', `chat=${msg.chatId} → parallel`)
+        const parsed = parseParticipantsTail(tail, slashWord.toLowerCase())
+        if (!parsed.ok) {
+          await reply(msg.chatId, parsed.error)
+          return true
+        }
+        try {
+          deps.coordinator.setMode(msg.chatId, { kind: 'parallel', participants: parsed.participants })
+        } catch (err) {
+          await reply(msg.chatId, `❌ /${slashWord} 启用失败: ${err instanceof Error ? err.message : String(err)}`)
+          return true
+        }
+        await reply(msg.chatId, `✅ 并行模式开启 (${parsed.participants.join(' + ')})。下条消息开始同时回复。`)
+        deps.log('MODE_CMD', `chat=${msg.chatId} → parallel participants=${parsed.participants.join(',')}`)
         return true
       }
 
-      // /chat — chatroom mode (v0.5.9: persistent session driven by claude-haiku-4-5 moderator)
-      if (slashWord.toLowerCase() === 'chat' && tail === '') {
+      // /chat — chatroom mode (v0.5.9: persistent session, moderator-driven).
+      // Bare form uses all registered providers; explicit form takes participants.
+      if (slashWord.toLowerCase() === 'chat') {
+        if (tail === '') {
+          try {
+            deps.coordinator.setMode(msg.chatId, { kind: 'chatroom' })
+          } catch (err) {
+            await reply(msg.chatId, `❌ /chat 启用失败: ${err instanceof Error ? err.message : String(err)}`)
+            return true
+          }
+          const registeredList = deps.registry.list()
+          const registeredDisplay = registeredList
+            .map(id => deps.registry.get(id)?.opts.displayName ?? id)
+            .join(' + ')
+          await reply(
+            msg.chatId,
+            `✅ 聊天室开启。${registeredDisplay} 都"在场"了——后续消息会按上下文挑发言人。每条带 prefix。切走（/cc /codex /solo）会清空聊天室上下文。`,
+          )
+          deps.log('MODE_CMD', `chat=${msg.chatId} → chatroom (no explicit participants)`)
+          return true
+        }
+        const parsed = parseParticipantsTail(tail, 'chat')
+        if (!parsed.ok) {
+          await reply(msg.chatId, parsed.error)
+          return true
+        }
         try {
-          deps.coordinator.setMode(msg.chatId, { kind: 'chatroom' })
+          deps.coordinator.setMode(msg.chatId, { kind: 'chatroom', participants: parsed.participants })
         } catch (err) {
           await reply(msg.chatId, `❌ /chat 启用失败: ${err instanceof Error ? err.message : String(err)}`)
           return true
         }
-        await reply(
-          msg.chatId,
-          '✅ 聊天室开启。Claude 和 Codex 都"在场"了——你之后每条消息他们都看得见对方的回复，会接着上下文讨论。每条回复带 [Claude] / [Codex] 前缀。切走（/cc /codex /solo）会清空聊天室上下文。',
-        )
-        deps.log('MODE_CMD', `chat=${msg.chatId} → chatroom`)
+        await reply(msg.chatId, `✅ 聊天室开启 (${parsed.participants.join(', ')})。每条回复带 prefix；切走会清空上下文。`)
+        deps.log('MODE_CMD', `chat=${msg.chatId} → chatroom participants=${parsed.participants.join(',')}`)
         return true
       }
 

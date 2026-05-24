@@ -415,4 +415,84 @@ describe('makeModeCommands', () => {
     })
     expect(sentMessages[0]?.[1]).toMatch(/还没.*昵称|尚未.*告诉|\/name/)
   })
+
+  describe('N-way grammar', () => {
+    it('/chat claude codex cursor sets chatroom with 3 participants', async () => {
+      const { cmds, set, sentMessages } = setup({ registered: ['claude', 'codex', 'cursor'] })
+      const consumed = await cmds.handle(inbound('/chat claude codex cursor'))
+      expect(consumed).toBe(true)
+      expect(set).toHaveBeenCalledWith('chat-1', {
+        kind: 'chatroom', participants: ['claude', 'codex', 'cursor'],
+      })
+      expect(sentMessages[0]?.[1]).toContain('claude')
+      expect(sentMessages[0]?.[1]).toContain('cursor')
+    })
+
+    it('/chat claude codex sets explicit 2-way chatroom', async () => {
+      const { cmds, set } = setup({ registered: ['claude', 'codex', 'cursor'] })
+      await cmds.handle(inbound('/chat claude codex'))
+      expect(set).toHaveBeenCalledWith('chat-1', {
+        kind: 'chatroom', participants: ['claude', 'codex'],
+      })
+    })
+
+    it('/parallel claude cursor sets parallel with explicit participants', async () => {
+      const { cmds, set } = setup({ registered: ['claude', 'codex', 'cursor'] })
+      await cmds.handle(inbound('/parallel claude cursor'))
+      expect(set).toHaveBeenCalledWith('chat-1', {
+        kind: 'parallel', participants: ['claude', 'cursor'],
+      })
+    })
+
+    it('/both claude cursor also sets parallel with explicit participants (alias)', async () => {
+      const { cmds, set } = setup({ registered: ['claude', 'codex', 'cursor'] })
+      await cmds.handle(inbound('/both claude cursor'))
+      expect(set).toHaveBeenCalledWith('chat-1', {
+        kind: 'parallel', participants: ['claude', 'cursor'],
+      })
+    })
+
+    it('/chat with no args remains bare chatroom (no participants property)', async () => {
+      const { cmds, set } = setup({ registered: ['claude', 'codex', 'cursor'] })
+      await cmds.handle(inbound('/chat'))
+      expect(set).toHaveBeenCalledWith('chat-1', { kind: 'chatroom' })
+    })
+
+    it('/both with no args remains bare parallel (no participants property)', async () => {
+      const { cmds, set } = setup({ registered: ['claude', 'codex', 'cursor'] })
+      await cmds.handle(inbound('/both'))
+      expect(set).toHaveBeenCalledWith('chat-1', { kind: 'parallel' })
+    })
+
+    it('/chat with single arg is rejected (≥2 required) — does NOT call setMode', async () => {
+      const { cmds, set, sentMessages } = setup({ registered: ['claude', 'codex', 'cursor'] })
+      await cmds.handle(inbound('/chat claude'))
+      expect(set).not.toHaveBeenCalled()
+      expect(sentMessages[0]?.[1]).toMatch(/≥2|至少|need.*2/)
+    })
+
+    it('/chat with unknown provider is rejected with helpful message', async () => {
+      const { cmds, set, sentMessages } = setup({ registered: ['claude', 'codex', 'cursor'] })
+      await cmds.handle(inbound('/chat claude gemini'))
+      expect(set).not.toHaveBeenCalled()
+      expect(sentMessages[0]?.[1]).toContain('gemini')
+      // Registered list is surfaced.
+      expect(sentMessages[0]?.[1]).toContain('claude')
+    })
+
+    it('/parallel with single arg is rejected (≥2 required)', async () => {
+      const { cmds, set, sentMessages } = setup({ registered: ['claude', 'codex', 'cursor'] })
+      await cmds.handle(inbound('/parallel claude'))
+      expect(set).not.toHaveBeenCalled()
+      expect(sentMessages[0]?.[1]).toMatch(/≥2|至少|need.*2/)
+    })
+
+    it('/chat dedupes repeated tokens silently', async () => {
+      const { cmds, set } = setup({ registered: ['claude', 'codex', 'cursor'] })
+      await cmds.handle(inbound('/chat claude claude codex'))
+      expect(set).toHaveBeenCalledWith('chat-1', {
+        kind: 'chatroom', participants: ['claude', 'codex'],
+      })
+    })
+  })
 })
