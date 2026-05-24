@@ -113,4 +113,73 @@ describe('bootstrap A2A wiring', () => {
       rmSync(stateDir, { recursive: true, force: true })
     }
   })
+
+  it('writes a2a-info.json with enabled=true + base_url when server starts', async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'wechat-cc-a2a-test-'))
+    const port = 19887
+    writeFileSync(
+      join(stateDir, 'agent-config.json'),
+      JSON.stringify({
+        provider: 'claude',
+        dangerouslySkipPermissions: false,
+        autoStart: false,
+        closeStopsDaemon: false,
+        a2a_listen: { host: '127.0.0.1', port },
+      }),
+    )
+    let boot: Awaited<ReturnType<typeof buildBootstrap>> | null = null
+    try {
+      boot = await buildBootstrap({
+        db: openTestDb(),
+        stateDir,
+        ilink: makeIlinkStub() as any,
+        loadProjects: () => ({ projects: {}, current: null }),
+        lastActiveChatId: () => null,
+        log: () => {},
+      })
+      const { readFileSync } = await import('node:fs')
+      const info = JSON.parse(readFileSync(join(stateDir, 'a2a-info.json'), 'utf8'))
+      expect(info.enabled).toBe(true)
+      expect(info.base_url).toBe(`http://127.0.0.1:${port}`)
+      expect(info.host).toBe('127.0.0.1')
+      expect(info.port).toBe(port)
+      expect(typeof info.pid).toBe('number')
+    } finally {
+      await boot?.a2aServer?.stop()
+      rmSync(stateDir, { recursive: true, force: true })
+    }
+  })
+
+  it('writes a2a-info.json with enabled=false when a2a_listen unset', async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'wechat-cc-a2a-test-'))
+    writeFileSync(
+      join(stateDir, 'agent-config.json'),
+      JSON.stringify({
+        provider: 'claude',
+        dangerouslySkipPermissions: false,
+        autoStart: false,
+        closeStopsDaemon: false,
+      }),
+    )
+    let boot: Awaited<ReturnType<typeof buildBootstrap>> | null = null
+    try {
+      boot = await buildBootstrap({
+        db: openTestDb(),
+        stateDir,
+        ilink: makeIlinkStub() as any,
+        loadProjects: () => ({ projects: {}, current: null }),
+        lastActiveChatId: () => null,
+        log: () => {},
+      })
+      const { readFileSync } = await import('node:fs')
+      const info = JSON.parse(readFileSync(join(stateDir, 'a2a-info.json'), 'utf8'))
+      expect(info.enabled).toBe(false)
+      expect(info.base_url).toBeNull()
+      expect(info.host).toBeNull()
+      expect(info.port).toBeNull()
+    } finally {
+      await boot?.a2aServer?.stop()
+      rmSync(stateDir, { recursive: true, force: true })
+    }
+  })
 })

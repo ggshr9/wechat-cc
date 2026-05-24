@@ -134,6 +134,9 @@ Usage:
   wechat-cc agent remove <id>       Drop agent registration
   wechat-cc agent activity <id> [--limit N]
                         Print recent A2A events (newest first, default 20)
+  wechat-cc agent info              Show A2A server status (base URL + agent count)
+  wechat-cc agent test <id> [--text MSG]
+                        Send a synthetic notify from <id> to validate inbound→chat path
   wechat-cc provider show [--json]  Show selected agent provider
   wechat-cc provider set <claude|codex> [--model MODEL] [--unattended true|false]
                         --unattended: when true (default for new installs), the
@@ -1646,6 +1649,27 @@ const agentActivityCmd = defineCommand({
   },
 })
 
+const agentInfoCmd = defineCommand({
+  meta: { name: 'info', description: "Show A2A server status (base URL + registered agents) — for sharing URL with external agents" },
+  async run() {
+    const { cmdAgentInfo } = await import('./src/cli/agent.ts')
+    cmdAgentInfo(STATE_DIR)
+  },
+})
+
+const agentTestCmd = defineCommand({
+  meta: { name: 'test', description: 'Send a synthetic notify from the named agent to validate the full inbound→chat path' },
+  args: {
+    id: { type: 'positional', required: true, description: 'Registered agent id', valueHint: 'agent-id' },
+    text: { type: 'string', description: 'Test message text (default: "test from <id> via wechat-cc")' },
+  },
+  async run({ args }) {
+    const text = args.text ?? `test from ${args.id} via wechat-cc`
+    const { cmdAgentTest } = await import('./src/cli/agent.ts')
+    await cmdAgentTest(STATE_DIR, args.id, text)
+  },
+})
+
 const agentCmd = defineCommand({
   meta: { name: 'agent', description: 'A2A agent registry — register, inspect, pause, resume, remove, and view activity' },
   subCommands: {
@@ -1656,6 +1680,8 @@ const agentCmd = defineCommand({
     resume: agentResumeCmd,
     remove: agentRemoveCmd,
     activity: agentActivityCmd,
+    info: agentInfoCmd,
+    test: agentTestCmd,
   },
 })
 

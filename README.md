@@ -601,6 +601,7 @@ prompt, guest forbidden.
 ### CLI subcommands
 
 ```
+wechat-cc agent info            # show A2A server status + base URL (share with external agents)
 wechat-cc agent inspect <url>   # fetch Agent Card, print metadata
 wechat-cc agent add <url>       # register agent, generate inbound API key
 wechat-cc agent list            # list all registered agents
@@ -608,6 +609,35 @@ wechat-cc agent pause <id>      # mute inbound + outbound for this agent
 wechat-cc agent resume <id>     # un-mute
 wechat-cc agent remove <id>     # drop registration
 wechat-cc agent activity <id>   # recent A2A events for this agent
+wechat-cc agent test <id>       # send a synthetic notify from <id> to validate the inbound→chat path
+```
+
+### Quick start
+
+```bash
+# 1. Enable the A2A inbound server. Edit agent-config.json:
+#    {"a2a_listen": {"host": "127.0.0.1", "port": 8717}, ...}
+#    Restart the daemon.
+
+# 2. Get your daemon's A2A base URL (share this with external agents):
+wechat-cc agent info
+# A2A status: running
+#   Base URL: http://127.0.0.1:8717
+#   Bound:    127.0.0.1:8717
+#   PID:      42718
+
+# 3. Register an external A2A agent — the CLI fetches its Agent Card,
+#    generates an inbound API key, and prints a curl example with your
+#    actual base URL pre-filled.
+wechat-cc agent add https://deploy-bot.example.com/a2a
+
+# 4. (Optional) Smoke test the loop: simulate the agent calling your
+#    /a2a/notify endpoint. The message should appear in your WeChat
+#    chat as `[A2A:deploy-bot] test from deploy-bot via wechat-cc`.
+wechat-cc agent test deploy-bot
+
+# 5. From WeChat, tell claude/codex/cursor "reply to deploy-bot: retry"
+#    — the agent uses the `a2a_send` MCP tool to push your reply back.
 ```
 
 ### Threat model

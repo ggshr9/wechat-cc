@@ -52,6 +52,7 @@ export function buildSystemPrompt(args: BuildSystemPromptArgs): string {
     baseChannelSection(providerId),
     toolsSection(),
     delegateAvailable ? delegateSection(peerProviderId) : '',
+    a2aSection(),
     memorySection(),
     multiModeAwarenessSection(),
     companionEnabled ? companionSection() : '',
@@ -111,6 +112,17 @@ function delegateSection(peerProviderId: ProviderId): string {
   注意：${peerProviderId} 看不到当前对话历史 — context_summary 必须自包含；它在 read-only 沙盒里跑，不能改文件、不能发微信、不能再 delegate。冷启动 ~3-5s，不要滥用。
 
   **附件转发**：如果当前 user 消息里有 \`[image:/abs/path]\` / \`[file:/abs/path]\` / \`[voice:/abs/path]\` marker 且你希望 ${peerProviderId} 看到这个文件，**必须把整个 marker 字符串原样写进 \`prompt\` 字段**。${peerProviderId} 的 Read/Bash 工具会按 marker 里的绝对路径打开文件。如果你只用自然语言描述（"用户发了张图"），${peerProviderId} 拿不到路径就读不到——这跟 chatroom moderator 的 paraphrase bug 是同一个 trap。`
+}
+
+function a2aSection(): string {
+  // 操作者可能注册了一批外部 A2A agent（部署 bot、日历 bot、监控 bot 等）。
+  // 那些 agent 通过 wechat-cc 把消息推给操作者，进 chat 时会带 `[A2A:<id>]` 前缀。
+  // 操作者想"回它一句"的时候让你调 a2a_send。所以**永远都暴露这个工具的存在**，
+  // 即使当前 chat 没有 A2A 消息也无害——claude 不会随便调没有上下文的工具。
+  return `## A2A 集成（外部 agent 通过我跟操作者通信）
+- 来自外部 A2A agent 的消息会在 chat 里以 \`[A2A:<agent_id>] <text>\` 形式出现（不是用户写的，是外部 agent push 进来的通知）。
+- 操作者可能让你"回 deploy-bot 一句 retry"/"告诉那个 agent yes" 之类——调 \`a2a_send(agent_id, text)\` 把消息发回去。\`agent_id\` 就是 \`[A2A:<id>]\` 前缀里的那个 id，**逐字保留 dash、下划线**，不要自己加 prefix 或换大小写。
+- \`a2a_send\` 返回 \`{ ok, http_status?, error?, registered? }\`。\`unknown_agent\` → 名单错了（registered 字段列了已注册的，用那个 ID 重试）；\`agent_paused\` → 操作者主动暂停了那个 agent，**不要再调**、平常回复用户即可。`
 }
 
 function memorySection(): string {

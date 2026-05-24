@@ -2192,6 +2192,40 @@ input { font: inherit; color: inherit; }
   margin-top: 8px;
 }
 
+/* Server status banner at the top of the Agents (A2A) tab. */
+.a2a-server-banner {
+  padding: 10px 12px;
+  margin: 0 0 12px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--paper, #fff);
+  border: 1px solid var(--hair, #e5e7eb);
+  font-size: 13px;
+  color: var(--ink-2, #4b5563);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.a2a-server-banner:empty { display: none; }
+.a2a-server-banner .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.a2a-server-banner .dot.on  { background: var(--green, #10b981); }
+.a2a-server-banner .dot.off { background: var(--ink-3, #9ca3af); }
+.a2a-server-banner code {
+  font-size: 12px;
+  background: var(--paper-2, #f3f4f6);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.a2a-server-banner .a2a-base-url {
+  user-select: all;
+  cursor: text;
+}
+
 /* A2A Add Agent modal */
 .a2a-modal {
   border: 1px solid var(--hair);

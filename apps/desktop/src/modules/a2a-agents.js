@@ -46,6 +46,24 @@ export async function refresh() {
   const list = document.getElementById('a2a-agents-list')
   if (!list) return
   list.innerHTML = '<li class="empty">加载中…</li>'
+
+  // Refresh the server-status banner first — operator-visible "your A2A
+  // base URL is X" so they can share it with external agents without
+  // hunting through the Add Agent modal. Best-effort: if /info fails or
+  // the banner element isn't in DOM, just skip it.
+  const banner = document.getElementById('a2a-server-banner')
+  if (banner) {
+    const info = /** @type {Record<string, any>} */ (await invokeApi('GET', '/v1/a2a/info').catch(() => null))
+    if (!info) {
+      banner.innerHTML = '<span class="dot off"></span> A2A 状态未知（daemon 未启动？）'
+    } else if (!info.enabled) {
+      banner.innerHTML = '<span class="dot off"></span> A2A 入站服务器已禁用 — 编辑 <code>agent-config.json</code> 加 <code>"a2a_listen": { "port": 8717 }</code> 后重启 daemon'
+    } else {
+      const url = String(info.base_url ?? '')
+      banner.innerHTML = `<span class="dot on"></span> A2A 服务器运行中，外部 agent 调用此地址：<code class="a2a-base-url">${escapeHtml(url)}/a2a/notify</code>`
+    }
+  }
+
   const resp = /** @type {{ agents?: Array<any> }} */ (await invokeApi('GET', '/v1/a2a/list'))
   const agents = resp?.agents ?? []
   list.innerHTML = ''

@@ -36,6 +36,7 @@ import type { Options } from '@anthropic-ai/claude-agent-sdk'
 import { findOnPath, probeBinaryVersion } from '../../lib/util'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import type { WechatProjectsDep, WechatVoiceDep, WechatCompanionDep } from '../wechat-tool-deps'
 import { makeSessionStore } from '../../core/session-store'
@@ -728,6 +729,26 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
     await a2aServer.start()
     deps.log('A2A', `server listening on http://${configuredAgent.a2a_listen.host}:${a2aServer.port()}`)
   }
+
+  // Discovery file — non-sensitive (no token), tells CLI + dashboard the
+  // daemon's A2A server status. Operator runs `wechat-cc agent info`,
+  // which reads this file directly (no internal-api round-trip needed).
+  // Mode 0644 because there's no secret here, just an HTTP base URL.
+  const a2aInfoPath = join(deps.stateDir, 'a2a-info.json')
+  try {
+    writeFileSync(
+      a2aInfoPath,
+      JSON.stringify({
+        enabled: !!a2aServer,
+        base_url: a2aServer ? a2aServer.baseUrl() : null,
+        host: a2aServer ? configuredAgent.a2a_listen!.host : null,
+        port: a2aServer ? a2aServer.port() : null,
+        pid: process.pid,
+        ts: Date.now(),
+      }, null, 2),
+      { mode: 0o644 },
+    )
+  } catch { /* non-fatal: CLI falls back to internal-api lookup */ }
 
   const a2aDeps = {
     registry: a2aRegistry,

@@ -28,6 +28,14 @@ describe('buildSystemPrompt', () => {
     expect(pCodex).not.toContain('你是 claude')
   })
 
+  it('mentions a2a_send tool and [A2A:<id>] prefix convention', () => {
+    const p = buildSystemPrompt(defaults())
+    expect(p).toContain('a2a_send')
+    expect(p).toContain('[A2A:')
+    // Make sure the agent knows agent_id comes from the prefix
+    expect(p).toMatch(/agent_id.*前缀|前缀.*agent_id/)
+  })
+
   it('lists every wechat-mcp tool surface (no v0.x staleness regression)', () => {
     const p = buildSystemPrompt(defaults())
     // The original v0.x prompt missed these. Verify they're back.
