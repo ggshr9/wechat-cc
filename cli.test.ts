@@ -55,6 +55,7 @@ describe('citty migrated commands', () => {
     const subs = cittyRoot.subCommands as Record<string, unknown>
     expect(Object.keys(subs).sort()).toEqual([
       'account',
+      'agent',
       'avatar',
       'conversations',
       'daemon',
