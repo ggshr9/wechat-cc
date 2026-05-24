@@ -1907,4 +1907,59 @@ describe('ConversationCoordinator', () => {
         .toThrow(/≥2|at least 2/)
     })
   })
+
+  describe('integration — 3-way chatroom over 4 rounds', () => {
+    it('moderator picks all 3 participants across the rounds; sendAssistantText prefixes each speaker', async () => {
+      const store = makeMockStore()
+      const registry = createProviderRegistry()
+      for (const id of ['claude', 'codex', 'cursor']) {
+        registry.register(id, dummyProvider, { displayName: id[0]!.toUpperCase() + id.slice(1), canResume: () => true })
+      }
+      store.set('chat-1', { kind: 'chatroom', participants: ['claude', 'codex', 'cursor'] })
+      const acquired: ProviderId[] = []
+      const acquire = vi.fn(async (req: AcquireRequest) => {
+        acquired.push(req.providerId)
+        return makeHandle(req.providerId, makeFakeSession({
+          events: [
+            { kind: 'text', text: `${req.providerId} weighs in` },
+            { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+          ],
+        }))
+      })
+      // Scripted moderator: round 1=claude, 2=codex, 3=cursor, 4=end.
+      const pickOrder: ProviderId[] = ['claude', 'codex', 'cursor']
+      let i = 0
+      const haikuEval = vi.fn(async () => {
+        if (i < pickOrder.length) {
+          const speaker = pickOrder[i]!
+          i++
+          return JSON.stringify({ action: 'continue', speaker, prompt: `as ${speaker}`, reasoning: `r${i}` })
+        }
+        return JSON.stringify({ action: 'end', reasoning: 'done' })
+      })
+      const sendAssistantText = vi.fn(async (_chatId: string, _text: string) => {})
+      const c = createConversationCoordinator({
+        resolveProject: () => ({ alias: 'a', path: '/p' }),
+        manager: { acquire },
+        conversationStore: store,
+        registry,
+        defaultProviderId: 'claude',
+        format: (m) => m.text,
+        sendAssistantText,
+        permissionMode: 'strict',
+        loadAccess: adminAccess,
+        chatroomMaxRounds: 4,
+        haikuEval,
+        log: () => {},
+      })
+      await c.dispatch(inbound('chat-1', 'what do you all think?'))
+      // All 3 speakers were acquired at least once.
+      expect(new Set(acquired)).toEqual(new Set(['claude', 'codex', 'cursor']))
+      // sendAssistantText carried the prefixed text from each speaker.
+      const sentTexts = sendAssistantText.mock.calls.map((c) => c[1])
+      expect(sentTexts.some((t) => t.includes('[Claude]'))).toBe(true)
+      expect(sentTexts.some((t) => t.includes('[Codex]'))).toBe(true)
+      expect(sentTexts.some((t) => t.includes('[Cursor]'))).toBe(true)
+    })
+  })
 })

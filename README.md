@@ -185,13 +185,30 @@ remembers its choice across daemon restarts (`conversations.json`).
 | `/cc`            | **Solo · Claude** | Claude only | Single reply |
 | `/codex`         | **Solo · Codex**  | Codex only  | Single reply |
 | `/cursor`        | **Solo · Cursor** | Cursor only (if `@cursor/sdk` + `CURSOR_API_KEY` are present) | Single reply |
-| `/both`          | **Parallel** | Claude + Codex independently | `[Claude] ...` + `[Codex] ...` (two replies) |
+| `/both`          | **Parallel** | All registered providers (or explicit list) independently | `[Claude] ...` + `[Codex] ...` + `[Cursor] ...` (one reply per participant) |
 | `/cc + codex`    | **Primary + Tool** | Claude main, Codex on call | Single reply; Claude self-decides when to invoke `delegate_codex` |
 | `/codex + cc`    | **Primary + Tool** | Codex main, Claude on call | Same shape, roles swapped |
-| `/chat`          | **Chatroom** | Both, multi-round dialogue | Mixed `[Claude]` / `[Codex]` lines as they discuss, then a final answer |
+| `/chat`          | **Chatroom** | All registered providers (or explicit list), multi-round dialogue | Mixed `[Claude]` / `[Codex]` / `[Cursor]` lines as they discuss, then a final answer |
 | `/solo`          | revert to single-provider default | — | — |
 | `/stop`          | cancel the current `/chat` loop | — | — |
 | `/mode`          | show the current mode for this chat | — | — |
+
+- **`/chat`** — chatroom mode. Multiple agents take turns under a haiku
+  moderator that decides who speaks next per round. Bare `/chat` uses
+  all registered providers (after cursor was added, that's claude +
+  codex + cursor). Explicit form: `/chat claude codex` (2-way) or
+  `/chat claude codex cursor` (3-way). P1 caps the participant list
+  at 3 — extras are silently dropped with a log warning.
+
+- **`/both`** (alias `/parallel`) — parallel mode. Same shape:
+  bare → all registered, explicit → `/parallel claude cursor`. ≥2
+  participants required; rejects unknown providers up front.
+
+- **Legacy 2-way chats** — if you used `/chat` or `/both` before
+  cursor was registered, your existing chats stay 2-way (claude +
+  codex). The first dispatch under the new code persists this
+  intent. To opt into 3-way explicitly, re-issue
+  `/chat claude codex cursor`.
 
 In **chatroom** mode (`/chat`) the assistants address each other with
 line-anchored `@-tags`:
@@ -202,9 +219,9 @@ line-anchored `@-tags`:
 ```
 
 Lines starting with `@user` (or no tag at all) are user-facing; `@codex` /
-`@claude` lines are routed to the other agent for the next round. The loop
-ends when one of them just `@user`s a final answer, or when `max_rounds=4`
-is hit. `/stop` aborts immediately.
+`@claude` / `@cursor` lines are routed to the relevant agent for the next
+round. The loop ends when one of them just `@user`s a final answer, or when
+`max_rounds=4` is hit. `/stop` aborts immediately.
 
 The architecture is **open** — providers are an open string brand registered
 through `ProviderRegistry`, not a Claude+Codex enum. **Cursor** ships as the
@@ -604,6 +621,10 @@ Stable `obs_demo_*` / `ms_demo_*` ids make `unseed` reliable.
   working directory. If you have guests you don't trust to write inside cwd, route
   them to Claude (whose `disallowedTools` array enforces strict per-tool blocks
   for guest tier).
+- **3-participant cap** — chatroom and parallel are capped at 3
+  participants in P1. The moderator's coherence with 4+ speakers is
+  untested; the cap is a safety net. Raise it once we've seen real
+  3-way data.
 - **v0.6 sessions table schema is one-way** — migration v10 adds a `chat_id`
   column and rebuilds the primary key as `(alias, provider, chat_id)`. The
   upgrade is safe; the downgrade isn't. A v0.5 binary opening a post-v0.6
