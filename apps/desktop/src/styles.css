@@ -2126,3 +2126,207 @@ input { font: inherit; color: inherit; }
   margin: 8px 0 0;
   line-height: 1.5;
 }
+
+/* ── A2A Agents tab ──────────────────────────────────────────────────────── */
+
+.a2a-agents-body {
+  padding: 16px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.a2a-agents-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.a2a-agents-list .empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.a2a-agent-card {
+  padding: 12px;
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+}
+
+.a2a-agent-card.paused { opacity: 0.55; }
+
+.a2a-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+/* reuse the existing .dot styles from the dashboard status pill */
+.a2a-card-head .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.a2a-card-head .dot.on  { background: var(--green); }
+.a2a-card-head .dot.off { background: var(--ink-4); }
+
+.a2a-card-url {
+  color: var(--ink-3);
+  font-size: 11.5px;
+  margin: 4px 0;
+  word-break: break-all;
+  font-family: var(--mono, monospace);
+}
+
+.a2a-card-counts {
+  color: var(--ink-3);
+  font-size: 11.5px;
+  margin: 4px 0;
+}
+
+.a2a-card-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+/* A2A Add Agent modal */
+.a2a-modal {
+  border: 1px solid var(--hair);
+  border-radius: var(--radius);
+  padding: 20px;
+  max-width: 520px;
+  width: 92vw;
+  box-shadow: var(--shadow);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.a2a-modal::backdrop {
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.a2a-modal h3 { margin: 0 0 16px; font-size: 16px; }
+.a2a-modal h4 { margin: 0 0 8px; font-size: 14px; }
+.a2a-modal p  { margin: 0 0 10px; font-size: 13px; color: var(--ink-2); }
+
+.a2a-modal label {
+  display: block;
+  margin: 10px 0;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.a2a-modal input {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--hair-2);
+  border-radius: var(--radius-sm);
+  background: var(--paper-2);
+  color: var(--ink);
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.a2a-modal input:focus {
+  outline: 2px solid var(--green);
+  outline-offset: -1px;
+}
+
+.a2a-modal ul {
+  margin: 0 0 12px;
+  padding-left: 18px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.a2a-modal pre {
+  background: var(--paper-3);
+  border: 1px solid var(--hair);
+  padding: 10px 12px;
+  font-size: 11px;
+  font-family: var(--mono, monospace);
+  overflow-x: auto;
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 8px 0 12px;
+}
+
+.a2a-form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+/* A2A Activity drawer — full-height side panel */
+.a2a-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 380px;
+  max-width: 92vw;
+  background: var(--paper);
+  border-left: 1px solid var(--hair);
+  box-shadow: -4px 0 24px rgba(0,0,0,.10);
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+}
+
+.a2a-drawer[hidden] { display: none; }
+
+.a2a-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--hair);
+  flex-shrink: 0;
+}
+
+.a2a-drawer-head h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.a2a-activity-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.a2a-activity-list .empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.a2a-activity-list .event {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--hair);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.a2a-activity-list .event time {
+  color: var(--ink-4);
+  font-size: 11px;
+  font-family: var(--mono, monospace);
+  margin-right: 6px;
+}
+
+.a2a-activity-list .event.in  { background: var(--tint); }
+.a2a-activity-list .event.out { background: var(--paper); }

@@ -173,6 +173,10 @@
               <span>日志</span>
               <span class="count" id="logs-count"></span>
             </button>
+            <button class="dash-nav-link" data-pane="a2a-agents">
+              <span class="ic"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="5" cy="5" r="2"/><circle cx="11" cy="5" r="2"/><circle cx="8" cy="11" r="2"/><path d="M5 7v1.5M11 7v1.5M8 9v0"/><path d="M5 8.5c1-.5 5-.5 6 0"/></svg></span>
+              <span>Agents</span>
+            </button>
           </nav>
 
           <div class="dash-rail-foot">
@@ -396,9 +400,59 @@
             </div>
           </article>
 
+          <!-- ── pane: a2a-agents ──────────────────────────────────────── -->
+          <article class="dash-pane" data-pane="a2a-agents" hidden>
+            <div class="topbar">
+              <span class="crumb">Agents (A2A)</span>
+              <div class="actions">
+                <button id="a2a-add-btn" class="btn">+ Add Agent</button>
+              </div>
+            </div>
+            <div class="a2a-agents-body">
+              <ul id="a2a-agents-list" class="a2a-agents-list"></ul>
+            </div>
+          </article>
+
         </section>
       </div>
     </main>
+
+    <!-- A2A Add Agent modal — top-level overlay so it's not clipped by
+         the dashboard main pane. Sibling to #qr-modal. -->
+    <dialog id="a2a-add-modal" class="a2a-modal">
+      <h3>Add A2A Agent</h3>
+      <form id="a2a-add-form">
+        <label>Agent URL <input type="url" name="url" required placeholder="https://example.com/a2a"></label>
+        <div class="a2a-form-actions">
+          <button type="submit">Fetch Agent Card →</button>
+        </div>
+      </form>
+      <section id="a2a-add-preview" hidden>
+        <h4 id="a2a-preview-name"></h4>
+        <p id="a2a-preview-description"></p>
+        <ul id="a2a-preview-capabilities"></ul>
+        <label>Local id (slug) <input name="id" required></label>
+        <label>Outbound API key <input name="outbound_key" placeholder="From the agent's docs (optional)"></label>
+        <div class="a2a-form-actions">
+          <button id="a2a-install-confirm" type="button">Install</button>
+          <button id="a2a-install-cancel" type="button">Cancel</button>
+        </div>
+      </section>
+      <section id="a2a-add-success" hidden>
+        <p>✅ Installed. Share this key with the agent so it can call back:</p>
+        <pre id="a2a-add-curl"></pre>
+        <button id="a2a-add-close" type="button">Close</button>
+      </section>
+    </dialog>
+
+    <!-- A2A Activity drawer — top-level overlay, hidden by default. -->
+    <aside id="a2a-activity-drawer" class="a2a-drawer" hidden>
+      <header class="a2a-drawer-head">
+        <h3 id="a2a-activity-title">Activity</h3>
+        <button id="a2a-activity-close" class="drawer-close" type="button" aria-label="关闭">×</button>
+      </header>
+      <ul id="a2a-activity-list" class="a2a-activity-list"></ul>
+    </aside>
 
     <!-- Shared lightbox for image / file attachment previews. Hidden
          until a chat-bubble image or file-card is clicked. -->

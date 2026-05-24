@@ -975,9 +975,43 @@ const daemonKillResidualCmd = defineCommand({
   },
 })
 
+const daemonApiInfoCmd = defineCommand({
+  meta: { name: 'api-info', description: 'Read internal-api-info.json (base URL + token) — used by the desktop GUI to call /v1/* endpoints' },
+  args: {
+    json: { type: 'boolean', description: 'JSON envelope (always emits JSON; flag is for CLI consistency)' },
+  },
+  async run() {
+    const { existsSync, readFileSync } = await import('node:fs')
+    const infoPath = join(STATE_DIR, 'internal-api-info.json')
+    if (!existsSync(infoPath)) {
+      console.log(JSON.stringify({ ok: false, error: 'daemon not running (internal-api-info.json not found)' }))
+      process.exit(1)
+    }
+    let info: { baseUrl?: string; tokenFilePath?: string }
+    try {
+      info = JSON.parse(readFileSync(infoPath, 'utf8'))
+    } catch (err) {
+      console.log(JSON.stringify({ ok: false, error: `could not read internal-api-info.json: ${err instanceof Error ? err.message : String(err)}` }))
+      process.exit(1)
+    }
+    if (!info.baseUrl || !info.tokenFilePath) {
+      console.log(JSON.stringify({ ok: false, error: 'internal-api-info.json is malformed (missing baseUrl or tokenFilePath)' }))
+      process.exit(1)
+    }
+    let token: string
+    try {
+      token = readFileSync(info.tokenFilePath, 'utf8').trim()
+    } catch (err) {
+      console.log(JSON.stringify({ ok: false, error: `could not read token file: ${err instanceof Error ? err.message : String(err)}` }))
+      process.exit(1)
+    }
+    console.log(JSON.stringify({ ok: true, baseUrl: info.baseUrl, token }))
+  },
+})
+
 const daemonCmd = defineCommand({
   meta: { name: 'daemon', description: 'Daemon process control' },
-  subCommands: { kill: daemonKillCmd, 'kill-residual': daemonKillResidualCmd },
+  subCommands: { kill: daemonKillCmd, 'kill-residual': daemonKillResidualCmd, 'api-info': daemonApiInfoCmd },
 })
 
 async function runDemo(verb: 'seed' | 'unseed', chatIdArg: string | undefined, json: boolean): Promise<void> {

@@ -34,6 +34,7 @@ import { renderConversations } from "./modules/conversations.js"
 import { loadMemoryPane, wireMemoryButtons, loadMemoryTopZone, loadMemoryDecisions, archiveObservation } from "./modules/memory.js"
 import { loadLogsPane, startLogsAutoRefresh, stopLogsAutoRefresh } from "./modules/logs.js"
 import { loadSessionsList, openProjectDetail, closeProjectDetail, toggleFavorite, exportProjectMarkdown, deleteProject, wireSearch, startSessionsAutoRefresh, stopSessionsAutoRefresh, stopDetailAutoRefresh, setSessionsDetailMode } from "./modules/sessions.js"
+import { initA2AAgentsTab, refresh as refreshA2AAgents } from "./modules/a2a-agents.js"
 import { loadUpdateProbe, applyUpdate } from "./modules/update.js"
 import { wireSettingsDrawer, openSettingsDrawer } from "./modules/settings-drawer.js"
 
@@ -331,6 +332,9 @@ function switchPane(name) {
   } else {
     stopSessionsAutoRefresh()
     stopDetailAutoRefresh()
+  }
+  if (name === "a2a-agents") {
+    refreshA2AAgents().catch(err => console.error("a2a-agents refresh failed", err))
   }
 }
 
@@ -779,6 +783,9 @@ async function boot() {
   wireDoctorSubscribers()
   wireEvents()
   await loadAgentConfig().catch(err => console.error("agent config load failed", err))
+  // Wire the A2A agents tab (event listeners attached once; first list load
+  // is deferred until the user actually switches to that pane).
+  initA2AAgentsTab().catch(err => console.error("a2a-agents init failed", err))
   const report = await doctorPoller.refresh()
   if (!report) {
     setMode("wizard")
