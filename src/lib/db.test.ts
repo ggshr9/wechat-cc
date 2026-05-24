@@ -125,6 +125,31 @@ describe('migration v10 — sessions.chat_id', () => {
   })
 })
 
+describe('migration v12 — a2a_events table', () => {
+  it('creates a2a_events table with expected columns', () => {
+    const db = openDb({ path: ':memory:' })
+    const cols = db.query<{ name: string }, []>(
+      "SELECT name FROM pragma_table_info('a2a_events')"
+    ).all()
+    const names = cols.map(c => c.name).sort()
+    expect(names).toEqual(['agent_id', 'direction', 'http_status', 'id', 'status', 'text', 'ts', 'urgency'])
+  })
+
+  it('PRAGMA user_version = 12 after v12', () => {
+    const db = openDb({ path: ':memory:' })
+    const v = (db.query('PRAGMA user_version').get() as { user_version: number }).user_version
+    expect(v).toBe(12)
+  })
+
+  it('agent_ts index exists', () => {
+    const db = openDb({ path: ':memory:' })
+    const idx = db.query<{ name: string }, []>(
+      "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='a2a_events'"
+    ).all()
+    expect(idx.find(i => i.name === 'a2a_events_agent_ts')).toBeDefined()
+  })
+})
+
 describe('migration v11 — participants column', () => {
   it('adds nullable TEXT participants column to conversations', () => {
     const db = openDb({ path: ':memory:' })

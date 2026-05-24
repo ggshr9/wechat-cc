@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { loadAgentConfig, saveAgentConfig } from './agent-config'
+import { loadAgentConfig, saveAgentConfig, parseAgentConfig } from './agent-config'
 
 describe('agent-config', () => {
   it('defaults to claude with unattended=true when no config exists', () => {
@@ -131,6 +131,47 @@ describe('agent-config', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('agent-config — A2A fields', () => {
+  it('accepts a config with a2a_listen and a2a_agents', () => {
+    const cfg = parseAgentConfig({
+      provider: 'claude',
+      a2a_listen: { host: '127.0.0.1', port: 8717 },
+      a2a_agents: [
+        { id: 'deploy-bot', name: 'Deploy Bot', url: 'https://deploy.example.com/a2a',
+          inbound_api_key: 'wc_abc1234567890123', outbound_api_key: 'dpb_xyz',
+          capabilities: ['notify'], paused: false },
+      ],
+    })
+    expect(cfg.a2a_listen?.port).toBe(8717)
+    expect(cfg.a2a_agents).toHaveLength(1)
+    expect(cfg.a2a_agents?.[0]?.id).toBe('deploy-bot')
+  })
+
+  it('accepts config without A2A fields (backward compat)', () => {
+    const cfg = parseAgentConfig({ provider: 'claude' })
+    expect(cfg.a2a_listen).toBeUndefined()
+    expect(cfg.a2a_agents).toBeUndefined()
+  })
+
+  it('rejects duplicate agent ids', () => {
+    expect(() => parseAgentConfig({
+      provider: 'claude',
+      a2a_agents: [
+        { id: 'x', name: 'X', url: 'https://a/a2a', inbound_api_key: 'wc_1234567890123456', outbound_api_key: 'k2', capabilities: ['notify'], paused: false },
+        { id: 'x', name: 'X2', url: 'https://b/a2a', inbound_api_key: 'wc_2234567890123456', outbound_api_key: 'k4', capabilities: ['notify'], paused: false },
+      ],
+    })).toThrow(/duplicate a2a agent id/)
+  })
+
+  it('rejects invalid agent id (must be slug: lowercase alphanumeric + dash)', () => {
+    expect(() => parseAgentConfig({
+      provider: 'claude',
+      a2a_agents: [{ id: 'Bad ID!', name: 'X', url: 'https://a/a2a',
+        inbound_api_key: 'wc_1234567890123456', outbound_api_key: 'k', capabilities: ['notify'], paused: false }],
+    })).toThrow(/agent id must match/)
   })
 })
 

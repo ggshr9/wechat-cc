@@ -61,15 +61,13 @@ describe('full state-dir migration — upgrading-user smoke', () => {
     rmSync(stateDir, { recursive: true, force: true })
   })
 
-  it('opens a fresh db with PRAGMA user_version = 11 and the 7 tables', () => {
+  it('opens a fresh db with PRAGMA user_version = 12 and the 8 tables', () => {
     const v = (db.query('PRAGMA user_version').get() as { user_version: number }).user_version
-    // v11 (N-way modes P3): conversations.participants column added.
-    // v10 (user-tier-permissions Task 7): sessions table rebuilt with
-    // the (alias, provider, chat_id) primary key.
-    expect(v).toBe(11)
+    // v12 (A2A integration): a2a_events table added.
+    expect(v).toBe(12)
     const tables = db.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as Array<{ name: string }>
     expect(tables.map(t => t.name)).toEqual([
-      'activity', 'conversations', 'events', 'milestones', 'observations', 'session_state', 'sessions',
+      'a2a_events', 'activity', 'conversations', 'events', 'milestones', 'observations', 'session_state', 'sessions',
     ])
   })
 
