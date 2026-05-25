@@ -17,7 +17,8 @@ import { isAdmin, loadAccess } from '../../lib/access'
 import { makeAdminCommands } from '../admin-commands'
 import { makeModeCommands } from '../mode-commands'
 import { makeOnboardingHandler } from '../onboarding'
-import { botName } from '../bot-name'
+import { botName, botNameFromModeFallback } from '../bot-name'
+import { saveAgentConfig } from '../../lib/agent-config'
 import { materializeAttachments } from '../media'
 import { loadGuardConfig } from '../guard/store'
 import { makeFireMilestonesFor, makeRecordInbound, makeMaybeWriteWelcomeObservation } from './side-effects'
@@ -43,6 +44,18 @@ export function buildPipelineDeps(opts: PipelineDepsOpts, refs: PipelineDepsRefs
   const inboxDir = join(stateDir, 'inbox')
 
   const fireMilestonesFor = makeFireMilestonesFor({ stateDir, db })
+
+  // Disk-first then mutate: if saveAgentConfig throws (EACCES, ENOSPC),
+  // the in-memory boot.agentConfig stays untouched so callers can retry.
+  // Mutate via index access so existing readers (who hold the same object
+  // reference) see the new value on next lookup.
+  const setBotName = async (name: string | null): Promise<void> => {
+    const next: typeof boot.agentConfig = { ...boot.agentConfig, bot_name: name }
+    await saveAgentConfig(stateDir, next)
+    boot.agentConfig.bot_name = name
+  }
+  const getBotName = (): string | null => boot.agentConfig.bot_name ?? null
+
   const recordInbound = makeRecordInbound({ stateDir, db })
   const maybeWriteWelcomeObservation = makeMaybeWriteWelcomeObservation({
     stateDir,
@@ -71,6 +84,9 @@ export function buildPipelineDeps(opts: PipelineDepsOpts, refs: PipelineDepsRefs
     sessionStore: boot.sessionStore,
     log,
     startedAt: STARTED_AT_ISO,
+    getBotName,
+    setBotName,
+    botNameFallback: (cid) => botNameFromModeFallback(boot.coordinator.getMode(cid)),
   })
 
   const modeHandler = makeModeCommands({
@@ -101,6 +117,9 @@ export function buildPipelineDeps(opts: PipelineDepsOpts, refs: PipelineDepsRefs
       })
     },
     log,
+    isAdmin,
+    getBotName,
+    setBotName,
   })
 
   const pipelineDeps: InboundPipelineDeps = {
