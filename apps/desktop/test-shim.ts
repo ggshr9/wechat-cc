@@ -77,6 +77,10 @@ const __mockState: {
   // rendered nothing.
   observations: Array<{ id: string; ts: string; body: string; tone?: string; archived: boolean }>
   milestones: Array<{ id: string; ts: string; body: string; event_id?: string }>
+  // Doctor-derived state — controllable via demo.seed args. Defaults
+  // mirror the "everything healthy" path; tests that need to drive the
+  // hero into "暂时失去连接" tone pass daemonAlive: false explicitly.
+  daemonAlive: boolean
   sessions: Array<{ id: string; project: string; created_at: number; favorited: boolean }>
   qrScanComplete?: boolean
   qrScanFails?: boolean
@@ -90,7 +94,7 @@ const __mockState: {
   // A2A mock state — seeded by `a2a.seed` test-control command.
   a2aAgents: A2AAgent[]
   a2aEvents: A2AEvent[]
-} = { chats: [], observations: [], milestones: [], sessions: [], installProgress: null, installSimulationStep: 0, conversations: null, a2aAgents: [], a2aEvents: [] }
+} = { chats: [], observations: [], milestones: [], sessions: [], daemonAlive: true, installProgress: null, installSimulationStep: 0, conversations: null, a2aAgents: [], a2aEvents: [] }
 
 // ─── A2A mock credentials ─────────────────────────────────────────────────────
 // The A2A routes (/v1/a2a/*) are served by the SAME Bun.serve instance as the
@@ -220,6 +224,7 @@ Bun.serve({
           __mockState.observations = []
           __mockState.milestones = []
           __mockState.sessions = []
+          __mockState.daemonAlive = true
           __mockState.qrScanComplete = undefined
           __mockState.qrScanFails = undefined
           __mockState.envCheck = undefined
@@ -232,8 +237,9 @@ Bun.serve({
         }
 
         if (body.command === 'demo.seed') {
-          const args = body.args as { chat_id?: string } | undefined
+          const args = body.args as { chat_id?: string; daemonAlive?: boolean } | undefined
           const chatId = args?.chat_id ?? 'test_chat'
+          __mockState.daemonAlive = args?.daemonAlive ?? true
           __mockState.chats = [{ id: chatId, name: 'Test User', last_active: Date.now() }]
           // Shape matches src/cli/schema.ts::ObservationEntry — { id, ts,
           // body, tone?, archived }. Earlier shim used `triggered_at` /
@@ -364,6 +370,62 @@ Bun.serve({
             __mockState.milestones.length > 0
           ) {
             return Response.json({ result: { milestones: __mockState.milestones } })
+          }
+
+          // Intercept doctor --json in DRY_RUN. Returns a minimal valid
+          // DoctorOutput shape derived from __mockState.chats so playwright
+          // tests can drive the dashboard's hero tone + accounts table
+          // without depending on the dev machine's real CLI output. The
+          // hero tone flips based on the chats length: seeded → daemon
+          // "alive" + accounts.count=1 → "AI 正在陪伴中"; unseeded →
+          // daemon dead + accounts.count=0 → "暂时失去连接".
+          if (
+            dryRun &&
+            body.command === 'wechat_cli_json' &&
+            cliArgs[0] === 'doctor'
+          ) {
+            const seeded = __mockState.chats.length > 0
+            const chat = seeded ? __mockState.chats[0]! : null
+            const userNames: Record<string, string> = chat ? { [chat.id]: chat.name } : {}
+            const items = chat ? [{
+              id: `${chat.id}-im-bot`,
+              botId: chat.id,
+              userId: chat.id,
+              baseUrl: 'https://example.test',
+            }] : []
+            // daemon.alive is driven by __mockState.daemonAlive (default
+            // true); separate from `seeded` so tests can drive the hero
+            // into "暂时失去连接" tone while still booting into dashboard
+            // mode (initialMode checks accounts + provider + service,
+            // NOT daemon.alive).
+            const daemonAlive = seeded && __mockState.daemonAlive
+            return Response.json({
+              result: {
+                ready: seeded,
+                stateDir: '/tmp/wechat-cc-shim',
+                runtime: 'source',
+                wslDetected: false,
+                checks: {
+                  bun: { ok: true, path: '/usr/local/bin/bun' },
+                  git: { ok: true, path: '/usr/bin/git' },
+                  claude: { ok: true, path: '/usr/local/bin/claude' },
+                  codex: { ok: true, path: '/usr/local/bin/codex' },
+                  cursor: { ok: false, apiKeySet: false, sdkInstalled: true },
+                  accounts: { ok: true, count: items.length, items },
+                  access: { ok: true, dmPolicy: 'allowlist', allowFromCount: items.length },
+                  provider: {
+                    ok: true,
+                    provider: 'claude',
+                    binaryPath: '/usr/local/bin/claude',
+                  },
+                  daemon: { alive: daemonAlive, pid: daemonAlive ? 12345 : null },
+                  service: { installed: seeded, kind: 'launchagent' },
+                },
+                userNames,
+                expiredBots: [],
+                nextActions: [],
+              },
+            })
           }
 
           // Intercept memory list in DRY_RUN unconditionally — return seeded
