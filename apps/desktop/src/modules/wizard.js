@@ -36,8 +36,18 @@ export function renderDoctorWizard(report) {
   }
   const claudeMeta = document.getElementById("claude-meta")
   const codexMeta = document.getElementById("codex-meta")
+  const cursorMeta = document.getElementById("cursor-meta")
   if (claudeMeta) claudeMeta.textContent = report.checks.claude.ok ? report.checks.claude.path : "未检测到"
   if (codexMeta) codexMeta.textContent = report.checks.codex.ok ? report.checks.codex.path : "未检测到"
+  // Cursor's probe shape differs ({ apiKeySet, sdkInstalled } vs { ok, path }).
+  // Surface the more useful missing-piece on the wizard card.
+  if (cursorMeta) {
+    const c = report.checks.cursor
+    cursorMeta.textContent = c?.ok ? "已就绪"
+      : !c?.apiKeySet ? "缺少 CURSOR_API_KEY"
+      : !c?.sdkInstalled ? "缺少 @cursor/sdk"
+      : "未检测到"
+  }
   renderProviderStatus("claude", report.checks.claude)
   renderProviderStatus("codex", report.checks.codex)
   updateFooterStatus(report.checks.daemon)

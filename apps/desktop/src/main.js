@@ -279,13 +279,16 @@ async function commitProvider(provider) {
 
 /** @param {any} report */
 function hasAnyProvider(report) {
-  return !!(report?.checks?.claude?.ok || report?.checks?.codex?.ok)
+  return !!(report?.checks?.claude?.ok || report?.checks?.codex?.ok || report?.checks?.cursor?.ok)
 }
 
 /** @param {any} report */
 async function ensureUsableProviderSelected(report) {
   if (report?.checks?.provider?.ok) return false
-  const fallback = report?.checks?.claude?.ok ? "claude" : (report?.checks?.codex?.ok ? "codex" : null)
+  const fallback = report?.checks?.claude?.ok ? "claude"
+    : report?.checks?.codex?.ok ? "codex"
+    : report?.checks?.cursor?.ok ? "cursor"
+    : null
   if (!fallback) return false
   await commitProvider(fallback)
   return true
