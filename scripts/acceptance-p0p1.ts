@@ -192,6 +192,10 @@ process.on('exit', () => { for (const c of cleanup) try { Promise.resolve(c()).c
     registry: boot.registry,
     sessionManager: boot.sessionManager,
     sessionStore: boot.sessionStore,
+    // /name wiring lands in T6; stubs keep the acceptance script compilable
+    getBotName: () => null,
+    setBotName: async () => {},
+    botNameFallback: () => 'cc',
   })
 
   // Seed a stored session for the chat so /health ai has something to render.

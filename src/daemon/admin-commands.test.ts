@@ -62,6 +62,10 @@ describe('admin-commands', () => {
       registry: { list: () => [] },
       sessionManager: { release: async () => {}, list: () => [] },
       sessionStore: { get: () => null, delete: () => {} },
+      // /name deps — no-op defaults so legacy tests don't need to care
+      getBotName: () => null,
+      setBotName: async () => {},
+      botNameFallback: () => 'cc',
       ...overrides,
     })
   }
@@ -262,6 +266,114 @@ describe('admin-commands', () => {
       })
       expect(await cmds.handle(msg('/health ai'))).toBe(true)
       expect(sentBody()).toMatch(/未绑定|no project|未映射/i)
+    })
+  })
+
+  describe('/name command', () => {
+    let getBotName: ReturnType<typeof vi.fn>
+    let setBotName: ReturnType<typeof vi.fn>
+    let botNameFallback: ReturnType<typeof vi.fn>
+
+    function mkMsg(text: string, chatId = 'admin-1'): InboundMsg {
+      return {
+        chatId, userId: chatId, userName: undefined, accountId: 'a1',
+        text, msgType: 'text', createTimeMs: 0,
+      }
+    }
+
+    function build(): ReturnType<typeof makeAdminCommands> {
+      return makeAdminCommands({
+        stateDir,
+        isAdmin: isAdmin as unknown as AdminCommandsDeps['isAdmin'],
+        sessionState,
+        pollHandle: {
+          stopAccount: stopAccount as unknown as AdminCommandsDeps['pollHandle']['stopAccount'],
+          stopAccountAndWait: stopAccountAndWait as unknown as AdminCommandsDeps['pollHandle']['stopAccountAndWait'],
+          running: running as unknown as AdminCommandsDeps['pollHandle']['running'],
+        },
+        resolveUserName: () => undefined,
+        sendMessage: sendMessage as unknown as AdminCommandsDeps['sendMessage'],
+        resolveProject: () => null,
+        registry: { list: () => [] },
+        sessionManager: { release: vi.fn(), list: vi.fn(() => []) },
+        sessionStore: { get: vi.fn(() => null), delete: vi.fn() },
+        log: log as unknown as AdminCommandsDeps['log'],
+        startedAt: '2026-05-25T00:00:00.000Z',
+        getBotName: getBotName as unknown as AdminCommandsDeps['getBotName'],
+        setBotName: setBotName as unknown as AdminCommandsDeps['setBotName'],
+        botNameFallback: botNameFallback as unknown as AdminCommandsDeps['botNameFallback'],
+      })
+    }
+
+    beforeEach(() => {
+      getBotName = vi.fn(() => null)
+      setBotName = vi.fn(async () => {})
+      botNameFallback = vi.fn(() => 'cc')
+      isAdmin.mockReturnValue(true)
+    })
+
+    it('/name <valid> from admin → setBotName called + ack', async () => {
+      const handler = build()
+      const consumed = await handler.handle(mkMsg('/name 小希'))
+      expect(consumed).toBe(true)
+      expect(setBotName).toHaveBeenCalledWith('小希')
+      expect(sendMessage).toHaveBeenCalledWith('admin-1', expect.stringContaining('小希'))
+    })
+
+    it('/name <valid> from non-admin → silently consumed, no setBotName', async () => {
+      isAdmin.mockReturnValue(false)
+      const handler = build()
+      const consumed = await handler.handle(mkMsg('/name 偷偷改'))
+      expect(consumed).toBe(true)  // matches existing admin-cmd convention: drop silently
+      expect(setBotName).not.toHaveBeenCalled()
+      expect(sendMessage).not.toHaveBeenCalled()
+    })
+
+    it('/name 跳过 → setBotName(null) + ack with fallback', async () => {
+      botNameFallback.mockReturnValue('cc')
+      const handler = build()
+      await handler.handle(mkMsg('/name 跳过'))
+      expect(setBotName).toHaveBeenCalledWith(null)
+      expect(sendMessage).toHaveBeenCalledWith('admin-1', expect.stringContaining('cc'))
+    })
+
+    it('/name (bare, bot_name set) → show current', async () => {
+      getBotName.mockReturnValue('小希')
+      const handler = build()
+      await handler.handle(mkMsg('/name'))
+      expect(setBotName).not.toHaveBeenCalled()
+      expect(sendMessage).toHaveBeenCalledWith('admin-1', expect.stringContaining('小希'))
+    })
+
+    it('/name (bare, bot_name null) → show fallback', async () => {
+      getBotName.mockReturnValue(null)
+      botNameFallback.mockReturnValue('cc')
+      const handler = build()
+      await handler.handle(mkMsg('/name'))
+      expect(sendMessage).toHaveBeenCalledWith('admin-1', expect.stringContaining('cc'))
+    })
+
+    it('/name <too long> → validation reply, no setBotName', async () => {
+      const longName = 'a'.repeat(25)
+      const handler = build()
+      await handler.handle(mkMsg(`/name ${longName}`))
+      expect(setBotName).not.toHaveBeenCalled()
+      expect(sendMessage).toHaveBeenCalledWith('admin-1', expect.stringContaining('太长'))
+    })
+
+    it('/name <illegal chars> → validation reply, no setBotName', async () => {
+      const handler = build()
+      await handler.handle(mkMsg('/name 🌸emoji🌸'))
+      expect(setBotName).not.toHaveBeenCalled()
+      expect(sendMessage).toHaveBeenCalledWith('admin-1', expect.stringContaining('不行'))
+    })
+
+    it('setBotName throws → ack with retry hint, no crash', async () => {
+      setBotName.mockRejectedValueOnce(new Error('disk full'))
+      const handler = build()
+      const consumed = await handler.handle(mkMsg('/name 小希'))
+      expect(consumed).toBe(true)
+      expect(sendMessage).toHaveBeenCalledWith('admin-1', expect.stringContaining('稍后再试'))
     })
   })
 })

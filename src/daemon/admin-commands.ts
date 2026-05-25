@@ -41,6 +41,9 @@ export interface AdminCommandsDeps {
   registry: Pick<ProviderRegistry, 'list'>
   sessionManager: Pick<SessionManager, 'release' | 'list'>
   sessionStore: Pick<SessionStore, 'get' | 'delete'>
+  getBotName: () => string | null
+  setBotName: (name: string | null) => Promise<void>
+  botNameFallback: (chatId: string) => string  // mode-derived; shown when bot_name is null
 }
 
 export interface AdminCommands {
@@ -64,11 +67,21 @@ const RESET_RE = /^\s*\/(?:reset|重置)\s*$/
 // network) — just inspects the daemon's own bookkeeping.
 const HEALTH_AI_RE = /^\s*\/health\s+ai\s*$/
 
+// /name <new-name>  — set
+// /name 跳过 / 不用 / 没有 / skip / clear / 清除  — clear (fall back to mode-derived)
+// /name             — show current
+const NAME_RE = /^\s*\/name(?:\s+(.+?))?\s*$/
+const NAME_SKIP_WORDS = new Set(['跳过', '不用', '没有', 'skip', 'clear', '清除'])
+// Reuse the same nickname constraint onboarding applies to user_name.
+// Keep this regex in sync with onboarding.ts::NICKNAME_RE.
+const NAME_VALID_RE = /^[一-鿿_a-zA-Z0-9 \-]+$/
+const NAME_MAX_LEN = 24
+
 export function makeAdminCommands(deps: AdminCommandsDeps): AdminCommands {
   return {
     async handle(msg) {
       const text = msg.text.trim()
-      const isCmd = text === '/health' || HEALTH_AI_RE.test(text) || RESET_RE.test(text) || CLEANUP_RE.test(text) || HEARTH_INGEST_RE.test(text) || HEARTH_LIST_RE.test(text) || HEARTH_SHOW_RE.test(text) || HEARTH_APPLY_RE.test(text) || HEARTH_HELP_RE.test(text)
+      const isCmd = text === '/health' || HEALTH_AI_RE.test(text) || RESET_RE.test(text) || CLEANUP_RE.test(text) || HEARTH_INGEST_RE.test(text) || HEARTH_LIST_RE.test(text) || HEARTH_SHOW_RE.test(text) || HEARTH_APPLY_RE.test(text) || HEARTH_HELP_RE.test(text) || NAME_RE.test(text)
       if (!isCmd) return false
 
       if (!deps.isAdmin(msg.chatId)) {
@@ -122,6 +135,47 @@ export function makeAdminCommands(deps: AdminCommandsDeps): AdminCommands {
 
       if (HEARTH_HELP_RE.test(text)) {
         await sendHearthHelp(deps, msg.chatId)
+        return true
+      }
+
+      const nameMatch = text.match(NAME_RE)
+      if (nameMatch) {
+        const arg = nameMatch[1]?.trim()
+        // /name (no arg) — show current
+        if (!arg) {
+          const current = deps.getBotName()
+          const display = current && current.trim() ? current.trim() : deps.botNameFallback(msg.chatId)
+          await deps.sendMessage(msg.chatId, `我现在叫 ${display}`)
+          return true
+        }
+        // /name 跳过 — explicit clear
+        if (NAME_SKIP_WORDS.has(arg.toLowerCase())) {
+          try {
+            await deps.setBotName(null)
+            const fallback = deps.botNameFallback(msg.chatId)
+            await deps.sendMessage(msg.chatId, `好的，回到默认「${fallback}」`)
+          } catch (err) {
+            deps.log('ADMIN_CMD', `/name clear failed: ${err}`)
+            await deps.sendMessage(msg.chatId, '我没记住，稍后再试 /name')
+          }
+          return true
+        }
+        // /name <new-name> — validate + set
+        if (arg.length > NAME_MAX_LEN) {
+          await deps.sendMessage(msg.chatId, `「${arg}」太长（最多 ${NAME_MAX_LEN} 字符）。再试一次?`)
+          return true
+        }
+        if (!NAME_VALID_RE.test(arg)) {
+          await deps.sendMessage(msg.chatId, `「${arg}」不行：只支持中文/字母/数字/空格/_/- (1-24 字)`)
+          return true
+        }
+        try {
+          await deps.setBotName(arg)
+          await deps.sendMessage(msg.chatId, `好的，从现在开始我叫 ${arg}`)
+        } catch (err) {
+          deps.log('ADMIN_CMD', `/name set failed: ${err}`)
+          await deps.sendMessage(msg.chatId, '我没记住，稍后再试 /name')
+        }
         return true
       }
 
