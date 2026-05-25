@@ -14,28 +14,40 @@ const STEP_ORDER = ["doctor", "provider", "wechat", "service"]
 
 export function renderDoctorWizard(report) {
   const list = document.getElementById("checks")
-  if (!list) return
-  const rowsHtml = doctorRows(report).map(([name, check]) => {
-    const ic = check.ok
-      ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-7"/></svg>'
-      : '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l8 8M12 4l-8 8"/></svg>'
-    const cls = check.ok ? "" : (check.severity === "hard" ? " bad bad-hard" : " bad")
-    return `
-      <div class="env-row${cls}">
-        <span class="ic">${ic}</span>
-        <span class="nm">${escapeHtml(name)}</span>
-        <span class="val">${escapeHtml(check.path || "missing")}</span>
-        ${!check.ok && check.fix ? renderFixHint(check.fix) : ""}
-      </div>
-    `
-  }).join("")
-  // WSL hint preempts the inevitable "I have Claude in WSL, why doesn't
-  // wechat-cc see it?" question. Honest about the v 当前 limitation; a
-  // proper Windows-GUI ↔ WSL-daemon integration is on the roadmap.
-  list.innerHTML = renderWslNotice(report) + rowsHtml
-  document.getElementById("claude-meta").textContent = report.checks.claude.ok ? report.checks.claude.path : "未检测到"
-  document.getElementById("codex-meta").textContent = report.checks.codex.ok ? report.checks.codex.path : "未检测到"
+  if (list) {
+    const rowsHtml = doctorRows(report).map(([name, check]) => {
+      const ic = check.ok
+        ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-7"/></svg>'
+        : '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l8 8M12 4l-8 8"/></svg>'
+      const cls = check.ok ? "" : (check.severity === "hard" ? " bad bad-hard" : " bad")
+      return `
+        <div class="env-row${cls}">
+          <span class="ic">${ic}</span>
+          <span class="nm">${escapeHtml(name)}</span>
+          <span class="val">${escapeHtml(check.path || "missing")}</span>
+          ${!check.ok && check.fix ? renderFixHint(check.fix) : ""}
+        </div>
+      `
+    }).join("")
+    // WSL hint preempts the inevitable "I have Claude in WSL, why doesn't
+    // wechat-cc see it?" question. Honest about the v 当前 limitation; a
+    // proper Windows-GUI ↔ WSL-daemon integration is on the roadmap.
+    list.innerHTML = renderWslNotice(report) + rowsHtml
+  }
+  const claudeMeta = document.getElementById("claude-meta")
+  const codexMeta = document.getElementById("codex-meta")
+  if (claudeMeta) claudeMeta.textContent = report.checks.claude.ok ? report.checks.claude.path : "未检测到"
+  if (codexMeta) codexMeta.textContent = report.checks.codex.ok ? report.checks.codex.path : "未检测到"
+  renderProviderStatus("claude", report.checks.claude)
+  renderProviderStatus("codex", report.checks.codex)
   updateFooterStatus(report.checks.daemon)
+}
+
+function renderProviderStatus(provider, check) {
+  const card = document.getElementById(`${provider}-status-card`)
+  const label = document.getElementById(`${provider}-status-label`)
+  if (card) card.classList.toggle("is-ok", !!check.ok)
+  if (label) label.textContent = check.ok ? "已链接" : "未链接"
 }
 
 function renderWslNotice(report) {
@@ -83,7 +95,7 @@ export function refreshEnterDashboardButton(report) {
 export function showStep(stepState, name) {
   stepState.currentStep = name
   document.querySelectorAll(".wizard .screen").forEach(el => el.classList.remove("active"))
-  document.querySelector(`#screen-${name}`).classList.add("active")
+  document.querySelector(`#screen-${name}`)?.classList.add("active")
   const idx = STEP_ORDER.indexOf(name)
   document.querySelectorAll(".steps .step").forEach((el) => {
     const stepIdx = STEP_ORDER.indexOf(el.dataset.step)
@@ -93,7 +105,8 @@ export function showStep(stepState, name) {
     const num = el.querySelector(".num")
     if (num) num.textContent = stepIdx < idx ? "✓" : String(stepIdx + 1)
   })
-  document.getElementById("wizard-step-of").textContent = `step ${idx + 1} of ${STEP_ORDER.length}`
+  const stepOf = document.getElementById("wizard-step-of")
+  if (stepOf) stepOf.textContent = `step ${idx + 1} of ${STEP_ORDER.length}`
   return name
 }
 

@@ -7,12 +7,12 @@
 //         <button data-pane="overview">  — default active pane
 //         <button data-pane="sessions">
 //         <button data-pane="memory">
-//         <button data-pane="logs">
+//       <button data-action="open-wizard">
 //     <section class="dash-main">
 //       <article class="dash-pane" data-pane="overview">
-//         <div class="card">
-//           <tbody id="accounts-body">  — bound accounts table
-//           <tbody id="conversations-body">  — conversations table
+//         <div class="moment-body">
+//           <div id="accounts-body">  — sub-user cards
+//           <tbody id="conversations-body">  — hidden conversations support table
 //
 // NOTE: In DRY_RUN the doctor --json always returns accounts.count=0 so the
 // page boots into wizard mode, NOT dashboard mode. The dashboard <main> is
@@ -51,6 +51,7 @@ test('dashboard panel is in DOM and becomes visible when mode is set', async ({ 
   await expect(page.locator('button[data-pane="overview"]')).toBeAttached()
   await expect(page.locator('button[data-pane="sessions"]')).toBeAttached()
   await expect(page.locator('button[data-pane="memory"]')).toBeAttached()
+  await expect(page.locator('.rail-gear[data-action="open-wizard"]')).toBeAttached()
 
   // Accounts table body must be in DOM (even if empty in DRY_RUN boot)
   await expect(page.locator('#accounts-body')).toBeAttached()

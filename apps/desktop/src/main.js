@@ -172,6 +172,15 @@ function showStep(name) {
   // Service step has the guard toggle — refresh status when entering so
   // the line shows current IP + reachability without waiting for a click.
   if (name === "service") refreshGuardStatus()
+  if (name === "wechat" && !state.setup && !state.qrTimer) {
+    refreshQr({ invoke, mock }, state).catch(err => {
+      console.error("qr refresh failed", err)
+      const titleEl = document.getElementById("qr-title")
+      const box = document.getElementById("qr-box")
+      if (titleEl) titleEl.textContent = "二维码生成失败，请刷新重试。"
+      if (box) box.textContent = formatInvokeError(err)
+    })
+  }
 }
 
 // ─── doctor subscribers ──────────────────────────────────────────────
@@ -239,6 +248,20 @@ async function commitProvider(provider) {
   const args = ["provider", "set", provider, "--unattended", state.unattended ? "true" : "false"]
   await invoke("wechat_cli_text", { args })
   if (state.mode === "dashboard") doctorPoller.refresh()
+}
+
+/** @param {any} report */
+function hasAnyProvider(report) {
+  return !!(report?.checks?.claude?.ok || report?.checks?.codex?.ok)
+}
+
+/** @param {any} report */
+async function ensureUsableProviderSelected(report) {
+  if (report?.checks?.provider?.ok) return false
+  const fallback = report?.checks?.claude?.ok ? "claude" : (report?.checks?.codex?.ok ? "codex" : null)
+  if (!fallback) return false
+  await commitProvider(fallback)
+  return true
 }
 
 async function loadAgentConfig() {
@@ -323,6 +346,13 @@ function wireEvents() {
   document.getElementById("continue-provider")?.addEventListener("click", () => showStep("provider"))
   document.getElementById("continue-wechat")?.addEventListener("click", () => showStep("wechat"))
   document.getElementById("continue-service")?.addEventListener("click", () => showStep("service"))
+  document.getElementById("recheck-env")?.addEventListener("click", async () => {
+    const report = await doctorPoller.refresh()
+    if (!report) return
+    await ensureUsableProviderSelected(report)
+    const latest = doctorPoller.current ?? report
+    if (hasAnyProvider(latest)) showStep("wechat")
+  })
   document.getElementById("qr-refresh")?.addEventListener("click", () => refreshQr({ invoke, mock }, state))
   document.getElementById("service-install")?.addEventListener("click", () => serviceAction(deps, state, "install"))
   document.getElementById("post-stop-kill")?.addEventListener("click", () => forceKillDaemon(deps))
@@ -733,11 +763,13 @@ async function boot() {
   wireDoctorSubscribers()
   wireEvents()
   await loadAgentConfig().catch(err => console.error("agent config load failed", err))
-  const report = await doctorPoller.refresh()
+  let report = await doctorPoller.refresh()
   if (!report) {
     setMode("wizard")
     return
   }
+  const switchedProvider = await ensureUsableProviderSelected(report)
+  if (switchedProvider) report = await doctorPoller.refresh() ?? report
   const decision = initialMode(report)
   if (decision.mode === "wizard" && decision.step) showStep(decision.step)
   setMode(decision.mode)

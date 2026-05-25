@@ -2,11 +2,9 @@
 //
 // Wizard DOM structure (from index.html audit):
 //   <main class="wizard"> — wrapper for wizard mode; shown when [data-mode="wizard"]
-//     <div class="steps">
-//       <button data-step="doctor">  — step 1: env check
-//       <button data-step="provider"> — step 2: agent
-//       <button data-step="wechat">  — step 3: bind WeChat / QR  ← default on this machine
-//       <button data-step="service"> — step 4: background service
+//     <div class="wz-top">
+//       <div class="wz-brand"> — logo / app name
+//       <button class="wz-back" data-action="open-dashboard"> — close wizard
 //     <section id="screen-doctor" class="screen [active]">
 //       <div id="checks" class="env-list"> — doctor/env-check list renders here
 //     <section id="screen-wechat" class="screen [active]">
@@ -26,9 +24,11 @@ test('wizard renders without crashing', async ({ page, shimUrl }) => {
   await expect(page).toHaveTitle(/wechat-cc/i)
   // The wizard main element must be in the DOM
   await expect(page.locator('main.wizard')).toBeAttached()
-  // Step navigation buttons must exist
-  await expect(page.locator('button[data-step="doctor"]')).toBeAttached()
-  await expect(page.locator('button[data-step="wechat"]')).toBeAttached()
+  // Current wizard shell and screen sections must exist
+  await expect(page.locator('.wz-brand')).toBeAttached()
+  await expect(page.locator('.wz-back[data-action="open-dashboard"]')).toBeAttached()
+  await expect(page.locator('#screen-doctor')).toBeAttached()
+  await expect(page.locator('#screen-wechat')).toBeAttached()
 })
 
 test('wizard shows an active screen after boot', async ({ page, shimUrl }) => {
@@ -54,6 +54,18 @@ test('wizard shows an active screen after boot', async ({ page, shimUrl }) => {
     // The QR refresh button must be present (wizard includes it in HTML even if step hidden)
     await expect(page.locator('#qr-refresh')).toBeAttached()
   }
+})
+
+test('wizard close button returns to dashboard', async ({ page, shimUrl }) => {
+  await page.goto(shimUrl)
+  await page.waitForFunction(
+    () => document.documentElement.dataset.mode === 'wizard' || document.documentElement.dataset.mode === 'dashboard',
+    { timeout: 15_000 }
+  )
+  await page.evaluate(() => { document.documentElement.dataset.mode = 'wizard' })
+  await expect(page.locator('.wz-back[data-action="open-dashboard"]')).toBeVisible()
+  await page.locator('.wz-back[data-action="open-dashboard"]').click()
+  await expect(page.locator('main.dashboard')).toBeVisible()
 })
 
 test('wizard QR step: setup-poll returns confirmed after auto-complete', async ({ shim }) => {

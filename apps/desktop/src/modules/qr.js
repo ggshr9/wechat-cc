@@ -41,8 +41,8 @@ export async function refreshQr(deps, state) {
   const ttlEl = document.getElementById("qr-ttl")
   const rawEl = document.getElementById("qr-raw")
   const continueBtn = /** @type {HTMLButtonElement | null} */ (document.getElementById("continue-service"))
-  if (titleEl) titleEl.textContent = "等待扫码"
-  if (messageEl) messageEl.textContent = "用微信扫描二维码。"
+  if (titleEl) titleEl.textContent = "使用微信扫描二维码，激活应用"
+  if (messageEl) messageEl.textContent = "等待扫码"
   if (pollEl) pollEl.hidden = false
   if (ttlEl) ttlEl.textContent = qr.expires_in_ms
     ? `${Math.floor(qr.expires_in_ms / 1000)}s ttl`
@@ -58,7 +58,10 @@ export async function refreshQr(deps, state) {
  * @param {string} text
  */
 async function renderQrInto(deps, box, text) {
-  if (deps.mock) { box.textContent = text; return }
+  if (deps.mock) {
+    box.innerHTML = `<div class="mock-qr" aria-label="${escapeHtml(text)}"><span></span></div>`
+    return
+  }
   try {
     const svg = /** @type {string} */ (await deps.invoke("render_qr_svg", { text }))
     box.innerHTML = svg
