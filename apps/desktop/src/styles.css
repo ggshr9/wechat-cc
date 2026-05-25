@@ -114,6 +114,14 @@ input { font: inherit; color: inherit; }
   position: sticky;
   top: 0;
   z-index: 100;
+  /* Banner is informational only — it must NOT intercept pointer events
+   * targeting elements at the top of the page (drawer close ×, modal
+   * close ×, wizard × close, etc.). The high z-index is for visual
+   * stacking (so it appears above normal content) but the
+   * pointer-events:none disowns the click hit-testing. Without this,
+   * playwright sees "<div id=dev-banner> intercepts pointer events"
+   * and any user trying to close a drawer in dev mode is stuck. */
+  pointer-events: none;
 }
 .dev-banner[hidden] { display: none !important; }
 .dev-banner b { color: #ffe3b8; font-weight: 500; }
