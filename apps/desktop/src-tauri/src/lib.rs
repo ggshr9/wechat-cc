@@ -89,7 +89,21 @@ fn render_qr_svg(text: String) -> Result<String, String> {
 // part of the error payload so callers (the wizard / dashboard) can render a
 // useful message when something goes wrong. Termination with a non-zero exit
 // code is treated as failure regardless of stdout content.
+//
+// Dev hot-reload (debug builds only): if a repo root is resolved — either
+// from $WECHAT_CC_DEV_ROOT or by walking up from CARGO_MANIFEST_DIR and
+// finding a cli.ts — bypass the bundled (and almost certainly stale)
+// sidecar binary and shell out to `bun <root>/cli.ts <args>`. This way
+// edits to cli.ts / src/**/*.ts take effect on the *next* invoke without
+// re-running `bun build --compile`. Release builds (cfg(not(debug_assertions)))
+// always use the sidecar so production has no path that depends on bun
+// being on PATH or on a writable repo checkout.
 async fn run_sidecar(app: &AppHandle, args: Vec<String>) -> Result<String, String> {
+    #[cfg(debug_assertions)]
+    if let Some(root) = resolve_dev_repo_root() {
+        return run_dev_bun(&root, args).await;
+    }
+
     let sidecar = app
         .shell()
         .sidecar("wechat-cc-cli")
@@ -137,6 +151,60 @@ async fn run_sidecar(app: &AppHandle, args: Vec<String>) -> Result<String, Strin
 #[allow(dead_code)]
 fn emit_log(app: &AppHandle, line: &str) {
     let _ = app.emit("wechat-cc:log", line);
+}
+
+// ─── Dev hot-reload helpers (debug builds only) ──────────────────────────────
+// In release builds these vanish entirely (cfg-gated) — production never
+// touches `bun` on PATH and never reads the repo checkout.
+
+#[cfg(debug_assertions)]
+fn resolve_dev_repo_root() -> Option<std::path::PathBuf> {
+    // Priority 1: explicit env var. Lets the user point at a different
+    // checkout (e.g. a feature branch) without recompiling the Rust shim.
+    if let Ok(env_root) = std::env::var("WECHAT_CC_DEV_ROOT") {
+        let p = std::path::PathBuf::from(env_root);
+        if p.join("cli.ts").exists() {
+            return Some(p);
+        }
+    }
+    // Priority 2: walk up from CARGO_MANIFEST_DIR (baked in at compile
+    // time = .../apps/desktop/src-tauri). Three levels up is the repo
+    // root. Verify cli.ts is there before trusting it.
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let guess = manifest.parent()?.parent()?.parent()?.to_path_buf();
+    if guess.join("cli.ts").exists() {
+        return Some(guess);
+    }
+    None
+}
+
+#[cfg(debug_assertions)]
+async fn run_dev_bun(root: &std::path::Path, args: Vec<String>) -> Result<String, String> {
+    use tokio::process::Command;
+    let cli = root.join("cli.ts");
+    // wait_with_output drains stdout+stderr concurrently and waits — no
+    // risk of pipe-buffer deadlock on chatty subcommands.
+    let output = Command::new("bun")
+        .arg(cli)
+        .args(&args)
+        .current_dir(root)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|err| format!("failed to spawn `bun cli.ts` (dev mode): {err}"))?
+        .wait_with_output()
+        .await
+        .map_err(|err| format!("wait: {err}"))?;
+
+    let stdout_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr_str = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !output.status.success() {
+        if stderr_str.is_empty() {
+            return Err(format!("`bun cli.ts` exited with {:?}\n{stdout_str}", output.status.code()));
+        }
+        return Err(stderr_str);
+    }
+    Ok(stdout_str)
 }
 
 // Returns the daemon's pid by matching command-line on bun.exe / node.exe.

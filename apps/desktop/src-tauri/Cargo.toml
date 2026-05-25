@@ -19,3 +19,8 @@ tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-shell = "2"
 tauri-plugin-notification = "2"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+# tokio (process feature) is only used by the debug-only dev-hot-reload
+# branch in run_sidecar; release builds drop those code paths entirely.
+# Listed as a normal dep because Cargo's [target.<cfg>.dependencies] does
+# not accept `cfg(debug_assertions)` as a target predicate.
+tokio = { version = "1", features = ["process", "io-util"] }
