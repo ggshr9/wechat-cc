@@ -192,4 +192,82 @@ describe('findCodexBinary', () => {
     })
     expect(result).toBeNull()
   })
+
+  // ── moduleUrl probe (daemon-repo node_modules) ────────────────────────────
+  // Covers the common dev / source-mode case (`bun src/daemon/main.ts` from
+  // an arbitrary repo clone) AND `npm i -g wechat-cc` → `wechat-cc run`,
+  // where the wizards-recommended probe roots don't match.
+
+  it('prefers daemon-repo node_modules (derived from moduleUrl) over PATH', () => {
+    const fs = new Set([
+      '/Users/dev/wechat-cc/node_modules/@openai/codex/bin/codex.js',
+      '/usr/local/bin/codex',
+    ])
+    const result = findCodexBinary({
+      exists: (p) => fs.has(p),
+      readdir: () => [],
+      pathEnv: '/usr/local/bin',
+      homeDir: HOME,
+      platform: 'darwin',
+      execPath: '/opt/homebrew/bin/bun',
+      moduleUrl: 'file:///Users/dev/wechat-cc/src/lib/find-codex-binary.ts',
+      wechatCcRoot: undefined,
+    })
+    expect(result).toBe('/Users/dev/wechat-cc/node_modules/@openai/codex/bin/codex.js')
+  })
+
+  it('moduleUrl probe loses to explicit WECHAT_CC_ROOT (the env var is operator intent)', () => {
+    const fs = new Set([
+      '/Users/dev/wechat-cc/node_modules/@openai/codex/bin/codex.js',
+      '/opt/override/wechat-cc/node_modules/@openai/codex/bin/codex.js',
+    ])
+    const result = findCodexBinary({
+      exists: (p) => fs.has(p),
+      readdir: () => [],
+      pathEnv: '/usr/local/bin',
+      homeDir: HOME,
+      platform: 'darwin',
+      execPath: '/opt/homebrew/bin/bun',
+      moduleUrl: 'file:///Users/dev/wechat-cc/src/lib/find-codex-binary.ts',
+      wechatCcRoot: '/opt/override/wechat-cc',
+    })
+    expect(result).toBe('/opt/override/wechat-cc/node_modules/@openai/codex/bin/codex.js')
+  })
+
+  it('moduleUrl probe is a no-op when the URL is a Bun virtual-fs path (compiled-binary mode)', () => {
+    // bun build --compile packs files into /$bunfs/... — fileURLToPath
+    // returns a real-looking string but the on-disk node_modules check
+    // must fail. Verify by giving a fake fs that contains a tempting
+    // /$bunfs/.../node_modules entry — it must NOT be picked.
+    const fs = new Set([
+      '/$bunfs/root/wechat-cc/node_modules/@openai/codex/bin/codex.js',
+      '/usr/local/bin/codex',
+    ])
+    const result = findCodexBinary({
+      exists: (p) => fs.has(p),
+      readdir: () => [],
+      pathEnv: '/usr/local/bin',
+      homeDir: HOME,
+      platform: 'linux',
+      execPath: '/$bunfs/root/wechat-cc-cli',
+      moduleUrl: 'file:///$bunfs/root/wechat-cc/src/lib/find-codex-binary.ts',
+      wechatCcRoot: undefined,
+    })
+    expect(result).toBe('/usr/local/bin/codex')
+  })
+
+  it('moduleUrl probe is skipped when no daemon-repo node_modules exists (falls through to PATH)', () => {
+    const fs = new Set(['/usr/local/bin/codex'])
+    const result = findCodexBinary({
+      exists: (p) => fs.has(p),
+      readdir: () => [],
+      pathEnv: '/usr/local/bin',
+      homeDir: HOME,
+      platform: 'darwin',
+      execPath: '/opt/homebrew/bin/bun',
+      moduleUrl: 'file:///Users/dev/wechat-cc/src/lib/find-codex-binary.ts',
+      wechatCcRoot: undefined,
+    })
+    expect(result).toBe('/usr/local/bin/codex')
+  })
 })

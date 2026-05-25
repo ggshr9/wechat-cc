@@ -32,6 +32,7 @@ import { existsSync, readdirSync } from 'node:fs'
 // `/` for `\` even when the test explicitly passes platform: 'linux'.
 import { posix as posixPath, win32 as winPath } from 'node:path'
 import { homedir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 
 export interface FindCodexBinaryDeps {
   /** Defaults to `existsSync`. */
@@ -50,6 +51,14 @@ export interface FindCodexBinaryDeps {
    *  .app bundle Resources path so a version-matched codex shipped inside
    *  the bundle wins over a stale global codex on PATH. */
   execPath?: string
+  /** Defaults to `import.meta.url` of the calling site (this module).
+   *  Used to derive the running daemon's own `node_modules/@openai/codex`
+   *  in source mode (`bun src/daemon/main.ts`) so the bundled codex pinned
+   *  to our SDK version wins over a mismatched global on PATH. Returns
+   *  a virtual `/$bunfs/...` path in `bun build --compile`d mode, which
+   *  is filtered out by `existsSync` so the probe is automatically a
+   *  no-op in compiled-binary launches. */
+  moduleUrl?: string
 }
 
 /** Derive `<bundle>.app/Contents/Resources/` from `execPath` when the
@@ -89,6 +98,28 @@ function wechatCcSourceProbeRoots(
   return roots
 }
 
+// Resolve the daemon-repo root from the calling module's URL. In source
+// mode this file lives at `<repo>/src/lib/find-codex-binary.ts`, so the
+// repo root is two directories up. In `bun build --compile`d mode the URL
+// is `/$bunfs/...` and `fileURLToPath` returns a virtual path that
+// `existsSync` will reject — the probe is then a no-op.
+function daemonRepoRootFromModuleUrl(
+  moduleUrl: string | undefined,
+  p: typeof posixPath,
+): string | null {
+  if (!moduleUrl) return null
+  try {
+    const filePath = fileURLToPath(moduleUrl)        // .../src/lib/find-codex-binary.ts
+    const libDir = p.dirname(filePath)               // .../src/lib
+    const srcDir = p.dirname(libDir)                 // .../src
+    const repoRoot = p.dirname(srcDir)               // .../<repo>
+    if (!repoRoot || repoRoot === '/' || repoRoot.startsWith('/$bunfs/')) return null
+    return repoRoot
+  } catch {
+    return null
+  }
+}
+
 export function findCodexBinary(deps: FindCodexBinaryDeps = {}): string | null {
   const exists = deps.exists ?? existsSync
   const readdir = deps.readdir ?? readdirSync
@@ -97,6 +128,7 @@ export function findCodexBinary(deps: FindCodexBinaryDeps = {}): string | null {
   const platform = deps.platform ?? process.platform
   const wechatCcRoot = 'wechatCcRoot' in deps ? deps.wechatCcRoot : process.env.WECHAT_CC_ROOT
   const execPath = deps.execPath ?? process.execPath
+  const moduleUrl = 'moduleUrl' in deps ? deps.moduleUrl : import.meta.url
   const exe = platform === 'win32' ? 'codex.exe' : 'codex'
   const sep = platform === 'win32' ? ';' : ':'
   // Drive `join` off the `platform` dep, not the host. Otherwise tests
@@ -126,6 +158,18 @@ export function findCodexBinary(deps: FindCodexBinaryDeps = {}): string | null {
   // pins the codex CLI version to the SDK we ship with.
   for (const root of wechatCcSourceProbeRoots(homeDir, wechatCcRoot, platformPath)) {
     const shim = platformPath.join(root, 'node_modules', '@openai', 'codex', 'bin', 'codex.js')
+    if (exists(shim)) return shim
+  }
+
+  // 1b. The daemon's OWN repo, resolved from this module's URL. Covers
+  // the source-mode case `bun src/daemon/main.ts` from an arbitrary clone
+  // location (devs, contributors, `npm i -g wechat-cc` users — all hit
+  // here before the wizards-recommended probe roots above were ever set
+  // up). Same version-lock rationale as step 1; this just extends the
+  // search to "wherever the daemon is actually running from".
+  const daemonRepoRoot = daemonRepoRootFromModuleUrl(moduleUrl, platformPath)
+  if (daemonRepoRoot) {
+    const shim = platformPath.join(daemonRepoRoot, 'node_modules', '@openai', 'codex', 'bin', 'codex.js')
     if (exists(shim)) return shim
   }
 
