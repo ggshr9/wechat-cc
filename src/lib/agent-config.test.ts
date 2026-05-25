@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { loadAgentConfig, saveAgentConfig, parseAgentConfig } from './agent-config'
@@ -128,6 +128,58 @@ describe('agent-config', () => {
       const loaded = loadAgentConfig(dir)
       expect(loaded).toEqual({ provider: 'claude', dangerouslySkipPermissions: true, autoStart: true, closeStopsDaemon: false })
       expect((loaded as { keepAlive?: boolean }).keepAlive).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('round-trips bot_name string through save → load', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agent-cfg-botname-'))
+    try {
+      const cfg = {
+        provider: 'claude' as const,
+        dangerouslySkipPermissions: true,
+        autoStart: true,
+        closeStopsDaemon: false,
+        bot_name: '小希',
+      }
+      saveAgentConfig(dir, cfg)
+      const loaded = loadAgentConfig(dir)
+      expect(loaded.bot_name).toBe('小希')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('round-trips bot_name=null through save → load', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agent-cfg-botname-null-'))
+    try {
+      const cfg = {
+        provider: 'claude' as const,
+        dangerouslySkipPermissions: true,
+        autoStart: true,
+        closeStopsDaemon: false,
+        bot_name: null,
+      }
+      saveAgentConfig(dir, cfg)
+      const loaded = loadAgentConfig(dir)
+      expect(loaded.bot_name).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('absent bot_name field loads as undefined (back-compat)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agent-cfg-botname-abs-'))
+    try {
+      writeFileSync(join(dir, 'agent-config.json'), JSON.stringify({
+        provider: 'claude',
+        dangerouslySkipPermissions: true,
+        autoStart: true,
+        closeStopsDaemon: false,
+      }))
+      const loaded = loadAgentConfig(dir)
+      expect(loaded.bot_name).toBeUndefined()
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

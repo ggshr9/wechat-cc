@@ -28,6 +28,10 @@ export interface AgentConfig {
   // false (advanced setting): the GUI is the daemon's launcher, not its
   // host — closing the window should not stop inbound message handling.
   closeStopsDaemon: boolean
+  // Admin-chosen self-name. Null/undefined → fall back to botNameForMode(mode).
+  // Constrained to NICKNAME_RE (1-24 chars, CJK/Latin/digits/space/_/-).
+  // Set via the daemon's onboarding flow (first admin scan) or `/name` command.
+  bot_name?: string | null
   // A2A: optional listener and registered peer agent records.
   a2a_listen?: A2AListen
   a2a_agents?: A2AAgentRecord[]
@@ -69,6 +73,7 @@ const AgentConfigSchema = z.object({
         ids.add(a.id)
       }
     }),
+  bot_name: z.string().nullable().optional(),
 })
 
 /**
@@ -123,6 +128,8 @@ export function loadAgentConfig(stateDir: string): AgentConfig {
       closeStopsDaemon,
       ...(a2aListen ? { a2a_listen: a2aListen } : {}),
       ...(a2aAgents && a2aAgents.length > 0 ? { a2a_agents: a2aAgents } : {}),
+      ...(parsed.bot_name === null ? { bot_name: null } : {}),
+      ...(typeof parsed.bot_name === 'string' ? { bot_name: parsed.bot_name } : {}),
     }
   } catch {
     return { provider: 'claude', dangerouslySkipPermissions: true, autoStart: true, closeStopsDaemon: false }
