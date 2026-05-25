@@ -275,9 +275,18 @@ describe('initialMode', () => {
     expect(initialMode(fakeReport({ checks: { bun: { ok: false, path: null } } })))
       .toEqual({ mode: 'wizard', step: 'doctor' })
   })
-  it('parks at provider step if provider binary missing', () => {
+  it('continues to WeChat if selected provider is missing but another provider is available', () => {
     expect(initialMode(fakeReport({ checks: { provider: { ok: false, provider: 'claude', binaryPath: null } } })))
-      .toEqual({ mode: 'wizard', step: 'provider' })
+      .toEqual({ mode: 'wizard', step: 'wechat' })
+  })
+  it('parks at doctor step if no agent provider is installed', () => {
+    expect(initialMode(fakeReport({
+      checks: {
+        claude: { ok: false, path: null },
+        codex: { ok: false, path: null },
+        provider: { ok: false, provider: 'claude', binaryPath: null },
+      },
+    }))).toEqual({ mode: 'wizard', step: 'doctor' })
   })
   it('parks at wechat step if no accounts yet', () => {
     expect(initialMode(fakeReport()))

@@ -119,6 +119,7 @@ export function escapeHtml(value) {
 export function initialMode(report) {
   const hasAccount = report.checks.accounts.count > 0
   const serviceInstalled = !!report.checks.service?.installed
+  const hasAnyProvider = !!(report.checks.claude?.ok || report.checks.codex?.ok)
   if (hasAccount && report.checks.provider.ok && serviceInstalled) return { mode: "dashboard" }
   // bun/git only block routing in source mode; in compiled-bundle the
   // sidecar is self-contained, so a user without system bun on their
@@ -128,8 +129,9 @@ export function initialMode(report) {
   if (report.runtime !== "compiled-bundle" && (!report.checks.bun.ok || !report.checks.git.ok)) {
     return { mode: "wizard", step: "doctor" }
   }
-  if (!report.checks.provider.ok) return { mode: "wizard", step: "provider" }
+  if (!hasAnyProvider) return { mode: "wizard", step: "doctor" }
   if (!hasAccount) return { mode: "wizard", step: "wechat" }
+  if (!report.checks.provider.ok) return { mode: "wizard", step: "doctor" }
   return { mode: "wizard", step: "service" }
 }
 
@@ -436,4 +438,3 @@ export function updateApplyLine(result) {
   }
   return frameApply(result.reason, result.message, result.details)
 }
-
