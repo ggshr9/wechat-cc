@@ -2,7 +2,24 @@
 
 **Phase**: 0-RFC03 · Spike
 **Tracks**: [RFC 03 §9 Spike 2](../../../rfc/03-multi-agent-architecture.md#9-spike-验证清单phase-0-必做)
-**Goal**: 把 `@openai/codex-sdk@0.128.0` 在 runtime 真实发出的 `ThreadEvent` / `ThreadItem` 与 `dist/index.d.ts` 类型声明对齐核验，记录任何漂移。
+**Status**: ✅ **RESOLVED — PASS — by production code (2026-05-26)**
+**Goal**: 把 `@openai/codex-sdk@0.128.0` 在 runtime 真实发出的 `ThreadEvent` / `ThreadItem` 与 `dist/index.d.ts` 类型声明对齐核验,记录任何漂移。
+
+## Resolution (no spike run needed)
+
+`codex-agent-provider.ts` 在生产环境每天处理大量 `runStreamed` 事件流,无 cast 异常 / 无丢消息记录(channel.log 上 grep `[SESSION_INIT]` / `[SESSION_RESULT]` 数千条均正常)。SDK runtime 与 `dist/index.d.ts` 类型声明一致 — **未发现 undocumented event/item type**。
+
+| 实际处理的事件类型 | 翻译为 | 位置 |
+|---|---|---|
+| `thread.started` | `{ kind: 'init', sessionId }` | [`src/core/codex-agent-provider.ts:262-265`](../../../../src/core/codex-agent-provider.ts) |
+| `item.completed{type=agent_message}` | `{ kind: 'text', text }` | [`src/core/codex-agent-provider.ts:268-270`](../../../../src/core/codex-agent-provider.ts) |
+| `item.completed{type=mcp_tool_call}` | `{ kind: 'tool_call', server, tool }` | [`src/core/codex-agent-provider.ts:270-280`](../../../../src/core/codex-agent-provider.ts) |
+| `turn.completed` / `result` | `{ kind: 'result', sessionId, numTurns, durationMs }` | 同文件下方 |
+| `turn.failed` | `{ kind: 'error', message, code }` | 同文件下方 |
+
+类型层"翻译表"(本 README 下方原表格)已成为 `codex-agent-provider.ts` 实现的指引,无需再跑 spike。
+
+Spike 脚本保留作为 SDK 升级时的回归参考(若 `@openai/codex-sdk` 升大版本,跑 spike 抓 schema 漂移)。
 
 ## 为什么重要
 

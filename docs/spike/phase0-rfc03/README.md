@@ -1,13 +1,14 @@
 # Phase 0 Spikes for RFC 03 (multi-agent architecture)
 
 **Tracks**: [RFC 03 §9 Spike 验证清单](../../rfc/03-multi-agent-architecture.md#9-spike-验证清单phase-0-必做)
+**Status**: ✅ **Phase 0 CLOSED — 2026-05-26** — 三个 spike 的问题全部由 P0/P1 + RFC 05 Phase 2 的生产代码回答,无需再跑 spike。
 **Goal**: 在 P0/P1 开工前把三个关于 `@openai/codex-sdk@0.128.0` 的未知项落地为可执行验证。
 
-| # | 主题 | 状态 | 关键问题 |
+| # | 主题 | 状态 | 答案 |
 |---|---|---|---|
-| [01-codex-mcp](./01-codex-mcp/) | 程序化 MCP 注入 | spike scaffold ready · runtime pending | `Codex({ config: { mcp_servers: { ... } } })` 启的 thread 能不能真的加载并调用 stdio MCP server？|
-| [02-codex-events](./02-codex-events/) | runStreamed 事件 schema | spike scaffold ready · runtime pending | Runtime 事件结构和 `dist/index.d.ts` 类型声明是否一致？有没有 undocumented event/item type？|
-| [03-codex-perms](./03-codex-perms/) | 权限粒度 | spike scaffold ready · runtime pending | 没有 per-tool callback 已确认；daemon 模式下 (sandboxMode × approvalPolicy) 的安全 default 该怎么选？|
+| [01-codex-mcp](./01-codex-mcp/) | 程序化 MCP 注入 | ✅ **PASS** (production) | `Codex({ config: { mcp_servers } })` 在 `src/core/codex-agent-provider.ts:201` 实际使用,e2e 测试覆盖。无需 Appendix B 兜底。 |
+| [02-codex-events](./02-codex-events/) | runStreamed 事件 schema | ✅ **PASS** (production) | runtime 与 `dist/index.d.ts` 一致;翻译表已落在 `codex-agent-provider.ts:258-280`。无 undocumented 类型。 |
+| [03-codex-perms](./03-codex-perms/) | 权限粒度 | ✅ **MAPPED** (RFC 05 P2) | 无 per-tool callback 已确认编码到 `CODEX_CAPABILITIES.perToolCallback: false`;tier→sandboxMode+approvalPolicy 映射在 codex-agent-provider.ts:46-58。 |
 
 ## 类型层已确认（无须运行）
 

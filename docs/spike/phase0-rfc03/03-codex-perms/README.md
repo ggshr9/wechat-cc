@@ -2,7 +2,29 @@
 
 **Phase**: 0-RFC03 · Spike
 **Tracks**: [RFC 03 §9 Spike 3](../../../rfc/03-multi-agent-architecture.md#9-spike-验证清单phase-0-必做)
-**Goal**: 实测 (sandboxMode × approvalPolicy) 矩阵的真实行为，确认 Codex 那侧没有 per-tool callback，记录 daemon 模式的安全 ship default。
+**Status**: ✅ **RESOLVED — MAPPED — by production code + RFC 05 Phase 2 (2026-05-26)**
+**Goal**: 实测 (sandboxMode × approvalPolicy) 矩阵的真实行为,确认 Codex 那侧没有 per-tool callback,记录 daemon 模式的安全 ship default。
+
+## Resolution (mapping locked, no spike run needed)
+
+权限映射已经在生产 + RFC 05 Phase 2 里固化:
+
+| Tier (`TIER_PROFILES`) | Codex `sandboxMode` | Codex `approvalPolicy` | 实施位置 |
+|---|---|---|---|
+| `admin` (or `permissionMode === 'dangerously'`) | `danger-full-access` | `never` | [`src/core/codex-agent-provider.ts:46-49`](../../../../src/core/codex-agent-provider.ts) |
+| `trusted` (relay/deny size = 0,只能 reply) | `workspace-write` | `never` | 同文件 :55-56 |
+| `guest` / 其他 (deny non-empty) | `read-only` | `untrusted` | 同文件 :58 |
+
+| 已固化的事实 | 证据 |
+|---|---|
+| Codex SDK **无** per-tool callback | [`CODEX_CAPABILITIES.perToolCallback: false`](../../../../src/core/codex-agent-provider.ts) — RFC 05 Phase 2 已编码 |
+| 三个 sandbox 级别全支持 | [`CODEX_CAPABILITIES.sandboxLevels: Set(['read-only', 'workspace-write', 'full'])`](../../../../src/core/codex-agent-provider.ts) |
+| 粗粒度 approval gating(无 user prompt 路径)的策略生效 | [`docs/releases/2026-05-26-tier-policy-change.md`](../../../releases/2026-05-26-tier-policy-change.md) — admin strict mode 现在会 prompt admin 自己 |
+| 派生公式: `approvalPolicy = !perToolCallback && has(read-only) ? trait.coarseApproval : null` | [`src/core/capability-matrix.ts:deriveCapability`](../../../../src/core/capability-matrix.ts) — RFC 05 Phase 2 |
+
+`approval_policy='on-request'` daemon 模式下的具体行为(spike 3-C) **未被生产代码触发** — 当前 mapping 只用 `never` + `untrusted` 两档,绕开了"on-request 在 daemon 子进程下怎么样"这个未知。如果将来加 trusted tier 想用 on-request 做"危险操作要 admin 远程确认",再开一个针对性 spike。
+
+Spike 脚本保留作为 SDK 行为回归参考。
 
 ## 为什么重要
 

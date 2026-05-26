@@ -2,7 +2,23 @@
 
 **Phase**: 0-RFC03 · Spike
 **Tracks**: [RFC 03 §9 Spike 1](../../../rfc/03-multi-agent-architecture.md#9-spike-验证清单phase-0-必做)
+**Status**: ✅ **RESOLVED — PASS — by production code (2026-05-26)**
 **Goal**: 验证 `Codex({ config: { mcp_servers: { ... } } })` 启动的 thread 能真的加载 + 调用一个 stdio MCP server。
+
+## Resolution (no spike run needed)
+
+P0/P1 已合入并稳定运行。`codex-agent-provider.ts` 在每个 daemon 启动时都走程序化注入路径,效果在所有 daemon e2e 测试和生产用户日志里都得到验证。
+
+| 证据 | 位置 |
+|---|---|
+| `Codex({ config: { mcp_servers } })` 实际调用点 | [`src/core/codex-agent-provider.ts:201`](../../../../src/core/codex-agent-provider.ts) — `config.mcp_servers = opts.mcpServers` |
+| `mcp_servers` 的命令行 + 参数装配 | [`src/daemon/bootstrap/index.ts`](../../../../src/daemon/bootstrap/index.ts) — `bun src/mcp-servers/wechat/main.ts` + `WECHAT_INTERNAL_API` env |
+| 端到端 stdio MCP → Codex → tool call 闭环 | [`src/mcp-servers/wechat/integration.test.ts`](../../../../src/mcp-servers/wechat/integration.test.ts) — 16 用例,含 memory_delete 软删 audit 闭环 |
+| Provider 静态能力声明 | [`src/core/codex-agent-provider.ts:15-20`](../../../../src/core/codex-agent-provider.ts) — `CODEX_CAPABILITIES`(RFC 05 Phase 2) |
+
+**不需要走 Appendix B 兜底**(`~/.codex/config.toml` 改写)。程序化注入在生产环境工作正常。
+
+Spike 脚本(spike.ts + echo-mcp-server.ts)保留作为 SDK 行为回归参考,但不再属于 "P0 开工前必跑" 清单。
 
 ## 为什么重要
 

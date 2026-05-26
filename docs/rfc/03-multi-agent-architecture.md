@@ -500,7 +500,18 @@ P0/P1 是其余全部的前置。建议合并为一个 PR（~一周）一起 rev
 
 ---
 
-## 9. Spike 验证清单（Phase 0 必做）
+## 9. Spike 验证清单（Phase 0 — CLOSED 2026-05-26）
+
+> **Phase 0 已收尾** — 三个 spike 提出的问题都已被 P0/P1 落地的生产代码回答,不再属于 "P0 开工前必跑" 项。详见 [`docs/spike/phase0-rfc03/README.md`](../spike/phase0-rfc03/README.md)。
+>
+> 简表：
+> - Spike 1 (程序化 MCP 注入) — **PASS**:`src/core/codex-agent-provider.ts:201` 实际使用,e2e 测试覆盖。
+> - Spike 2 (runStreamed events) — **PASS**:`codex-agent-provider.ts:258-280` 翻译表稳定,无 undocumented 类型。
+> - Spike 3 (perms granularity) — **MAPPED**:`CODEX_CAPABILITIES`(RFC 05 P2) 编码,tier→sandboxMode+approvalPolicy 在 `codex-agent-provider.ts:46-58`。
+>
+> Spike 脚本(`docs/spike/phase0-rfc03/0[1-3]-*/spike.ts`)保留作为 SDK 升级回归参考,不再属于本 RFC 的"待办"。
+>
+> 以下原始清单仅作为历史档案保留:
 
 P0 开工前要写小 spike 程序确认三件事：
 
@@ -690,3 +701,4 @@ Claude 那侧 `cancel()` 调 `q.interrupt()`；Codex 那侧调 `thread.cancel()`
 | 2026-05-02 | 初版 draft，待 review + spike 验证后转 Accepted |
 | 2026-05-02 | 用户反馈：抽象应对其他 agent 开放（"先解决 codex/claude，让他们无缝接入；其他自然也能"）。修订 §1.1 / §1.3 / §3.3 / §7 决策表 / §11 措辞；新增 Appendix D 接入指南雏形 |
 | 2026-05-02 | 用户反馈：Codex 有订阅 + API key 两种鉴权，wechat-cc 不该感知具体哪种。新增 C7 硬约束 + §3.6 Auth-agnostic 设计；§3.5 表格加"鉴权"行；spike 1/2/3 已修（不再 hard-fail OPENAI_API_KEY、不传 apiKey 给 SDK） |
+| 2026-05-26 | Phase 0 收尾:§9 三个 spike 的问题全部被 P0/P1 + RFC 05 Phase 2 的生产代码回答(MCP 程序化注入 PASS、runStreamed 事件 schema PASS、权限粒度 MAPPED 进 `CODEX_CAPABILITIES`)。各 spike README 标 RESOLVED 并引用生产代码位置。 |
