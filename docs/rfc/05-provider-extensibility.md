@@ -1,6 +1,6 @@
 # RFC 05 · Provider 扩展性 + Tier/Permission 解耦
 
-**Status**: Draft · 2026-05-26
+**Status**: Accepted · 2026-05-26（决议项 §7 已 close，待实施）
 **Phase**: 内部重构（无用户可见 feature 变化）
 **Triggered by**: 2026-05-25 dev-branch review 发现的 C4 / C5 / sweep#6 三个 tier-policy regressions（commit `33f9398`、`5d5233a`、`957e4b8`、`ca0efb3`）
 **Related**: [RFC 03 §3.6 / C7](./03-multi-agent-architecture.md) provider abstraction；[RFC 04 §4](./04-inbound-pipeline-and-capability-matrix.md) capability matrix
@@ -296,28 +296,45 @@ A2A inbound (`/a2a/notify`) 路由到 operator 微信的逻辑也保持独立（
 
 ## 3. 迁移路径
 
-骨骼一次性立起来代价高，肉慢慢长。分 3 个 phase，每个 phase 独立可 merge、可发布：
+§7 决议后定为 **2 个 PR**（一刀切，不走双轨过渡）：
 
-### Phase 1 — SpawnContext 双轨过渡（1 PR，~3 文件）
+### Phase 1 — SpawnContext + per-provider self-translation + C4（1 PR，~12 文件）
 
-- 引入 `SpawnContext` interface，`spawn` 接口签名扩成 `spawn(project, ctxOrOpts)`，两种调用都接受（兼容 v0.6）。
-- Daemon 端的 `sdkOptionsForProject` 暂时保留，**新增**直接构造 `SpawnContext` 的路径。
-- 测试：现有 2080 个 unit test 不变。新增 5-8 个用 `SpawnContext` 调用 spawn 的 case。
-- 这一 PR **不修 C4/C5**，纯结构，零行为变更。
+§7 决议 1 选了**一刀切**，所以原本"双轨过渡"的 Phase 1 和"删 export"的 Phase 2 合并为单个 PR：
 
-### Phase 2 — 各 provider 内部翻译 + 删除 daemon 端 import（2 PR）
+- 新增 `SpawnContext` / `ProviderRuntime` / `ProviderCapabilities` interfaces（`src/core/agent-provider.ts`）。
+- `spawn(project, ctx)` **直接换签名**——所有 caller / test 一次性改。无 ctxOrOpts 双轨。
+- 每个 provider 实现内部 `buildXxxSdkOpts(ctx)`。**删除** `tierProfileToClaudeSdkOpts` / `tierProfileToCodexSdkOpts` / `tierProfileToCursorSdkOpts` 的 export 入口。
+- Daemon 端 `sdkOptionsForProject` closure 删除（claude / delegate-claude 两处）。bootstrap 直接给 provider 传 `runtime.buildCanUseTool` 工厂。
+- **C4 同步修**：`TIER_PROFILES.admin.relay` 加 `shell_destructive` + `memory_delete`；`effectivePolicy` 增加 `tp.allow.has(kind) → 'allow'` 短路。
+- **C5 已在 commit `33f9398` 修了**——本 PR 顺手把 `resolveEffectiveTier` 的 dangerously promotion 撤掉，改由 provider 内的 `permissionMode === 'dangerously'` 短路负责。语义等价，但抽象更干净。
+- **释放 note**（§7 决议 2 = 需要）：写到 `docs/releases/2026-05-XX-v0.5.6.md`，admin section 显式说明 strict 模式下 destructive Bash / `memory_delete` 现在会 prompt admin 自己；`--dangerously` 不受影响。
 
-- **PR-2a**：每个 provider 实现内部 `buildXxxSdkOpts(ctx)`。`tierProfileToXxxSdkOpts` 改为内部使用，从 export 下沉。Daemon 端的 `sdkOptionsForProject` 改为 thin wrapper（直接调 SpawnContext）。
-- **PR-2b**：删除 `tierProfileToXxxSdkOpts` 的 export 入口；daemon 端 `sdkOptionsForProject` 删除。**这一 PR 顺带修 C4**——admin TierProfile 加 `shell_destructive` 到 relay；行为变化由 release note 显式说明。
+预期文件改动清单：
 
-### Phase 3 — ProviderCapabilities + matrix 派生（1 PR）
+```
+src/core/agent-provider.ts                       [新 types]
+src/core/user-tier.ts                            [admin.relay + 测试]
+src/core/permission-relay.ts                     [effectivePolicy 短路]
+src/core/claude-agent-provider.ts                [internalize translation, 删 export]
+src/core/codex-agent-provider.ts                 [同上 + permissionMode 入参]
+src/core/cursor-agent-provider.ts                [同上 + sandboxOptions tie-break]
+src/daemon/bootstrap/index.ts                    [sdkOptionsForProject closure 删除]
+src/daemon/bootstrap/delegate.ts                 [delegate 端走新 ctx]
+src/daemon/wiring/tick-bodies.ts                 [companion tick spawn(ctx)]
+docs/CLAUDE.md                                   [permission 表更新]
+docs/releases/2026-05-XX-v0.5.6.md               [新 release note]
++ 配套测试更新 ~5-7 个文件
+```
 
-- 每个 provider 声明 `capabilities`。
+### Phase 2 — ProviderCapabilities + matrix 派生（1 PR）
+
+- 每个 provider 声明 `capabilities`。Cursor 写 `supportsDelegation: false` 但注释明确"P2 SDK 出 sub-agent 后再开"（§7 决议 3）。
 - `capability-matrix.ts` 24 行常量 → `MODE_TRAITS` 8 行常量 + `deriveCapability`。
 - `assertMatrixComplete` 改写为校验派生函数。
-- 测试：matrix 表存在的 invariant test 改写为派生函数的 property test。
+- 测试：matrix 表存在的 invariant test 改写为派生函数的 property test，加一个"ghost gemini" provider 单测验证 `lookup('solo', 'gemini', 'strict')` 不 throw。
 
-Phase 1+2 即可解锁 C4 / C5 / sweep#6 完整修复。Phase 3 是 "extensibility" 的最后一公里——不阻塞 gemini，但能让加 gemini 时 matrix 工作量从"写 8 行"压到"声明 4 个字段"。
+Phase 1 即解锁 C4 / C5 / sweep#6 完整修复 + gemini 添加成本压缩。Phase 2 是"extensibility 的最后一公里"——让加 gemini 时 matrix 工作量从"写 8 行"压到"声明 4 个字段"。
 
 ### 不同步做的事
 
@@ -409,14 +426,14 @@ Phase 3 完成后：
 
 ---
 
-## 7. 决议（待 review）
+## 7. 决议（2026-05-26 closed）
 
-| 决议 | 选项 | 倾向 |
-|---|---|---|
-| Phase 1 PR 要不要兼容 v0.6 旧签名 | (a) 双轨 (b) 一刀切 | (a)：让 review 容易 cherry-pick，merge 风险小 |
-| Phase 2-b 的 C4 行为变化要不要 release note | (a) 需要 (b) 不需要 | (a)：admin 用户会看到 "destructive Bash 现在 prompt 自己"，需要解释 |
-| Cursor `supportsDelegation = false` 是 P1 终态还是临时 | (a) 永久 (b) 后续 P2 加 | (b)：等 cursor SDK 暴露 sub-agent 能力 |
-| A2A 的 ToolKind 是否进 ProviderCapabilities | (a) 进（"capability.canBeA2APeer"） (b) 不进 | (b)：a2a peer 是数据，capability 是 provider 自我描述 |
+| # | 决议 | 结果 | 实施位置 |
+|---|---|---|---|
+| 1 | Phase 1 PR 兼容旧签名 | **一刀切**，无双轨过渡 — `spawn(project, ctx)` 直接换签名；Phase 1 和原 Phase 2 合并 | §3 Phase 1 |
+| 2 | C4 行为变化是否写 release note | **需要** — 写到 `docs/releases/2026-05-XX-v0.5.6.md`，admin section 显式说明 strict 下会 prompt 自己 | §3 Phase 1 |
+| 3 | Cursor `supportsDelegation = false` 定位 | **后续 P2 加** — 等 Cursor SDK 暴露 sub-agent / canUseTool 等价物再 flip；注释明确"非永久" | §2.2 |
+| 4 | A2A 的 ToolKind 进不进 ProviderCapabilities | **不进** — a2a peer 是 operator-curated 数据，不是 provider 自我描述维度 | §2.5 + §5 |
 
 ---
 
