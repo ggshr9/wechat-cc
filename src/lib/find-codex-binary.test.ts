@@ -4,170 +4,33 @@ import { findCodexBinary } from './find-codex-binary'
 const HOME = '/home/u'
 
 describe('findCodexBinary', () => {
-  it('prefers the macOS .app bundle Resources shim (highest priority — version-matched + immune to global codex on PATH)', () => {
-    // Desktop installer ships @openai/codex inside the .app at
-    // Contents/Resources/codex. find-codex-binary derives that path from
-    // process.execPath when the daemon was launched as a Tauri sidecar.
-    const execPath = '/Applications/wechat-cc.app/Contents/MacOS/wechat-cc-cli'
+  // ── PATH lookup (the canonical case) ─────────────────────────────────────
+
+  it('finds codex from a PATH entry (linux)', () => {
+    const fs = new Set(['/usr/local/bin/codex'])
+    const result = findCodexBinary({
+      exists: (p) => fs.has(p),
+      readdir: () => [],
+      pathEnv: '/usr/local/bin:/usr/bin',
+      homeDir: HOME,
+      platform: 'linux',
+    })
+    expect(result).toBe('/usr/local/bin/codex')
+  })
+
+  it('returns first PATH match (left-to-right priority)', () => {
     const fs = new Set([
-      '/Applications/wechat-cc.app/Contents/Resources/codex/bin/codex.js',
-      // Even when a plugin-style install ALSO has the shim, the .app
-      // bundle wins — it's the source of truth for the installed daemon.
-      '/home/u/.claude/plugins/local/wechat/node_modules/@openai/codex/bin/codex.js',
+      '/opt/homebrew/bin/codex',
       '/usr/local/bin/codex',
     ])
     const result = findCodexBinary({
       exists: (p) => fs.has(p),
       readdir: () => [],
-      pathEnv: '/usr/local/bin',
+      pathEnv: '/opt/homebrew/bin:/usr/local/bin',
       homeDir: HOME,
       platform: 'darwin',
-      execPath,
     })
-    expect(result).toBe('/Applications/wechat-cc.app/Contents/Resources/codex/bin/codex.js')
-  })
-
-  it('skips the .app bundle probe when execPath is not a Tauri-style sidecar layout', () => {
-    // Running from source (`bun src/daemon/main.ts`) — execPath points
-    // somewhere like /opt/homebrew/bin/bun. The probe must not invent a
-    // fake Resources path off such a parent.
-    const fs = new Set(['/home/u/.claude/plugins/local/wechat/node_modules/@openai/codex/bin/codex.js'])
-    const result = findCodexBinary({
-      exists: (p) => fs.has(p),
-      readdir: () => [],
-      pathEnv: '/usr/local/bin',
-      homeDir: HOME,
-      platform: 'darwin',
-      execPath: '/opt/homebrew/bin/bun',
-    })
-    expect(result).toBe('/home/u/.claude/plugins/local/wechat/node_modules/@openai/codex/bin/codex.js')
-  })
-
-  it('prefers wechat-cc-bundled JS shim over PATH/nvm (version-matched)', () => {
-    const fs = new Set([
-      '/home/u/.claude/plugins/local/wechat/node_modules/@openai/codex/bin/codex.js',
-      '/usr/bin/codex',  // older system codex — should NOT win
-    ])
-    const result = findCodexBinary({
-      exists: (p) => fs.has(p),
-      readdir: () => [],
-      pathEnv: '/usr/bin',
-      homeDir: HOME,
-      platform: 'linux',
-    })
-    expect(result).toBe('/home/u/.claude/plugins/local/wechat/node_modules/@openai/codex/bin/codex.js')
-  })
-
-  it('honours WECHAT_CC_ROOT when set (alternative source location)', () => {
-    const fs = new Set(['/opt/wechat-cc/node_modules/@openai/codex/bin/codex.js'])
-    const result = findCodexBinary({
-      exists: (p) => fs.has(p),
-      readdir: () => [],
-      pathEnv: '/usr/bin',
-      homeDir: HOME,
-      platform: 'linux',
-      wechatCcRoot: '/opt/wechat-cc',
-    })
-    expect(result).toBe('/opt/wechat-cc/node_modules/@openai/codex/bin/codex.js')
-  })
-
-  it('falls through to PATH when wechat-cc bundled shim is missing', () => {
-    const fs = new Set(['/usr/bin/codex'])
-    const result = findCodexBinary({
-      exists: (p) => fs.has(p),
-      readdir: () => [],
-      pathEnv: '/usr/bin',
-      homeDir: HOME,
-      platform: 'linux',
-    })
-    expect(result).toBe('/usr/bin/codex')
-  })
-
-  it('returns the first PATH entry that has an executable named "codex"', () => {
-    const fs = new Set([
-      '/usr/local/bin/codex',
-      '/home/u/.local/bin/codex',
-    ])
-    const result = findCodexBinary({
-      exists: (p) => fs.has(p),
-      readdir: () => [],
-      pathEnv: '/usr/bin:/usr/local/bin:/home/u/.local/bin',
-      homeDir: HOME,
-      platform: 'linux',
-    })
-    expect(result).toBe('/usr/local/bin/codex')  // first hit wins, /usr/bin had no codex
-  })
-
-  it('returns null when nothing is found anywhere', () => {
-    const result = findCodexBinary({
-      exists: () => false,
-      readdir: () => [],
-      pathEnv: '/usr/bin:/usr/local/bin',
-      homeDir: HOME,
-      platform: 'linux',
-    })
-    expect(result).toBeNull()
-  })
-
-  it('falls back to nvm when PATH has no codex', () => {
-    const fs = new Set([
-      '/home/u/.nvm/versions/node',
-      '/home/u/.nvm/versions/node/v22.22.2/bin/codex',
-    ])
-    const result = findCodexBinary({
-      exists: (p) => fs.has(p),
-      readdir: () => ['v22.22.2', 'v20.10.0'],
-      pathEnv: '/usr/bin',
-      homeDir: HOME,
-      platform: 'linux',
-    })
-    expect(result).toBe('/home/u/.nvm/versions/node/v22.22.2/bin/codex')
-  })
-
-  it('walks nvm versions newest-first (string-desc) and stops at the first that has codex', () => {
-    const fs = new Set([
-      '/home/u/.nvm/versions/node',
-      '/home/u/.nvm/versions/node/v18.0.0/bin/codex',  // older has codex
-      // v22.x intentionally missing — expected to skip
-    ])
-    const result = findCodexBinary({
-      exists: (p) => fs.has(p),
-      readdir: () => ['v18.0.0', 'v22.22.2', 'v20.10.0'],
-      pathEnv: '/usr/bin',
-      homeDir: HOME,
-      platform: 'linux',
-    })
-    expect(result).toBe('/home/u/.nvm/versions/node/v18.0.0/bin/codex')
-  })
-
-  it('on Windows: splits PATH on ; and looks for codex.exe (not codex)', () => {
-    const probed: string[] = []
-    findCodexBinary({
-      // Probe-only: capture every existsSync candidate
-      exists: (p) => { probed.push(p); return false },
-      readdir: () => [],
-      pathEnv: 'C:\\Windows\\System32;C:\\Program Files\\nodejs',
-      homeDir: 'C:\\Users\\u',
-      platform: 'win32',
-    })
-    // Both PATH segments probed (semicolon split) + binary suffix is codex.exe.
-    // Path separator is host-OS-dependent (test runs on Linux), so we just
-    // assert the basename is codex.exe and both PATH dirs were tried.
-    expect(probed.some(p => /codex\.exe$/.test(p) && /System32/.test(p))).toBe(true)
-    expect(probed.some(p => /codex\.exe$/.test(p) && /nodejs/.test(p))).toBe(true)
-  })
-
-  it('does not consult nvm on Windows', () => {
-    let nvmReadCount = 0
-    const result = findCodexBinary({
-      exists: () => false,
-      readdir: () => { nvmReadCount++; return [] },
-      pathEnv: 'C:\\Windows\\System32',
-      homeDir: 'C:\\Users\\u',
-      platform: 'win32',
-    })
-    expect(result).toBeNull()
-    expect(nvmReadCount).toBe(0)
+    expect(result).toBe('/opt/homebrew/bin/codex')
   })
 
   it('skips empty PATH entries (PATH="::/usr/bin:" produces "" segments)', () => {
@@ -182,6 +45,49 @@ describe('findCodexBinary', () => {
     expect(result).toBe('/usr/bin/codex')
   })
 
+  it('uses codex.exe + ; separator on win32', () => {
+    const fs = new Set(['C:\\bin\\codex.exe'])
+    const result = findCodexBinary({
+      exists: (p) => fs.has(p),
+      readdir: () => [],
+      pathEnv: 'C:\\bin;C:\\other',
+      homeDir: 'C:\\Users\\u',
+      platform: 'win32',
+    })
+    expect(result).toBe('C:\\bin\\codex.exe')
+  })
+
+  // ── nvm fallback (systemd-user / launchd paths without nvm-sourced shell)
+
+  it('falls back to ~/.nvm/versions/node when PATH does not contain codex (newest-version wins)', () => {
+    const fs = new Set([
+      '/home/u/.nvm/versions/node',
+      '/home/u/.nvm/versions/node/v20.0.0/bin/codex',
+      '/home/u/.nvm/versions/node/v22.5.0/bin/codex',
+    ])
+    const result = findCodexBinary({
+      exists: (p) => fs.has(p),
+      readdir: () => ['v20.0.0', 'v22.5.0'],
+      pathEnv: '/usr/bin',
+      homeDir: HOME,
+      platform: 'linux',
+    })
+    expect(result).toBe('/home/u/.nvm/versions/node/v22.5.0/bin/codex')
+  })
+
+  it('skips nvm fallback on win32', () => {
+    let nvmReadCount = 0
+    const result = findCodexBinary({
+      exists: () => false,
+      readdir: () => { nvmReadCount++; return [] },
+      pathEnv: 'C:\\bin',
+      homeDir: 'C:\\Users\\u',
+      platform: 'win32',
+    })
+    expect(result).toBeNull()
+    expect(nvmReadCount).toBe(0)
+  })
+
   it('survives a readdir throw on the nvm root (e.g. permission denied) and just returns null', () => {
     const result = findCodexBinary({
       exists: (p) => p === '/home/u/.nvm/versions/node',
@@ -191,5 +97,56 @@ describe('findCodexBinary', () => {
       platform: 'linux',
     })
     expect(result).toBeNull()
+  })
+
+  // ── Not-found path ───────────────────────────────────────────────────────
+
+  it('returns null when codex is nowhere — caller surfaces the "install codex" error', () => {
+    const result = findCodexBinary({
+      exists: () => false,
+      readdir: () => [],
+      pathEnv: '/usr/bin:/usr/local/bin',
+      homeDir: HOME,
+      platform: 'linux',
+    })
+    expect(result).toBeNull()
+  })
+
+  // ── Regression: bundled probes must NOT win over user PATH ───────────────
+  //
+  // Earlier iterations (pre-Task #18) probed several `node_modules/@openai/codex/
+  // bin/codex.js` paths before falling back to PATH. That meant a stale-bundled
+  // wechat-cc would silently use a different version than the user's `codex`,
+  // creating confusing "I upgraded codex, why isn't it in use?" reports. These
+  // tests guard against accidentally re-introducing that behavior.
+
+  it('does NOT probe any node_modules path — only PATH + nvm', () => {
+    let probed: string[] = []
+    const fs = new Set(['/usr/local/bin/codex'])
+    const result = findCodexBinary({
+      exists: (p) => { probed.push(p); return fs.has(p) },
+      readdir: () => [],
+      pathEnv: '/usr/local/bin',
+      homeDir: HOME,
+      platform: 'linux',
+    })
+    expect(result).toBe('/usr/local/bin/codex')
+    // No probed path should mention `node_modules` — the old bundled-probe
+    // step ALWAYS produced such paths before checking PATH.
+    expect(probed.some(p => p.includes('node_modules'))).toBe(false)
+  })
+
+  it('does NOT probe ~/.claude/plugins/local/wechat (pre-Task-#18 wizards-probe-roots regression guard)', () => {
+    let probed: string[] = []
+    const fs = new Set<string>()
+    findCodexBinary({
+      exists: (p) => { probed.push(p); return fs.has(p) },
+      readdir: () => [],
+      pathEnv: '/usr/bin',
+      homeDir: HOME,
+      platform: 'linux',
+    })
+    expect(probed.some(p => p.includes('.claude/plugins/local/wechat'))).toBe(false)
+    expect(probed.some(p => p.includes('.local/share/wechat-cc'))).toBe(false)
   })
 })

@@ -33,6 +33,19 @@ export async function initA2AAgentsTab() {
   document.getElementById('a2a-install-confirm')?.addEventListener('click', onInstallConfirm)
   document.getElementById('a2a-install-cancel')?.addEventListener('click', closeAddModal)
   document.getElementById('a2a-add-close')?.addEventListener('click', closeAddModal)
+  // ✕ in modal header (any stage) + backdrop click (click outside the
+  // content area). HTML <dialog> doesn't close on backdrop click by
+  // default — event target === the dialog itself only when the click
+  // landed on the backdrop (not on any descendant); use that as the
+  // signal. ESC is handled natively by showModal().
+  document.getElementById('a2a-add-modal-close')?.addEventListener('click', closeAddModal)
+  document.getElementById('a2a-add-modal')?.addEventListener('click', (e) => {
+    if (e.target instanceof HTMLDialogElement) closeAddModal()
+  })
+  document.getElementById('a2a-test-modal-close')?.addEventListener('click', closeTestModal)
+  document.getElementById('a2a-test-modal')?.addEventListener('click', (e) => {
+    if (e.target instanceof HTMLDialogElement) closeTestModal()
+  })
   document.getElementById('a2a-activity-close')?.addEventListener('click', () => {
     const drawer = document.getElementById('a2a-activity-drawer')
     if (drawer) drawer.hidden = true

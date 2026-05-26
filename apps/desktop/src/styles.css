@@ -114,6 +114,14 @@ input { font: inherit; color: inherit; }
   position: sticky;
   top: 0;
   z-index: 100;
+  /* Banner is informational only — it must NOT intercept pointer events
+   * targeting elements at the top of the page (drawer close ×, modal
+   * close ×, wizard × close, etc.). The high z-index is for visual
+   * stacking (so it appears above normal content) but the
+   * pointer-events:none disowns the click hit-testing. Without this,
+   * playwright sees "<div id=dev-banner> intercepts pointer events"
+   * and any user trying to close a drawer in dev mode is stuck. */
+  pointer-events: none;
 }
 .dev-banner[hidden] { display: none !important; }
 .dev-banner b { color: #ffe3b8; font-weight: 500; }
@@ -2927,6 +2935,7 @@ input { font: inherit; color: inherit; }
 
 /* A2A Add Agent modal */
 .a2a-modal {
+  position: relative;
   border: 1px solid var(--hair);
   border-radius: var(--radius);
   padding: 20px;
@@ -2940,6 +2949,29 @@ input { font: inherit; color: inherit; }
 .a2a-modal::backdrop {
   background: rgba(0, 0, 0, 0.35);
 }
+
+/* ✕ close button anchored top-right of modal. Sized to match the
+ * 12px H3 line — visually balanced with the title without crowding
+ * the form below. Hover/active states give the affordance teeth. */
+.a2a-modal-x {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--ink-3);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.a2a-modal-x:hover { background: var(--surface); color: var(--ink); }
+.a2a-modal-x:active { background: var(--hair); }
 
 .a2a-modal h3 { margin: 0 0 16px; font-size: 16px; }
 .a2a-modal h4 { margin: 0 0 8px; font-size: 14px; }

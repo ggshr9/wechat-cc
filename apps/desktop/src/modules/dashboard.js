@@ -47,11 +47,18 @@ export function renderDashboard(report) {
       `
       tbody.innerHTML = ""
     } else {
+      // Daemon doesn't expose last-active timestamps (see view.js notes —
+      // ilink gives us errcode=-14 expiry but no positive heartbeat).
+      // Show honest copy: "已连接" for active, "连接已过期" for expired.
+      const currentExp = expiredById[currentRow.id]
+      const currentSub = currentRow.expired
+        ? `连接已过期${currentExp ? ` · ${formatRelativeTime(currentExp.firstSeenExpiredAt)}` : ""}`
+        : "已连接"
       current.innerHTML = `
         <div class="user-avatar avatar-admin">${avatarSvg("admin")}</div>
         <div class="user-copy">
           <div class="user-name">${escapeHtml(currentRow.name)} <span class="role-pill">管理员</span></div>
-          <div class="user-sub">微信私聊，${currentRow.expired ? "连接已过期" : "1小时前活跃"}</div>
+          <div class="user-sub">微信私聊，${currentSub}</div>
         </div>
         <span class="provider-chip">${escapeHtml(report.checks.provider.provider || "codex")}</span>
         <span class="provider-chevron">⌄</span>
@@ -66,7 +73,13 @@ export function renderDashboard(report) {
     const displayRows = subRows.length > 0 ? subRows : demoSubUsers()
     tbody.innerHTML = displayRows.map((row, index) => {
       const expEntry = expiredById[row.id]
-      const expCell = expEntry ? formatRelativeTime(expEntry.firstSeenExpiredAt) : "5分钟前活跃"
+      // Active: honest "已连接" — daemon has no last-active heartbeat for
+      // real accounts. Demo rows (moxiuwen's placeholder set) get a more
+      // populated-looking "活跃中" so the empty-state mockup still reads
+      // alive without misrepresenting expired-vs-active for real users.
+      const expCell = expEntry
+        ? `已过期 · ${formatRelativeTime(expEntry.firstSeenExpiredAt)}`
+        : row.demo ? "活跃中" : "已连接"
       // Expired rows get a primary 重新扫码 affordance next to the (now
       // ghost) delete button — clicking 重新扫码 routes back into the
       // wizard's bind/QR step so the user can pair the same WeChat

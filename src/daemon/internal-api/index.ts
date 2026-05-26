@@ -72,11 +72,18 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
     return timingSafeEqual(provided, token)
   }
 
-  function send(res: ServerResponse, status: number, body: unknown): void {
+  function send(res: ServerResponse, status: number, body: unknown, origin?: string): void {
     const payload = JSON.stringify(body)
     res.statusCode = status
     res.setHeader('content-type', 'application/json; charset=utf-8')
     res.setHeader('content-length', Buffer.byteLength(payload).toString())
+    // CORS: echo the request Origin so the dashboard webview (Tauri's
+    // `tauri://localhost` / `http://tauri.localhost`, or the dev shim's
+    // `http://127.0.0.1:4174`) can read the response. The server only
+    // listens on 127.0.0.1, so any caller already passed the trust
+    // boundary — echoing is safe and avoids hard-coding origins per
+    // platform / dev mode.
+    if (origin) res.setHeader('Access-Control-Allow-Origin', origin)
     res.end(payload)
   }
 
@@ -96,13 +103,32 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
   }
 
   async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const origin = (req.headers.origin && typeof req.headers.origin === 'string') ? req.headers.origin : undefined
+
+    // CORS preflight — browsers strip auth + custom headers off OPTIONS,
+    // so it MUST NOT go through authOk. Replying 204 with the standard
+    // Access-Control-* headers lets the actual GET/POST proceed with the
+    // Authorization header attached. Without this, the dashboard's A2A
+    // tab and any other webview fetch silently fails: preflight 401 →
+    // browser blocks the real request, no error visible to the user
+    // beyond a stale "loading…" or a "未启动?" banner.
+    if (req.method === 'OPTIONS') {
+      res.statusCode = 204
+      if (origin) res.setHeader('Access-Control-Allow-Origin', origin)
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+      res.setHeader('Access-Control-Allow-Headers', 'authorization, content-type')
+      res.setHeader('Access-Control-Max-Age', '600')  // cache preflight 10 min
+      res.end()
+      return
+    }
+
     if (!authOk(req)) {
       deps.log?.('INTERNAL_API', `401 ${req.method} ${req.url}`, {
         event: 'auth_rejected',
         method: req.method,
         url: req.url,
       })
-      return send(res, 401, { error: 'unauthorized' })
+      return send(res, 401, { error: 'unauthorized' }, origin)
     }
 
     const method = req.method ?? 'GET'
@@ -111,7 +137,7 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
     const route = ROUTES[`${method} ${url.pathname}`]
 
     if (!route) {
-      return send(res, 404, { error: 'not_found', method, url: rawUrl })
+      return send(res, 404, { error: 'not_found', method, url: rawUrl }, origin)
     }
 
     let body: unknown = null
@@ -119,7 +145,7 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
       try {
         body = await readJsonBody(req)
       } catch (err) {
-        return send(res, 400, { error: 'malformed_json', detail: errMsg(err) })
+        return send(res, 400, { error: 'malformed_json', detail: errMsg(err) }, origin)
       }
     }
 
@@ -135,7 +161,7 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
           path: key,
           issues: parsed.error.issues,
         })
-        return send(res, 400, { error: 'invalid_request', detail: parsed.error.flatten() })
+        return send(res, 400, { error: 'invalid_request', detail: parsed.error.flatten() }, origin)
       }
       if (method === 'POST') body = parsed.data
       // GET: handler still reads from url.searchParams (legacy contract);
@@ -144,7 +170,7 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
 
     try {
       const out = await route(url.searchParams, body)
-      send(res, out.status, out.body)
+      send(res, out.status, out.body, origin)
     } catch (err) {
       deps.log?.('INTERNAL_API', `500 ${method} ${rawUrl}: ${errMsg(err)}`, {
         event: 'route_threw',
@@ -152,7 +178,7 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
         url: rawUrl,
         error: errMsg(err),
       })
-      send(res, 500, { error: 'internal', detail: errMsg(err) })
+      send(res, 500, { error: 'internal', detail: errMsg(err) }, origin)
     }
   }
 

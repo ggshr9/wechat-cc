@@ -52,6 +52,7 @@ import { buildDelegateDispatch, type DelegateDispatch } from './delegate'
 import { makeSendAssistantText } from './fallback-reply'
 import { findCodexBinary } from '../../lib/find-codex-binary'
 import { checkCodexVersion } from './codex-version-check'
+import { attemptCodexAutofix } from '../../lib/codex-autofix'
 import { assertNotAuthFailed, type CheapEval } from '../../core/agent-provider'
 import { createA2ARegistry } from '../../core/a2a-registry'
 import { createA2AClient } from '../../core/a2a-client'
@@ -81,6 +82,34 @@ function resolveClaudeBinary(): string | undefined {
   const bundled = join(here, '..', '..', '..', 'node_modules', '@anthropic-ai', 'claude-agent-sdk-linux-x64', 'claude')
   if (existsSync(bundled)) return bundled
   return undefined
+}
+
+// Locate the wechat-cc source-mode install root (where package.json lives).
+// Source mode: derived from this file's path. Compiled-binary mode (Bun's
+// /$bunfs/...): existsSync(repoRoot/package.json) returns false → return null.
+// Null → codex-autofix returns "unsafe" and the daemon falls back to bundled.
+function wechatCcRepoRoot(): string | null {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url))     // .../src/daemon/bootstrap
+    const root = join(here, '..', '..', '..')                // .../<repo>
+    if (existsSync(join(root, 'package.json'))) return root
+    return null
+  } catch {
+    return null
+  }
+}
+
+// Get the user's PATH-installed codex binary + version (skips wechat-cc's
+// own bundled probe — that would loop back to ourselves). Used by
+// codex-autofix to decide whether the bundled SDK needs realignment.
+function detectUserCodexOnPath(): { path: string | null; version: string | null } {
+  const path = findOnPath('codex')
+  if (!path) return { path: null, version: null }
+  const raw = probeBinaryVersion(path)
+  if (!raw) return { path, version: null }
+  // probeBinaryVersion returns "codex-cli 0.133.0" or similar; extract semver.
+  const m = /(\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?)/.exec(raw)
+  return { path, version: m?.[1] ?? null }
 }
 
 const CLAUDE_AUTH_ENV_KEYS = [
@@ -459,6 +488,57 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
       canResume: (cwd, sid) => existsSync(claudeSessionJsonlPath(HOME, cwd, sid)),
     },
   )
+  // Auto-fix codex SDK to match the user's PATH codex CLI version when
+  // they diverge. This lets a user-driven `npm i -g @openai/codex@X`
+  // propagate into wechat-cc's bundled SDK without waiting for a
+  // wechat-cc release. See src/lib/codex-autofix.ts for safety constraints.
+  //
+  // Fire-and-forget: we DO NOT await. A `bun add` against a slow npm
+  // registry can take many seconds (and was observed to hang outright);
+  // blocking daemon boot on it produces a daemon that appears dead. By
+  // detaching the promise, boot continues with the bundled SDK in
+  // memory and the on-disk node_modules realigns in the background. The
+  // SDK swap takes effect on the NEXT daemon restart (the in-memory
+  // SDK was already required() before this function ran, so even an
+  // awaited fix wouldn't swap it within this process).
+  //
+  // Inner timeout (default 90s) + spawn-hard-kill (100s) protect against
+  // a permanently hung `bun add` zombie.
+  void attemptCodexAutofix({
+    installDir: wechatCcRepoRoot(),
+    bundledSdkVersion: codexCliPkg.version,
+    detectUserCodex: () => detectUserCodexOnPath(),
+    envDisabled: process.env.WECHAT_CC_DISABLE_CODEX_AUTOFIX === '1',
+    log: (line) => deps.log('CODEX_AUTOFIX', line),
+  }).then((outcome) => {
+    switch (outcome.status) {
+      case 'fixed':
+        deps.log('CODEX_AUTOFIX',
+          `done: ${outcome.from} → ${outcome.to}. Restart daemon to use the new SDK.`)
+        break
+      case 'failed':
+        deps.log('CODEX_AUTOFIX',
+          `failed (${outcome.from} → ${outcome.to}): ${outcome.reason}. ` +
+          `Continuing with bundled v${outcome.from}.`)
+        break
+      case 'timed_out':
+        deps.log('CODEX_AUTOFIX',
+          `timed out after ${Math.floor(outcome.timeoutMs / 1000)}s (${outcome.from} → ${outcome.to}). ` +
+          `Bun add killed. Continuing with bundled v${outcome.from}; investigate npm/network.`)
+        break
+      case 'unsafe':
+        deps.log('CODEX_AUTOFIX', `skipped: ${outcome.reason}. Bundled SDK in use.`)
+        break
+      case 'disabled':
+      case 'matched':
+      case 'no_user_codex':
+        // Silent — these are the common "nothing to do" outcomes.
+        break
+    }
+  }).catch((err) => {
+    deps.log('CODEX_AUTOFIX', `unexpected error in background auto-fix: ${err}`)
+  })
+
   // Conditional codex registration (v0.5.6) — find a real codex CLI on disk.
   // The Codex SDK's internal `findCodexPath()` uses moduleRequire.resolve()
   // which can't see real node_modules from inside the bun-compiled bundle
@@ -519,15 +599,35 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
       },
     )
   } else if (codexBinary && codexVersionCheck && !codexVersionCheck.ok) {
+    // VERSION MISMATCH: user has codex installed, but its protocol version
+    // doesn't match our bundled SDK. Three resolution paths:
+    //   - Wait for codex-autofix (running in background since boot start;
+    //     it'll `bun add @openai/codex-sdk@<userVer>` to realign).
+    //     Restart daemon after autofix completes.
+    //   - Manually downgrade global: `npm i -g @openai/codex@<expected>`.
+    //   - Manually upgrade wechat-cc: `bun add @openai/codex-sdk@<userVer>
+    //     @openai/codex@<userVer>` in the wechat-cc install dir.
     deps.log('BOOT',
-      `codex provider NOT registered — version check failed. ` +
-      `binary=${codexBinary} actual=${codexVersionCheck.actualSemver ?? codexVersionCheck.rawVersion ?? '(unreadable)'} ` +
-      `expected=${codexVersionCheck.expectedVersion} reason=${codexVersionCheck.reason}. ` +
-      `The codex SDK ↔ CLI protocol is version-locked; a mismatched CLI silently emits events the SDK can't decode (no reply ever reaches the user). ` +
-      `Run \`npm i -g @openai/codex@${codexVersionCheck.expectedVersion}\` or remove the older codex from PATH.`,
+      `codex provider NOT registered — version mismatch. ` +
+      `Your codex CLI at ${codexBinary} is ` +
+      `v${codexVersionCheck.actualSemver ?? codexVersionCheck.rawVersion ?? '(unreadable)'}, ` +
+      `but wechat-cc's bundled SDK expects v${codexVersionCheck.expectedVersion}. ` +
+      `The codex SDK ↔ CLI protocol is version-locked (silent fail otherwise). ` +
+      `Resolution: (a) wait for the background auto-fix to realign SDK to your CLI version, then restart daemon; ` +
+      `or (b) downgrade global codex: \`npm i -g @openai/codex@${codexVersionCheck.expectedVersion}\`.`,
     )
   } else {
-    deps.log('BOOT', 'codex binary not found in PATH or ~/.nvm — codex provider not registered. Install `npm i -g @openai/codex` to enable /codex /both /chat modes.')
+    // NOT INSTALLED: no codex on PATH or in ~/.nvm. Tell the user the
+    // exact one-time setup. We deliberately don't bundle codex (post
+    // Task #18) — `codex login` is required for auth anyway, and bundling
+    // hid which version was actually in use.
+    deps.log('BOOT',
+      `codex provider NOT registered — codex CLI not installed. ` +
+      `To enable codex / /both / /chat modes:\n` +
+      `  1. \`npm i -g @openai/codex@${codexCliPkg.version}\`\n` +
+      `  2. \`codex login\`  (one-time OAuth or API-key setup; auth lives in ~/.codex/)\n` +
+      `  3. Restart daemon.`,
+    )
   }
 
   // ──────────────────────────────────────────────────────────────

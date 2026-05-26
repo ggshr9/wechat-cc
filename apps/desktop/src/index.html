@@ -522,6 +522,7 @@
     <!-- A2A Add Agent modal — top-level overlay so it's not clipped by
          the dashboard main pane. Sibling to #qr-modal. -->
     <dialog id="a2a-add-modal" class="a2a-modal">
+      <button id="a2a-add-modal-close" class="a2a-modal-x" type="button" aria-label="关闭">×</button>
       <h3>Add A2A Agent</h3>
       <form id="a2a-add-form">
         <label>Agent URL <input type="url" name="url" required placeholder="https://example.com/a2a"></label>
@@ -550,6 +551,7 @@
     <!-- A2A Test modal — validate inbound (notify → WeChat chat) or outbound
          (call external agent) without dropping to CLI. -->
     <dialog id="a2a-test-modal" class="a2a-modal">
+      <button id="a2a-test-modal-close" class="a2a-modal-x" type="button" aria-label="关闭">×</button>
       <h3 id="a2a-test-title">Test agent</h3>
       <p class="a2a-test-help">
         <strong>Inbound</strong>: send a synthetic notify to your own WeChat chat (validates server + key + routing).<br>

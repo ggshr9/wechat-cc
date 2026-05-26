@@ -71,8 +71,16 @@ type A2AEvent = {
 
 const __mockState: {
   chats: Array<{ id: string; name: string; last_active: number; mode?: { kind: string; provider?: string } }>
-  observations: Array<{ id: string; body: string; tone: string; archived: boolean }>
-  milestones: Array<{ id: string; label: string; triggered_at: number }>
+  // Mirrors src/cli/schema.ts::ObservationEntry / MilestoneEntry so the
+  // dashboard renderer (observations.js) sees the same shape it would from
+  // the real CLI. Earlier ad-hoc fields (triggered_at / label) silently
+  // rendered nothing.
+  observations: Array<{ id: string; ts: string; body: string; tone?: string; archived: boolean }>
+  milestones: Array<{ id: string; ts: string; body: string; event_id?: string }>
+  // Doctor-derived state — controllable via demo.seed args. Defaults
+  // mirror the "everything healthy" path; tests that need to drive the
+  // hero into "暂时失去连接" tone pass daemonAlive: false explicitly.
+  daemonAlive: boolean
   sessions: Array<{ id: string; project: string; created_at: number; favorited: boolean }>
   qrScanComplete?: boolean
   qrScanFails?: boolean
@@ -86,7 +94,7 @@ const __mockState: {
   // A2A mock state — seeded by `a2a.seed` test-control command.
   a2aAgents: A2AAgent[]
   a2aEvents: A2AEvent[]
-} = { chats: [], observations: [], milestones: [], sessions: [], installProgress: null, installSimulationStep: 0, conversations: null, a2aAgents: [], a2aEvents: [] }
+} = { chats: [], observations: [], milestones: [], sessions: [], daemonAlive: true, installProgress: null, installSimulationStep: 0, conversations: null, a2aAgents: [], a2aEvents: [] }
 
 // ─── A2A mock credentials ─────────────────────────────────────────────────────
 // The A2A routes (/v1/a2a/*) are served by the SAME Bun.serve instance as the
@@ -206,21 +214,55 @@ Bun.serve({
         // These are shim-only commands that Playwright tests POST to seed mock
         // state or configure failure modes. They are NOT forwarded to the CLI.
 
+        if (body.command === 'demo.unseed') {
+          // Reset all mock state to "fresh install" — used by playwright
+          // tests that need to assert the empty-state UI. Without an
+          // explicit unseed the shim is worker-scoped, so any test that
+          // ran `demo.seed` earlier in the worker leaves chats / obs /
+          // milestones populated for subsequent tests (cross-test leak).
+          __mockState.chats = []
+          __mockState.observations = []
+          __mockState.milestones = []
+          __mockState.sessions = []
+          __mockState.daemonAlive = true
+          __mockState.qrScanComplete = undefined
+          __mockState.qrScanFails = undefined
+          __mockState.envCheck = undefined
+          __mockState.installProgress = null
+          __mockState.installSimulationStep = 0
+          __mockState.conversations = null
+          __mockState.a2aAgents = []
+          __mockState.a2aEvents = []
+          return Response.json({ result: { ok: true } })
+        }
+
         if (body.command === 'demo.seed') {
-          const args = body.args as { chat_id?: string } | undefined
+          const args = body.args as { chat_id?: string; daemonAlive?: boolean } | undefined
           const chatId = args?.chat_id ?? 'test_chat'
+          __mockState.daemonAlive = args?.daemonAlive ?? true
           __mockState.chats = [{ id: chatId, name: 'Test User', last_active: Date.now() }]
+          // Shape matches src/cli/schema.ts::ObservationEntry — { id, ts,
+          // body, tone?, archived }. Earlier shim used `triggered_at` /
+          // `label` on milestones which didn't match the CLI schema or
+          // the dashboard renderer (observationRow / milestoneCard read
+          // .body + .ts); empty content rendered silently. Real schema
+          // tested at the playwright level prevents that regression.
+          const nowIso = new Date().toISOString()
+          const yesterdayIso = new Date(Date.now() - 86_400_000).toISOString()
+          const twoDaysAgoIso = new Date(Date.now() - 2 * 86_400_000).toISOString()
+          const threeDaysAgoIso = new Date(Date.now() - 3 * 86_400_000).toISOString()
           __mockState.observations = [
-            { id: 'obs_demo_1', body: 'demo observation 1', tone: 'playful', archived: false },
-            { id: 'obs_demo_2', body: 'demo observation 2', tone: 'reflective', archived: false },
-            { id: 'obs_demo_3', body: 'demo observation 3', tone: 'playful', archived: false },
-            { id: 'obs_demo_4', body: 'demo observation 4', tone: 'reflective', archived: false },
-            { id: 'obs_demo_5', body: 'demo observation 5', tone: 'playful', archived: false },
+            { id: 'obs_demo_1', ts: nowIso, body: 'demo observation 1', tone: 'playful', archived: false },
+            { id: 'obs_demo_2', ts: nowIso, body: 'demo observation 2', tone: 'reflective', archived: false },
+            { id: 'obs_demo_3', ts: nowIso, body: 'demo observation 3', tone: 'playful', archived: false },
+            { id: 'obs_demo_4', ts: nowIso, body: 'demo observation 4', tone: 'reflective', archived: false },
+            { id: 'obs_demo_5', ts: nowIso, body: 'demo observation 5', tone: 'playful', archived: false },
           ]
+          // Shape matches src/cli/schema.ts::MilestoneEntry — { id, ts, body, event_id? }.
           __mockState.milestones = [
-            { id: 'ms_demo_1', label: '100 messages', triggered_at: Date.now() - 86400000 },
-            { id: 'ms_demo_2', label: '7-day streak', triggered_at: Date.now() - 172800000 },
-            { id: 'ms_demo_3', label: 'first push reply', triggered_at: Date.now() - 259200000 },
+            { id: 'ms_demo_1', ts: yesterdayIso,    body: '100 messages' },
+            { id: 'ms_demo_2', ts: twoDaysAgoIso,   body: '7-day streak' },
+            { id: 'ms_demo_3', ts: threeDaysAgoIso, body: 'first push reply' },
           ]
           __mockState.sessions = [
             { id: 'sess_1', project: 'wechat-cc', created_at: Date.now(), favorited: false },
@@ -328,6 +370,88 @@ Bun.serve({
             __mockState.milestones.length > 0
           ) {
             return Response.json({ result: { milestones: __mockState.milestones } })
+          }
+
+          // Intercept doctor --json in DRY_RUN. Returns a minimal valid
+          // DoctorOutput shape derived from __mockState.chats so playwright
+          // tests can drive the dashboard's hero tone + accounts table
+          // without depending on the dev machine's real CLI output. The
+          // hero tone flips based on the chats length: seeded → daemon
+          // "alive" + accounts.count=1 → "AI 正在陪伴中"; unseeded →
+          // daemon dead + accounts.count=0 → "暂时失去连接".
+          if (
+            dryRun &&
+            body.command === 'wechat_cli_json' &&
+            cliArgs[0] === 'doctor'
+          ) {
+            const seeded = __mockState.chats.length > 0
+            const chat = seeded ? __mockState.chats[0]! : null
+            const userNames: Record<string, string> = chat ? { [chat.id]: chat.name } : {}
+            const items = chat ? [{
+              id: `${chat.id}-im-bot`,
+              botId: chat.id,
+              userId: chat.id,
+              baseUrl: 'https://example.test',
+            }] : []
+            // daemon.alive is driven by __mockState.daemonAlive (default
+            // true); separate from `seeded` so tests can drive the hero
+            // into "暂时失去连接" tone while still booting into dashboard
+            // mode (initialMode checks accounts + provider + service,
+            // NOT daemon.alive).
+            const daemonAlive = seeded && __mockState.daemonAlive
+            return Response.json({
+              result: {
+                ready: seeded,
+                stateDir: '/tmp/wechat-cc-shim',
+                runtime: 'source',
+                wslDetected: false,
+                checks: {
+                  bun: { ok: true, path: '/usr/local/bin/bun' },
+                  git: { ok: true, path: '/usr/bin/git' },
+                  claude: { ok: true, path: '/usr/local/bin/claude' },
+                  codex: { ok: true, path: '/usr/local/bin/codex' },
+                  cursor: { ok: false, apiKeySet: false, sdkInstalled: true },
+                  accounts: { ok: true, count: items.length, items },
+                  access: { ok: true, dmPolicy: 'allowlist', allowFromCount: items.length },
+                  provider: {
+                    ok: true,
+                    provider: 'claude',
+                    binaryPath: '/usr/local/bin/claude',
+                  },
+                  daemon: { alive: daemonAlive, pid: daemonAlive ? 12345 : null },
+                  service: { installed: seeded, kind: 'launchagent' },
+                },
+                userNames,
+                expiredBots: [],
+                nextActions: [],
+              },
+            })
+          }
+
+          // Intercept memory list in DRY_RUN unconditionally — return seeded
+          // shape when demo.seed has run, empty list otherwise. The
+          // unconditional intercept is deliberate: without it the shim
+          // falls through to the real CLI which reads the dev machine's
+          // ~/.claude/channels/wechat/memory/ — leaking real user data into
+          // playwright tests (a "no chats" assertion saw a real "GSR" user
+          // and failed for environment-contaminated reasons, not real bugs).
+          if (
+            dryRun &&
+            body.command === 'wechat_cli_json' &&
+            cliArgs[0] === 'memory' &&
+            cliArgs[1] === 'list'
+          ) {
+            if (__mockState.chats.length === 0) {
+              return Response.json({ result: [] })
+            }
+            const chat = __mockState.chats[0]!
+            return Response.json({
+              result: [{
+                userId: chat.id,
+                fileCount: 1,
+                files: [{ path: 'profile.md', size: 128, mtime: new Date().toISOString() }],
+              }],
+            })
           }
 
           // Intercept sessions list-projects in DRY_RUN when demo data has been seeded.

@@ -1,0 +1,120 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":semanticCommits"],
+
+  "description": "wechat-cc dependency tracking. Strategy: aggressive auto-merge for LLM SDK patches (Codex / Claude / Gemini move fast and we want the latest protocols), human review for majors. See docs/maintenance.md for rationale.",
+
+  "timezone": "Asia/Shanghai",
+  "schedule": ["before 9am on Monday"],
+  "prHourlyLimit": 4,
+  "prConcurrentLimit": 10,
+
+  "labels": ["dependencies"],
+
+  "packageRules": [
+    {
+      "description": "LLM SDK ecosystem — patch + minor auto-merge. Codex moves multiple times per week; staying close to upstream matters. Codex's SDK<->CLI protocol lock means we MUST keep these two in sync, so they share a group.",
+      "matchPackageNames": [
+        "@openai/codex",
+        "@openai/codex-sdk"
+      ],
+      "groupName": "openai-codex",
+      "matchUpdateTypes": ["patch", "minor"],
+      "automerge": true,
+      "automergeType": "branch",
+      "schedule": ["at any time"]
+    },
+    {
+      "description": "Codex major bumps — needs human review (API breaks more likely).",
+      "matchPackageNames": [
+        "@openai/codex",
+        "@openai/codex-sdk"
+      ],
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    },
+    {
+      "description": "Claude Agent SDK — patch auto-merge; minor + major to human review. Currently pinned to 0.2.x; a 0.3 jump landed upstream (May 2026) but has potential API changes worth manual validation.",
+      "matchPackageNames": ["@anthropic-ai/claude-agent-sdk"],
+      "matchUpdateTypes": ["patch"],
+      "automerge": true,
+      "automergeType": "branch"
+    },
+    {
+      "description": "Claude Agent SDK minor + major — review.",
+      "matchPackageNames": ["@anthropic-ai/claude-agent-sdk"],
+      "matchUpdateTypes": ["minor", "major"],
+      "automerge": false
+    },
+    {
+      "description": "Gemini SDK family — patch + minor auto-merge once we adopt it. @google/genai is HTTPS-based (no version-lock pain), so we can stay aggressive.",
+      "matchPackageNames": [
+        "@google/genai",
+        "@google/adk"
+      ],
+      "matchUpdateTypes": ["patch", "minor"],
+      "automerge": true,
+      "automergeType": "branch"
+    },
+    {
+      "description": "Gemini SDK major — review.",
+      "matchPackageNames": [
+        "@google/genai",
+        "@google/adk"
+      ],
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    },
+    {
+      "description": "Cursor SDK — patch + minor auto-merge.",
+      "matchPackageNames": ["@cursor/sdk"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "automerge": true,
+      "automergeType": "branch"
+    },
+    {
+      "description": "MCP SDK — patch auto-merge; minor + major human review.",
+      "matchPackageNames": ["@modelcontextprotocol/sdk"],
+      "matchUpdateTypes": ["patch"],
+      "automerge": true,
+      "automergeType": "branch"
+    },
+    {
+      "description": "Tauri + Tauri plugins — patch auto-merge; the desktop bundle build CI catches regressions.",
+      "matchPackageNames": [
+        "@tauri-apps/cli",
+        "@playwright/test"
+      ],
+      "matchUpdateTypes": ["patch"],
+      "automerge": true,
+      "automergeType": "branch"
+    },
+    {
+      "description": "Cargo (Rust) deps in apps/desktop/src-tauri — patches auto-merge.",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["patch"],
+      "automerge": true,
+      "automergeType": "branch"
+    },
+    {
+      "description": "Pin GitHub Actions to commit SHAs (security best practice — prevents tag-republishing supply-chain attacks).",
+      "matchManagers": ["github-actions"],
+      "pinDigests": true
+    }
+  ],
+
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security"],
+    "automerge": true,
+    "automergeType": "branch",
+    "schedule": ["at any time"]
+  },
+
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 9am on Monday"],
+    "automerge": true,
+    "automergeType": "branch"
+  }
+}
