@@ -57,7 +57,7 @@ function scheduleReload(filename: string | null) {
   if (pending) clearTimeout(pending)
   pending = setTimeout(() => {
     pending = null
-    if (filename) console.log(`[dev-server] reload (${filename})`)
+    if (filename) console.error(`[dev-server] reload (${filename})`)
     broadcastReload()
   }, 50)
 }
@@ -169,9 +169,10 @@ Bun.serve({
   },
 })
 
-console.log(`[dev-server] serving ${ROOT}`)
-console.log(`[dev-server] listening on http://127.0.0.1:${PORT}`)
-console.log(`[dev-server] watching for file changes; browser reloads on save`)
+// Banner on stderr so tauri's beforeDevCommand stdout-parsers don't see it.
+console.error(`[dev-server] serving ${ROOT}`)
+console.error(`[dev-server] listening on http://127.0.0.1:${PORT}`)
+console.error(`[dev-server] watching for file changes; browser reloads on save`)
 
 // Clean exit when tauri's beforeDevCommand parent goes away, or on ctrl-C.
 // Without this, the port can stay bound for a few seconds on the next dev run.

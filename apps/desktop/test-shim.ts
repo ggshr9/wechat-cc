@@ -26,7 +26,7 @@
 // against the real .app, but in seconds and with DOM-aware selectors.
 
 import { spawn } from 'bun'
-import { join } from 'node:path'
+import { join, resolve, relative, isAbsolute } from 'node:path'
 
 const ROOT = process.env.WECHAT_CC_ROOT ?? join(import.meta.dir, '..', '..')
 const SRC = join(import.meta.dir, 'src')
@@ -190,8 +190,13 @@ Bun.serve({
 
     // Local-file attachment endpoint — restricted to the wechat-cc
     // inbox tree so the dev shim doesn't double as an open file server.
+    //
+    // Path-guard rules: resolve the request to an absolute path first,
+    // then verify it's a true descendant of an allowed root via
+    // path.relative. Naive startsWith lets a sibling like `inbox-evil/`
+    // bypass `inbox`, and `..` segments slip past entirely.
     if (url.pathname === '/attachment' && req.method === 'GET') {
-      const filePath = url.searchParams.get('path') || ''
+      const requested = url.searchParams.get('path') || ''
       const inboxRoot = join(ROOT, 'apps', 'desktop')  // for tauri-localhost dev cache
       const stateInbox = (process.env.WECHAT_CC_STATE_DIR
         ?? join(process.env.HOME ?? '', '.claude', 'channels', 'wechat'))
@@ -200,7 +205,12 @@ Bun.serve({
         join(stateInbox, 'avatars'),  // custom avatars (Bundle E2.5)
         inboxRoot,
       ]
-      const ok = filePath && allowedRoots.some(root => filePath.startsWith(root))
+      const filePath = requested ? resolve(requested) : ''
+      const insideRoot = (root: string) => {
+        const rel = relative(root, filePath)
+        return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+      }
+      const ok = filePath && allowedRoots.some(insideRoot)
       if (!ok) return new Response('forbidden', { status: 403 })
       const file = Bun.file(filePath)
       if (!(await file.exists())) return new Response('not found', { status: 404 })
