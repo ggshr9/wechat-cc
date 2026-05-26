@@ -18,7 +18,7 @@ import { makeAdminCommands } from '../admin-commands'
 import { makeModeCommands } from '../mode-commands'
 import { makeOnboardingHandler } from '../onboarding'
 import { botName, botNameFromModeFallback } from '../bot-name'
-import { saveAgentConfig } from '../../lib/agent-config'
+import { loadAgentConfig, saveAgentConfig } from '../../lib/agent-config'
 import { materializeAttachments } from '../media'
 import { loadGuardConfig } from '../guard/store'
 import { makeFireMilestonesFor, makeRecordInbound, makeMaybeWriteWelcomeObservation } from './side-effects'
@@ -49,8 +49,16 @@ export function buildPipelineDeps(opts: PipelineDepsOpts, refs: PipelineDepsRefs
   // the in-memory boot.agentConfig stays untouched so callers can retry.
   // Mutate via index access so existing readers (who hold the same object
   // reference) see the new value on next lookup.
+  //
+  // Read fresh from disk before merging: another process (CLI
+  // `wechat-cc agent add`, the dashboard install route, a future
+  // a2a-registry mutation) may have written to agent-config.json
+  // since boot. Using the boot-time snapshot here would clobber
+  // those fields. Read → spread → write keeps a2a_agents and any
+  // other fields written by sibling processes intact.
   const setBotName = async (name: string | null): Promise<void> => {
-    const next: typeof boot.agentConfig = { ...boot.agentConfig, bot_name: name }
+    const current = loadAgentConfig(stateDir)
+    const next: typeof current = { ...current, bot_name: name }
     await saveAgentConfig(stateDir, next)
     boot.agentConfig.bot_name = name
   }

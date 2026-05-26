@@ -302,6 +302,28 @@ describe('conversation-store — participants', () => {
     expect(() => store.setParticipants('chat-solo', ['claude', 'codex']))
       .toThrow(/only parallel\/chatroom/)
   })
+
+  test('set(chatroom-without-participants) preserves prior participant list (COALESCE)', () => {
+    // Regression: `/chat claude codex` → `/solo` → `/chat` (no args)
+    // previously wiped the participants column to NULL on the third
+    // upsert because excluded.participants was NULL. The COALESCE in
+    // stmtUpsert keeps the prior list around for re-entry.
+    const db = openDb({ path: ':memory:' })
+    const store = makeConversationStore(db)
+    store.set('chat', { kind: 'chatroom', participants: ['claude', 'codex'] })
+    store.set('chat', { kind: 'solo', provider: 'claude' })
+    store.set('chat', { kind: 'chatroom' })  // no participants → must NOT clobber
+    expect(store.get('chat')?.mode).toEqual({ kind: 'chatroom', participants: ['claude', 'codex'] })
+  })
+
+  test('set(chatroom-with-participants) overwrites prior list', () => {
+    // Explicit list still takes precedence over the COALESCE preserve.
+    const db = openDb({ path: ':memory:' })
+    const store = makeConversationStore(db)
+    store.set('chat', { kind: 'chatroom', participants: ['claude', 'codex'] })
+    store.set('chat', { kind: 'chatroom', participants: ['claude', 'cursor'] })
+    expect(store.get('chat')?.mode).toEqual({ kind: 'chatroom', participants: ['claude', 'cursor'] })
+  })
 })
 
 describe('modeRequiresParticipantPrefix (RFC 03 review #5)', () => {

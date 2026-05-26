@@ -141,9 +141,17 @@ export function makeConversationStore(db: Db, opts: ConversationStoreOpts = {}):
   const stmtGet = db.query<Row, [string]>(
     'SELECT chat_id, mode_kind, mode_provider, mode_primary, participants, user_id, account_id, last_user_name FROM conversations WHERE chat_id = ?',
   )
+  // ON CONFLICT participants column uses COALESCE so an upsert that omits
+  // participants (e.g. `/chat` with no args → setMode(chatId, {kind:'chatroom'}))
+  // does NOT wipe a previously persisted participant list. Without this,
+  // `/chat claude codex` → `/solo` → `/chat` lost the participant list on
+  // the third command because the upsert wrote excluded.participants=NULL
+  // straight over the column.
+  //
+  // Callers that legitimately want to clear participants use setParticipants(chatId, undefined).
   const stmtUpsert = db.query<unknown, [string, string, string | null, string | null, string | null, string]>(
     'INSERT INTO conversations(chat_id, mode_kind, mode_provider, mode_primary, participants, updated_at) VALUES (?, ?, ?, ?, ?, ?) ' +
-    'ON CONFLICT(chat_id) DO UPDATE SET mode_kind = excluded.mode_kind, mode_provider = excluded.mode_provider, mode_primary = excluded.mode_primary, participants = excluded.participants, updated_at = excluded.updated_at',
+    'ON CONFLICT(chat_id) DO UPDATE SET mode_kind = excluded.mode_kind, mode_provider = excluded.mode_provider, mode_primary = excluded.mode_primary, participants = COALESCE(excluded.participants, participants), updated_at = excluded.updated_at',
   )
   const stmtDelete = db.query<unknown, [string]>('DELETE FROM conversations WHERE chat_id = ?')
   const stmtAll = db.query<Row, []>(

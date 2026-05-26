@@ -362,11 +362,18 @@ export type A2ATestRequestT = z.infer<typeof A2ATestRequest>
 // chatId is camelCase — intentional divergence from other wechat routes.
 // Mode is a discriminated union matching the runtime Mode type in conversation.ts.
 
+// parallel/chatroom carry an optional explicit participant list — dashboard
+// sends `{kind:'chatroom', participants:['claude','cursor']}` to opt the user
+// into a specific N-way set. Pre-fix the schema omitted `participants` so
+// zod (default behavior strips unknown keys on discriminated-union arms)
+// silently dropped the field before the handler saw it, downgrading the
+// mode to "use registry default" — visible to the user as their explicit
+// participant choice being ignored.
 const ModeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('solo'), provider: z.string() }),
-  z.object({ kind: z.literal('parallel') }),
+  z.object({ kind: z.literal('parallel'), participants: z.array(z.string()).optional() }),
   z.object({ kind: z.literal('primary_tool'), primary: z.string() }),
-  z.object({ kind: z.literal('chatroom') }),
+  z.object({ kind: z.literal('chatroom'), participants: z.array(z.string()).optional() }),
 ])
 
 export const ConversationSetModeRequest = z.object({

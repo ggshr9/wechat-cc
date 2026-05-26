@@ -801,15 +801,20 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
   const a2aEventsStore = makeA2AEventsStore(deps.db)
 
   // Helper: resolve operator chat. v1 = earliest-updated_at conversation
-  // row (first chat the operator ever used; most stable identity). Cached
-  // for the daemon's lifetime — operator binding doesn't shift mid-session.
-  let cachedOperatorChatId: string | null | undefined = undefined
+  // row (first chat the operator ever used; most stable identity).
+  //
+  // Cache only POSITIVE hits: on a fresh install the conversations table
+  // is empty until the operator sends their first WeChat message. If we
+  // also cached `null`, every A2A notify that arrived before that first
+  // message would be permanently dropped as `dropped_no_operator_chat`
+  // — even after the operator binds — until daemon restart.
+  let cachedOperatorChatId: string | null = null
   function resolveOperatorChatId(): string | null {
-    if (cachedOperatorChatId !== undefined) return cachedOperatorChatId
+    if (cachedOperatorChatId) return cachedOperatorChatId
     const row = deps.db.query<{ chat_id: string }, []>(
       'SELECT chat_id FROM conversations ORDER BY updated_at ASC LIMIT 1',
     ).get()
-    cachedOperatorChatId = row?.chat_id ?? null
+    if (row?.chat_id) cachedOperatorChatId = row.chat_id
     return cachedOperatorChatId
   }
 

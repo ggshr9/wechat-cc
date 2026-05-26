@@ -548,6 +548,31 @@ describe('ConversationSetModeRequest', () => {
       mode: { kind: 'chatroom' },
     }).success).toBe(true)
   })
+  it('preserves explicit participants on chatroom mode', () => {
+    // Pre-fix the schema omitted `participants` so zod silently stripped
+    // the field before the handler saw it — the dashboard's
+    // `/v1/conversation/set-mode` with `participants: ['claude','cursor']`
+    // landed on the daemon as a bare chatroom and the participant choice
+    // was lost.
+    const r = ConversationSetModeRequest.safeParse({
+      chatId: 'abc',
+      mode: { kind: 'chatroom', participants: ['claude', 'cursor'] },
+    })
+    expect(r.success).toBe(true)
+    if (r.success && r.data.mode.kind === 'chatroom') {
+      expect(r.data.mode.participants).toEqual(['claude', 'cursor'])
+    }
+  })
+  it('preserves explicit participants on parallel mode', () => {
+    const r = ConversationSetModeRequest.safeParse({
+      chatId: 'abc',
+      mode: { kind: 'parallel', participants: ['claude', 'codex'] },
+    })
+    expect(r.success).toBe(true)
+    if (r.success && r.data.mode.kind === 'parallel') {
+      expect(r.data.mode.participants).toEqual(['claude', 'codex'])
+    }
+  })
   it('rejects unknown mode kind', () => {
     expect(ConversationSetModeRequest.safeParse({
       chatId: 'abc',
