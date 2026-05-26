@@ -237,7 +237,11 @@ Bun.serve({
         }
 
         if (body.command === 'demo.seed') {
-          const args = body.args as { chat_id?: string; daemonAlive?: boolean } | undefined
+          const args = body.args as {
+            chat_id?: string
+            daemonAlive?: boolean
+            withSessions?: boolean
+          } | undefined
           const chatId = args?.chat_id ?? 'test_chat'
           __mockState.daemonAlive = args?.daemonAlive ?? true
           __mockState.chats = [{ id: chatId, name: 'Test User', last_active: Date.now() }]
@@ -264,7 +268,10 @@ Bun.serve({
             { id: 'ms_demo_2', ts: twoDaysAgoIso,   body: '7-day streak' },
             { id: 'ms_demo_3', ts: threeDaysAgoIso, body: 'first push reply' },
           ]
-          __mockState.sessions = [
+          // Sessions are opt-in so playwright can exercise the empty-state
+          // path while still having accounts bound (state.mode must reach
+          // 'dashboard', which requires accounts).
+          __mockState.sessions = args?.withSessions === false ? [] : [
             { id: 'sess_1', project: 'wechat-cc', created_at: Date.now(), favorited: false },
             { id: 'sess_2', project: 'compass', created_at: Date.now() - 3600000, favorited: false },
           ]
@@ -454,17 +461,19 @@ Bun.serve({
             })
           }
 
-          // Intercept sessions list-projects in DRY_RUN when demo data has been seeded.
-          // Frontend calls: ["sessions", "list-projects", "--json"]
+          // Intercept sessions list-projects in DRY_RUN unconditionally.
+          // Frontend calls: ["sessions", "list-projects", "--json"].
+          // Empty state when no sessions seeded (deliberately uncoupled
+          // from chats to let playwright exercise the empty-state path
+          // while still having accounts bound — without this the shim
+          // would fall through to the real CLI and read the dev box's
+          // ~/.claude/projects, leaking real project names into tests).
           if (
             dryRun &&
             body.command === 'wechat_cli_json' &&
             cliArgs[0] === 'sessions' &&
-            cliArgs[1] === 'list-projects' &&
-            __mockState.sessions.length > 0
+            cliArgs[1] === 'list-projects'
           ) {
-            // Map internal sessions to the shape the frontend expects
-            // (alias, last_used_at, summary — matches sessions list-projects output)
             const projects = __mockState.sessions.map(s => ({
               alias: s.project,
               last_used_at: new Date(s.created_at).toISOString(),
