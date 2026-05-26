@@ -2,6 +2,7 @@ import type { ProviderId, SessionStore } from './session-store'
 import type { AgentEvent, AgentSession } from './agent-provider'
 import type { ProviderRegistry } from './provider-registry'
 import type { TierProfile } from './user-tier'
+import type { PermissionMode } from './capability-matrix'
 import { log } from '../lib/log'
 
 export interface SessionManagerOptions {
@@ -38,6 +39,14 @@ export interface AcquireRequest {
   providerId: ProviderId
   chatId: string
   tierProfile: TierProfile
+  /**
+   * Daemon-wide permission mode. Forwarded into `provider.spawn`'s
+   * SpawnContext so providers can honor `--dangerously` independently of
+   * tier (see RFC 05 §2.1). When dangerously, every provider's
+   * translation short-circuits to its SDK-level bypass equivalent
+   * (claude → bypassPermissions, codex → danger-full-access + never).
+   */
+  permissionMode: PermissionMode
 }
 
 /**
@@ -153,6 +162,7 @@ export class SessionManager {
     const session = await provider.spawn(project, {
       ...(resumeSessionId ? { resumeSessionId } : {}),
       tierProfile: req.tierProfile,
+      permissionMode: req.permissionMode,
       // Forward chatId so the Claude provider can bake it into a
       // per-session canUseTool closure (see bootstrap/index.ts).
       chatId: req.chatId,

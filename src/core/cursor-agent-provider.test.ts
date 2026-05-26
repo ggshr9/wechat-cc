@@ -8,19 +8,22 @@ import {
 import { TIER_PROFILES } from './user-tier'
 
 describe('tierProfileToCursorSdkOpts', () => {
-  it('admin → sandbox disabled', () => {
-    const out = tierProfileToCursorSdkOpts(TIER_PROFILES.admin)
-    expect(out.sandboxOptions.enabled).toBe(false)
+  it('dangerously mode → sandbox disabled regardless of tier', () => {
+    // Operator override: --dangerously short-circuits all tiers.
+    for (const tier of [TIER_PROFILES.admin, TIER_PROFILES.trusted, TIER_PROFILES.guest]) {
+      expect(tierProfileToCursorSdkOpts(tier, 'dangerously').sandboxOptions.enabled).toBe(false)
+    }
   })
 
-  it('trusted → sandbox enabled', () => {
-    const out = tierProfileToCursorSdkOpts(TIER_PROFILES.trusted)
-    expect(out.sandboxOptions.enabled).toBe(true)
-  })
-
-  it('guest → sandbox enabled (lossier than codex read-only; documented)', () => {
-    const out = tierProfileToCursorSdkOpts(TIER_PROFILES.guest)
-    expect(out.sandboxOptions.enabled).toBe(true)
+  it('strict mode → sandbox enabled regardless of tier (cursor has no per-tool gate)', () => {
+    // Post-RFC-05: cursor strict mode always sandboxes. Cursor can't
+    // enforce the relay portion of admin/trusted tier profiles, so the
+    // safer default is "sandboxed unless operator explicitly bypassed".
+    // Pre-C4 admin tier got sandbox-off via the relay+deny-empty
+    // shortcut; that's now reserved for --dangerously.
+    for (const tier of [TIER_PROFILES.admin, TIER_PROFILES.trusted, TIER_PROFILES.guest]) {
+      expect(tierProfileToCursorSdkOpts(tier, 'strict').sandboxOptions.enabled).toBe(true)
+    }
   })
 })
 
@@ -250,7 +253,7 @@ function makeFakeSdk(agent: ReturnType<typeof makeFakeAgent>) {
 }
 
 describe('createCursorAgentProvider', () => {
-  it('spawn calls Agent.create with apiKey + model + mcpServers + tier-derived sandbox', async () => {
+  it('spawn calls Agent.create with apiKey + model + mcpServers + dangerously sandbox-off', async () => {
     const agent = makeFakeAgent([{ type: 'status', status: 'FINISHED' }])
     const sdk = makeFakeSdk(agent)
     const provider = createCursorAgentProvider({
@@ -259,9 +262,11 @@ describe('createCursorAgentProvider', () => {
       model: 'composer-2',
       mcpServers: { wechat: { command: 'node', args: ['mcp.js'] } },
     })
+    // RFC 05: cursor's sandbox-off only fires on `permissionMode='dangerously'`.
+    // Strict mode (any tier) always sandboxes — cursor has no per-tool gate.
     const session = await provider.spawn(
       { alias: 'P', path: '/tmp/proj' },
-      { tierProfile: TIER_PROFILES.admin, chatId: 'admin-chat' },
+      { tierProfile: TIER_PROFILES.admin, permissionMode: 'dangerously', chatId: 'admin-chat' },
     )
     expect(sdk.Agent.create).toHaveBeenCalledTimes(1)
     const createArgs = sdk.Agent.create.mock.calls[0]![0] as Record<string, unknown>
@@ -279,7 +284,7 @@ describe('createCursorAgentProvider', () => {
     const provider = createCursorAgentProvider({ sdk, apiKey: 'test-key' })
     await provider.spawn(
       { alias: 'P', path: '/tmp/proj' },
-      { tierProfile: TIER_PROFILES.guest, chatId: 'guest-chat' },
+      { tierProfile: TIER_PROFILES.guest, permissionMode: 'strict', chatId: 'guest-chat' },
     )
     const createArgs = sdk.Agent.create.mock.calls[0]![0] as Record<string, unknown>
     expect((createArgs.local as { sandboxOptions: { enabled: boolean } }).sandboxOptions.enabled).toBe(true)
@@ -294,7 +299,7 @@ describe('createCursorAgentProvider', () => {
     const provider = createCursorAgentProvider({ sdk, apiKey: 'test-key' })
     const session = await provider.spawn(
       { alias: 'P', path: '/tmp/proj' },
-      { tierProfile: TIER_PROFILES.admin, chatId: 'c' },
+      { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: 'c' },
     )
     const events: any[] = []
     for await (const ev of session.dispatch('hi')) events.push(ev)
@@ -312,7 +317,7 @@ describe('createCursorAgentProvider', () => {
     const provider = createCursorAgentProvider({ sdk, apiKey: 'test-key' })
     const session = await provider.spawn(
       { alias: 'P', path: '/tmp/proj' },
-      { tierProfile: TIER_PROFILES.admin, chatId: 'c' },
+      { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: 'c' },
     )
     await session.close()
     expect(closeSpy).toHaveBeenCalled()
@@ -326,7 +331,7 @@ describe('createCursorAgentProvider', () => {
     const provider = createCursorAgentProvider({ sdk, apiKey: 'test-key' })
     const session = await provider.spawn(
       { alias: 'P', path: '/tmp/proj' },
-      { tierProfile: TIER_PROFILES.admin, chatId: 'c' },
+      { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: 'c' },
     )
     const events: any[] = []
     for await (const ev of session.dispatch('hi')) events.push(ev)
@@ -343,7 +348,7 @@ describe('createCursorAgentProvider', () => {
     const provider = createCursorAgentProvider({ sdk, apiKey: 'test-key' })
     await provider.spawn(
       { alias: 'P', path: '/tmp/proj' },
-      { tierProfile: TIER_PROFILES.admin, chatId: 'c', resumeSessionId: 'agent-prior' },
+      { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: 'c', resumeSessionId: 'agent-prior' },
     )
     expect(sdk.Agent.resume).toHaveBeenCalledTimes(1)
     expect(sdk.Agent.create).not.toHaveBeenCalled()
@@ -365,7 +370,7 @@ describe('createCursorAgentProvider', () => {
     const provider = createCursorAgentProvider({ sdk, apiKey: 'test-key' })
     await provider.spawn(
       { alias: 'P', path: '/tmp/proj' },
-      { tierProfile: TIER_PROFILES.admin, chatId: 'c', resumeSessionId: 'agent-stale' },
+      { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: 'c', resumeSessionId: 'agent-stale' },
     )
     expect(sdk.Agent.resume).toHaveBeenCalledTimes(1)
     expect(sdk.Agent.create).toHaveBeenCalledTimes(1)

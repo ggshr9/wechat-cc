@@ -111,6 +111,7 @@ export function buildTickBodies(deps: TickDeps): TickBodies {
       providerId: deps.boot.defaultProviderId,
       chatId,
       tierProfile,
+      permissionMode: deps.permissionMode,
     })
     const tickText = buildPushTickText({
       nowIso: opts?.nowIso ?? new Date().toISOString(),

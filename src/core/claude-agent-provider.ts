@@ -1,6 +1,7 @@
 import { query, type Options, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
-import type { AgentEvent, AgentProject, AgentProvider, AgentSession } from './agent-provider'
+import type { AgentEvent, AgentProject, AgentProvider, AgentSession, SpawnContext } from './agent-provider'
 import type { TierProfile, ToolKind } from './user-tier'
+import type { PermissionMode } from './capability-matrix'
 import { log } from '../lib/log'
 
 /**
@@ -32,15 +33,22 @@ export interface ClaudeTierSdkOpts {
 }
 
 /**
- * Pure translation from daemon TierProfile → Claude SDK options.
+ * Pure translation from (TierProfile, permissionMode) → Claude SDK options.
  * The caller layers `canUseTool` on top of this — `disallowedTools` only
  * covers built-ins (which the SDK knows by name); MCP tools and
  * shell_destructive get filtered inside the canUseTool closure.
+ *
+ * `permissionMode='dangerously'` bypasses unconditionally — operator
+ * opted into full SDK bypass regardless of tier. `permissionMode='strict'`
+ * always uses `default` + canUseTool; tier-aware allow/relay/deny
+ * decisions happen inside the canUseTool callback (see
+ * `effectivePolicy` in permission-relay.ts). Pre-RFC-05 this function
+ * inferred "dangerously-equivalent" from `relay.size === 0 && deny.size === 0`
+ * (admin tier shape), which broke when admin tier policy changed (C4)
+ * and when --dangerously didn't propagate to non-admin chats (C5).
  */
-export function tierProfileToClaudeSdkOpts(tp: TierProfile): ClaudeTierSdkOpts {
-  // admin → bypass everything (equivalent to old --dangerously path)
-  // Any allow-everything profile is treated this way; check by relay+deny size.
-  if (tp.relay.size === 0 && tp.deny.size === 0) {
+export function tierProfileToClaudeSdkOpts(tp: TierProfile, permissionMode: PermissionMode): ClaudeTierSdkOpts {
+  if (permissionMode === 'dangerously') {
     return { permissionMode: 'bypassPermissions' }
   }
 
@@ -163,7 +171,7 @@ export function createClaudeAgentProvider(opts: ClaudeAgentProviderOptions): Age
     },
     async spawn(
       project: AgentProject,
-      spawnOpts: { resumeSessionId?: string; tierProfile: TierProfile; chatId: string },
+      spawnOpts: SpawnContext,
     ): Promise<AgentSession> {
       const sdkQueue = new AsyncQueue<SDKUserMessage>()
       // chatId is threaded into sdkOptionsForProject so the builder can

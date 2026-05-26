@@ -119,6 +119,10 @@ export function buildDelegateDispatch(deps: DelegateBuildDeps): DelegateDispatch
         { alias: '_delegate', path: cwd ?? deps.stateDir },
         {
           tierProfile: peer === 'codex' ? TIER_PROFILES.guest : TIER_PROFILES.trusted,
+          // Delegate is always strict — there's no daemon-wide --dangerously
+          // override path that reaches here (delegate is invoked headless
+          // for one-shot consultations, not user-initiated dispatch).
+          permissionMode: 'strict',
           chatId: '_delegate',
         },
       )

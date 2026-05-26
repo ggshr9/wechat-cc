@@ -82,9 +82,20 @@ describe('TIER_PROFILES', () => {
     })
   }
 
-  it('admin allows everything', () => {
-    expect(TIER_PROFILES.admin.relay.size).toBe(0)
+  it('admin relays destructive ops only (post-RFC-05 / C4)', () => {
+    // Post-RFC-05: admin tier is no longer "auto-bypass everything".
+    // Destructive Bash and memory_delete now relay to the admin chat
+    // (which is the admin themselves per resolveAdminChatId), giving
+    // a "are you sure?" gate. Operators wanting zero prompts launch
+    // with `--dangerously`.
+    expect(TIER_PROFILES.admin.relay.has('shell_destructive')).toBe(true)
+    expect(TIER_PROFILES.admin.relay.has('memory_delete')).toBe(true)
+    expect(TIER_PROFILES.admin.relay.size).toBe(2)
     expect(TIER_PROFILES.admin.deny.size).toBe(0)
+    // Non-destructive ops stay auto-allowed.
+    expect(TIER_PROFILES.admin.allow.has('shell')).toBe(true)
+    expect(TIER_PROFILES.admin.allow.has('fs_read')).toBe(true)
+    expect(TIER_PROFILES.admin.allow.has('a2a_send')).toBe(true)
   })
 
   it('trusted relays shell_destructive and memory_delete', () => {

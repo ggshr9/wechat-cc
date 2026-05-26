@@ -113,13 +113,12 @@ function provider(opts: Parameters<typeof createCodexAgentProvider>[0] = {}, fak
 }
 
 describe('Codex agent provider', () => {
-  it('spawns a fresh thread with tier-derived sandbox + approval policy (admin → danger-full-access)', async () => {
-    // Task 6: sandboxMode + approvalPolicy moved from CodexAgentProviderOptions to
-    // spawnOpts.tierProfile. Admin tier (passed here as the daemon's hard-coded
-    // stub via session-manager) maps to danger-full-access + never — matches the
-    // old --dangerously posture, which is what session-manager currently emits.
+  it('dangerously permissionMode → danger-full-access + never (regardless of tier)', async () => {
+    // RFC 05: permissionMode short-circuits in the provider translation.
+    // --dangerously means operator opted into full bypass; codex sandbox
+    // matches that intent regardless of which tier the chat is in.
     const { provider: p, fake } = provider()
-    await p.spawn({ alias: 'compass', path: '/repo' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    await p.spawn({ alias: 'compass', path: '/repo' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'dangerously', chatId: '_test' })
     expect(fake.startThreadCalls).toHaveLength(1)
     const o = fake.startThreadCalls[0]!
     expect(o.workingDirectory).toBe('/repo')
@@ -128,31 +127,42 @@ describe('Codex agent provider', () => {
     expect(o.approvalPolicy).toBe('never')
   })
 
+  it('strict + admin → workspace-write + never (post-C4: admin relay set non-empty)', async () => {
+    // Post-RFC-05 / C4: admin tier has shell_destructive + memory_delete
+    // in relay. codex has no per-tool callback to enforce that relay, so
+    // it falls through to "deny empty → workspace-write".
+    const { provider: p, fake } = provider()
+    await p.spawn({ alias: 'compass', path: '/repo' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
+    const o = fake.startThreadCalls[0]!
+    expect(o.sandboxMode).toBe('workspace-write')
+    expect(o.approvalPolicy).toBe('never')
+  })
+
   it('threads non-admin tiers into startThread sandbox + approval policy', async () => {
     // Trusted → workspace-write + never; guest → read-only + untrusted. The
     // tierProfile-to-codex translation lives in tierProfileToCodexSdkOpts;
     // this test just verifies the spawn path actually plumbs it through.
     const { provider: trustedProv, fake: trustedFake } = provider()
-    await trustedProv.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.trusted, chatId: '_test' })
+    await trustedProv.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.trusted, permissionMode: 'strict', chatId: '_test' })
     expect(trustedFake.startThreadCalls[0]!.sandboxMode).toBe('workspace-write')
     expect(trustedFake.startThreadCalls[0]!.approvalPolicy).toBe('never')
 
     const { provider: guestProv, fake: guestFake } = provider()
-    await guestProv.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.guest, chatId: '_test' })
+    await guestProv.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.guest, permissionMode: 'strict', chatId: '_test' })
     expect(guestFake.startThreadCalls[0]!.sandboxMode).toBe('read-only')
     expect(guestFake.startThreadCalls[0]!.approvalPolicy).toBe('untrusted')
   })
 
   it('respects model override (sandboxMode/approvalPolicy now tier-driven, see test above)', async () => {
     const { provider: p, fake } = provider({ model: 'gpt-5-codex' })
-    await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
     const o = fake.startThreadCalls[0]!
     expect(o.model).toBe('gpt-5-codex')
   })
 
   it('routes resumeSessionId to resumeThread, NOT startThread', async () => {
     const { provider: p, fake } = provider()
-    await p.spawn({ alias: 'compass', path: '/repo' }, { resumeSessionId: 'thread-xyz', tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    await p.spawn({ alias: 'compass', path: '/repo' }, { resumeSessionId: 'thread-xyz', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
     expect(fake.startThreadCalls).toHaveLength(0)
     expect(fake.resumeThreadCalls).toHaveLength(1)
     expect(fake.resumeThreadCalls[0]).toMatchObject({ id: 'thread-xyz' })
@@ -166,7 +176,7 @@ describe('Codex agent provider', () => {
       { type: 'turn.completed', usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5, reasoning_output_tokens: 0 } },
     ])
     const { provider: p } = provider({}, fakeCodex)
-    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
 
     const events = await drain(session.dispatch('hi'))
 
@@ -195,7 +205,7 @@ describe('Codex agent provider', () => {
       { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } },
     ])
     const { provider: p } = provider({}, fakeCodex)
-    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
 
     const events = await drain(session.dispatch('please reply'))
 
@@ -209,7 +219,7 @@ describe('Codex agent provider', () => {
       { type: 'turn.failed', error: { message: 'context limit exceeded' } },
     ])
     const { provider: p } = provider({}, fakeCodex)
-    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
 
     const events = await drain(session.dispatch('hi'))
 
@@ -225,7 +235,7 @@ describe('Codex agent provider', () => {
       { type: 'error', message: 'network timeout' } as unknown as ThreadEvent,
     ])
     const { provider: p } = provider({}, fakeCodex)
-    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
 
     const events = await drain(session.dispatch('hi'))
 
@@ -238,7 +248,7 @@ describe('Codex agent provider', () => {
     const fakeCodex = makeFakeCodex()
     // No turns pushed — close before dispatch
     const { provider: p } = provider({}, fakeCodex)
-    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
 
     await session.close()
     const events = await drain(session.dispatch('after close'))
@@ -258,7 +268,7 @@ describe('Codex agent provider', () => {
     ])
 
     const { provider: p } = provider({ appendInstructions: 'be terse' }, fakeCodex)
-    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
 
     // First dispatch — should inject instructions
     await drain(session.dispatch('hi'))
@@ -287,7 +297,7 @@ describe('Codex agent provider', () => {
       { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } },
     ])
     const { provider: p } = provider({}, fakeCodex)
-    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
 
     const firstEvents = await drain(session.dispatch('first'))
     const secondEvents = await drain(session.dispatch('second'))
@@ -332,7 +342,7 @@ describe('Codex agent provider', () => {
     } as unknown as Codex
 
     const p = createCodexAgentProvider({ codexFactory: () => codex })
-    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
 
     // First dispatch hangs.
     void session.dispatch('hangs')[Symbol.asyncIterator]().next().catch(() => undefined)
@@ -376,7 +386,7 @@ describe('Codex agent provider', () => {
     } as unknown as Codex
 
     const p = createCodexAgentProvider({ codexFactory: () => codex })
-    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
     // Don't await dispatch — it'll hang on the generator. Just trigger it
     // so runStreamed runs and our AbortSignal hook fires.
     void session.dispatch('hangs forever')[Symbol.asyncIterator]().next().catch(() => undefined)
@@ -392,7 +402,7 @@ describe('Codex agent provider', () => {
     const fake = makeFakeCodex()
     const factory: CodexFactory = (args) => { factoryArgs.push(args); return fake.codex }
     const p = createCodexAgentProvider({ codexFactory: factory })
-    await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
     // PR F: factory is called twice — once at provider construction for
     // the hoisted cheapEval Codex instance, once per spawn() call.
     // Neither call should pass apiKey.
@@ -407,7 +417,7 @@ describe('Codex agent provider', () => {
     const fake = makeFakeCodex()
     const factory: CodexFactory = (args) => { factoryArgs.push(args); return fake.codex }
     const p = createCodexAgentProvider({ codexFactory: factory, codexPathOverride: '/opt/codex/bin/codex' })
-    await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
     expect(factoryArgs[0]).toMatchObject({ codexPathOverride: '/opt/codex/bin/codex' })
   })
 
@@ -427,7 +437,7 @@ describe('Codex agent provider', () => {
         { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } },
       ])
       const { provider: p } = provider({}, fakeCodex)
-      const session = await p.spawn({ alias: 'logtest', path: '/p' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+      const session = await p.spawn({ alias: 'logtest', path: '/p' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
 
       await drain(session.dispatch('hi'))
 
@@ -448,7 +458,7 @@ describe('Codex agent provider', () => {
       { type: 'turn.failed', error: { message: 'OPENAI_API_KEY not set, run `codex login`' } },
     ])
     const { provider: p } = provider({}, fakeCodex)
-    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
 
     const events = await drain(session.dispatch('hi'))
 
@@ -464,7 +474,7 @@ describe('Codex agent provider', () => {
       { type: 'error', message: 'not authenticated, please run codex login' } as unknown as ThreadEvent,
     ])
     const { provider: p } = provider({}, fakeCodex)
-    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
 
     const events = await drain(session.dispatch('hi'))
 
@@ -480,7 +490,7 @@ describe('Codex agent provider', () => {
       { type: 'error', message: 'network timeout' } as unknown as ThreadEvent,
     ])
     const { provider: p } = provider({}, fakeCodex)
-    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
 
     const events = await drain(session.dispatch('hi'))
 
@@ -540,20 +550,32 @@ describe('Codex agent provider', () => {
 })
 
 describe('tierProfileToCodexSdkOpts', () => {
-  it('admin → danger-full-access + never', () => {
-    const out = tierProfileToCodexSdkOpts(TIER_PROFILES.admin)
-    expect(out.sandboxMode).toBe('danger-full-access')
-    expect(out.approvalPolicy).toBe('never')
+  it('dangerously mode → danger-full-access + never regardless of tier', () => {
+    // Operator override: --dangerously short-circuits all tiers.
+    for (const tier of [TIER_PROFILES.admin, TIER_PROFILES.trusted, TIER_PROFILES.guest]) {
+      const out = tierProfileToCodexSdkOpts(tier, 'dangerously')
+      expect(out.sandboxMode).toBe('danger-full-access')
+      expect(out.approvalPolicy).toBe('never')
+    }
   })
 
-  it('trusted → workspace-write + never (NOT on-request, no admin UI to field)', () => {
-    const out = tierProfileToCodexSdkOpts(TIER_PROFILES.trusted)
+  it('strict + admin → workspace-write + never (post-C4: admin relay set non-empty)', () => {
+    // Post-RFC-05 + C4: admin tier carries shell_destructive + memory_delete
+    // in relay. Codex has no per-tool callback to enforce the relay, so we
+    // fall through to "deny empty → workspace-write".
+    const out = tierProfileToCodexSdkOpts(TIER_PROFILES.admin, 'strict')
     expect(out.sandboxMode).toBe('workspace-write')
     expect(out.approvalPolicy).toBe('never')
   })
 
-  it('guest → read-only + untrusted', () => {
-    const out = tierProfileToCodexSdkOpts(TIER_PROFILES.guest)
+  it('strict + trusted → workspace-write + never (NOT on-request, no admin UI to field)', () => {
+    const out = tierProfileToCodexSdkOpts(TIER_PROFILES.trusted, 'strict')
+    expect(out.sandboxMode).toBe('workspace-write')
+    expect(out.approvalPolicy).toBe('never')
+  })
+
+  it('strict + guest → read-only + untrusted', () => {
+    const out = tierProfileToCodexSdkOpts(TIER_PROFILES.guest, 'strict')
     expect(out.sandboxMode).toBe('read-only')
     expect(out.approvalPolicy).toBe('untrusted')
   })

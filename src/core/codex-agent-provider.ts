@@ -1,8 +1,9 @@
 import { Codex, type Thread, type ThreadEvent, type ThreadItem } from '@openai/codex-sdk'
 import { tmpdir } from 'node:os'
-import type { AgentEvent, AgentProject, AgentProvider, AgentSession } from './agent-provider'
+import type { AgentEvent, AgentProject, AgentProvider, AgentSession, SpawnContext } from './agent-provider'
 import { resolveCodexCheapModel } from './codex-cheap-model'
 import type { TierProfile } from './user-tier'
+import type { PermissionMode } from './capability-matrix'
 import { log } from '../lib/log'
 
 export interface CodexTierSdkOpts {
@@ -11,11 +12,15 @@ export interface CodexTierSdkOpts {
 }
 
 /**
- * Pure translation from daemon TierProfile → Codex SDK options.
+ * Pure translation from (TierProfile, permissionMode) → Codex SDK options.
  *
  * Codex has no per-tool callback equivalent to Claude's canUseTool.
  * Tier enforcement is therefore coarser:
- *   - admin → full access
+ *   - `permissionMode='dangerously'` → full access on every chat (operator
+ *     opted into bypass; tier doesn't matter)
+ *   - admin/admin-equivalent → full access (admin tier still gets
+ *     destructive Bash relay on the Claude side via canUseTool; codex
+ *     has no equivalent gate, so it's full-access)
  *   - trusted → workspace-write sandbox (no admin UI to field
  *     'on-request' prompts, so we use 'never' approval — destructive
  *     ops within the workspace cwd are still possible; documented
@@ -23,14 +28,17 @@ export interface CodexTierSdkOpts {
  *   - guest → read-only sandbox + untrusted approval (functionally
  *     restricted to reading + replying)
  *
- * Distinguishing tiers by relay/deny size is a heuristic: a profile
- * with no relay and no deny is treated as admin-equivalent; any deny
- * presence means guest-equivalent; relay-only means trusted. This
- * works for the three default profiles; if custom profiles get added
- * later this needs revisiting.
+ * Pre-RFC-05 this function ignored `permissionMode` entirely and
+ * derived everything from `TierProfile` shape — which silently broke
+ * the `--dangerously` operator override for non-admin chats (C5).
  */
-export function tierProfileToCodexSdkOpts(tp: TierProfile): CodexTierSdkOpts {
-  if (tp.relay.size === 0 && tp.deny.size === 0) {
+export function tierProfileToCodexSdkOpts(tp: TierProfile, permissionMode: PermissionMode): CodexTierSdkOpts {
+  if (permissionMode === 'dangerously') {
+    return { sandboxMode: 'danger-full-access', approvalPolicy: 'never' }
+  }
+  // strict mode — heuristic on TierProfile shape. admin profile (relay
+  // may contain destructive ops; deny is empty) → workspace-write.
+  if (tp.deny.size === 0 && tp.relay.size === 0) {
     return { sandboxMode: 'danger-full-access', approvalPolicy: 'never' }
   }
   if (tp.deny.size === 0) {
@@ -169,9 +177,9 @@ export function createCodexAgentProvider(opts: CodexAgentProviderOptions = {}): 
       // has no per-tool callback equivalent (tier enforcement is coarser,
       // via sandboxMode/approvalPolicy on the Thread), so we accept it for
       // contract conformance but don't consume it.
-      spawnOpts: { resumeSessionId?: string; tierProfile: TierProfile; chatId: string },
+      spawnOpts: SpawnContext,
     ): Promise<AgentSession> {
-      const tierOpts = tierProfileToCodexSdkOpts(spawnOpts.tierProfile)
+      const tierOpts = tierProfileToCodexSdkOpts(spawnOpts.tierProfile, spawnOpts.permissionMode)
       const config: Record<string, unknown> = {}
       if (opts.mcpServers) {
         // Cast through `unknown` because CodexConfigValue forbids undefined

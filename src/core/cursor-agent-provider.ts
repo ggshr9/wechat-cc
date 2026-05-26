@@ -16,6 +16,7 @@
  */
 import type { AgentEvent, AgentProject, AgentProvider, AgentSession } from './agent-provider'
 import type { TierProfile } from './user-tier'
+import type { PermissionMode } from './capability-matrix'
 import { log } from '../lib/log'
 
 export interface CursorTierSdkOpts {
@@ -34,8 +35,15 @@ export interface CursorTierSdkOpts {
  * known limitation; operators with strict guest separation route
  * guests to Claude.
  */
-export function tierProfileToCursorSdkOpts(tp: TierProfile): CursorTierSdkOpts {
-  if (tp.relay.size === 0 && tp.deny.size === 0) {
+export function tierProfileToCursorSdkOpts(_tp: TierProfile, permissionMode: PermissionMode): CursorTierSdkOpts {
+  // Cursor has no per-tool callback. The only knob is sandbox on/off.
+  // Strict mode → always sandboxed (operator wanting unrestricted access
+  // opts in via `--dangerously`). Pre-RFC-05 this varied by tier shape,
+  // but post-C4 the "admin tier = no sandbox" shortcut conflated with
+  // "admin can still call destructive Bash" — and cursor can't enforce
+  // the relay, so the safer default is "sandboxed unless the operator
+  // explicitly bypassed at daemon level".
+  if (permissionMode === 'dangerously') {
     return { sandboxOptions: { enabled: false } }
   }
   return { sandboxOptions: { enabled: true } }
@@ -225,7 +233,7 @@ export function createCursorAgentProvider(opts: CursorAgentProviderOptions): Age
 
   return {
     async spawn(project: AgentProject, spawnOpts) {
-      const tierOpts = tierProfileToCursorSdkOpts(spawnOpts.tierProfile)
+      const tierOpts = tierProfileToCursorSdkOpts(spawnOpts.tierProfile, spawnOpts.permissionMode)
       const createOptions: Record<string, unknown> = {
         apiKey: opts.apiKey,
         ...(opts.model ? { model: { id: opts.model } } : {}),

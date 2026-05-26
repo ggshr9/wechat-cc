@@ -10,9 +10,20 @@ import { classifyToolUse, TIER_PROFILES, type TierProfile, type ToolKind, type U
  * Precedence:
  *   1. tier.deny  → deny (tier forbids this kind outright)
  *   2. tier.relay → relay (tier requires admin approval for this kind)
- *   3. otherwise → defer to matrix base.askUser:
+ *   3. tier.allow → allow (tier explicitly auto-allows; bypass the matrix)
+ *   4. otherwise → defer to matrix base.askUser:
  *      - 'per-tool' → relay (matrix dictates per-tool prompt)
  *      - 'never'    → allow (matrix says no prompt needed)
+ *
+ * Step 3 is the post-RFC-05 short-circuit: tier.allow is an explicit
+ * "don't bother the matrix" signal. Without it, strict mode would relay
+ * every tool call (matrix.askUser='per-tool') even when tier policy
+ * intends auto-allow — which would mean admin sees a y/n prompt for
+ * `Read`, `Glob`, harmless Bash, etc. Pre-RFC-05 the workaround was
+ * the bypassPermissions short-circuit in tierProfileToClaudeSdkOpts,
+ * which made admin never call canUseTool at all (and broke C4 — admin
+ * destructive Bash also skipped the relay). Now the relay set lives in
+ * the tier and matrix overrides only when tier didn't classify.
  */
 export function effectivePolicy(
   base: Capability,
@@ -21,6 +32,7 @@ export function effectivePolicy(
 ): 'allow' | 'relay' | 'deny' {
   if (tp.deny.has(kind)) return 'deny'
   if (tp.relay.has(kind)) return 'relay'
+  if (tp.allow.has(kind)) return 'allow'
   return base.askUser === 'per-tool' ? 'relay' : 'allow'
 }
 

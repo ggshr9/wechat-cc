@@ -322,6 +322,7 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
       providerId,
       chatId: msg.chatId,
       tierProfile,
+      permissionMode: deps.permissionMode,
     })
     const text = deps.format(msg)
     const summary = await collectTurn(handle.dispatch(text))
@@ -532,6 +533,7 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
           providerId: speaker,
           chatId: msg.chatId,
           tierProfile,
+          permissionMode: deps.permissionMode,
         })
         // PR C2 — propagate the chatroom aborter into the speaker turn so
         // /stop (and "new dispatch preempts prior") interrupt mid-stream
@@ -652,6 +654,7 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
         providerId: p,
         chatId: msg.chatId,
         tierProfile,
+        permissionMode: deps.permissionMode,
       })),
     )
     const text = deps.format(msg)

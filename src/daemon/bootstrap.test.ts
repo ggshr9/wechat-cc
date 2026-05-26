@@ -149,7 +149,7 @@ describe('bootstrap', () => {
     expect(opts.disallowedTools).toContain('Edit')
   })
 
-  it('defaults dangerouslySkipPermissions to false when omitted', async () => {
+  it('defaults dangerouslySkipPermissions to false when omitted (strict mode → default+canUseTool)', async () => {
     const b = await buildBootstrap({
       db: openTestDb(),
       stateDir: '/tmp/state',
@@ -158,11 +158,11 @@ describe('bootstrap', () => {
       lastActiveChatId: () => null,
       log: () => {},
     })
-    // With admin tier (the default for sdkOptionsForProject calls without
-    // a tier resolver), the result is bypassPermissions regardless of the
-    // flag. canUseTool is still wired.
+    // RFC 05: when daemon was NOT launched --dangerously, sdkOptionsForProject
+    // returns `default + canUseTool` regardless of tier — destructive ops
+    // get gated via the relay inside canUseTool, not by SDK-level bypass.
     const opts = b.sdkOptionsForProject('P', '/p', TIER_PROFILES.admin, '_test')
-    expect(opts.permissionMode).toBe('bypassPermissions')
+    expect(opts.permissionMode).toBe('default')
     expect(typeof opts.canUseTool).toBe('function')
   })
 

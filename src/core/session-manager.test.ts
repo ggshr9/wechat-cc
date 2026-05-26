@@ -79,14 +79,14 @@ describe('SessionManager', () => {
       registry: registryWithProvider({ spawn } as unknown as AgentProvider),
     })
 
-    const h = await mgr.acquire({ alias: 'codex-proj', path: '/repo', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin })
+    const h = await mgr.acquire({ alias: 'codex-proj', path: '/repo', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
     // drain the iterable to trigger onDispatch spy
     for await (const _ of h.dispatch('hello codex')) { /* consume */ }
 
     expect(spawn).toHaveBeenCalledWith(
       { alias: 'codex-proj', path: '/repo' },
       // Caller (this test) passes admin tier + chatId — provider gets both verbatim.
-      { tierProfile: TIER_PROFILES.admin, chatId: '_legacy' },
+      { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_legacy' },
     )
     expect(dispatched).toEqual(['hello codex'])
     await mgr.shutdown()
@@ -110,9 +110,9 @@ describe('SessionManager', () => {
       idleEvictMs: 60_000,
       registry: singleClaudeRegistry((_alias, path) => ({ cwd: path } as Options)),
     })
-    const a = await mgr.acquire({ alias: 'proj-a', path: '/home/nate/proj-a', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin })
+    const a = await mgr.acquire({ alias: 'proj-a', path: '/home/nate/proj-a', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
     expect(fakeQuery).toHaveBeenCalledTimes(1)
-    const a2 = await mgr.acquire({ alias: 'proj-a', path: '/home/nate/proj-a', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin })
+    const a2 = await mgr.acquire({ alias: 'proj-a', path: '/home/nate/proj-a', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
     expect(a).toBe(a2)
     expect(fakeQuery).toHaveBeenCalledTimes(1)
     await mgr.shutdown()
@@ -135,8 +135,8 @@ describe('SessionManager', () => {
       registry: registryWithProvider(provider),
     })
     const [h1, h2] = await Promise.all([
-      mgr.acquire({ alias: 'shared', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin }),
-      mgr.acquire({ alias: 'shared', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin }),
+      mgr.acquire({ alias: 'shared', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' }),
+      mgr.acquire({ alias: 'shared', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' }),
     ])
     expect(spawnCount).toBe(1)
     expect(h1).toBe(h2)
@@ -170,7 +170,7 @@ describe('SessionManager', () => {
       idleEvictMs: 60_000,
       registry: singleClaudeRegistry(() => ({ cwd: '/tmp/x' } as Options)),
     })
-    const h = await mgr.acquire({ alias: 'a', path: '/tmp/x', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin })
+    const h = await mgr.acquire({ alias: 'a', path: '/tmp/x', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
     // Dispatch sequentially — each must complete before the next can start
     // (claude provider throws if a previous dispatch is still in flight).
     for await (const _ of h.dispatch('first')) { /* consume */ }
@@ -185,12 +185,12 @@ describe('SessionManager', () => {
       idleEvictMs: 60_000,
       registry: singleClaudeRegistry(() => ({ cwd: '/tmp/x' } as Options)),
     })
-    await mgr.acquire({ alias: 'a', path: '/a', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin })
-    await mgr.acquire({ alias: 'b', path: '/b', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin })
+    await mgr.acquire({ alias: 'a', path: '/a', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
+    await mgr.acquire({ alias: 'b', path: '/b', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
     await new Promise(r => setTimeout(r, 2))
-    const handleA = await mgr.acquire({ alias: 'a', path: '/a', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin })
+    const handleA = await mgr.acquire({ alias: 'a', path: '/a', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
     expect(handleA.alias).toBe('a')
-    await mgr.acquire({ alias: 'c', path: '/c', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin })
+    await mgr.acquire({ alias: 'c', path: '/c', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
     const aliases = mgr.list().map(s => s.alias).sort()
     expect(aliases).toEqual(['a', 'c'])
     await mgr.shutdown()
@@ -203,7 +203,7 @@ describe('SessionManager', () => {
       idleEvictMs: 1000,
       registry: singleClaudeRegistry(() => ({ cwd: '/tmp/x' } as Options)),
     })
-    await mgr.acquire({ alias: 'a', path: '/a', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin })
+    await mgr.acquire({ alias: 'a', path: '/a', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
     vi.advanceTimersByTime(2000)
     await mgr.sweepIdle()
     expect(mgr.list()).toEqual([])
@@ -256,7 +256,7 @@ describe('SessionManager', () => {
 
     // No session yet → false.
     expect(mgr.isInFlight({ alias: 'a', providerId: 'claude', chatId: '_legacy' })).toBe(false)
-    const h = await mgr.acquire({ alias: 'a', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin })
+    const h = await mgr.acquire({ alias: 'a', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
     // Session acquired, no dispatch in flight → still false.
     expect(mgr.isInFlight({ alias: 'a', providerId: 'claude', chatId: '_legacy' })).toBe(false)
 
@@ -331,7 +331,7 @@ describe('SessionManager', () => {
       idleEvictMs: 1000,
       registry: registryWithProvider({ spawn } as unknown as AgentProvider),
     })
-    const h = await mgr.acquire({ alias: 'a', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin })
+    const h = await mgr.acquire({ alias: 'a', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
 
     // Begin draining — consume one event then PAUSE before the result.
     const drained: unknown[] = []
@@ -417,7 +417,7 @@ describe('SessionManager', () => {
       idleEvictMs: 1000,
       registry: registryWithProvider({ async spawn() { return session as never } } as unknown as AgentProvider),
     })
-    const h = await mgr.acquire({ alias: 'a', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin })
+    const h = await mgr.acquire({ alias: 'a', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
     const iter = h.dispatch('hi')[Symbol.asyncIterator]()
     const firstPromise = iter.next()
     push({ kind: 'init', sessionId: 's1' })
@@ -438,7 +438,7 @@ describe('SessionManager', () => {
     // hadn't run, the counter would still be 1 and the new session would
     // be untouchable by sweepIdle even when it's idle.
     vi.useFakeTimers()
-    const h2 = await mgr.acquire({ alias: 'a', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin })
+    const h2 = await mgr.acquire({ alias: 'a', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
     // h2 has had a dispatch wrapper applied lazily; never called .dispatch
     // so its counter is 0 from inception. Advance time past idleEvictMs.
     vi.advanceTimersByTime(60_000)
@@ -458,8 +458,8 @@ describe('SessionManager', () => {
     r.register('codex', codex, { displayName: 'Codex', canResume: () => true })
     const mgr = new SessionManager({ maxConcurrent: 4, idleEvictMs: 60_000, registry: r })
 
-    const a = await mgr.acquire({ alias: 'compass', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin })
-    const b = await mgr.acquire({ alias: 'compass', path: '/p', providerId: 'codex', chatId: '_legacy', tierProfile: TIER_PROFILES.admin })
+    const a = await mgr.acquire({ alias: 'compass', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
+    const b = await mgr.acquire({ alias: 'compass', path: '/p', providerId: 'codex', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
     expect(a).not.toBe(b)
     expect(a.providerId).toBe('claude')
     expect(b.providerId).toBe('codex')
@@ -474,7 +474,7 @@ describe('SessionManager', () => {
       maxConcurrent: 4, idleEvictMs: 60_000,
       registry: singleClaudeRegistry(() => ({ cwd: '/' } as Options)),
     })
-    await expect(mgr.acquire({ alias: 'a', path: '/p', providerId: 'gemini', chatId: '_legacy', tierProfile: TIER_PROFILES.admin })).rejects.toThrow(/unknown provider: gemini/)
+    await expect(mgr.acquire({ alias: 'a', path: '/p', providerId: 'gemini', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })).rejects.toThrow(/unknown provider: gemini/)
     await mgr.shutdown()
   })
 
@@ -529,7 +529,7 @@ describe('SessionManager', () => {
         registry: singleClaudeRegistry((_alias, path) => ({ cwd: path } as Options), canResume),
         sessionStore: store,
       })
-      await mgr.acquire({ alias: 'compass', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin })
+      await mgr.acquire({ alias: 'compass', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
       expect(fakeQuery).toHaveBeenCalledOnce()
       const args = firstQueryArgs()
       expect(args.options.resume).toBe('sid-abc')
@@ -549,7 +549,7 @@ describe('SessionManager', () => {
         sessionStore: store,
         resumeTTLMs: 7 * 24 * 60 * 60_000,
       })
-      await mgr.acquire({ alias: 'compass', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin })
+      await mgr.acquire({ alias: 'compass', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
       const args = firstQueryArgs()
       expect(args.options.resume).toBeUndefined()
       // Stale-cleanup must target only the active provider's row, not
@@ -570,7 +570,7 @@ describe('SessionManager', () => {
         registry: singleClaudeRegistry((_alias, path) => ({ cwd: path } as Options), canResume),
         sessionStore: store,
       })
-      await mgr.acquire({ alias: 'compass', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin })
+      await mgr.acquire({ alias: 'compass', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
       const args = firstQueryArgs()
       expect(args.options.resume).toBeUndefined()
       expect(store.deleteOne).toHaveBeenCalledWith({ alias: 'compass', provider: 'claude', chatId: '_legacy' })
@@ -593,7 +593,7 @@ describe('SessionManager', () => {
         sessionStore: store,
         resumeTTLMs: 7 * 24 * 60 * 60_000,
       })
-      await mgr.acquire({ alias: 'compass', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin })
+      await mgr.acquire({ alias: 'compass', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
       expect(store.deleteOne).not.toHaveBeenCalled()
       expect(store.delete).not.toHaveBeenCalled()
       // Sibling row still intact.
@@ -624,7 +624,7 @@ describe('SessionManager', () => {
         registry: singleClaudeRegistry(() => ({ cwd: '/p' } as Options)),
         sessionStore: store,
       })
-      const h = await mgr.acquire({ alias: 'compass', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin })
+      const h = await mgr.acquire({ alias: 'compass', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
       // Dispatch and drain so the result event is processed and session_id persisted.
       for await (const _ of h.dispatch('test')) { /* consume result */ }
       expect(store.set).toHaveBeenCalledWith({ alias: 'compass', provider: 'claude', chatId: '_legacy', sessionId: 'sid-new' })
@@ -638,7 +638,7 @@ describe('SessionManager', () => {
         registry: singleClaudeRegistry((_alias, path) => ({ cwd: path } as Options)),
         // sessionStore omitted
       })
-      await mgr.acquire({ alias: 'proj', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin })
+      await mgr.acquire({ alias: 'proj', path: '/p', providerId: 'claude', chatId: '_legacy', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
       const args = firstQueryArgs()
       expect(args.options.resume).toBeUndefined()
       await mgr.shutdown()
@@ -666,8 +666,8 @@ describe('SessionManager — per-chat isolation', () => {
       idleEvictMs: 60_000,
       registry: registryWithProvider(provider),
     })
-    const h1 = await mgr.acquire({ alias: '_default', path: '/tmp/x', providerId: 'claude', chatId: 'chatA', tierProfile: TIER_PROFILES.admin })
-    const h2 = await mgr.acquire({ alias: '_default', path: '/tmp/x', providerId: 'claude', chatId: 'chatB', tierProfile: TIER_PROFILES.admin })
+    const h1 = await mgr.acquire({ alias: '_default', path: '/tmp/x', providerId: 'claude', chatId: 'chatA', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
+    const h2 = await mgr.acquire({ alias: '_default', path: '/tmp/x', providerId: 'claude', chatId: 'chatB', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
     expect(h1).not.toBe(h2)
     expect(spawnCount).toBe(2)
     expect(mgr.list()).toHaveLength(2)
@@ -687,8 +687,8 @@ describe('SessionManager — per-chat isolation', () => {
       idleEvictMs: 60_000,
       registry: registryWithProvider(provider),
     })
-    const h1 = await mgr.acquire({ alias: '_default', path: '/tmp/x', providerId: 'claude', chatId: 'chatA', tierProfile: TIER_PROFILES.admin })
-    const h2 = await mgr.acquire({ alias: '_default', path: '/tmp/x', providerId: 'claude', chatId: 'chatA', tierProfile: TIER_PROFILES.admin })
+    const h1 = await mgr.acquire({ alias: '_default', path: '/tmp/x', providerId: 'claude', chatId: 'chatA', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
+    const h2 = await mgr.acquire({ alias: '_default', path: '/tmp/x', providerId: 'claude', chatId: 'chatA', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
     expect(h1).toBe(h2)
     expect(spawnCount).toBe(1)
     await mgr.shutdown()
@@ -736,7 +736,7 @@ describe('SessionManager — per-chat isolation', () => {
       idleEvictMs: 60_000,
       registry: registryWithProvider({ async spawn() { return session as never } } as unknown as AgentProvider),
     })
-    const h = await mgr.acquire({ alias: '_default', path: '/tmp/x', providerId: 'claude', chatId: 'chatA', tierProfile: TIER_PROFILES.admin })
+    const h = await mgr.acquire({ alias: '_default', path: '/tmp/x', providerId: 'claude', chatId: 'chatA', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
     const it = h.dispatch('hi')[Symbol.asyncIterator]()
     // Kick the iterator forward one event so the wrapper's `try` block
     // is active and the in-flight counter is incremented.

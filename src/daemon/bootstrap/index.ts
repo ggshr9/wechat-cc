@@ -453,7 +453,7 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
     // matrix's per-tool askUser flag asks for. Under bypassPermissions the
     // SDK won't fire canUseTool; under default mode canUseTool is what
     // gates everything not statically excluded via disallowedTools.
-    const tierOpts = tierProfileToClaudeSdkOpts(tierProfile)
+    const tierOpts = tierProfileToClaudeSdkOpts(tierProfile, permissionMode)
     // Build canUseTool with this session's chatId baked in. Done per-call
     // (not once at bootstrap) so concurrent sessions on different chats
     // each get a closure resolving tier/mode for their OWN chatId.

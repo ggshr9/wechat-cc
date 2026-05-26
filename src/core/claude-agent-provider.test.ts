@@ -83,7 +83,7 @@ import * as sdk from '@anthropic-ai/claude-agent-sdk'
 describe('claude-agent-provider', () => {
   it('yields init then text then result for a simple turn', async () => {
     const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
-    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
 
     const eventsPromise = drain(session.dispatch('hi'))
 
@@ -111,7 +111,7 @@ describe('claude-agent-provider', () => {
 
   it('yields tool_call for `mcp__wechat__reply` with `{server:"wechat", tool:"reply"}`', async () => {
     const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
-    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
 
     const eventsPromise = drain(session.dispatch('reply please'))
 
@@ -137,7 +137,7 @@ describe('claude-agent-provider', () => {
 
   it('yields tool_call for built-in tools without server prefix', async () => {
     const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
-    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
 
     const eventsPromise = drain(session.dispatch('read a file'))
 
@@ -163,7 +163,7 @@ describe('claude-agent-provider', () => {
 
   it('yields error event for non-success result subtype', async () => {
     const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
-    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
 
     const eventsPromise = drain(session.dispatch('hi'))
 
@@ -189,7 +189,7 @@ describe('claude-agent-provider', () => {
     // The provider must intercept it and surface a structured error so the
     // coordinator can suppress the fallback path.
     const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
-    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
 
     const eventsPromise = drain(session.dispatch('hi'))
 
@@ -222,7 +222,7 @@ describe('claude-agent-provider', () => {
     // The provider must catch the first chunk; otherwise that chunk flows to
     // the user as a normal reply before the second one trips the error path.
     const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
-    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
 
     const eventsPromise = drain(session.dispatch('hi'))
     await new Promise(r => setTimeout(r, 0))
@@ -245,7 +245,7 @@ describe('claude-agent-provider', () => {
 
   it('returns an empty iterable after close()', async () => {
     const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
-    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
     await session.close()
     const events = await drain(session.dispatch('after close'))
     expect(events).toEqual([])
@@ -253,7 +253,7 @@ describe('claude-agent-provider', () => {
 
   it('throws if dispatch is called while a previous dispatch is in flight', async () => {
     const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
-    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
 
     // Start first dispatch — do NOT drain it yet (keep it in-flight)
     const first = session.dispatch('a')
@@ -281,7 +281,7 @@ describe('claude-agent-provider', () => {
   it('cancel() calls SDK interrupt without closing the session', async () => {
     ;(sdk as unknown as { __test_reset_interrupt: () => void }).__test_reset_interrupt()
     const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
-    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
 
     // Start a dispatch and leave it in-flight.
     const eventsPromise = drain(session.dispatch('first'))
@@ -379,7 +379,7 @@ describe('claude-agent-provider', () => {
   it('cancel() is a no-op after close()', async () => {
     ;(sdk as unknown as { __test_reset_interrupt: () => void }).__test_reset_interrupt()
     const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
-    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
     await session.close()
     // close() itself calls interrupt — record that baseline, then verify
     // cancel() does NOT add another call.
@@ -389,14 +389,24 @@ describe('claude-agent-provider', () => {
   })
 
   describe('tierProfileToClaudeSdkOpts', () => {
-    it('admin → permissionMode=bypassPermissions, no disallowedTools', () => {
-      const out = tierProfileToClaudeSdkOpts(TIER_PROFILES.admin)
-      expect(out.permissionMode).toBe('bypassPermissions')
+    it('dangerously mode → permissionMode=bypassPermissions regardless of tier', () => {
+      // Operator override: --dangerously short-circuits all tiers.
+      expect(tierProfileToClaudeSdkOpts(TIER_PROFILES.admin, 'dangerously').permissionMode).toBe('bypassPermissions')
+      expect(tierProfileToClaudeSdkOpts(TIER_PROFILES.trusted, 'dangerously').permissionMode).toBe('bypassPermissions')
+      expect(tierProfileToClaudeSdkOpts(TIER_PROFILES.guest, 'dangerously').permissionMode).toBe('bypassPermissions')
+    })
+
+    it('strict + admin → permissionMode=default + canUseTool (admin tier relay set fires for destructive)', () => {
+      // Post-RFC-05: admin in strict no longer auto-bypasses. canUseTool
+      // fires for every tool; admin's tier policy auto-allows safe tools
+      // and relays destructive Bash / memory_delete via permission-relay.
+      const out = tierProfileToClaudeSdkOpts(TIER_PROFILES.admin, 'strict')
+      expect(out.permissionMode).toBe('default')
       expect(out.disallowedTools).toBeUndefined()
     })
 
-    it('trusted → permissionMode=default, no disallowedTools (canUseTool relays destructive)', () => {
-      const out = tierProfileToClaudeSdkOpts(TIER_PROFILES.trusted)
+    it('strict + trusted → permissionMode=default, no disallowedTools (canUseTool relays destructive)', () => {
+      const out = tierProfileToClaudeSdkOpts(TIER_PROFILES.trusted, 'strict')
       expect(out.permissionMode).toBe('default')
       // shell_destructive is relayed via canUseTool, not via disallowedTools —
       // because disallowedTools blocks at the tool name level and we'd lose
@@ -404,8 +414,8 @@ describe('claude-agent-provider', () => {
       expect(out.disallowedTools).toBeUndefined()
     })
 
-    it('guest → permissionMode=default + disallowedTools blocks non-allowed built-ins', () => {
-      const out = tierProfileToClaudeSdkOpts(TIER_PROFILES.guest)
+    it('strict + guest → permissionMode=default + disallowedTools blocks non-allowed built-ins', () => {
+      const out = tierProfileToClaudeSdkOpts(TIER_PROFILES.guest, 'strict')
       expect(out.permissionMode).toBe('default')
       expect(out.disallowedTools).toBeDefined()
       expect(out.disallowedTools).toContain('Bash')
@@ -413,7 +423,7 @@ describe('claude-agent-provider', () => {
     })
 
     it('guest disallowedTools is exactly the built-in tools mapped to non-allow ToolKinds', () => {
-      const out = tierProfileToClaudeSdkOpts(TIER_PROFILES.guest)
+      const out = tierProfileToClaudeSdkOpts(TIER_PROFILES.guest, 'strict')
       const set = new Set(out.disallowedTools ?? [])
       expect(set.has('Bash')).toBe(true)
       expect(set.has('KillShell')).toBe(true)
@@ -436,7 +446,7 @@ describe('claude-agent-provider', () => {
 
   it('assistant text arriving with no active queue is dropped with [STREAM_DROP] warn', async () => {
     const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
-    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, chatId: '_test' })
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 

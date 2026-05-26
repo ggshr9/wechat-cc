@@ -1,4 +1,5 @@
 import type { TierProfile } from './user-tier'
+import type { PermissionMode } from './capability-matrix'
 
 export interface AgentProject {
   alias: string
@@ -66,17 +67,49 @@ export interface AgentSession {
  */
 export type CheapEval = (prompt: string) => Promise<string>
 
+/**
+ * Per-spawn context passed to every `AgentProvider.spawn`. RFC 05 — the
+ * uniform shape lets providers (Claude / Codex / Cursor / future
+ * gemini-cli) translate daemon-owned policy (tierProfile +
+ * permissionMode) into their own SDK options without the daemon having
+ * to know provider-specific SDK shapes.
+ *
+ * **`permissionMode`** is the daemon-wide flag (`--dangerously` ⇒
+ * `'dangerously'`; otherwise `'strict'`). Providers MUST honor this —
+ * dangerously means "operator opted into full bypass, regardless of
+ * what tier this chat is in".
+ *
+ * Why this lives next to `tierProfile`: pre-RFC-05, providers tried to
+ * infer "is this a dangerously spawn" from `tierProfile.relay.size === 0
+ * && tierProfile.deny.size === 0` (admin tier shape) — that conflated
+ * "this user is admin" with "operator launched --dangerously", and
+ * broke silently when admin tier policy changed (C4) or when the
+ * dangerously flag changed without bumping tier (C5). The fix is to
+ * thread `permissionMode` explicitly.
+ */
+export interface SpawnContext {
+  tierProfile: TierProfile
+  permissionMode: PermissionMode
+  /** Bound at spawn time so per-session canUseTool closures resolve the
+   *  right chat's tier under concurrent dispatch (no `lastActiveChatId`
+   *  process-wide reads). */
+  chatId: string
+  /** When set, the provider should resume an existing session (claude
+   *  jsonl, codex thread id, cursor agent id) instead of cold-starting. */
+  resumeSessionId?: string
+}
+
 export interface AgentProvider {
   /**
-   * `chatId` is required so the provider (Claude) can bake it into its
-   * per-session canUseTool closure — see permission-relay.ts. Process-wide
-   * "lastActiveChatId" was previously read inside the closure, which under
-   * concurrent dispatch could cross-resolve tiers (chat A's tool decision
-   * resolving with chat B's tier). Codex doesn't use canUseTool and treats
-   * chatId as informational only. Delegate path passes a sentinel like
-   * `'_delegate'` — the delegate has no real chat owner.
+   * Spawn a session. See `SpawnContext` for the per-spawn shape;
+   * provider-construction opts (model, mcpServers, claude binary,
+   * etc.) come from the factory call.
+   *
+   * Concurrency: providers are NOT required to support overlapping
+   * spawns or dispatches on the same session. Coordinators serialise
+   * per-chat.
    */
-  spawn(project: AgentProject, opts: { resumeSessionId?: string; tierProfile: TierProfile; chatId: string }): Promise<AgentSession>
+  spawn(project: AgentProject, ctx: SpawnContext): Promise<AgentSession>
   /**
    * Optional one-shot eval. Coordinators that need cheap routing /
    * decision LLM calls should resolve via `ProviderRegistry.getCheapEval()`

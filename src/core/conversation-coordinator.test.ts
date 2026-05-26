@@ -201,6 +201,7 @@ describe('ConversationCoordinator', () => {
       providerId: 'codex',
       chatId: 'chat-1',
       tierProfile: TIER_PROFILES.admin,
+      permissionMode: 'strict',
     })
     expect(dispatched).toContain('[fmt]hi codex')
   })
@@ -276,6 +277,7 @@ describe('ConversationCoordinator', () => {
       providerId: 'claude',
       chatId: 'chat-1',
       tierProfile: TIER_PROFILES.admin,
+      permissionMode: 'strict',
     })
     expect(log).toHaveBeenCalledWith('COORDINATOR', expect.stringContaining("provider 'gemini' not registered"))
   })

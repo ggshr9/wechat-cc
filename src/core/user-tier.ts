@@ -55,14 +55,22 @@ function difference(a: ReadonlySet<ToolKind>, b: ReadonlySet<ToolKind>): Set<Too
   return out
 }
 
+// Admin tier still gets prompted in strict mode for genuinely
+// destructive ops — they're admins, but accidents happen. The relay
+// prompt goes to the admin themselves (per the sweep#6 fix in
+// resolveAdminChatId), giving a "are you sure?" gate without
+// inconveniencing day-to-day use. Operators who want zero prompts
+// launch with `--dangerously`.
+const ADMIN_RELAY = new Set<ToolKind>(['shell_destructive', 'memory_delete'])
+
 const TRUSTED_RELAY = new Set<ToolKind>(['shell_destructive', 'memory_delete', 'a2a_send'])
 
 const GUEST_ALLOW = new Set<ToolKind>(['reply', 'share_page', 'memory_read', 'observations_read'])
 
 export const TIER_PROFILES: Record<UserTier, TierProfile> = {
   admin: {
-    allow: ALL_KINDS,
-    relay: new Set(),
+    allow: difference(ALL_KINDS, ADMIN_RELAY),
+    relay: ADMIN_RELAY,
     deny: new Set(),
   },
   trusted: {
