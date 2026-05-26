@@ -13,6 +13,7 @@
  * See docs/superpowers/specs/2026-05-22-user-tier-permissions-design.md.
  */
 import type { Access } from '../lib/access'
+import type { PermissionMode } from './capability-matrix'
 
 export type UserTier = 'admin' | 'trusted' | 'guest'
 
@@ -88,23 +89,49 @@ export function resolveTier(chatId: string, access: Access): UserTier {
 }
 
 /**
+ * Effective tier, honoring the daemon-wide `--dangerously` flag. When the
+ * operator launched with `--dangerously` (`permissionMode === 'dangerously'`)
+ * every chat is treated as admin — matching the pre-v0.6 behavior where
+ * the dangerously flag uniformly bypassed sandbox / approval / canUseTool
+ * for ALL chats. Without this override the per-tier sandbox/approval
+ * derivation (codex guest → read-only + untrusted; claude trusted →
+ * default+canUseTool) silently overrode the operator's intent on every
+ * non-admin chat.
+ */
+export function resolveEffectiveTier(
+  chatId: string,
+  access: Access,
+  permissionMode: PermissionMode,
+): UserTier {
+  if (permissionMode === 'dangerously') return 'admin'
+  return resolveTier(chatId, access)
+}
+
+/**
  * Regex set for destructive Bash commands. Best-effort — a determined
  * adversary can `eval` or obfuscate. The intent is preventing
  * accidents and surface-level prompt injection, not stopping malice.
  *
  * Pattern guidelines:
  *   - Anchor to word boundaries so we don't over-fire on "rm" inside a path
- *     ("/var/farm/...") or git command embedded in a string.
+ *     ("/var/farm/...").
+ *   - Quote chars (`'` / `"`) ARE in the trigger class — `bash -c "rm -rf"`
+ *     is a real attack/accident path (AI agents routinely chain commands
+ *     via `bash -c "..."`). This means `echo "rm is dangerous"` also
+ *     classifies as destructive; for a relay prompt that's an acceptable
+ *     false positive — the doc-string above commits us to err on the
+ *     side of triggering.
  *   - `\s+` between args so `rm  -rf` (multiple spaces) still matches.
  *
  * Extend by adding patterns; document the rationale next to each.
  */
+const TRIGGER = String.raw`(?:^|[;&|\`$()\s'"])`
 const DESTRUCTIVE_BASH_PATTERNS: ReadonlyArray<RegExp> = [
-  /(?:^|[;&|`$()\s])rm(?:\s+-[a-zA-Z]*)*\s+/,     // rm, rm -rf, rm -f, etc.
-  /(?:^|[;&|`$()\s])git\s+reset\s+--hard/,        // git reset --hard
-  /(?:^|[;&|`$()\s])git\s+push\b[^|]*--force/,    // git push --force / --force-with-lease
-  /(?:^|[;&|`$()\s])git\s+branch\s+-D\b/,         // git branch -D
-  /(?:^|[;&|`$()\s])dd\s+(?:if|of)=/,             // dd if=… of=…
+  new RegExp(`${TRIGGER}rm(?:\\s+-[a-zA-Z]*)*\\s+`),     // rm, rm -rf, rm -f, etc.
+  new RegExp(`${TRIGGER}git\\s+reset\\s+--hard`),        // git reset --hard
+  new RegExp(`${TRIGGER}git\\s+push\\b[^|]*--force`),    // git push --force / --force-with-lease
+  new RegExp(`${TRIGGER}git\\s+branch\\s+-D\\b`),        // git branch -D
+  new RegExp(`${TRIGGER}dd\\s+(?:if|of)=`),              // dd if=… of=…
 ]
 
 function isDestructiveBash(command: string): boolean {

@@ -14,8 +14,9 @@ import { makeEventsStore } from '../events/store'
 import { makeObservationsStore } from '../observations/store'
 import { runIntrospectTick } from '../companion/introspect'
 import { resolveIntrospectChatId, makeIntrospectAgent } from '../companion/introspect-runtime'
-import { resolveTier, TIER_PROFILES } from '../../core/user-tier'
+import { resolveEffectiveTier, TIER_PROFILES } from '../../core/user-tier'
 import type { Access } from '../../lib/access'
+import type { PermissionMode } from '../../core/capability-matrix'
 
 function errMsg(err: unknown): string { return err instanceof Error ? err.message : String(err) }
 
@@ -33,6 +34,12 @@ export interface TickDeps {
    * `default_chat_id` is a misconfiguration the tick surfaces via log.
    */
   loadAccess: () => Access
+  /**
+   * Daemon-wide permission mode. When 'dangerously', the companion tick
+   * promotes the resolved tier to admin so the operator's `--dangerously`
+   * intent applies to background ticks as well as user-initiated dispatch.
+   */
+  permissionMode: PermissionMode
   log: (tag: string, line: string, fields?: Record<string, unknown>) => void
 }
 
@@ -89,7 +96,7 @@ export function buildTickBodies(deps: TickDeps): TickBodies {
     // misconfigured default_chat_id (pointing at a non-admin) runs with
     // reduced capabilities rather than silently inheriting admin.
     const chatId = cfg.default_chat_id
-    const tier = resolveTier(chatId, deps.loadAccess())
+    const tier = resolveEffectiveTier(chatId, deps.loadAccess(), deps.permissionMode)
     if (tier !== 'admin') {
       deps.log('COMPANION', `default_chat_id=${chatId} is non-admin tier (${tier}); push tick will run with reduced capabilities`)
     }

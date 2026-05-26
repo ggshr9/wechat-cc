@@ -22,7 +22,7 @@ import type { InboundMsg } from './prompt-format'
 import { evaluateRound as evaluateModeratorRound, type ModeratorDecision, type ChatroomEntry } from './chatroom-moderator'
 import { assertSupported, UnsupportedCombinationError, type PermissionMode } from './capability-matrix'
 import { collectTurn, type TurnSummary } from './agent-provider'
-import { resolveTier, TIER_PROFILES } from './user-tier'
+import { resolveEffectiveTier, TIER_PROFILES } from './user-tier'
 import type { Access } from '../lib/access'
 
 export class ModeNotImplementedError extends Error {
@@ -307,7 +307,7 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     proj: { alias: string; path: string },
     providerId: ProviderId,
   ): Promise<void> {
-    const tier = resolveTier(msg.chatId, deps.loadAccess())
+    const tier = resolveEffectiveTier(msg.chatId, deps.loadAccess(), deps.permissionMode)
     const tierProfile = TIER_PROFILES[tier]
     deps.log('COORDINATOR', `solo chat=${msg.chatId} → project=${proj.alias} provider=${providerId} tier=${tier}`, {
       event: 'dispatch_solo',
@@ -424,7 +424,7 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     // same tier profile. (Re-resolving per round would let an access.json
     // edit mid-loop take effect; we prefer consistency within one user
     // turn.)
-    const tier = resolveTier(msg.chatId, deps.loadAccess())
+    const tier = resolveEffectiveTier(msg.chatId, deps.loadAccess(), deps.permissionMode)
     const tierProfile = TIER_PROFILES[tier]
 
     // v0.5.9 — chatroom is a persistent session. Pull existing history
@@ -642,7 +642,7 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     proj: { alias: string; path: string },
     participants: ProviderId[],
   ): Promise<void> {
-    const tier = resolveTier(msg.chatId, deps.loadAccess())
+    const tier = resolveEffectiveTier(msg.chatId, deps.loadAccess(), deps.permissionMode)
     const tierProfile = TIER_PROFILES[tier]
     deps.log('COORDINATOR', `parallel chat=${msg.chatId} → project=${proj.alias} providers=${participants.join(',')} tier=${tier}`)
     const handles = await Promise.all(

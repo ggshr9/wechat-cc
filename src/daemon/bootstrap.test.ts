@@ -406,6 +406,41 @@ describe('bootstrap', () => {
         { default_chat_id: null } as CompanionConfig,
       )).toBe('a')
     })
+
+    it('prefers the initiating chat when it is itself an admin (multi-admin)', () => {
+      // Multi-admin install: prompt goes to whichever admin triggered the
+      // tool call. Closes the "admins[1+] never see prompts" gap without
+      // reintroducing the guest self-approval hole (only admins are
+      // allowed to self-approve).
+      const access = {
+        dmPolicy: 'allowlist',
+        allowFrom: ['admin-a', 'admin-b', 'admin-c'],
+        admins: ['admin-a', 'admin-b', 'admin-c'],
+      } as Access
+      const companion = { default_chat_id: null } as CompanionConfig
+      expect(resolveAdminChatId(access, companion, 'admin-b')).toBe('admin-b')
+      expect(resolveAdminChatId(access, companion, 'admin-c')).toBe('admin-c')
+    })
+
+    it('routes non-admin initiator to default_chat_id / admins[0]', () => {
+      // Guest/trusted initiating chat MUST NOT self-approve. Falls
+      // through to companion.default_chat_id (if admin) or admins[0].
+      const access = {
+        dmPolicy: 'allowlist',
+        allowFrom: ['guest-x', 'admin-a', 'admin-b'],
+        admins: ['admin-a', 'admin-b'],
+      } as Access
+      expect(resolveAdminChatId(
+        access,
+        { default_chat_id: 'admin-b' } as CompanionConfig,
+        'guest-x',
+      )).toBe('admin-b')
+      expect(resolveAdminChatId(
+        access,
+        { default_chat_id: null } as CompanionConfig,
+        'guest-x',
+      )).toBe('admin-a')
+    })
   })
 
   it('system prompt is the prompt-builder output (mentions delegate_codex for claude sessions)', async () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveTier, TIER_PROFILES, type UserTier, type ToolKind } from './user-tier'
+import { resolveTier, resolveEffectiveTier, TIER_PROFILES, type UserTier, type ToolKind } from './user-tier'
 import type { Access } from '../lib/access'
 
 const baseAccess: Access = {
@@ -30,6 +30,27 @@ describe('resolveTier', () => {
     expect(resolveTier('dupe', {
       ...baseAccess, admins: ['dupe'], trusted: ['dupe'],
     })).toBe('admin')
+  })
+})
+
+describe('resolveEffectiveTier — --dangerously override', () => {
+  it('strict mode: behaves identically to resolveTier', () => {
+    expect(resolveEffectiveTier('admin1', baseAccess, 'strict')).toBe('admin')
+    expect(resolveEffectiveTier('trusted1', baseAccess, 'strict')).toBe('trusted')
+    expect(resolveEffectiveTier('guest1', baseAccess, 'strict')).toBe('guest')
+    expect(resolveEffectiveTier('unknown', baseAccess, 'strict')).toBe('guest')
+  })
+
+  it('dangerously mode: every chat is promoted to admin', () => {
+    // The operator launched `wechat-cc run --dangerously` expecting all
+    // chats to bypass sandbox/relay. Pre-fix, only access.admins chats
+    // got admin perms; guest/trusted chats silently kept their reduced
+    // sandbox (codex guest → read-only + untrusted, claude trusted →
+    // canUseTool relay) regardless of the daemon flag.
+    expect(resolveEffectiveTier('admin1', baseAccess, 'dangerously')).toBe('admin')
+    expect(resolveEffectiveTier('trusted1', baseAccess, 'dangerously')).toBe('admin')
+    expect(resolveEffectiveTier('guest1', baseAccess, 'dangerously')).toBe('admin')
+    expect(resolveEffectiveTier('unknown', baseAccess, 'dangerously')).toBe('admin')
   })
 })
 
@@ -134,8 +155,28 @@ describe('classifyToolUse', () => {
     expect(classifyToolUse('Bash', { command: 'git push --force-with-lease' })).toBe('shell_destructive')
     expect(classifyToolUse('Bash', { command: 'git branch -D feature' })).toBe('shell_destructive')
   })
-  it('Bash with command that mentions rm in a string → shell (not destructive)', () => {
-    expect(classifyToolUse('Bash', { command: 'echo "rm is dangerous"' })).toBe('shell')
+  it('Bash with destructive command inside bash -c "..." → shell_destructive', () => {
+    // AI agents routinely chain commands via `bash -c "..."`; the destructive
+    // intent inside quotes must still trigger the relay. Trigger class
+    // includes `'` and `"` for this reason.
+    expect(classifyToolUse('Bash', { command: 'bash -c "rm -rf /tmp/important"' })).toBe('shell_destructive')
+    expect(classifyToolUse('Bash', { command: "bash -c 'rm -rf /tmp/important'" })).toBe('shell_destructive')
+    expect(classifyToolUse('Bash', { command: 'sh -c "git reset --hard HEAD~1"' })).toBe('shell_destructive')
+    expect(classifyToolUse('Bash', { command: 'bash -c "cd foo && git push --force"' })).toBe('shell_destructive')
+  })
+  it('Bash echoing a destructive string is a known false positive (relay-side)', () => {
+    // Conservative classifier: prefer over-prompting to under-prompting.
+    // `echo "rm is dangerous"` doesn't actually delete anything, but the
+    // tier policy classifies it as destructive so the operator sees a
+    // relay prompt. Acceptable trade since the intent is preventing
+    // accidents, not stopping a determined adversary.
+    expect(classifyToolUse('Bash', { command: 'echo "rm is dangerous"' })).toBe('shell_destructive')
+  })
+  it('Bash with rm-substring inside path is not destructive', () => {
+    // The word-boundary anchor (`\s+` after rm) requires rm to look like a
+    // command token, so `/var/farm/...` stays classified as plain shell.
+    expect(classifyToolUse('Bash', { command: 'ls /var/farm/data' })).toBe('shell')
+    expect(classifyToolUse('Bash', { command: 'cd /home/uname/' })).toBe('shell')
   })
   it('KillShell → shell', () => {
     expect(classifyToolUse('KillShell', { shell_id: 'x' })).toBe('shell')

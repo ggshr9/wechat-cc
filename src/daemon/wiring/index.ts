@@ -74,7 +74,10 @@ export function wireMain(opts: WireMainOpts): WiredDeps {
     guard: new Ref<GuardLifecycle>('guard'),
     pipeline: new Ref<PipelineRun>('pipeline'),
   }
-  const ticks = buildTickBodies(opts)
+  const ticks = buildTickBodies({
+    ...opts,
+    permissionMode: opts.dangerously ? 'dangerously' : 'strict',
+  })
   const { pipelineDeps } = buildPipelineDeps(opts, refs)
   const lifecycleDeps = buildLifecycleDeps(opts, ticks)
   return {

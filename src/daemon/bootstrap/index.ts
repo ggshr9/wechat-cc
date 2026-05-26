@@ -278,19 +278,31 @@ function wrapCheapEvalWithAuthFailCheck(
 /**
  * Resolve which chat receives permission-relay prompts. Pre-Task-13 the
  * relay routed to `lastActiveChatId` — a security hole, since a guest who
- * could trigger a tool call could then approve their own request. Now the
- * relay target is always an admin:
+ * could trigger a tool call could then approve their own request. The
+ * relay target is now an admin chat, but we still prefer the INITIATING
+ * chat when that chat itself is in `access.admins`:
  *
- *   1. If companion.default_chat_id is set AND that chat is admin, use it
+ *   1. If `initiatingChatId` is itself an admin, prompt that admin.
+ *      Closes the multi-admin gap where admin[1+] never sees prompts for
+ *      their own tool calls. Admin self-approval is fine — the original
+ *      security hole was specifically guest self-approval.
+ *   2. Else if companion.default_chat_id is set AND admin, use it
  *      (operator can explicitly direct prompts to their preferred chat).
- *   2. Otherwise fall back to `access.admins[0]` — first admin in config.
- *   3. If no admins exist at all, return null (relay denies the request).
+ *   3. Otherwise fall back to `access.admins[0]` — first admin in config.
+ *   4. If no admins exist at all, return null (relay denies the request).
  *
  * Called per-tool-call inside the makeCanUseTool closure, so changes to
  * either access.json or companion config take effect within one read TTL
  * (5s for access; instant for companion).
  */
-export function resolveAdminChatId(access: Access, companion: CompanionConfig): string | null {
+export function resolveAdminChatId(
+  access: Access,
+  companion: CompanionConfig,
+  initiatingChatId?: string | null,
+): string | null {
+  if (initiatingChatId && access.admins?.includes(initiatingChatId)) {
+    return initiatingChatId
+  }
   if (companion.default_chat_id && access.admins?.includes(companion.default_chat_id)) {
     return companion.default_chat_id
   }
@@ -340,7 +352,7 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
     // the chat that initiated the dispatch. Closes a self-approval hole
     // where a guest who could trigger a tool call could also click 'allow'
     // on their own request.
-    adminChatId: () => resolveAdminChatId(loadAccess(), loadCompanionConfig(deps.stateDir)),
+    adminChatId: () => resolveAdminChatId(loadAccess(), loadCompanionConfig(deps.stateDir), chatId),
     // Task 13 — tier resolution rules:
     //   - dangerouslySkipPermissions=true  → every chat is admin tier
     //     (global override; old default-allow path's new spelling).

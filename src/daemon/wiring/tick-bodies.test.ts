@@ -82,6 +82,7 @@ function setupDeps(opts: {
       registry: { getCheapEval: () => null } as never,
     } as never,
     loadAccess: () => access,
+    permissionMode: 'strict',
     log: (tag, line) => { logs.push(`${tag}|${line}`) },
   }
   return { stateDir, acquire, isInFlight, dispatch, logs, deps }
