@@ -182,7 +182,7 @@ export function restartButtonState(daemon, service) {
  *
  * @param {{
  *   report: import('../src/cli/doctor.ts').DoctorReport,
- *   healthOk: boolean | null,
+ *   healthOk: boolean | null,   // null = health-probe not yet wired (Step 1 stub); code 7 never fires
  *   lastError: unknown | null,
  *   lastRestart?: { pidUnchanged: boolean } | null,
  *   platform?: string,

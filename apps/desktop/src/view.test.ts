@@ -656,8 +656,10 @@ describe('diagnose', () => {
         lastError: null,
       })
       expect(result.code).toBe(1)
-      expect(result.title).toBeTruthy()
-      expect(result.hint).toBeTruthy()
+      expect(result.title).toBe('后台服务挂了')
+      expect(result.hint).toMatch(/OOM|panic|pid 文件/)
+      expect(result.secondary).toBeDefined()
+      expect((result.secondary!.action as any).kind).toBe('open-logs')
       expect((result.primary.action as any).kind).toBe('run-restart-sequence')
     })
 
@@ -673,6 +675,8 @@ describe('diagnose', () => {
         lastError: null,
       })
       expect(result.code).toBe(2)
+      expect(result.secondary).toBeDefined()
+      expect((result.secondary!.action as any).kind).toBe('open-logs')
       expect((result.primary.action as any).kind).toBe('run-restart-sequence')
     })
 
