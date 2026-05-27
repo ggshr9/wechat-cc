@@ -100,9 +100,17 @@ const __mockState: {
   //                   specific DoctorReport shapes to drive diagnose() codes.
   //   serviceInvokes: records ['service stop', 'service start', 'kill-residual']
   //                   calls so Playwright tests can assert restart chains fired.
+  //   healthProbeResult: return value for wechat_health_ping invocations.
+  //                      Defaults true (daemon healthy). Set to false via
+  //                      `mock.health-probe` to simulate probe failure.
   doctorOverride: object | null
+  //   doctorErrorOnce: when truthy, the NEXT doctor --json call returns an
+  //                    error (causing invoke() to throw, setting lastError).
+  //                    Cleared automatically after firing — one-shot.
+  doctorErrorOnce: boolean
   serviceInvokes: string[]
-} = { chats: [], observations: [], milestones: [], sessions: [], daemonAlive: true, installProgress: null, installSimulationStep: 0, conversations: null, a2aAgents: [], a2aEvents: [], doctorOverride: null, serviceInvokes: [] }
+  healthProbeResult: boolean
+} = { chats: [], observations: [], milestones: [], sessions: [], daemonAlive: true, installProgress: null, installSimulationStep: 0, conversations: null, a2aAgents: [], a2aEvents: [], doctorOverride: null, doctorErrorOnce: false, serviceInvokes: [], healthProbeResult: true }
 
 // ─── A2A mock credentials ─────────────────────────────────────────────────────
 // The A2A routes (/v1/a2a/*) are served by the SAME Bun.serve instance as the
@@ -252,7 +260,9 @@ Bun.serve({
           __mockState.a2aAgents = []
           __mockState.a2aEvents = []
           __mockState.doctorOverride = null
+          __mockState.doctorErrorOnce = false
           __mockState.serviceInvokes = []
+          __mockState.healthProbeResult = true
           return Response.json({ result: { ok: true } })
         }
 
@@ -278,6 +288,23 @@ Bun.serve({
         // since the last reset. Used to assert restart chains fired.
         if (body.command === 'mock.get-service-invokes') {
           return Response.json({ result: { invokes: __mockState.serviceInvokes } })
+        }
+
+        // mock.health-probe: set the return value for wechat_health_ping.
+        // Pass { result: true } to simulate a healthy daemon, { result: false }
+        // to simulate probe failure (daemon not responding).
+        if (body.command === 'mock.health-probe') {
+          const r = body.args as { result?: boolean } | undefined
+          __mockState.healthProbeResult = r?.result !== false
+          return Response.json({ result: { ok: true } })
+        }
+
+        // mock.doctor-error: make the NEXT doctor --json call throw (one-shot).
+        // This populates doctorPoller.lastError so restartDaemon sees a non-null
+        // lastError when it calls refresh(). Used to drive code-7 tests.
+        if (body.command === 'mock.doctor-error') {
+          __mockState.doctorErrorOnce = true
+          return Response.json({ result: { ok: true } })
         }
 
         if (body.command === 'demo.seed') {
@@ -323,6 +350,11 @@ Bun.serve({
           __mockState.qrScanComplete = false
           __mockState.qrScanFails = false
           __mockState.envCheck = undefined
+          // Reset reconnect-diagnose test state so prior test runs don't
+          // contaminate subsequent ones (doctorOverride / error flags / invokes).
+          __mockState.doctorOverride = null
+          __mockState.doctorErrorOnce = false
+          __mockState.serviceInvokes = []
           return Response.json({ ok: true, seeded: true })
         }
 
@@ -457,6 +489,12 @@ Bun.serve({
             body.command === 'wechat_cli_json' &&
             cliArgs[0] === 'doctor'
           ) {
+            // doctorErrorOnce: one-shot error injection so lastError gets set.
+            // Cleared immediately after firing; next poll returns normally.
+            if (__mockState.doctorErrorOnce) {
+              __mockState.doctorErrorOnce = false
+              return Response.json({ error: 'simulated doctor poll error' })
+            }
             // If a doctorOverride is set (by mock.doctor test-control),
             // return it verbatim so reconnect-diagnose tests can inject
             // specific DoctorReport shapes to drive diagnosis codes.
@@ -497,7 +535,13 @@ Bun.serve({
                     provider: 'claude',
                     binaryPath: '/usr/local/bin/claude',
                   },
-                  daemon: { alive: daemonAlive, pid: daemonAlive ? 12345 : null },
+                  daemon: {
+                    alive: daemonAlive,
+                    pid: daemonAlive ? 12345 : null,
+                    // Fake internal_api so health-probe tests can call
+                    // wechat_health_ping (shim ignores the actual values).
+                    ...(daemonAlive ? { internal_api: { port: 9999, token_file_path: '/tmp/fake-shim-token' } } : {}),
+                  },
                   service: { installed: seeded, kind: 'launchagent' },
                 },
                 userNames,
@@ -777,6 +821,14 @@ Bun.serve({
           const text = (body.args as { text?: string } | undefined)?.text ?? ''
           return Response.json({ result: placeholderQr(text) })
         }
+
+        // wechat_health_ping — returns __mockState.healthProbeResult.
+        // In dry-run the shim can't read a 0o600 token or hit a real daemon;
+        // the mock is the source of truth for health-probe tests.
+        if (body.command === 'wechat_health_ping') {
+          return Response.json({ result: __mockState.healthProbeResult })
+        }
+
         return Response.json({ error: `unknown command: ${body.command}` })
       } catch (err) {
         return Response.json({ error: err instanceof Error ? err.message : String(err) })

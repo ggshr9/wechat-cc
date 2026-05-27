@@ -400,4 +400,35 @@ test.describe('reconnect-diagnose card', () => {
     // Pending text shows the "all green" message
     await expect(page.locator('#dash-pending')).toHaveText('一切正常，无需操作', { timeout: 3000 })
   })
+
+  test('frontend-stuck click shows code-7 card (lastError non-null + healthOk=true)', async ({ page, shimUrl, shim }) => {
+    // Seed so dashboard mode is reached with daemonAlive=true (generates a
+    // report with internal_api in daemon.checks so healthProbe can fire).
+    await shim.invoke('demo.seed', { chat_id: 'test_chat' })
+    await bootIntoDashboard(page, shimUrl)
+
+    // Ensure health probe returns true (default, but be explicit).
+    await shim.invoke('mock.health-probe', { result: true })
+
+    // Make the NEXT doctor --json call fail so doctorPoller.lastError gets set.
+    // The poller's .current still holds the last good report (from boot poll).
+    await shim.invoke('mock.doctor-error')
+
+    // Force-show the restart button (daemon was alive at boot → stop btn shown).
+    await page.evaluate(() => {
+      const btn = document.getElementById('dash-restart')
+      if (btn) btn.hidden = false
+    })
+
+    // Click "重新连接" — restartDaemon:
+    //   1. refresh() fails → lastError set, returns null
+    //   2. current report has daemon.internal_api → healthProbe fires → true
+    //   3. diagnose({ report, healthOk: true, lastError: non-null }) → code 7
+    await page.locator('#dash-restart').click()
+
+    await expect(page.locator('#reconnect-diagnose-card')).toBeVisible({ timeout: 5000 })
+    await expect(page.locator('#rdc-title')).toContainText(/Dashboard 自己卡了|前端|本地轮询/i)
+    // Primary action is "重启 Dashboard"
+    await expect(page.locator('#rdc-primary')).toHaveText('重启 Dashboard')
+  })
 })
