@@ -26,6 +26,8 @@ export interface AccessSnapshot {
 export interface DaemonSnapshot {
   alive: boolean
   pid: number | null
+  /** Present only when daemon is alive and internal-api-info.json is readable. */
+  internal_api?: { port: number; token_file_path: string }
 }
 
 export interface ExpiredBotEntry {
@@ -488,12 +490,34 @@ export function readDaemon(stateDir: string): DaemonSnapshot {
     if (!Number.isFinite(pid) || pid <= 0) return { alive: false, pid: null }
     try {
       process.kill(pid, 0)
-      return { alive: true, pid }
+      // Daemon is alive — try to read internal-api-info.json for health-probe
+      const internal_api = readInternalApiInfo(stateDir)
+      return { alive: true, pid, ...(internal_api ? { internal_api } : {}) }
     } catch {
       return { alive: false, pid }
     }
   } catch {
     return { alive: false, pid: null }
+  }
+}
+
+/**
+ * Read `<stateDir>/internal-api-info.json` and extract the port + token-file
+ * path. Returns null if the file is absent, malformed, or missing required
+ * fields — callers treat null as "info not available".
+ */
+function readInternalApiInfo(stateDir: string): { port: number; token_file_path: string } | null {
+  try {
+    const raw = readFileSync(join(stateDir, 'internal-api-info.json'), 'utf8')
+    const info = JSON.parse(raw) as { baseUrl?: string; tokenFilePath?: string }
+    if (typeof info.baseUrl !== 'string' || typeof info.tokenFilePath !== 'string') return null
+    const match = /\:(\d+)$/.exec(info.baseUrl.replace(/\/$/, ''))
+    if (!match) return null
+    const port = Number(match[1])
+    if (!Number.isFinite(port) || port <= 0 || port > 65535) return null
+    return { port, token_file_path: info.tokenFilePath }
+  } catch {
+    return null
   }
 }
 

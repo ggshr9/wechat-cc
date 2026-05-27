@@ -48,6 +48,8 @@ const ExpiredBotEntry = z.object({
 const DaemonSnapshot = z.object({
   alive: z.boolean(),
   pid: z.number().nullable(),
+  /** Present only when daemon is alive and internal-api-info.json is readable. */
+  internal_api: z.object({ port: z.number(), token_file_path: z.string() }).optional(),
 })
 
 const ServiceKind = z.enum(['launchagent', 'scheduled-task', 'systemd-user'])

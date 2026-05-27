@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest'
-import { analyzeDoctor, setupStatus, serviceStatus } from './doctor'
+import { describe, expect, it, afterEach } from 'vitest'
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { analyzeDoctor, setupStatus, serviceStatus, readDaemon } from './doctor'
 
 const installedSystemd = () => ({ installed: true, kind: 'systemd-user' as const })
 const missingSystemd = () => ({ installed: false, kind: 'systemd-user' as const })
@@ -380,5 +382,72 @@ describe('doctor installer JSON', () => {
     // Source mode: bun missing → install_bun in nextActions (the existing
     // contract — bundle mode is the deviation, not the default).
     expect(report.nextActions).toContain('install_bun')
+  })
+})
+
+// ── readDaemon: internal_api population ────────────────────────────────────
+describe('readDaemon internal_api', () => {
+  const tmpDir = join('/tmp', `readDaemon-test-${process.pid}`)
+
+  afterEach(() => {
+    try { rmSync(tmpDir, { recursive: true, force: true }) } catch { /* ignore */ }
+  })
+
+  it('populates internal_api when daemon alive and info file present', () => {
+    mkdirSync(tmpDir, { recursive: true })
+    // Write a server.pid pointing at the current process (guaranteed alive)
+    writeFileSync(join(tmpDir, 'server.pid'), String(process.pid))
+    writeFileSync(
+      join(tmpDir, 'internal-api-info.json'),
+      JSON.stringify({ baseUrl: 'http://127.0.0.1:54321', tokenFilePath: join(tmpDir, 'internal-token'), pid: process.pid, ts: Date.now() }),
+    )
+    const snap = readDaemon(tmpDir)
+    expect(snap.alive).toBe(true)
+    expect(snap.pid).toBe(process.pid)
+    expect(snap.internal_api).toEqual({ port: 54321, token_file_path: join(tmpDir, 'internal-token') })
+  })
+
+  it('omits internal_api when daemon alive but info file absent', () => {
+    mkdirSync(tmpDir, { recursive: true })
+    writeFileSync(join(tmpDir, 'server.pid'), String(process.pid))
+    // No internal-api-info.json written
+    const snap = readDaemon(tmpDir)
+    expect(snap.alive).toBe(true)
+    expect(snap.internal_api).toBeUndefined()
+  })
+
+  it('omits internal_api when daemon dead', () => {
+    mkdirSync(tmpDir, { recursive: true })
+    // Use pid 0 to force alive=false (process.kill(0, 0) throws ESRCH)
+    writeFileSync(join(tmpDir, 'server.pid'), '99999999')
+    writeFileSync(
+      join(tmpDir, 'internal-api-info.json'),
+      JSON.stringify({ baseUrl: 'http://127.0.0.1:54321', tokenFilePath: join(tmpDir, 'internal-token'), pid: 99999999, ts: Date.now() }),
+    )
+    const snap = readDaemon(tmpDir)
+    // The pid might exist or not — in either case internal_api must be absent
+    expect(snap.alive).toBe(false)
+    expect(snap.internal_api).toBeUndefined()
+  })
+
+  it('omits internal_api when info file is malformed JSON', () => {
+    mkdirSync(tmpDir, { recursive: true })
+    writeFileSync(join(tmpDir, 'server.pid'), String(process.pid))
+    writeFileSync(join(tmpDir, 'internal-api-info.json'), 'not-json{')
+    const snap = readDaemon(tmpDir)
+    expect(snap.alive).toBe(true)
+    expect(snap.internal_api).toBeUndefined()
+  })
+
+  it('omits internal_api when info file missing baseUrl', () => {
+    mkdirSync(tmpDir, { recursive: true })
+    writeFileSync(join(tmpDir, 'server.pid'), String(process.pid))
+    writeFileSync(
+      join(tmpDir, 'internal-api-info.json'),
+      JSON.stringify({ tokenFilePath: join(tmpDir, 'internal-token') }),
+    )
+    const snap = readDaemon(tmpDir)
+    expect(snap.alive).toBe(true)
+    expect(snap.internal_api).toBeUndefined()
   })
 })
