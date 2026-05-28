@@ -26,7 +26,7 @@ import {
 } from "./modules/wizard.js"
 import { refreshQr } from "./modules/qr.js"
 import { serviceAction, forceKillDaemon } from "./modules/service.js"
-import { renderDashboard, renderRestartButton, setPending, updateClock, restartDaemon, stopDaemon, handleAccountRowClick } from "./modules/dashboard.js"
+import { renderDashboard, renderRestartButton, setPending, updateClock, restartDaemon, stopDaemon, handleAccountRowClick, toggleProviderMenu, closeProviderMenu } from "./modules/dashboard.js"
 import { renderConversations } from "./modules/conversations.js"
 import { loadMemoryPane, wireMemoryButtons, loadMemoryTopZone, loadMemoryDecisions, archiveObservation } from "./modules/memory.js"
 import { loadLogsPane, startLogsAutoRefresh, stopLogsAutoRefresh } from "./modules/logs.js"
@@ -605,6 +605,17 @@ function wireEvents() {
   document.getElementById("update-apply-btn")?.addEventListener("click", () => applyUpdate(deps))
 
   document.getElementById("accounts-body")?.addEventListener("click", ev => handleAccountRowClick(deps, ev))
+
+  // Provider-switch dropdown. The .provider-switch button lives inside
+  // #accounts-current which is re-rendered on every doctor poll, so we
+  // use event delegation on the overview pane instead of a direct listener.
+  // Escape-key and outside-click are handled inside toggleProviderMenu itself.
+  document.querySelector('.dash-pane[data-pane="overview"]')?.addEventListener("click", ev => {
+    const btn = ev.target instanceof HTMLElement ? ev.target.closest(".provider-switch") : null
+    if (!btn) return
+    ev.stopPropagation()
+    toggleProviderMenu(deps, doctorPoller.current)
+  })
 
   // "+ 绑定新账号" routes into the wizard's bind/QR step instead of
   // a stand-alone modal — the modal version was master's flow; moxiuwen's

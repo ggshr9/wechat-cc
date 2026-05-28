@@ -6,14 +6,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 beforeEach(() => {
   // @ts-expect-error provide a minimal getElementById stub
   globalThis.document = { getElementById: () => null }
-  // @ts-expect-error provide the DOM constant used by renderRestartButton
-  globalThis.Node = { TEXT_NODE: 3 }
+  // Use a class for Node so vitest's expect(x instanceof Node) check doesn't
+  // throw — a plain object is not constructable, but vitest's toContain tries
+  // `actual instanceof Node` which throws when Node is not a function.
+  class NodeStub { static TEXT_NODE = 3 }
+  // @ts-expect-error stub Node for test environment
+  globalThis.Node = NodeStub
   // Reset card + restart module-level state so tests don't bleed into each other.
   __resetDiagnoseCardState?.()
 })
 
 // Import AFTER document stub so setPending's getElementById doesn't crash
-const { renderDashboard, renderRestartButton, restartDaemon, runRestartSequence, stopDaemon, renderDiagnoseCard, hideDiagnoseCard, handleDiagnoseAction, __resetDiagnoseCardState } = await import('./dashboard.js')
+const { renderDashboard, renderRestartButton, restartDaemon, runRestartSequence, stopDaemon, renderDiagnoseCard, hideDiagnoseCard, handleDiagnoseAction, __resetDiagnoseCardState, toggleProviderMenu, closeProviderMenu } = await import('./dashboard.js')
 
 function textNode(text = '') {
   return { nodeType: 3, textContent: text }
@@ -96,6 +100,89 @@ function installDashboardDom() {
   }
   globalThis.document = fakeDocument as unknown as typeof document
   return els
+}
+
+// Extends installDashboardDom with the provider-menu element and a fake
+// .provider-switch anchor so toggleProviderMenu can position and populate
+// the menu in tests. Returns the extended element bag.
+function installProviderMenuDom() {
+  const base = installDashboardDom()
+
+  // Buttons added to the menu on each toggleProviderMenu call.
+  const menuButtons: Array<{ dataset: { provider: string }; disabled: boolean; className: string; _clickHandlers: Array<(ev: any) => void> }> = []
+
+  const providerMenu = {
+    ...fakeEl(),
+    hidden: true,
+    style: {} as Record<string, string>,
+    innerHTML: '',
+    _buttons: menuButtons,
+    querySelectorAll: (_sel: string) => menuButtons,
+    contains: (node: any) => menuButtons.includes(node),
+  }
+
+  // Fake .provider-switch button that has getBoundingClientRect
+  const providerSwitch = {
+    ...fakeEl(),
+    getBoundingClientRect: () => ({ bottom: 100, left: 50, top: 70, right: 200, width: 150, height: 30 }),
+    contains: (_node: any) => false,
+  }
+
+  // When innerHTML is set on the menu, parse out data-provider attributes
+  // to build fake button objects.
+  Object.defineProperty(providerMenu, 'innerHTML', {
+    set(html: string) {
+      menuButtons.length = 0
+      // Extract data-provider="..." values from the HTML string
+      const re = /data-provider="([^"]+)"/g
+      let m: RegExpExecArray | null
+      while ((m = re.exec(html)) !== null) {
+        const provider = m[1]!
+        const isActive = html.includes(`class="provider-menu-active"`) && html.indexOf(`class="provider-menu-active"`) < html.indexOf(`data-provider="${provider}"`)
+        const btn: typeof menuButtons[0] = {
+          dataset: { provider },
+          disabled: false,
+          className: isActive ? 'provider-menu-active' : '',
+          _clickHandlers: [],
+        }
+        ;(btn as any).addEventListener = (_ev: string, handler: (ev: any) => void) => {
+          btn._clickHandlers.push(handler)
+        }
+        menuButtons.push(btn)
+      }
+    },
+    get() { return '' },
+  })
+
+  // Track document-level event listeners added by toggleProviderMenu
+  const docListeners: Array<{ type: string; fn: EventListenerOrEventListenerObject; capture?: boolean }> = []
+
+  // Snapshot the base document BEFORE replacing globalThis.document
+  // so the extendedDoc.getElementById can delegate without infinite recursion.
+  const baseDoc = globalThis.document as any
+
+  const extendedDoc = {
+    ...baseDoc,
+    getElementById: (id: string) => {
+      if (id === 'provider-menu') return providerMenu
+      return baseDoc.getElementById(id)
+    },
+    querySelector: (sel: string) => {
+      if (sel === '.provider-switch') return providerSwitch
+      return null
+    },
+    addEventListener: (type: string, fn: EventListenerOrEventListenerObject, capture?: boolean) => {
+      docListeners.push({ type, fn, capture })
+    },
+    removeEventListener: (type: string, fn: EventListenerOrEventListenerObject, capture?: boolean) => {
+      const idx = docListeners.findIndex(l => l.type === type && l.fn === fn && l.capture === capture)
+      if (idx !== -1) docListeners.splice(idx, 1)
+    },
+    _listeners: docListeners,
+  }
+  globalThis.document = extendedDoc as unknown as typeof document
+
+  return { ...base, providerMenu, providerSwitch, menuButtons, docListeners }
 }
 
 function dashboardReport(overrides: Record<string, any> = {}) {
@@ -890,5 +977,134 @@ describe('restartDaemon RECONNECT_DIAGNOSE telemetry', () => {
     expect(elapsed).toBeLessThan(500)
     // Resolve to avoid open-handle warnings
     _resolve({ ok: true })
+  })
+})
+
+// ── toggleProviderMenu / closeProviderMenu ────────────────────────────────
+// Tests use the extended installProviderMenuDom() harness which adds a
+// fake #provider-menu element and .provider-switch anchor stub.
+
+function makeProviderReport(provider = 'claude') {
+  return {
+    checks: {
+      daemon: { alive: true, pid: 1234 },
+      accounts: { count: 1, items: [] },
+      provider: { provider },
+      access: { allowFromCount: 1 },
+      service: { installed: true },
+    },
+    userNames: {},
+    expiredBots: [],
+  }
+}
+
+describe('provider menu', () => {
+  it('toggleProviderMenu populates menu with claude, codex, cursor buttons', async () => {
+    const { menuButtons } = installProviderMenuDom()
+    await toggleProviderMenu(
+      { invoke: vi.fn(async () => ({ ok: true })), doctorPoller: { current: null } },
+      makeProviderReport('claude'),
+    )
+    const providers = menuButtons.map(b => b.dataset.provider)
+    expect(providers).toContain('claude')
+    expect(providers).toContain('codex')
+    expect(providers).toContain('cursor')
+    expect(providers).toHaveLength(3)
+  })
+
+  it('active provider button has provider-menu-active class', async () => {
+    const { menuButtons } = installProviderMenuDom()
+    await toggleProviderMenu(
+      { invoke: vi.fn(async () => ({ ok: true })), doctorPoller: { current: null } },
+      makeProviderReport('codex'),
+    )
+    const activeBtn = menuButtons.find(b => b.className === 'provider-menu-active')
+    expect(activeBtn?.dataset.provider).toBe('codex')
+  })
+
+  it('clicking a different provider invokes CLI and calls runRestartSequence', async () => {
+    const { menuButtons, providerMenu } = installProviderMenuDom()
+    const invokeCalls: Array<[string, string[]]> = []
+    const invoke = vi.fn(async (name: string, args?: any) => {
+      invokeCalls.push([name, args?.args ?? []])
+      return { ok: true }
+    })
+    const doctorPoller = {
+      refresh: vi.fn(async () => makeProviderReport('codex')),
+      current: makeProviderReport('claude'),
+      waitForCondition: vi.fn(async (pred: (r: any) => boolean) => makeProviderReport('codex')),
+      lastError: null,
+    }
+    await toggleProviderMenu({ invoke, doctorPoller }, makeProviderReport('claude'))
+    // providerMenu is open — click 'codex' button
+    const codexBtn = menuButtons.find(b => b.dataset.provider === 'codex')
+    expect(codexBtn).toBeDefined()
+    // Fire the click handler (simulated)
+    for (const handler of codexBtn!._clickHandlers) {
+      await handler({ stopPropagation: () => {} })
+    }
+    // provider set should have been called via wechat_cli_text
+    const providerSetCall = invokeCalls.find(([_cmd, a]) => a[0] === 'provider' && a[1] === 'set')
+    expect(providerSetCall).toBeDefined()
+    expect(providerSetCall![1][2]).toBe('codex')
+    // service stop + start should have been called (from runRestartSequence)
+    const serviceStopCall = invokeCalls.find(([_cmd, a]) => a[0] === 'service' && a[1] === 'stop')
+    expect(serviceStopCall).toBeDefined()
+  })
+
+  it('clicking the same provider closes menu without invoking CLI', async () => {
+    const { menuButtons, providerMenu } = installProviderMenuDom()
+    const invoke = vi.fn(async () => ({ ok: true }))
+    await toggleProviderMenu({ invoke, doctorPoller: { current: null } }, makeProviderReport('claude'))
+    const claudeBtn = menuButtons.find(b => b.dataset.provider === 'claude')
+    expect(claudeBtn).toBeDefined()
+    for (const handler of claudeBtn!._clickHandlers) {
+      await handler({ stopPropagation: () => {} })
+    }
+    // No provider set call should have been made
+    const providerSetCall = invoke.mock.calls.find(c => {
+      const a = (c as any[])[1] as any
+      return a?.args?.[0] === 'provider' && a?.args?.[1] === 'set'
+    })
+    expect(providerSetCall).toBeUndefined()
+    // Menu should be hidden after same-provider click
+    expect(providerMenu.hidden).toBe(true)
+  })
+
+  it('closeProviderMenu hides the menu', async () => {
+    const { providerMenu } = installProviderMenuDom()
+    await toggleProviderMenu(
+      { invoke: vi.fn(async () => ({ ok: true })), doctorPoller: { current: null } },
+      makeProviderReport('claude'),
+    )
+    expect(providerMenu.hidden).toBe(false)
+    closeProviderMenu()
+    expect(providerMenu.hidden).toBe(true)
+  })
+
+  it('provider set failure shows error toast and does NOT trigger restart', async () => {
+    const els = installProviderMenuDom()
+    const { menuButtons } = els
+    const invoke = vi.fn(async (name: string, args?: any) => {
+      const a = args?.args ?? []
+      // provider set uses wechat_cli_text
+      if (name === 'wechat_cli_text' && a[0] === 'provider' && a[1] === 'set') {
+        throw new Error('provider set failed')
+      }
+      return { ok: true }
+    })
+    await toggleProviderMenu({ invoke, doctorPoller: { current: null } }, makeProviderReport('claude'))
+    const codexBtn = menuButtons.find(b => b.dataset.provider === 'codex')
+    for (const handler of codexBtn!._clickHandlers) {
+      await handler({ stopPropagation: () => {} })
+    }
+    // service stop should NOT have been called
+    const serviceStopCall = invoke.mock.calls.find(c => {
+      const a = (c as any[])[1] as any
+      return a?.args?.[0] === 'service' && a?.args?.[1] === 'stop'
+    })
+    expect(serviceStopCall).toBeUndefined()
+    // Error toast should be visible
+    expect(els.dashPending.textContent).toBe('切换 provider 失败')
   })
 })

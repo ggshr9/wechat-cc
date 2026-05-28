@@ -60,8 +60,10 @@ export function renderDashboard(report) {
           <div class="user-name">${escapeHtml(currentRow.name)} <span class="role-pill">管理员</span></div>
           <div class="user-sub">微信私聊，${currentSub}</div>
         </div>
-        <span class="provider-chip">${escapeHtml(report.checks.provider.provider || "codex")}</span>
-        <span class="provider-chevron">⌄</span>
+        <button class="provider-switch" aria-haspopup="true" aria-label="切换 provider">
+          <span class="provider-chip">${escapeHtml(report.checks.provider.provider || "codex")}</span>
+          <span class="provider-chevron">⌄</span>
+        </button>
       `
     }
   }
@@ -311,6 +313,16 @@ let _cardListenersWired = false
 // stale signals never linger across multiple clicks.
 let _lastRestart = null
 
+// Provider-switch dropdown state. Separated from the diagnose-card state
+// so the two features don't interfere with each other.
+let _providerMenuOpen = false
+let _providerSwitchInflight = false
+
+// One-shot outside-click + Escape handler installed when menu opens.
+// Stored so it can be removed precisely without leaking DOM listeners.
+let _providerMenuOutsideHandler = null
+let _providerMenuKeyHandler = null
+
 /**
  * Wire the card's click listeners once. Safe to call multiple times.
  * Uses event delegation via the card container — avoids needing
@@ -447,6 +459,10 @@ export function __resetDiagnoseCardState() {
   _cardDeps = null
   _cardDiagnosis = null
   _lastRestart = null
+  _providerMenuOpen = false
+  _providerSwitchInflight = false
+  _providerMenuOutsideHandler = null
+  _providerMenuKeyHandler = null
 }
 
 /**
@@ -553,6 +569,102 @@ export async function restartDaemon(deps) {
   // Non-0: render the card. Clear any transient pending text first.
   setPending("")
   renderDiagnoseCard(deps, diagnosis)
+}
+
+// Close the provider-switch dropdown and remove its one-shot listeners.
+export function closeProviderMenu() {
+  const menu = document.getElementById("provider-menu")
+  if (menu) menu.hidden = true
+  _providerMenuOpen = false
+  if (_providerMenuOutsideHandler) {
+    document.removeEventListener("click", _providerMenuOutsideHandler, true)
+    _providerMenuOutsideHandler = null
+  }
+  if (_providerMenuKeyHandler) {
+    document.removeEventListener("keydown", _providerMenuKeyHandler)
+    _providerMenuKeyHandler = null
+  }
+}
+
+// Toggle the provider-switch dropdown.
+// deps: the standard deps bag ({ invoke, doctorPoller, ... })
+// report: the current doctor report (used to read the active provider)
+export async function toggleProviderMenu(deps, report) {
+  if (_providerMenuOpen) {
+    closeProviderMenu()
+    return
+  }
+
+  const menu = document.getElementById("provider-menu")
+  if (!menu) return
+
+  // Find the anchor (.provider-switch button) to position the menu below it.
+  const anchor = document.querySelector(".provider-switch")
+  if (!anchor) return
+
+  const currentProvider = report?.checks?.provider?.provider || "codex"
+  const providers = ["claude", "codex", "cursor"]
+
+  // Build menu buttons
+  menu.innerHTML = providers.map(p => {
+    const active = p === currentProvider
+    return `<button class="${active ? "provider-menu-active" : ""}" data-provider="${escapeHtml(p)}">${escapeHtml(p)}</button>`
+  }).join("")
+
+  // Position: fixed, anchored below the .provider-switch button.
+  // Using getBoundingClientRect so it works regardless of scroll position.
+  const rect = anchor.getBoundingClientRect()
+  menu.style.top = `${rect.bottom + 4}px`
+  menu.style.left = `${rect.left}px`
+  menu.hidden = false
+  _providerMenuOpen = true
+
+  // Wire button clicks inside the menu
+  menu.querySelectorAll("button[data-provider]").forEach(btn => {
+    btn.addEventListener("click", async (ev) => {
+      ev.stopPropagation()
+      if (_providerSwitchInflight) return
+      const name = btn.dataset.provider
+      if (!name) return
+      if (name === currentProvider) {
+        closeProviderMenu()
+        return
+      }
+      // Disable further clicks while switching
+      _providerSwitchInflight = true
+      menu.querySelectorAll("button").forEach(b => { b.disabled = true })
+      try {
+        // provider set doesn't emit JSON — use wechat_cli_text (same as
+        // the wizard's commitProvider path in main.js).
+        await deps.invoke("wechat_cli_text", { args: ["provider", "set", name] })
+      } catch {
+        setPending(`切换 provider 失败`)
+        setTimeout(() => setPending(""), 3000)
+        _providerSwitchInflight = false
+        closeProviderMenu()
+        return
+      }
+      closeProviderMenu()
+      await runRestartSequence(deps)
+      setPending(`已切换到 ${name}`)
+      setTimeout(() => setPending(""), 2500)
+      _providerSwitchInflight = false
+    })
+  })
+
+  // Outside-click: close menu when clicking anywhere outside it
+  _providerMenuOutsideHandler = (ev) => {
+    if (!menu.contains(ev.target) && !(anchor.contains && anchor.contains(ev.target))) {
+      closeProviderMenu()
+    }
+  }
+  document.addEventListener("click", _providerMenuOutsideHandler, true)
+
+  // Escape key: close menu
+  _providerMenuKeyHandler = (ev) => {
+    if (ev.key === "Escape") closeProviderMenu()
+  }
+  document.addEventListener("keydown", _providerMenuKeyHandler)
 }
 
 // Account row inline two-step confirm handler. Wired by main.js to the

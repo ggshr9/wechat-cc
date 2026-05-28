@@ -433,6 +433,61 @@ test.describe('reconnect-diagnose card', () => {
   })
 })
 
+// ── Provider-switch dropdown ─────────────────────────────────────────────────
+
+test.describe('provider-switch dropdown', () => {
+  test('click .provider-switch shows menu with 3 options; clicking codex records provider-set + restart chain', async ({ page, shimUrl, shim }) => {
+    // Seed with claude as the active provider (default in shim doctor output)
+    await shim.invoke('demo.seed', { chat_id: 'test_chat' })
+    await bootIntoDashboard(page, shimUrl)
+
+    // Force-render the current-user card — the doctor poller runs on a 5s
+    // interval; we need the card in the DOM NOW. Trigger a doctor refresh.
+    // The shim seeds provider=claude, so the chip shows "claude".
+    await shim.invoke('mock.reset-service-invokes')
+
+    // Wait for the current-user card to have a .provider-switch button.
+    // It's rendered on the first doctor poll which completes during boot.
+    await expect(page.locator('#accounts-current .provider-switch')).toBeAttached({ timeout: 8000 })
+
+    // Click the provider-switch button to open the dropdown
+    await page.locator('#accounts-current .provider-switch').click()
+
+    // Menu should now be visible with 3 option buttons
+    await expect(page.locator('#provider-menu')).toBeVisible({ timeout: 3000 })
+    await expect(page.locator('#provider-menu button[data-provider="claude"]')).toBeAttached()
+    await expect(page.locator('#provider-menu button[data-provider="codex"]')).toBeAttached()
+    await expect(page.locator('#provider-menu button[data-provider="cursor"]')).toBeAttached()
+
+    // claude should be marked active (has .provider-menu-active class)
+    await expect(page.locator('#provider-menu button.provider-menu-active[data-provider="claude"]')).toBeAttached()
+
+    // Click "codex" to trigger the switch
+    await page.locator('#provider-menu button[data-provider="codex"]').click()
+
+    // Assert provider set was recorded
+    await expect.poll(
+      async () => {
+        const r = await shim.invoke('mock.get-provider-invokes') as { result: { invokes: Array<{ provider: string }> } }
+        return r.result.invokes.map(i => i.provider)
+      },
+      { timeout: 5000 },
+    ).toContain('codex')
+
+    // Assert service stop + start were called (restart chain)
+    await expect.poll(
+      async () => {
+        const r = await shim.invoke('mock.get-service-invokes') as { result: { invokes: string[] } }
+        return r.result.invokes
+      },
+      { timeout: 8000 },
+    ).toEqual(expect.arrayContaining(['service stop', 'service start']))
+
+    // Menu should be closed after the switch
+    await expect(page.locator('#provider-menu')).toBeHidden({ timeout: 3000 })
+  })
+})
+
 // ── Step 4 — RECONNECT_DIAGNOSE telemetry Playwright test ────────────────────
 //
 // Verify that clicking "重新连接" causes a fire-and-forget

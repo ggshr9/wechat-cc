@@ -590,6 +590,13 @@
       <ul id="a2a-activity-list" class="a2a-activity-list"></ul>
     </aside>
 
+    <!-- Provider-switch popover. Hidden by default; shown when the user
+         clicks .provider-switch in the current-user card. Positioned
+         absolutely relative to its anchor by toggleProviderMenu() in
+         dashboard.js. Must live outside .dash-pane so overflow:hidden
+         on parent cards cannot clip it. -->
+    <div id="provider-menu" hidden></div>
+
     <!-- Shared lightbox for image / file attachment previews. Hidden
          until a chat-bubble image or file-card is clicked. -->
     <div id="lightbox" class="lightbox" hidden aria-hidden="true">

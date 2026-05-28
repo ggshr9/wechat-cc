@@ -113,7 +113,10 @@ const __mockState: {
   //   logCalls: records every `wechat_cli_json` call with args[0]==='log'
   //             so Playwright tests can assert RECONNECT_DIAGNOSE telemetry fired.
   logCalls: Array<{ tag: string; msg: string; fields: Record<string, unknown> | null }>
-} = { chats: [], observations: [], milestones: [], sessions: [], daemonAlive: true, installProgress: null, installSimulationStep: 0, conversations: null, a2aAgents: [], a2aEvents: [], doctorOverride: null, doctorErrorOnce: false, serviceInvokes: [], healthProbeResult: true, logCalls: [] }
+  //   providerInvokes: records `provider set <name>` calls from the provider
+  //                   dropdown so Playwright tests can assert switching fired.
+  providerInvokes: Array<{ provider: string; ts: number }>
+} = { chats: [], observations: [], milestones: [], sessions: [], daemonAlive: true, installProgress: null, installSimulationStep: 0, conversations: null, a2aAgents: [], a2aEvents: [], doctorOverride: null, doctorErrorOnce: false, serviceInvokes: [], healthProbeResult: true, logCalls: [], providerInvokes: [] }
 
 // ─── A2A mock credentials ─────────────────────────────────────────────────────
 // The A2A routes (/v1/a2a/*) are served by the SAME Bun.serve instance as the
@@ -267,6 +270,7 @@ Bun.serve({
           __mockState.serviceInvokes = []
           __mockState.healthProbeResult = true
           __mockState.logCalls = []
+          __mockState.providerInvokes = []
           return Response.json({ result: { ok: true } })
         }
 
@@ -299,6 +303,13 @@ Bun.serve({
         // RECONNECT_DIAGNOSE telemetry fired after a reconnect click.
         if (body.command === 'mock.get-log-calls') {
           return Response.json({ result: { calls: __mockState.logCalls } })
+        }
+
+        // mock.get-provider-invokes: return the list of `provider set <name>`
+        // calls recorded since the last demo.seed / demo.unseed. Used by
+        // Playwright tests to assert the provider-switch dropdown fired.
+        if (body.command === 'mock.get-provider-invokes') {
+          return Response.json({ result: { invokes: __mockState.providerInvokes } })
         }
 
         // mock.health-probe: set the return value for wechat_health_ping.
@@ -367,6 +378,7 @@ Bun.serve({
           __mockState.doctorErrorOnce = false
           __mockState.serviceInvokes = []
           __mockState.logCalls = []
+          __mockState.providerInvokes = []
           return Response.json({ ok: true, seeded: true })
         }
 
@@ -750,6 +762,22 @@ Bun.serve({
               }
             }
             return Response.json({ result: { ok: true, conversations: __mockState.conversations } })
+          }
+
+          // Intercept provider set in DRY_RUN — record the call in
+          // __mockState.providerInvokes so Playwright tests can assert
+          // that the provider-switch dropdown fired the right command.
+          // Provider set uses wechat_cli_text (no JSON output).
+          // Frontend calls: ["provider", "set", <name>]
+          if (
+            dryRun &&
+            (body.command === 'wechat_cli_text' || body.command === 'wechat_cli_json') &&
+            cliArgs[0] === 'provider' &&
+            cliArgs[1] === 'set'
+          ) {
+            const provider = cliArgs[2] ?? ''
+            __mockState.providerInvokes.push({ provider, ts: Date.now() })
+            return Response.json({ result: `provider set: ${provider}` })
           }
 
           // Intercept mode set in DRY_RUN — update the mirror so the next
