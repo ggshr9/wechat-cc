@@ -39,10 +39,16 @@ trajectory:
       probe_kind: memory_recall
       ask: "我们现在用什么数据库？"
       expected:
+        # must_recall:mysql is the supersede signal. We do NOT add
+        # must_not_recall:postgres — a substring check can't tell "postgres is
+        # current" (the failure) from "mysql, migrated from postgres" (correct
+        # context). Observed 2026-05-29: "mysql，今天从 postgres 迁过来的。" —
+        # right answer, but the word postgres legitimately appears. The
+        # `calibration` judge dimension assesses "doesn't insist on stale".
         decision: send
-        summary: "回答 mysql，不再说 postgres 是当前在用的"
+        summary: "回答 mysql（不再把 postgres 当作当前在用；提迁移来源 postgres 不算错）"
         must_recall: ["mysql"]
-        must_not_recall: ["postgres"]
+        must_not_recall: []
         tone_hints: ["直接"]
         state_predicates: []
       dimensions: [recall, calibration]

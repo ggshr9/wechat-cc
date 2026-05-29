@@ -51,29 +51,41 @@ Backends: `claude-sdk` (MVP), `codex-sdk` (stub), `anthropic-api` (stub). Adding
 
 See the spec for the rationale on each.
 
-## Known divergences (acceptance run 2026-05-29)
+## Acceptance run 2026-05-29 — results + one harness bug found
 
-First full real-SDK run of the 6 new trajectories. Engine assertions passed for
-cross_domain_mixing and explicit_quiet (clean), and cross_chat_isolation's
-isolation guarantee held (chat_a reply leaked nothing from chat_b). Two genuine
-behavior findings are left as open questions rather than papered over by tuning:
+First full real-SDK run of the 6 new trajectories. Engine assertions pass for
+cross_domain_mixing, explicit_quiet, wrong_inference_correction,
+fact_update_supersede, and cross_chat_isolation (whose isolation guarantee held —
+the chat_a deploy reply leaked nothing from chat_b's private fact).
+
+**Harness bug found and fixed (commit ad829ad).** The first run showed empty
+replies on the *2nd+ message to a chat* (fact_update recall, wrong_inference
+Probe 2). Root cause: `waitForReplyTo` waited on `outbox.some(chat)` over the
+cumulative outbox, so a later message resolved instantly off the *prior* reply —
+the harness raced ahead, captured nothing, and could tear the daemon down before
+the message was dispatched. The two MVP trajectories never caught it (one message
+per chat). Fixed via `waitForNewReply` (waits for the chat's reply count to grow);
+regression test in `daemon-shim.test.ts`. Re-run confirms the companion answers
+correctly — fact_update: "mysql，今天从 postgres 迁过来的。"; wrong_inference:
+"那挺好。在搞什么？" (accepts the correction, no pity).
+
+`fact_update`'s `must_not_recall:postgres` was dropped afterward: a substring
+check can't distinguish "postgres is current" (the failure) from "migrated from
+postgres" (correct context) — `must_recall:mysql` + the `calibration` judge
+dimension carry that intent instead.
+
+**One genuine open finding (left red, not papered over):**
 
 - **`long_silence_initiative` — companion declined to push.** After 8 days of
   silence with an open thread (面试), the push tick chose `silent` (expected
-  `send` + recall "面试"). This is plausibly *correct* restraint-biased behavior
-  ("装翅膀不建笼子"), not a bug — but it means a proactive check-in on a stale
-  open thread is not reliably emitted. Decide whether the push tick *should*
+  `send` + recall "面试"). The tick path has **no** capture race (`fireTick`
+  fully awaits the dispatch), so this is real: either the open thread wasn't
+  persisted to memory for the tick to resurface, or the push logic is
+  restraint-biased ("装翅膀不建笼子"). Decide whether the push tick *should*
   resurface open threads before re-tuning this trajectory's expectation.
 
-- **`fact_update_supersede` — empty reply to a factual recall question.** The
-  `memory_recall` probe asked "我们现在用什么数据库？" and the companion replied
-  with nothing (decision captured as silent). Either companion-persona doesn't
-  do direct factual Q&A (a probe-design tension — `memory_recall` assumes it
-  will answer) or it's a real gap. Needs investigation before this mode is
-  considered covered.
-
-- **Judge dimension scores did not run.** The claude-sdk judge backend errored
-  on every probe (`Claude Code native binary not found … claude-agent-sdk-linux-x64-musl/claude`)
-  — it does not pass `pathToClaudeCodeExecutable`. The *companion's* SDK works
-  (replies were produced); only the judge half failed. Fixing the judge backend
-  is Sub-project B work.
+**Judge dimension scores did not run.** The claude-sdk judge backend errored on
+every probe (`Claude Code native binary not found … claude-agent-sdk-linux-x64-musl/claude`)
+— it does not pass `pathToClaudeCodeExecutable`. The *companion's* SDK works
+(replies were produced); only the judge half failed. Fixing the judge backend is
+Sub-project B work.
