@@ -6,9 +6,9 @@
  * a timer that wakes it up.
  *
  * On every tick (when enabled + not snoozed), `onTick` is called. The
- * supplied onTick typically dispatches a synthetic "companion_tick" user
- * message into the current project's session; Claude reads memory/ +
- * current time context and decides whether to push.
+ * supplied onTick reads the chat's `agenda.md` and only wakes Claude when a
+ * self-authored intention is due (default = act); when nothing is due it
+ * returns silently without an LLM call.
  */
 
 export interface CompanionSchedulerDeps {

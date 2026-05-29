@@ -475,7 +475,7 @@ server.registerTool(
   'companion_enable',
   {
     title: 'Enable Companion proactive ticks',
-    description: '开启 Companion 主动推送（定时 tick）。第一次调用会创建 config.json 并返回欢迎消息。幂等。',
+    description: '开启 Companion 主动关心：你在聊天里记下的待跟进（agenda.md）到点时系统会唤醒你来兑现。第一次调用会创建 config.json 并返回欢迎消息。幂等。',
     inputSchema: {},
   },
   async () => {

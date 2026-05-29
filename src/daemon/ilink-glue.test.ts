@@ -297,7 +297,7 @@ describe('makeIlinkAdapter (composed)', () => {
     const r = await adapter.companion.enable()
     expect(r.ok).toBe(true)
     if (!('already_configured' in r)) {
-      expect(r.welcome_message).toContain('主动提醒')
+      expect(r.welcome_message).toContain('主动关心')
       expect(r.welcome_message).toContain('memory')
     }
     const fs = await import('node:fs')
