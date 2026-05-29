@@ -36,12 +36,11 @@ export function makeCompanion(ctx: IlinkContext): WechatCompanionDep {
         ok: true as const,
         state_dir: companionDir(stateDir),
         welcome_message:
-          '主动提醒已开启。我会每 15-30 分钟醒一次，决定是不是联系你。\n' +
-          '不确定时我会选不打扰；连续被 ignore/snooze 我会自己调整频率。\n' +
+          '主动关心已开启。你聊到有日子的事（面试、截止、约定），我会记下来，到点了来问一声。\n' +
           '随时说 "别烦我" / "snooze 2 小时" 让我歇；或 "关掉主动" 完全停。\n' +
           '你对我的偏好（语气、作息、什么话题想聊）我会记在 memory 里，一点点学。',
         cost_estimate_note:
-          '每次主动 tick 评估一次 Claude（~$0.01/次）；默认 20 分钟一次有 jitter；不说话就不花钱。',
+          '只有到点要兑现的跟进才会调用一次 Claude（~$0.01/次）；没到点的 tick 不调用、不花钱。',
       }
     },
 
