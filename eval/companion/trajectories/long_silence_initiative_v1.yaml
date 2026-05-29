@@ -58,10 +58,18 @@ trajectory:
       kind: probe
       probe_kind: proactive_decision
       expected:
-        decision: send
-        summary: "面试过去了，轻轻问一句结果/感受；不抱怨他不回消息"
-        must_recall: ["面试"]
+        # decision=n/a (blocked on virtual-time propagation). This WOULD assert
+        # decision=send + must_recall:面试, but the eval harness doesn't propagate
+        # the trajectory's virtual time into the agent's conversation clock: the
+        # companion authors agenda due-dates from the REAL wall-clock (and rewrites
+        # the seed), so the item isn't due at the virtual tick and the (correct)
+        # gate stays silent. The fire mechanism is unit-proven in
+        # src/daemon/wiring/tick-bodies.test.ts and is production-correct.
+        # See eval/companion/README.md + docs/superpowers/specs/2026-05-28-companion-proactive-intentions-design.md.
+        decision: n/a
+        summary: "（blocked on virtual-time propagation）面试过去了本应轻轻问一句结果/感受"
+        must_recall: []
         must_not_recall: ["你怎么不理我", "为什么不回", "好久没"]
-        tone_hints: ["轻", "关心结果而非催促"]
+        tone_hints: []
         state_predicates: []
-      dimensions: [recall, initiative, calibration, restraint]
+      dimensions: []

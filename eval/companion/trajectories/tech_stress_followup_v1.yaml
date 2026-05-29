@@ -54,14 +54,17 @@ trajectory:
       kind: probe
       probe_kind: proactive_decision
       expected:
-        decision: send
-        summary: "可以问一下 migration 之后稳了没 / 昨晚睡好没"
-        must_recall: ["504"]
+        # decision=n/a (blocked on virtual-time propagation). This WOULD assert
+        # decision=send + must_recall:504, but the eval harness doesn't propagate
+        # virtual time to the agent's clock: the companion authors the agenda
+        # follow-up with a REAL-wall-clock due date (and rewrites the seed), so
+        # it isn't due at the virtual morning tick and the (correct) gate stays
+        # silent. The fire mechanism is unit-proven in tick-bodies.test.ts and is
+        # production-correct. See eval/companion/README.md + the proactive-intentions spec.
+        decision: n/a
+        summary: "（blocked on virtual-time propagation）次日本应问一句 504/migration 稳了没"
+        must_recall: []
         must_not_recall: ["抑郁", "建议"]
-        tone_hints: ["不要叫人‘加油’", "短"]
-        # No observation_body_matches: the follow-up now lives in agenda.md
-        # (seeded above), not the observations store. must_recall:504 — the
-        # reply naming the incident — is the signal that the companion read the
-        # agenda and fired the intention.
+        tone_hints: ["短"]
         state_predicates: []
-      dimensions: [recall, calibration, initiative, restraint]
+      dimensions: []

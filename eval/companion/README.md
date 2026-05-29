@@ -74,25 +74,29 @@ check can't distinguish "postgres is current" (the failure) from "migrated from
 postgres" (correct context) — `must_recall:mysql` + the `calibration` judge
 dimension carry that intent instead.
 
-**One CONFIRMED companion finding (left red — a real behavior gap, not a harness
-artifact):**
+**`long_silence_initiative` — resolved by Companion Proactivity v1; e2e verification
+blocked on virtual-time propagation.** The original finding (push tick didn't
+resurface open threads, judge `initiative:1`/`recall:1`) was root-caused to the
+push tick being a cold "should I?" poll. Fixed by the proactivity v1 model
+(`docs/superpowers/specs/2026-05-28-companion-proactive-intentions-design.md`): the
+companion authors dated follow-ups into `agenda.md`, and the push tick mechanically
+fires due items (default = act) instead of polling.
 
-- **`long_silence_initiative` — push tick does not resurface a persisted open
-  thread.** First investigation (2026-05-29) showed the original trajectory
-  persisted *nothing* about the interview, so the push tick correctly stayed
-  silent — a trajectory-design gap. Fixed by seeding the open thread into a
-  memory file (`threads.md`), which the push-tick prompt explicitly reads
-  (`memory_list` + `memory_read`). On re-run the push tick **still stayed
-  silent**, and the opus judge independently scored `initiative: 1` / `recall: 1`
-  ("the right moment for a gentle check-in; staying silent misses the proactive
-  touch"). The tick path has no capture race (`fireTick` fully awaits dispatch),
-  so this is a real companion behavior: the push tick's prompt biases hard toward
-  silence (*"不确定就选不 push"*) and doesn't reliably resurface persisted open
-  threads. **This is a companion-behavior / product question** — how proactive
-  should the push tick be? — and changing it modifies the daemon, which is out of
-  scope for the eval harness (the harness observes; it doesn't change the daemon).
-  The trajectory is left red on purpose: it's a regression marker that goes green
-  when/if the push tick is made to resurface open threads.
+The fire mechanism is **unit-proven** (`src/daemon/wiring/tick-bodies.ts` + its test:
+a due agenda item → `acquire`+`dispatch`; nothing due → silent) and is
+**production-correct** (agent and push tick both run on real time, so authored
+due-dates and tick firing align). The acceptance run also confirmed the **author
+path works** — the companion authored its own dated follow-ups from the conversation.
+
+But the e2e eval **cannot deterministically drive time-anchored firing**: the harness
+replays events at *virtual* timestamps, yet the agent uses the **real wall-clock**
+(virtual time isn't propagated into its conversation context). So the companion
+authors agenda due-dates from real "today", overwrites the seed, and the items
+aren't due at the virtual tick → the (correct) gate stays silent. Therefore
+`long_silence_initiative` and `tech_stress_followup_v1` set their `proactive_decision`
+probe to `decision: n/a` (still asserting `must_not_recall` guards), with a comment.
+**Making these go green e2e requires virtual-time propagation to the agent — a
+separate harness/daemon effort, deferred.**
 
 **Judge dimension scores — fixed (commit 78ccc85).** The first run's judge errored
 on every probe (`Claude Code native binary not found … claude-agent-sdk-linux-x64-musl/claude`)
