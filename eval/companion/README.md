@@ -84,8 +84,10 @@ dimension carry that intent instead.
   restraint-biased ("装翅膀不建笼子"). Decide whether the push tick *should*
   resurface open threads before re-tuning this trajectory's expectation.
 
-**Judge dimension scores did not run.** The claude-sdk judge backend errored on
-every probe (`Claude Code native binary not found … claude-agent-sdk-linux-x64-musl/claude`)
-— it does not pass `pathToClaudeCodeExecutable`. The *companion's* SDK works
-(replies were produced); only the judge half failed. Fixing the judge backend is
-Sub-project B work.
+**Judge dimension scores — fixed (commit 78ccc85).** The first run's judge errored
+on every probe (`Claude Code native binary not found … claude-agent-sdk-linux-x64-musl/claude`)
+because it passed no `pathToClaudeCodeExecutable` and the SDK mis-detects the musl
+native binary under bun on glibc. `run.ts` now resolves the binary (env
+`CLAUDE_CODE_EXECUTABLE` → PATH, with an optional `pathToClaudeCodeExecutable`
+override in `judge-config.json`) and threads it through. Verified: dimension
+scores now produce (e.g. cross_domain_mixing → calibration 5.0 / restraint 5.0).
