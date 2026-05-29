@@ -74,15 +74,25 @@ check can't distinguish "postgres is current" (the failure) from "migrated from
 postgres" (correct context) — `must_recall:mysql` + the `calibration` judge
 dimension carry that intent instead.
 
-**One genuine open finding (left red, not papered over):**
+**One CONFIRMED companion finding (left red — a real behavior gap, not a harness
+artifact):**
 
-- **`long_silence_initiative` — companion declined to push.** After 8 days of
-  silence with an open thread (面试), the push tick chose `silent` (expected
-  `send` + recall "面试"). The tick path has **no** capture race (`fireTick`
-  fully awaits the dispatch), so this is real: either the open thread wasn't
-  persisted to memory for the tick to resurface, or the push logic is
-  restraint-biased ("装翅膀不建笼子"). Decide whether the push tick *should*
-  resurface open threads before re-tuning this trajectory's expectation.
+- **`long_silence_initiative` — push tick does not resurface a persisted open
+  thread.** First investigation (2026-05-29) showed the original trajectory
+  persisted *nothing* about the interview, so the push tick correctly stayed
+  silent — a trajectory-design gap. Fixed by seeding the open thread into a
+  memory file (`threads.md`), which the push-tick prompt explicitly reads
+  (`memory_list` + `memory_read`). On re-run the push tick **still stayed
+  silent**, and the opus judge independently scored `initiative: 1` / `recall: 1`
+  ("the right moment for a gentle check-in; staying silent misses the proactive
+  touch"). The tick path has no capture race (`fireTick` fully awaits dispatch),
+  so this is a real companion behavior: the push tick's prompt biases hard toward
+  silence (*"不确定就选不 push"*) and doesn't reliably resurface persisted open
+  threads. **This is a companion-behavior / product question** — how proactive
+  should the push tick be? — and changing it modifies the daemon, which is out of
+  scope for the eval harness (the harness observes; it doesn't change the daemon).
+  The trajectory is left red on purpose: it's a regression marker that goes green
+  when/if the push tick is made to resurface open threads.
 
 **Judge dimension scores — fixed (commit 78ccc85).** The first run's judge errored
 on every probe (`Claude Code native binary not found … claude-agent-sdk-linux-x64-musl/claude`)

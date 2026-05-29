@@ -2,11 +2,17 @@ trajectory:
   id: long_silence_initiative_v1
   failure_mode: long_silence_initiative
   description: |
-    Designed around an open thread (an interview) so the expected decision is
-    deterministic — a recall-driven check-in — rather than a coin-flip on the
-    inherently-ambiguous "ping or wait". User mentions a Wednesday interview, then
-    goes quiet ~7 days. The day-8 push should reference the interview and ask a
-    light check-in, not guilt-trip the silence.
+    Tests the push tick's INITIATIVE on a persisted open thread after silence.
+    The open thread (an interview) is seeded into a memory file — the push tick's
+    prompt explicitly reads memory_list + memory_read, and over 8 real days an
+    introspect tick would have captured this; the harness fires only push ticks,
+    so we seed it directly (deterministic, isolates the push decision from
+    introspect's non-deterministic capture). Day-8 push should reference the
+    interview and ask a light check-in, not guilt-trip the silence.
+
+    NOTE (2026-05-29): the first version seeded NOTHing about the interview, so
+    the push tick had nothing in memory to resurface and correctly stayed silent.
+    That was a trajectory-design gap, not companion behavior. See README.
 
   contact:
     chat_id: chat_silence_1
@@ -19,7 +25,12 @@ trajectory:
       # preferences
       - 不要因为我没回消息就阴阳怪气
     initial_observations: []
-    initial_memory_files: {}
+    initial_memory_files:
+      threads.md: |
+        # 开放话题（待回访）
+        - 2026-05-12：用户说下周三（约 2026-05-14）有面试，有点紧张。
+          这是个未完成的开放话题——面试过后值得轻轻问一句结果/感受。
+          别催、别灌鸡汤、别因为他没主动说就阴阳怪气。
 
   companion_config:
     enabled: true
