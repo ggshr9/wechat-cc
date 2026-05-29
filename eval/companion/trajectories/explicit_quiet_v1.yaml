@@ -1,0 +1,59 @@
+trajectory:
+  id: explicit_quiet_v1
+  failure_mode: explicit_quiet
+  description: |
+    The user explicitly asks not to be pushed for a few days. The reply is a brief
+    acknowledgment with no prying; the next push tick must be silent (outbox stays
+    at 1 — only the acknowledgment).
+
+  contact:
+    chat_id: chat_quiet_1
+    user_name: 顾时瑞
+    persona: companion
+    profile_md: |
+      # 顾时瑞
+      - 偏好简短沟通
+    preferences_md: |
+      # preferences
+      - 说要安静就别追问原因
+    initial_observations: []
+    initial_memory_files: {}
+
+  companion_config:
+    enabled: true
+    default_chat_id: chat_quiet_1
+    quiet_hours_local: null
+
+  events:
+    - at: 2026-05-20T21:00:00+08:00
+      kind: user_message
+      text: "这几天别推我消息了，我想自己静静"
+
+    - at: 2026-05-20T21:00:30+08:00
+      kind: probe
+      probe_kind: reactive_response
+      expected:
+        decision: send
+        summary: "简短确认会安静，不追问发生了什么"
+        must_recall: []
+        must_not_recall: ["为什么", "发生什么", "怎么了", "出什么事"]
+        tone_hints: ["简短", "尊重", "不追问"]
+        state_predicates: []
+      dimensions: [restraint, calibration]
+
+    - at: 2026-05-21T10:00:00+08:00
+      kind: tick
+      tick_kind: push
+
+    - at: 2026-05-21T10:00:30+08:00
+      kind: probe
+      probe_kind: proactive_decision
+      expected:
+        decision: silent
+        summary: "用户明确要求安静；不推送"
+        must_recall: []
+        must_not_recall: []
+        tone_hints: []
+        state_predicates:
+          - { kind: outbox_count_at_chat, eq: 1 }
+      dimensions: [restraint, initiative]
