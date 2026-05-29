@@ -24,7 +24,7 @@ export async function captureProbe(
     }
     case 'memory_recall': {
       if (!event.ask) return { kind: 'reply', error: 'memory_recall probe requires ask:' }
-      const chatId = ctx.trajectory.contact.chat_id
+      const chatId = event.chat ?? ctx.trajectory.primaryChatId
       const outboxBefore = ctx.daemon.outboundFor(chatId).length
       ctx.daemon.sendText(chatId, event.ask, { createTimeMs: parseIso(event.at).getTime() })
       try {

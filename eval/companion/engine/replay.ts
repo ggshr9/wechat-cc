@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { openDb } from '../../../src/lib/db'
 import { makeObservationsStore } from '../../../src/daemon/observations/store'
 import type { Trajectory } from './trajectory'
+import { resolveEventChat } from './trajectory'
 import { startEvalDaemon, type EvalDaemon } from './daemon-shim'
 import { parseIso } from './clock'
 import { captureSnapshot, type StateSnapshot } from './snapshot'
@@ -50,8 +51,9 @@ export interface ReplayContext {
 }
 
 export async function replay(trajectory: Trajectory, opts: ReplayOpts): Promise<EventResult[]> {
+  const knownUsers = Object.fromEntries(trajectory.contacts.map(c => [c.chat_id, c.user_name]))
   const daemon = await startEvalDaemon({
-    knownUsers: { [trajectory.contact.chat_id]: trajectory.contact.user_name },
+    knownUsers,
     companion: {
       enabled: trajectory.companion_config.enabled,
       default_chat_id: trajectory.companion_config.default_chat_id,
@@ -73,15 +75,16 @@ export async function replay(trajectory: Trajectory, opts: ReplayOpts): Promise<
       const event = trajectory.events[i]!
       const result: EventResult = { index: i, event }
 
+      const eventChatId = resolveEventChat(event, trajectory.primaryChatId)
       try {
         if (event.kind === 'user_message') {
-          daemon.sendText(trajectory.contact.chat_id, event.text, {
+          daemon.sendText(eventChatId, event.text, {
             createTimeMs: parseIso(event.at).getTime(),
           })
-          const outboxBefore = daemon.outboundFor(trajectory.contact.chat_id).length
+          const outboxBefore = daemon.outboundFor(eventChatId).length
           try {
-            await daemon.waitForReplyTo(trajectory.contact.chat_id, 120_000)
-            const outbox = daemon.outboundFor(trajectory.contact.chat_id)
+            await daemon.waitForReplyTo(eventChatId, 120_000)
+            const outbox = daemon.outboundFor(eventChatId)
             const newOnes = outbox.slice(outboxBefore)
             const lastNew = newOnes[newOnes.length - 1]
             ctx.lastUserMessageReply = { text: lastNew?.text ?? '' }
@@ -89,9 +92,9 @@ export async function replay(trajectory: Trajectory, opts: ReplayOpts): Promise<
             ctx.lastUserMessageReply = { error: err instanceof Error ? err.message : String(err) }
           }
         } else if (event.kind === 'tick') {
-          const outboxBefore = daemon.outboundFor(trajectory.contact.chat_id).length
+          const outboxBefore = daemon.outboundFor(eventChatId).length
           await daemon.daemonHandle.fireTick(event.tick_kind, parseIso(event.at))
-          const outbox = daemon.outboundFor(trajectory.contact.chat_id)
+          const outbox = daemon.outboundFor(eventChatId)
           const newOnes = outbox.slice(outboxBefore)
           ctx.lastTickOutcome = newOnes.length > 0
             ? { decision: 'send', ...(newOnes[newOnes.length - 1]?.text !== undefined ? { text: newOnes[newOnes.length - 1]!.text! } : {}) }
@@ -106,7 +109,7 @@ export async function replay(trajectory: Trajectory, opts: ReplayOpts): Promise<
       const db = openDb({ path: join(daemon.stateDir, 'wechat-cc.db') })
       try {
         const snap = await captureSnapshot({
-          stateDir: daemon.stateDir, db, chatId: trajectory.contact.chat_id, ilink: daemon.ilink,
+          stateDir: daemon.stateDir, db, chatId: eventChatId, ilink: daemon.ilink,
         })
         result.snapshot = snap
         if (event.kind === 'probe' && result.actual !== undefined) {
@@ -144,14 +147,16 @@ export async function replay(trajectory: Trajectory, opts: ReplayOpts): Promise<
 }
 
 function seedMemoryFiles(stateDir: string, trajectory: Trajectory): void {
-  const dir = join(stateDir, 'memory', trajectory.contact.chat_id)
-  mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, 'profile.md'), trajectory.contact.profile_md)
-  writeFileSync(join(dir, 'preferences.md'), trajectory.contact.preferences_md)
-  for (const [rel, content] of Object.entries(trajectory.contact.initial_memory_files)) {
-    const target = join(dir, rel)
-    mkdirSync(join(target, '..'), { recursive: true })
-    writeFileSync(target, content)
+  for (const contact of trajectory.contacts) {
+    const dir = join(stateDir, 'memory', contact.chat_id)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'profile.md'), contact.profile_md)
+    writeFileSync(join(dir, 'preferences.md'), contact.preferences_md)
+    for (const [rel, content] of Object.entries(contact.initial_memory_files)) {
+      const target = join(dir, rel)
+      mkdirSync(join(target, '..'), { recursive: true })
+      writeFileSync(target, content)
+    }
   }
 }
 
@@ -167,18 +172,21 @@ function renderHistoryToIndex(t: Trajectory, idx: number): string {
 }
 
 function seedObservations(stateDir: string, trajectory: Trajectory): void {
-  if (trajectory.contact.initial_observations.length === 0) return
+  const contactsWithObs = trajectory.contacts.filter(c => c.initial_observations.length > 0)
+  if (contactsWithObs.length === 0) return
   const db = openDb({ path: join(stateDir, 'wechat-cc.db') })
   try {
-    const store = makeObservationsStore(db, trajectory.contact.chat_id)
-    for (const obs of trajectory.contact.initial_observations) {
-      void store.appendRaw({
-        id: obs.id,
-        ts: obs.ts,
-        body: obs.body,
-        archived: obs.archived ?? false,
-        ...(obs.tone !== undefined ? { tone: obs.tone } : {}),
-      })
+    for (const contact of contactsWithObs) {
+      const store = makeObservationsStore(db, contact.chat_id)
+      for (const obs of contact.initial_observations) {
+        void store.appendRaw({
+          id: obs.id,
+          ts: obs.ts,
+          body: obs.body,
+          archived: obs.archived ?? false,
+          ...(obs.tone !== undefined ? { tone: obs.tone } : {}),
+        })
+      }
     }
   } finally { db.close() }
 }

@@ -46,18 +46,21 @@ const ExpectedSchema = z.object({
 const UserMessageEventSchema = z.object({
   at: z.string(),
   kind: z.literal('user_message'),
+  chat: z.string().optional(),
   text: z.string(),
 })
 
 const TickEventSchema = z.object({
   at: z.string(),
   kind: z.literal('tick'),
+  chat: z.string().optional(),
   tick_kind: z.enum(['push', 'introspect']),
 })
 
 const ProbeEventSchema = z.object({
   at: z.string(),
   kind: z.literal('probe'),
+  chat: z.string().optional(),
   probe_kind: z.enum(['reactive_response', 'proactive_decision', 'memory_recall', 'state_inspect']),
   ask: z.string().optional(),
   expected: ExpectedSchema,
@@ -86,16 +89,33 @@ const CompanionConfigSchema = z.object({
   quiet_hours_local: z.string().nullable(),
 })
 
-const TrajectorySchema = z.object({
-  id: z.string(),
-  failure_mode: z.enum(FAILURE_MODES),
-  description: z.string(),
-  contact: ContactSchema,
-  companion_config: CompanionConfigSchema,
-  events: z.array(EventSchema),
-})
+const TrajectoryInputSchema = z
+  .object({
+    id: z.string(),
+    failure_mode: z.enum(FAILURE_MODES),
+    description: z.string(),
+    contact: ContactSchema.optional(),
+    contacts: z.array(ContactSchema).min(1).optional(),
+    companion_config: CompanionConfigSchema,
+    events: z.array(EventSchema),
+  })
+  .refine(d => (d.contact === undefined) !== (d.contacts === undefined), {
+    message: 'trajectory must have exactly one of `contact` or `contacts`',
+  })
 
-export type Trajectory = z.infer<typeof TrajectorySchema>
+export type Contact = z.infer<typeof ContactSchema>
+
+/** Normalized trajectory: always a `contacts` list, with the primary chat id resolved. */
+export interface Trajectory {
+  id: string
+  failure_mode: (typeof FAILURE_MODES)[number]
+  description: string
+  contacts: Contact[]
+  primaryChatId: string
+  companion_config: z.infer<typeof CompanionConfigSchema>
+  events: TrajectoryEvent[]
+}
+
 export type TrajectoryEvent = z.infer<typeof EventSchema>
 export type TrajectoryProbe = z.infer<typeof ProbeEventSchema>
 export type TrajectoryExpected = z.infer<typeof ExpectedSchema>
@@ -106,9 +126,31 @@ export function loadTrajectory(path: string): Trajectory {
   if (typeof raw !== 'object' || raw === null || !('trajectory' in raw)) {
     throw new Error(`loadTrajectory(${path}): missing top-level 'trajectory' key`)
   }
-  const parsed = TrajectorySchema.safeParse((raw as { trajectory: unknown }).trajectory)
+  const parsed = TrajectoryInputSchema.safeParse((raw as { trajectory: unknown }).trajectory)
   if (!parsed.success) {
     throw new Error(`loadTrajectory(${path}): ${parsed.error.message}`)
   }
-  return parsed.data
+  const d = parsed.data
+  const contacts = d.contacts ?? [d.contact!]
+  const primaryChatId = contacts[0]!.chat_id
+  const knownChats = new Set(contacts.map(c => c.chat_id))
+  for (const ev of d.events) {
+    if (ev.chat !== undefined && !knownChats.has(ev.chat)) {
+      throw new Error(`loadTrajectory(${path}): event at ${ev.at} references unknown chat '${ev.chat}'`)
+    }
+  }
+  return {
+    id: d.id,
+    failure_mode: d.failure_mode,
+    description: d.description,
+    contacts,
+    primaryChatId,
+    companion_config: d.companion_config,
+    events: d.events,
+  }
+}
+
+/** Resolve which chat an event targets: explicit `chat:` or the trajectory's primary contact. */
+export function resolveEventChat(event: TrajectoryEvent, primaryChatId: string): string {
+  return event.chat ?? primaryChatId
 }
