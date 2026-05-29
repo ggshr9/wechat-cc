@@ -28,8 +28,20 @@ import { replay } from './engine/replay'
 import { writeReport } from './engine/reporter'
 import { makeClaudeSdkJudge } from './engine/judge-claude-sdk'
 import { makeCodexSdkJudge, makeAnthropicApiJudge, type Judge } from './engine/judge'
+import { findOnPath } from '../../src/lib/util'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
+
+// Mirror the daemon's bootstrap/resolveClaudeBinary preference (env → PATH) so
+// the claude-sdk judge passes a working binary to query(). Without this the SDK
+// mis-detects the musl native binary under bun on glibc and every probe errors.
+function resolveClaudeBinary(configured?: string): string | undefined {
+  if (configured && existsSync(configured)) return configured
+  const env = process.env.CLAUDE_CODE_EXECUTABLE
+  if (env && existsSync(env)) return env
+  const onPath = findOnPath('claude')
+  return onPath && existsSync(onPath) ? onPath : undefined
+}
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2)
@@ -67,9 +79,16 @@ async function main(): Promise<void> {
 function loadJudge(): Judge {
   const cfgPath = join(HERE, 'judge-config.json')
   if (!existsSync(cfgPath)) throw new Error(`Missing ${cfgPath}`)
-  const cfg = JSON.parse(readFileSync(cfgPath, 'utf8')) as { kind: string; model?: string; apiKey?: string }
+  const cfg = JSON.parse(readFileSync(cfgPath, 'utf8')) as { kind: string; model?: string; apiKey?: string; pathToClaudeCodeExecutable?: string }
   switch (cfg.kind) {
-    case 'claude-sdk': return makeClaudeSdkJudge({ ...(cfg.model !== undefined ? { model: cfg.model } : {}) })
+    case 'claude-sdk': {
+      const bin = resolveClaudeBinary(cfg.pathToClaudeCodeExecutable)
+      if (!bin) console.warn('[eval] WARN: no claude binary resolved (env CLAUDE_CODE_EXECUTABLE / PATH) — judge dimension scores will fail')
+      return makeClaudeSdkJudge({
+        ...(cfg.model !== undefined ? { model: cfg.model } : {}),
+        ...(bin ? { pathToClaudeCodeExecutable: bin } : {}),
+      })
+    }
     case 'codex-sdk': return makeCodexSdkJudge({ ...(cfg.model !== undefined ? { model: cfg.model } : {}) })
     case 'anthropic-api':
       if (!cfg.apiKey) throw new Error('anthropic-api judge requires apiKey in judge-config.json')

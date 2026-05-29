@@ -11,7 +11,7 @@ import type { Judge, JudgeProbeInput, JudgeDimension } from './judge'
 import type { JudgeScore } from './replay'
 import { buildJudgePrompt } from './judge-prompts'
 
-export function makeClaudeSdkJudge(opts: { model?: string } = {}): Judge {
+export function makeClaudeSdkJudge(opts: { model?: string; pathToClaudeCodeExecutable?: string } = {}): Judge {
   const model = opts.model ?? 'claude-opus-4-7'
   return {
     name: `claude-sdk:${model}`,
@@ -30,7 +30,16 @@ export function makeClaudeSdkJudge(opts: { model?: string } = {}): Judge {
       let text = ''
       const stream = query({
         prompt,
-        options: { model, settingSources: [] },
+        // pathToClaudeCodeExecutable: the SDK's own native-binary detection
+        // mis-picks the musl variant under bun on glibc (same bug the daemon
+        // works around in bootstrap/resolveClaudeBinary). Without it the judge
+        // errors "Claude Code native binary not found" on every probe and no
+        // dimension scores are produced.
+        options: {
+          model,
+          settingSources: [],
+          ...(opts.pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable: opts.pathToClaudeCodeExecutable } : {}),
+        },
       })
       for await (const raw of stream as AsyncIterable<SDKMessage>) {
         const msg = raw as unknown as { type: string; message?: { content?: unknown } }
