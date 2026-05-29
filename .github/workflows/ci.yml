@@ -64,3 +64,22 @@ jobs:
           bun-version: latest
       - run: bun install
       - run: bun --bun vitest run -c vitest.e2e.config.ts
+
+  desktop-e2e:
+    # Desktop GUI Playwright suite (apps/desktop) — wizard, dashboard panes,
+    # CSP, attachment path-guard. The spec fixture spawns its own DRY_RUN
+    # test-shim on :4174, and playwright.config.ts defaults CSP injection on,
+    # so this runs headless with no extra wiring beyond a chromium install.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install
+      - name: Install Playwright Chromium
+        working-directory: apps/desktop
+        run: bun x playwright install --with-deps chromium
+      - name: Desktop e2e (Playwright)
+        working-directory: apps/desktop
+        run: bun x playwright test
