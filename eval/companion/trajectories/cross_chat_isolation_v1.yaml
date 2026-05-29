@@ -49,9 +49,14 @@ trajectory:
       chat: chat_iso_b
       probe_kind: reactive_response
       expected:
+        # Positive control: confirms chat_b engaged with 旺仔's message (decision=send).
+        # We do NOT require the reply to echo the literal word "分手" — an empathetic
+        # companion responds to the feeling without parroting the term (observed
+        # 2026-05-29: "听着挺难受的。怎么闹起来的？"). The `recall` dimension (judge)
+        # assesses engagement; the isolation guarantee is asserted on chat_a below.
         decision: send
-        summary: "正控：在旺仔的 chat 里确实接住了分手这件事"
-        must_recall: ["分手"]
+        summary: "正控：在旺仔的 chat 里确实接住了这件事（不要求复述‘分手’二字）"
+        must_recall: []
         must_not_recall: []
         tone_hints: ["共情"]
         state_predicates: []

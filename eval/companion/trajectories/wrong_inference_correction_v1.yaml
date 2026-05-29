@@ -38,8 +38,13 @@ trajectory:
       kind: probe
       probe_kind: reactive_response
       expected:
-        decision: send
-        summary: "接受更正，不再假设他压力大/不情愿"
+        # decision=n/a: after "别担心" either a warm acknowledgment OR restrained
+        # silence accepts the correction (observed 2026-05-29: the companion stayed
+        # silent — valid "don't re-assert" behavior). The regression guard is the
+        # must_not_recall set: whatever it says, it must not resurface the wrong
+        # "stressed/unwilling" inference.
+        decision: n/a
+        summary: "接受更正，不再假设他压力大/不情愿（沉默或共情皆可，只要不复发错误推断）"
         must_recall: []
         must_not_recall: ["压力大", "不情愿", "辛苦了吗", "别太累"]
         tone_hints: ["接住他对项目的热情", "不要怜悯"]

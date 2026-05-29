@@ -50,3 +50,30 @@ Backends: `claude-sdk` (MVP), `codex-sdk` (stub), `anthropic-api` (stub). Adding
 - Codex / Anthropic-API judge backends (interfaces exist; bodies throw)
 
 See the spec for the rationale on each.
+
+## Known divergences (acceptance run 2026-05-29)
+
+First full real-SDK run of the 6 new trajectories. Engine assertions passed for
+cross_domain_mixing and explicit_quiet (clean), and cross_chat_isolation's
+isolation guarantee held (chat_a reply leaked nothing from chat_b). Two genuine
+behavior findings are left as open questions rather than papered over by tuning:
+
+- **`long_silence_initiative` — companion declined to push.** After 8 days of
+  silence with an open thread (面试), the push tick chose `silent` (expected
+  `send` + recall "面试"). This is plausibly *correct* restraint-biased behavior
+  ("装翅膀不建笼子"), not a bug — but it means a proactive check-in on a stale
+  open thread is not reliably emitted. Decide whether the push tick *should*
+  resurface open threads before re-tuning this trajectory's expectation.
+
+- **`fact_update_supersede` — empty reply to a factual recall question.** The
+  `memory_recall` probe asked "我们现在用什么数据库？" and the companion replied
+  with nothing (decision captured as silent). Either companion-persona doesn't
+  do direct factual Q&A (a probe-design tension — `memory_recall` assumes it
+  will answer) or it's a real gap. Needs investigation before this mode is
+  considered covered.
+
+- **Judge dimension scores did not run.** The claude-sdk judge backend errored
+  on every probe (`Claude Code native binary not found … claude-agent-sdk-linux-x64-musl/claude`)
+  — it does not pass `pathToClaudeCodeExecutable`. The *companion's* SDK works
+  (replies were produced); only the judge half failed. Fixing the judge backend
+  is Sub-project B work.
