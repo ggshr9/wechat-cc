@@ -66,9 +66,9 @@ export function buildPushTickText(opts: BuildPushTickTextOpts): string {
   return (
     `<companion_tick ts="${opts.nowIso}" default_chat_id="${opts.defaultChatId}" />\n` +
     `有一条到点的跟进：「${opts.intention}」\n` +
-    `先 memory_read 相关 .md，确认它没过期、用户也没自己说过结果。\n` +
-    `默认就是发：调 reply 写一句简短、自然的问候（别催、别灌鸡汤）。\n` +
-    `只有明显已过期、或用户已经自己说过结果时才不发——那就直接结束这一轮，不调用 reply，也不要产生任何 assistant text。`
+    `先 memory_read 相关 .md，看看它是否还有意义、用户是不是已经自己说过结果。\n` +
+    `默认就是发：调 reply 写一句简短、自然的问候（别催、别灌鸡汤）。晚了几天也照常发，自然带一句就行（"前两天那个…"），不用为迟到道歉。\n` +
+    `"已过期"指这件事本身已经没意义了——约定的具体时刻早过去很久、或明显已无关；单纯晚几天不算过期。只有真的没意义、或用户已经自己说过结果，才不发——那就直接结束这一轮，不调用 reply，也不要产生任何 assistant text。`
   )
 }
 

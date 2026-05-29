@@ -17,6 +17,8 @@ describe('buildPushTickText', () => {
     expect(out).toContain('有一条到点的跟进：「跟进健身计划进展」')
     expect(out).toContain('不调用 reply')
     expect(out).toContain('memory_read')
+    expect(out).toContain('不算过期')
+    expect(out).toContain('晚了几天也照常发')
   })
 })
 
