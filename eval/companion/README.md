@@ -105,9 +105,21 @@ follow-up as expired. So `long_silence_initiative` and `tech_stress_followup_v1`
 their `proactive_decision` probe at `decision: n/a` (still asserting `must_not_recall`).
 The fire mechanism remains **unit-proven** (`tick-bodies.test.ts`) and production-correct.
 
-**Next lever (deferred, not in the ts-authority scope):** calibrate the fire prompt's
-"已过期" skip valve so a slightly-overdue follow-up still fires (a few days' delay isn't
-"expired"). That's a companion-prompt iteration; libfaketime was explicitly ruled out.
+**Skip-valve calibration (commit 95ffc55) — tried, helped, still flaky → STOPPED.** The
+fire prompt was reworded so a few-days-overdue follow-up still fires (晚了几天也照常发；
+"已过期" narrowed to "the thing itself is moot"; spec
+`docs/superpowers/specs/2026-05-29-fire-skip-valve-calibration-design.md`). A second 6-run
+real-SDK check: fire rate rose **1/6 → 2/6**, and when it fired the replies were exactly
+right ("前几天那场面试后来怎么样？" — naturally acknowledging the delay, no apology). But it's
+still **4/6 silent**. Per the spec's pre-committed stop rule, this disconfirms "the skip
+valve is the (whole) cause": the residual decline is **persona-level restraint** — the
+companion is conservative about proactive outreach by disposition, independent of the
+gate, virtual time, and skip-valve wording. **We stop prompt-tuning here.** The reword is
+kept (it's correct behavior); `long_silence_initiative` / `tech_stress_followup_v1` stay
+`decision: n/a`. The fire mechanism remains unit-proven and production-correct; pushing the
+companion to be *more* proactive than its disposition is a deliberate product/persona
+decision, not a prompt patch — and over-pushing is arguably worse than under-pushing for a
+companion. libfaketime remains ruled out.
 
 **Judge dimension scores — fixed (commit 78ccc85).** The first run's judge errored
 on every probe (`Claude Code native binary not found … claude-agent-sdk-linux-x64-musl/claude`)
