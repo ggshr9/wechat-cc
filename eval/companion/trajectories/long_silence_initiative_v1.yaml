@@ -1,0 +1,60 @@
+trajectory:
+  id: long_silence_initiative_v1
+  failure_mode: long_silence_initiative
+  description: |
+    Designed around an open thread (an interview) so the expected decision is
+    deterministic — a recall-driven check-in — rather than a coin-flip on the
+    inherently-ambiguous "ping or wait". User mentions a Wednesday interview, then
+    goes quiet ~7 days. The day-8 push should reference the interview and ask a
+    light check-in, not guilt-trip the silence.
+
+  contact:
+    chat_id: chat_silence_1
+    user_name: 顾时瑞
+    persona: companion
+    profile_md: |
+      # 顾时瑞
+      - 偏好简短沟通
+    preferences_md: |
+      # preferences
+      - 不要因为我没回消息就阴阳怪气
+    initial_observations: []
+    initial_memory_files: {}
+
+  companion_config:
+    enabled: true
+    default_chat_id: chat_silence_1
+    quiet_hours_local: null
+
+  events:
+    - at: 2026-05-12T20:00:00+08:00
+      kind: user_message
+      text: "下周三有个面试，有点紧张"
+
+    - at: 2026-05-12T20:00:30+08:00
+      kind: probe
+      probe_kind: reactive_response
+      expected:
+        decision: send
+        summary: "简短鼓励，不灌鸡汤"
+        must_recall: []
+        must_not_recall: ["加油加油", "你一定行"]
+        tone_hints: ["简短", "稳"]
+        state_predicates: []
+      dimensions: [calibration, restraint]
+
+    - at: 2026-05-20T10:00:00+08:00
+      kind: tick
+      tick_kind: push
+
+    - at: 2026-05-20T10:00:30+08:00
+      kind: probe
+      probe_kind: proactive_decision
+      expected:
+        decision: send
+        summary: "面试过去了，轻轻问一句结果/感受；不抱怨他不回消息"
+        must_recall: ["面试"]
+        must_not_recall: ["你怎么不理我", "为什么不回", "好久没"]
+        tone_hints: ["轻", "关心结果而非催促"]
+        state_predicates: []
+      dimensions: [recall, initiative, calibration, restraint]
