@@ -46,8 +46,10 @@ export interface JudgeScore {
 export interface ReplayContext {
   trajectory: Trajectory
   daemon: EvalDaemon
-  lastUserMessageReply: { text?: string; error?: string } | null
-  lastTickOutcome: { decision: 'send' | 'silent'; text?: string } | null
+  primaryChatId: string
+  defaultChatId: string
+  lastUserMessageReply: Record<string, { text?: string; error?: string }>
+  lastTickOutcome: Record<string, { decision: 'send' | 'silent'; text?: string }>
 }
 
 export async function replay(trajectory: Trajectory, opts: ReplayOpts): Promise<EventResult[]> {
@@ -66,8 +68,10 @@ export async function replay(trajectory: Trajectory, opts: ReplayOpts): Promise<
 
     const ctx: ReplayContext = {
       trajectory, daemon,
-      lastUserMessageReply: null,
-      lastTickOutcome: null,
+      primaryChatId: trajectory.primaryChatId,
+      defaultChatId: trajectory.companion_config.default_chat_id,
+      lastUserMessageReply: {},
+      lastTickOutcome: {},
     }
     const results: EventResult[] = []
 
@@ -87,16 +91,18 @@ export async function replay(trajectory: Trajectory, opts: ReplayOpts): Promise<
             const outbox = daemon.outboundFor(eventChatId)
             const newOnes = outbox.slice(outboxBefore)
             const lastNew = newOnes[newOnes.length - 1]
-            ctx.lastUserMessageReply = { text: lastNew?.text ?? '' }
+            ctx.lastUserMessageReply[eventChatId] = { text: lastNew?.text ?? '' }
           } catch (err) {
-            ctx.lastUserMessageReply = { error: err instanceof Error ? err.message : String(err) }
+            ctx.lastUserMessageReply[eventChatId] = { error: err instanceof Error ? err.message : String(err) }
           }
         } else if (event.kind === 'tick') {
-          const outboxBefore = daemon.outboundFor(eventChatId).length
+          // The companion tick fires against companion_config.default_chat_id and
+          // ignores any per-event `chat:`. Measure + key the outcome by that chat.
+          const tickChat = trajectory.companion_config.default_chat_id
+          const outboxBefore = daemon.outboundFor(tickChat).length
           await daemon.daemonHandle.fireTick(event.tick_kind, parseIso(event.at))
-          const outbox = daemon.outboundFor(eventChatId)
-          const newOnes = outbox.slice(outboxBefore)
-          ctx.lastTickOutcome = newOnes.length > 0
+          const newOnes = daemon.outboundFor(tickChat).slice(outboxBefore)
+          ctx.lastTickOutcome[tickChat] = newOnes.length > 0
             ? { decision: 'send', ...(newOnes[newOnes.length - 1]?.text !== undefined ? { text: newOnes[newOnes.length - 1]!.text! } : {}) }
             : { decision: 'silent' }
         } else if (event.kind === 'probe') {
@@ -161,12 +167,15 @@ function seedMemoryFiles(stateDir: string, trajectory: Trajectory): void {
 }
 
 function renderHistoryToIndex(t: Trajectory, idx: number): string {
+  const multi = t.contacts.length > 1
   const lines: string[] = []
   for (let j = 0; j <= idx; j++) {
     const ev = t.events[j]!
-    if (ev.kind === 'user_message') lines.push(`[${ev.at}] USER: ${ev.text}`)
-    else if (ev.kind === 'tick') lines.push(`[${ev.at}] TICK (${ev.tick_kind})`)
-    else lines.push(`[${ev.at}] PROBE (${ev.probe_kind})`)
+    const chatTag = multi ? ` <${ev.chat ?? t.primaryChatId}>` : ''
+    const head = `[${ev.at}]${chatTag}`
+    if (ev.kind === 'user_message') lines.push(`${head} USER: ${ev.text}`)
+    else if (ev.kind === 'tick') lines.push(`${head} TICK (${ev.tick_kind})`)
+    else lines.push(`${head} PROBE (${ev.probe_kind})`)
   }
   return lines.join('\n')
 }
