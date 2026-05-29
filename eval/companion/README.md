@@ -43,7 +43,7 @@ Backends: `claude-sdk` (MVP), `codex-sdk` (stub), `anthropic-api` (stub). Adding
 
 ## What's NOT in MVP
 
-- Remaining 6 failure modes (cross_domain_mixing, fact_update_supersede, wrong_inference_correction, explicit_quiet, long_silence_initiative, multi_persona_isolation)
+- Remaining 6 failure modes (cross_domain_mixing, fact_update_supersede, wrong_inference_correction, explicit_quiet, long_silence_initiative, cross_chat_isolation)
 - Multi-seed judge averaging, pairwise blind comparison
 - CI integration — explicit manual run only
 - Codex / Anthropic-API judge backends (interfaces exist; bodies throw)

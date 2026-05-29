@@ -12,7 +12,7 @@ const FAILURE_MODES = [
   'wrong_inference_correction',
   'explicit_quiet',
   'long_silence_initiative',
-  'multi_persona_isolation',
+  'cross_chat_isolation',
 ] as const
 
 const DIMENSIONS = ['recall', 'inference', 'calibration', 'initiative', 'restraint'] as const

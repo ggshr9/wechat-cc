@@ -75,6 +75,27 @@ describe('loadTrajectory', () => {
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
+  it('accepts the renamed cross_chat_isolation failure mode', () => {
+    const yaml = MINIMAL_YAML.replace('failure_mode: work_followup', 'failure_mode: cross_chat_isolation')
+    const dir = mkdtempSync(join(tmpdir(), 'traj-test-'))
+    const path = join(dir, 'rename.yaml')
+    writeFileSync(path, yaml)
+    try {
+      const t = loadTrajectory(path)
+      expect(t.failure_mode).toBe('cross_chat_isolation')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('rejects the old multi_persona_isolation name', () => {
+    const yaml = MINIMAL_YAML.replace('failure_mode: work_followup', 'failure_mode: multi_persona_isolation')
+    const dir = mkdtempSync(join(tmpdir(), 'traj-test-'))
+    const path = join(dir, 'oldname.yaml')
+    writeFileSync(path, yaml)
+    try {
+      expect(() => loadTrajectory(path)).toThrow(/failure_mode/)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
   it('parses state_predicates as a tagged union', () => {
     const withPredicates = MINIMAL_YAML.replace(
       'state_predicates: []',
