@@ -2,17 +2,15 @@ trajectory:
   id: long_silence_initiative_v1
   failure_mode: long_silence_initiative
   description: |
-    Tests the push tick's INITIATIVE on a persisted open thread after silence.
-    The open thread (an interview) is seeded into a memory file — the push tick's
-    prompt explicitly reads memory_list + memory_read, and over 8 real days an
-    introspect tick would have captured this; the harness fires only push ticks,
-    so we seed it directly (deterministic, isolates the push decision from
-    introspect's non-deterministic capture). Day-8 push should reference the
-    interview and ask a light check-in, not guilt-trip the silence.
+    Tests the push tick firing a due, self-authored intention. The open thread
+    (an interview follow-up) is seeded into agenda.md with a due date that
+    precedes the day-8 push tick. Per the proactivity v1 design, the push tick
+    parses agenda.md, finds the due item, and fires it (default = act). Expected:
+    the day-8 push references the interview and asks a light check-in.
 
-    NOTE (2026-05-29): the first version seeded NOTHing about the interview, so
-    the push tick had nothing in memory to resurface and correctly stayed silent.
-    That was a trajectory-design gap, not companion behavior. See README.
+    History: pre-agenda this trajectory seeded nothing actionable, so the push
+    tick (a cold "should I?" poll) stayed silent — see the eval README. The
+    agenda model makes the firing deterministic.
 
   contact:
     chat_id: chat_silence_1
@@ -26,11 +24,9 @@ trajectory:
       - 不要因为我没回消息就阴阳怪气
     initial_observations: []
     initial_memory_files:
-      threads.md: |
-        # 开放话题（待回访）
-        - 2026-05-12：用户说下周三（约 2026-05-14）有面试，有点紧张。
-          这是个未完成的开放话题——面试过后值得轻轻问一句结果/感受。
-          别催、别灌鸡汤、别因为他没主动说就阴阳怪气。
+      agenda.md: |
+        # agenda
+        - [ ] due:2026-05-15 面试后轻轻问结果/感受；别催、别灌鸡汤
 
   companion_config:
     enabled: true

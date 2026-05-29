@@ -19,7 +19,10 @@ trajectory:
       - 工作日 9:30 之前不打扰
       - 不要技术建议；技术问题用户会自己处理
     initial_observations: []
-    initial_memory_files: {}
+    initial_memory_files:
+      agenda.md: |
+        # agenda
+        - [ ] due:2026-05-13 第二天问一下 504/migration 回归稳了没、昨晚睡得怎样
 
   companion_config:
     enabled: true
@@ -56,6 +59,9 @@ trajectory:
         must_recall: ["504"]
         must_not_recall: ["抑郁", "建议"]
         tone_hints: ["不要叫人‘加油’", "短"]
-        state_predicates:
-          - { kind: observation_body_matches, pattern: "504" }
+        # No observation_body_matches: the follow-up now lives in agenda.md
+        # (seeded above), not the observations store. must_recall:504 — the
+        # reply naming the incident — is the signal that the companion read the
+        # agenda and fired the intention.
+        state_predicates: []
       dimensions: [recall, calibration, initiative, restraint]
