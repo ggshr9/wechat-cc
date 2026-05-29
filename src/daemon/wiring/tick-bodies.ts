@@ -17,6 +17,8 @@ import { resolveIntrospectChatId, makeIntrospectAgent } from '../companion/intro
 import { resolveEffectiveTier, TIER_PROFILES } from '../../core/user-tier'
 import type { Access } from '../../lib/access'
 import type { PermissionMode } from '../../core/capability-matrix'
+import { makeMemoryFS } from '../memory/fs-api'
+import { parseAgenda, selectDue, markResolved } from '../companion/agenda'
 
 function errMsg(err: unknown): string { return err instanceof Error ? err.message : String(err) }
 
@@ -51,6 +53,8 @@ export interface TickBodies {
 export interface BuildPushTickTextOpts {
   nowIso: string
   defaultChatId: string
+  /** The due intention body the tick is firing — the concrete reason to reach out. */
+  intention: string
 }
 
 /**
@@ -61,11 +65,10 @@ export interface BuildPushTickTextOpts {
 export function buildPushTickText(opts: BuildPushTickTextOpts): string {
   return (
     `<companion_tick ts="${opts.nowIso}" default_chat_id="${opts.defaultChatId}" />\n` +
-    `定时唤醒。先 memory_list + memory_read 你觉得相关的文件。` +
-    `再看当前时间和用户最近状态。决定是否向 ${opts.defaultChatId} push。` +
-    `\n\n要 push：调 reply 工具，内容就是要发给用户的话。` +
-    `\n不 push：直接结束这一轮，**不调用 reply**，**也不产生任何 assistant text**——不要解释你为什么不打扰、不要总结你看到的状态。沉默就是沉默。` +
-    `\n不确定就选不 push（结束）。push 后写一条 memory 记下决策和意图（便于下次 tick 读到效果）。`
+    `有一条到点的跟进：「${opts.intention}」\n` +
+    `先 memory_read 相关 .md，确认它没过期、用户也没自己说过结果。\n` +
+    `默认就是发：调 reply 写一句简短、自然的问候（别催、别灌鸡汤）。\n` +
+    `只有明显已过期、或用户已经自己说过结果时才不发——那就直接结束这一轮，不调用 reply，也不要产生任何 assistant text。`
   )
 }
 
@@ -75,27 +78,24 @@ export function buildTickBodies(deps: TickDeps): TickBodies {
   async function pushTick(opts?: { nowIso?: string }): Promise<void> {
     const cfg = loadCompanionConfig(deps.stateDir)
     if (!cfg.default_chat_id) { deps.log('SCHED', 'skip tick — no default_chat_id'); return }
+    const chatId = cfg.default_chat_id
+
+    // Gate on the agenda: only wake the agent if a self-authored intention is
+    // due. No due item → silent, WITHOUT an LLM call (the common case).
+    const nowIso = opts?.nowIso ?? new Date().toISOString()
+    const today = nowIso.slice(0, 10)
+    const agendaFs = makeMemoryFS({ rootDir: join(deps.stateDir, 'memory', chatId) })
+    const agendaMd = agendaFs.read('agenda.md') ?? ''
+    const due = selectDue(parseAgenda(agendaMd), today)
+    if (due.length === 0) { deps.log('SCHED', 'push tick — no due intentions'); return }
+    // Fire the single oldest-due item this tick; the rest wait for later ticks.
+    const item = [...due].sort((a, b) => (a.due! < b.due! ? -1 : a.due! > b.due! ? 1 : 0))[0]!
+
     const snapshot = deps.ilink.loadProjects()
     const currentAlias = snapshot.current && snapshot.projects[snapshot.current] ? snapshot.current : null
     const proj = currentAlias
       ? { alias: currentAlias, path: snapshot.projects[currentAlias]!.path }
       : { alias: '_default', path: launchCwd }
-    // PR D — don't contend with an in-flight user-initiated dispatch on
-    // the same (alias, providerId, chatId) session. Companion pushes are
-    // best-effort background work — skipping a tick when the user is
-    // mid-conversation is strictly better than queueing behind their
-    // turn (push would land delayed and disrupt the user's flow) or
-    // forking a parallel turn against the same session (the providers
-    // serialise inside the SDK; result would be either rejection or
-    // unpredictable interleaving). Plan recommends skip + warn over
-    // abort because aborting the user's turn for a push tick is
-    // user-hostile.
-    // Task 11 — chatId is now `cfg.default_chat_id`, so this isInFlight
-    // check shares the same per-chat session bucket as user-initiated
-    // dispatch for that chat. Tier comes from access.json so a
-    // misconfigured default_chat_id (pointing at a non-admin) runs with
-    // reduced capabilities rather than silently inheriting admin.
-    const chatId = cfg.default_chat_id
     const tier = resolveEffectiveTier(chatId, deps.loadAccess(), deps.permissionMode)
     if (tier !== 'admin') {
       deps.log('COMPANION', `default_chat_id=${chatId} is non-admin tier (${tier}); push tick will run with reduced capabilities`)
@@ -103,7 +103,7 @@ export function buildTickBodies(deps: TickDeps): TickBodies {
     const tierProfile = TIER_PROFILES[tier]
     if (deps.boot.sessionManager.isInFlight({ alias: proj.alias, providerId: deps.boot.defaultProviderId, chatId })) {
       deps.log('SCHED', `[companion] skipping push tick: user session in-flight (alias=${proj.alias} provider=${deps.boot.defaultProviderId} chat=${chatId})`)
-      return
+      return // leave the item pending — retry next tick
     }
     const handle = await deps.boot.sessionManager.acquire({
       alias: proj.alias,
@@ -113,21 +113,19 @@ export function buildTickBodies(deps: TickDeps): TickBodies {
       tierProfile,
       permissionMode: deps.permissionMode,
     })
-    const tickText = buildPushTickText({
-      nowIso: opts?.nowIso ?? new Date().toISOString(),
-      defaultChatId: cfg.default_chat_id,
-    })
-    // `handle.dispatch` returns AsyncIterable<AgentEvent>, not a Promise —
-    // `await` alone is a no-op (it resolves to the iterable itself without
-    // ever calling .next()). The wrapper's enter/finally hooks (inFlight
-    // counter increment, sessionStore.set on result, droppedAssistantChunks
-    // accounting) live inside the generator body and only run when the
-    // consumer iterates. Drain the iterable so those hooks fire.
+    const tickText = buildPushTickText({ nowIso, defaultChatId: chatId, intention: item.body })
     try {
       for await (const _ev of handle.dispatch(tickText)) { /* drain */ }
     } catch (err) {
       deps.log('SCHED', `companion tick dispatch failed: ${errMsg(err)}`)
+      return // dispatch failed — leave pending, retry next tick
     }
+    // Resolve so the item fires at most once. Re-read first: the agent may have
+    // edited agenda.md during dispatch (added new intentions) — markResolved
+    // matches the original line and preserves any additions.
+    const freshMd = agendaFs.read('agenda.md') ?? agendaMd
+    const updated = markResolved(freshMd, item, today)
+    if (updated !== freshMd) agendaFs.write('agenda.md', updated)
   }
 
   async function introspectTick(_opts?: { nowIso?: string }): Promise<void> {

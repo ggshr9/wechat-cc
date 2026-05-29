@@ -7,15 +7,16 @@ import { TIER_PROFILES } from '../../core/user-tier'
 import type { Access } from '../../lib/access'
 
 describe('buildPushTickText', () => {
-  it('formats a push tick envelope with the supplied nowIso + chatId', () => {
+  it('formats a push tick envelope with the supplied nowIso + chatId + intention', () => {
     const out = buildPushTickText({
       nowIso: '2026-05-13T01:30:00.000Z',
       defaultChatId: 'chat_test_1',
+      intention: '跟进健身计划进展',
     })
     expect(out).toContain('<companion_tick ts="2026-05-13T01:30:00.000Z" default_chat_id="chat_test_1" />')
-    expect(out).toContain('定时唤醒')
+    expect(out).toContain('有一条到点的跟进：「跟进健身计划进展」')
     expect(out).toContain('不调用 reply')
-    expect(out).toContain('沉默就是沉默')
+    expect(out).toContain('memory_read')
   })
 })
 
@@ -45,11 +46,19 @@ function setupDeps(opts: {
   /** Optional Access stub. Defaults to admin tier for the configured chatId
    * so existing PR D tests keep their original expectations. */
   access?: Access
+  /** Optional agenda.md content written to memory/<chatId>/agenda.md so the
+   * agenda gate passes. Without this the tick returns early (no due items). */
+  agendaMd?: string
 }): Setup {
   const stateDir = makeStateDir({
     enabled: true,
     ...(opts.defaultChatId ? { default_chat_id: opts.defaultChatId } : {}),
   })
+  if (opts.agendaMd !== undefined && opts.defaultChatId) {
+    const memDir = join(stateDir, 'memory', opts.defaultChatId)
+    mkdirSync(memDir, { recursive: true })
+    writeFileSync(join(memDir, 'agenda.md'), opts.agendaMd)
+  }
   const logs: string[] = []
   // dispatch returns AsyncIterable<AgentEvent>, not a Promise — the real
   // contract. Mocking as `Promise<void>` would mask the bug that pushTick
@@ -98,10 +107,14 @@ describe('buildTickBodies / pushTick — companion isolation (PR D)', () => {
   })
 
   it('skips the tick when the resolved session has an in-flight dispatch', async () => {
-    const s = setupDeps({ defaultChatId: 'chat-1', inFlight: true })
+    const s = setupDeps({
+      defaultChatId: 'chat-1',
+      inFlight: true,
+      agendaMd: '- [ ] due:2026-05-13 check in on project',
+    })
     cleanup.push(s.stateDir)
     const { pushTick } = buildTickBodies(s.deps)
-    await pushTick()
+    await pushTick({ nowIso: '2026-05-13T10:00:00.000Z' })
     expect(s.isInFlight).toHaveBeenCalledWith({ alias: '_default', providerId: 'claude', chatId: 'chat-1' })
     expect(s.acquire).not.toHaveBeenCalled()
     expect(s.dispatch).not.toHaveBeenCalled()
@@ -109,10 +122,14 @@ describe('buildTickBodies / pushTick — companion isolation (PR D)', () => {
   })
 
   it('proceeds when no in-flight dispatch on the session', async () => {
-    const s = setupDeps({ defaultChatId: 'chat-1', inFlight: false })
+    const s = setupDeps({
+      defaultChatId: 'chat-1',
+      inFlight: false,
+      agendaMd: '- [ ] due:2026-05-13 check in on project',
+    })
     cleanup.push(s.stateDir)
     const { pushTick } = buildTickBodies(s.deps)
-    await pushTick()
+    await pushTick({ nowIso: '2026-05-13T10:00:00.000Z' })
     expect(s.isInFlight).toHaveBeenCalledWith({ alias: '_default', providerId: 'claude', chatId: 'chat-1' })
     expect(s.acquire).toHaveBeenCalledOnce()
     expect(s.dispatch).toHaveBeenCalledOnce()
@@ -125,6 +142,32 @@ describe('buildTickBodies / pushTick — companion isolation (PR D)', () => {
     await pushTick()
     expect(s.isInFlight).not.toHaveBeenCalled()
     expect(s.acquire).not.toHaveBeenCalled()
+  })
+
+  it('returns silently without an LLM call when no agenda.md exists', async () => {
+    // No agendaMd supplied → no agenda.md file → no due items → silent gate.
+    const s = setupDeps({ defaultChatId: 'chat-1', inFlight: false })
+    cleanup.push(s.stateDir)
+    const { pushTick } = buildTickBodies(s.deps)
+    await pushTick({ nowIso: '2026-05-13T10:00:00.000Z' })
+    expect(s.isInFlight).not.toHaveBeenCalled()
+    expect(s.acquire).not.toHaveBeenCalled()
+    expect(s.dispatch).not.toHaveBeenCalled()
+    expect(s.logs.some(l => l.includes('no due intentions'))).toBe(true)
+  })
+
+  it('returns silently when agenda.md has only future items', async () => {
+    const s = setupDeps({
+      defaultChatId: 'chat-1',
+      inFlight: false,
+      agendaMd: '- [ ] due:2026-12-31 far future item',
+    })
+    cleanup.push(s.stateDir)
+    const { pushTick } = buildTickBodies(s.deps)
+    await pushTick({ nowIso: '2026-05-13T10:00:00.000Z' })
+    expect(s.isInFlight).not.toHaveBeenCalled()
+    expect(s.acquire).not.toHaveBeenCalled()
+    expect(s.logs.some(l => l.includes('no due intentions'))).toBe(true)
   })
 })
 
@@ -143,10 +186,15 @@ describe('buildTickBodies / pushTick — companion default_chat_id + tier (Task 
       allowFrom: ['ownerChat'],
       admins: ['ownerChat'],
     }
-    const s = setupDeps({ defaultChatId: 'ownerChat', inFlight: false, access })
+    const s = setupDeps({
+      defaultChatId: 'ownerChat',
+      inFlight: false,
+      access,
+      agendaMd: '- [ ] due:2026-05-13 check in on project',
+    })
     cleanup.push(s.stateDir)
     const { pushTick } = buildTickBodies(s.deps)
-    await pushTick()
+    await pushTick({ nowIso: '2026-05-13T10:00:00.000Z' })
     expect(s.acquire).toHaveBeenCalledOnce()
     const req = s.acquire.mock.calls[0]?.[0] as { chatId: string; tierProfile: unknown }
     expect(req.chatId).toBe('ownerChat')
@@ -161,10 +209,15 @@ describe('buildTickBodies / pushTick — companion default_chat_id + tier (Task 
       allowFrom: ['nonadmin'],
       admins: ['someone-else'],
     }
-    const s = setupDeps({ defaultChatId: 'nonadmin', inFlight: false, access })
+    const s = setupDeps({
+      defaultChatId: 'nonadmin',
+      inFlight: false,
+      access,
+      agendaMd: '- [ ] due:2026-05-13 check in on project',
+    })
     cleanup.push(s.stateDir)
     const { pushTick } = buildTickBodies(s.deps)
-    await pushTick()
+    await pushTick({ nowIso: '2026-05-13T10:00:00.000Z' })
     expect(s.acquire).toHaveBeenCalledOnce()
     const req = s.acquire.mock.calls[0]?.[0] as { chatId: string; tierProfile: unknown }
     expect(req.chatId).toBe('nonadmin')
@@ -181,10 +234,15 @@ describe('buildTickBodies / pushTick — companion default_chat_id + tier (Task 
       allowFrom: ['trustyChat'],
       trusted: ['trustyChat'],
     }
-    const s = setupDeps({ defaultChatId: 'trustyChat', inFlight: false, access })
+    const s = setupDeps({
+      defaultChatId: 'trustyChat',
+      inFlight: false,
+      access,
+      agendaMd: '- [ ] due:2026-05-13 check in on project',
+    })
     cleanup.push(s.stateDir)
     const { pushTick } = buildTickBodies(s.deps)
-    await pushTick()
+    await pushTick({ nowIso: '2026-05-13T10:00:00.000Z' })
     expect(s.acquire).toHaveBeenCalledOnce()
     const req = s.acquire.mock.calls[0]?.[0] as { chatId: string; tierProfile: unknown }
     expect(req.tierProfile).toBe(TIER_PROFILES.trusted)
