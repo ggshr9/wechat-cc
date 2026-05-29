@@ -1,0 +1,48 @@
+trajectory:
+  id: fact_update_supersede_v1
+  failure_mode: fact_update_supersede
+  description: |
+    A fact is stated, then later superseded. A recall probe must reflect the new
+    fact (mysql), not the stale one (postgres). The recall-probe reply text is the
+    objective signal — no memory_file_matches predicate, because the companion
+    chooses which .md file to write the fact into.
+
+  contact:
+    chat_id: chat_fact_1
+    user_name: 顾时瑞
+    persona: companion
+    profile_md: |
+      # 顾时瑞
+      - 后端工程师
+    preferences_md: |
+      # preferences
+      - 简短
+    initial_observations: []
+    initial_memory_files: {}
+
+  companion_config:
+    enabled: true
+    default_chat_id: chat_fact_1
+    quiet_hours_local: null
+
+  events:
+    - at: 2026-05-18T14:00:00+08:00
+      kind: user_message
+      text: "我们这套服务现在用 postgres"
+
+    - at: 2026-05-19T14:00:00+08:00
+      kind: user_message
+      text: "数据库迁到 mysql 了，postgres 弃用了"
+
+    - at: 2026-05-19T14:01:00+08:00
+      kind: probe
+      probe_kind: memory_recall
+      ask: "我们现在用什么数据库？"
+      expected:
+        decision: send
+        summary: "回答 mysql，不再说 postgres 是当前在用的"
+        must_recall: ["mysql"]
+        must_not_recall: ["postgres"]
+        tone_hints: ["直接"]
+        state_predicates: []
+      dimensions: [recall, calibration]
