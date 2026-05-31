@@ -27,9 +27,11 @@ import { decisionRow } from "./decisions.js"
 // "we have a file open" flag for the edit button visibility. `editing`
 // flips the textarea/render visibility; `pristine` is the unsaved-content
 // snapshot used by the cancel path.
-/** @type {{ users: MemoryList, selected: { userId: string, path: string } | null, marked: { parse: (s: string) => string } | null, editing: boolean, pristine: string, dirtySwitchPending: string | null }} */
+/** @type {{ users: MemoryList, observations: ObservationsList["observations"], milestones: MilestonesList["milestones"], selected: { userId: string, path: string } | null, marked: { parse: (s: string) => string } | null, editing: boolean, pristine: string, dirtySwitchPending: string | null }} */
 const memoryState = {
   users: [],
+  observations: [],
+  milestones: [],
   selected: null,
   marked: null,
   editing: false,
@@ -63,6 +65,7 @@ export async function loadMemoryPane(deps) {
   if (metaEl) metaEl.textContent = `${memoryState.users.length} 个用户 · ${totalFiles} 文件`
   const navCount = document.getElementById("memory-count")
   if (navCount) navCount.textContent = totalFiles > 0 ? String(totalFiles) : ""
+  renderMemoryProfileOverview(deps)
 }
 
 /** @param {Deps} deps */
@@ -277,6 +280,230 @@ function formatBytes(n) {
   return `${(n / 1024 / 1024).toFixed(1)}M`
 }
 
+/** @param {Deps} deps */
+function renderMemoryProfileOverview(deps) {
+  const root = document.getElementById("memory-profile-content")
+  if (!root) return
+
+  const user = memoryState.users[0] || null
+  const userNames = deps.doctorPoller.current?.userNames || {}
+  const friendly = user ? (userNames[user.userId] || user.userId.split("@")[0] || user.userId) : "你"
+  const totalFiles = memoryState.users.reduce((sum, u) => sum + u.fileCount, 0)
+  const latestFileMtime = memoryState.users
+    .flatMap(u => u.files.map(f => f.mtime))
+    .sort()
+    .at(-1)
+  const latestObservation = memoryState.observations[0]?.ts
+  const updatedAt = latestObservation || latestFileMtime
+  const profile = buildMemoryProfileModel(friendly, totalFiles, updatedAt)
+
+  root.innerHTML = `
+    <div class="memory-artboard" id="memory-artboard">
+    <div class="memory-profile-hero">
+      <div class="memory-profile-copy">
+        <div class="memory-profile-kicker">
+          <span class="spark">✦</span>
+          <span>${escapeHtml(profile.kicker)}</span>
+        </div>
+        <h1>${escapeHtml(profile.title)}</h1>
+        <p>${escapeHtml(profile.summary)}</p>
+        <div class="memory-profile-tags">
+          ${profile.tags.map(tag => `<span>${escapeHtml(tag)}</span>`).join("")}
+        </div>
+      </div>
+      <div class="memory-profile-companion" aria-label="人格画像指标">
+        <div class="metric-bubble metric-bubble-a">
+          <strong>${profile.metrics.expression}%</strong>
+          <span>表达欲</span>
+        </div>
+        <div class="metric-bubble metric-bubble-b">
+          <strong>${profile.metrics.safety}%</strong>
+          <span>安全感</span>
+        </div>
+        <div class="memory-avatar-wrap">
+          <img src="./assets/memory-companion.png" alt="" />
+        </div>
+        <div class="metric-bubble metric-bubble-c">
+          <strong>${profile.metrics.memory}</strong>
+          <span>记忆密度</span>
+        </div>
+        <div class="metric-bubble metric-bubble-d">
+          <strong>${escapeHtml(profile.metrics.companion)}</strong>
+          <span>陪伴需求</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="memory-profile-grid">
+      <section class="profile-panel profile-panel-tall">
+        <h2>长期人格倾向</h2>
+        <div class="profile-insight">
+          <span class="quote-mark">“</span>
+          <div>
+            <h3>一句话人格洞察</h3>
+            <p>${escapeHtml(profile.insight)}</p>
+          </div>
+        </div>
+        <div class="profile-trait-list">
+          ${profile.traits.map(trait => `
+            <article class="profile-trait">
+              <span class="trait-icon" aria-hidden="true">${trait.icon}</span>
+              <div>
+                <h3>${escapeHtml(trait.title)}</h3>
+                <p>${escapeHtml(trait.body)}</p>
+              </div>
+            </article>
+          `).join("")}
+        </div>
+      </section>
+
+      <div class="profile-side-stack">
+        <section class="profile-panel">
+          <h2>互动偏好画像</h2>
+          <div class="preference-grid">
+            ${profile.preferences.map(item => `
+              <article>
+                <h3>${escapeHtml(item.title)}</h3>
+                <p>${escapeHtml(item.body)}</p>
+              </article>
+            `).join("")}
+          </div>
+        </section>
+
+        <section class="profile-panel">
+          <h2>AI记住你的事情</h2>
+          <div class="memory-snippet-grid">
+            ${profile.snippets.map(item => `
+              <article>
+                <h3>${escapeHtml(item.title)}</h3>
+                <p>${escapeHtml(item.body)}</p>
+              </article>
+            `).join("")}
+          </div>
+        </section>
+      </div>
+    </div>
+    </div>
+  `
+  requestAnimationFrame(fitMemoryArtboard)
+}
+
+function fitMemoryArtboard() {
+  const root = document.getElementById("memory-profile-content")
+  const board = document.getElementById("memory-artboard")
+  if (!root || !board) return
+  const rootRect = root.getBoundingClientRect()
+  const boardRect = board.getBoundingClientRect()
+  const designWidth = 1680
+  const designHeight = 1180
+  const scale = Math.min(rootRect.width / designWidth, rootRect.height / designHeight, 1.08)
+  board.style.setProperty("--memory-artboard-scale", String(Math.max(0.1, scale)))
+  root.style.setProperty("--memory-artboard-scaled-height", `${designHeight * scale}px`)
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("resize", fitMemoryArtboard)
+}
+
+/**
+ * @param {string} friendly
+ * @param {number} totalFiles
+ * @param {string | undefined} updatedAt
+ */
+function buildMemoryProfileModel(friendly, totalFiles, updatedAt) {
+  const observations = memoryState.observations.filter(obs => !obs.archived)
+  const milestones = memoryState.milestones
+  const obsBodies = observations.map(obs => obs.body).filter(Boolean)
+  const primaryObservation = obsBodies[0]
+  const expression = clamp(58 + observations.length * 7 + totalFiles * 2, 62, 88)
+  const safety = clamp(64 + milestones.length * 4 - Math.max(0, observations.length - 4) * 2, 58, 84)
+  const memoryLabel = totalFiles > 0 ? `${totalFiles}份` : "生成中"
+  const companionLabel = observations.length >= 3 ? "中高" : observations.length >= 1 ? "温和" : "待校准"
+  const freshness = updatedAt ? ` · 更新于 ${formatRelativeTime(updatedAt)}` : ""
+  const remembered = obsBodies.slice(0, 4)
+
+  return {
+    kicker: `数字人格空间 · 实时更新${freshness}`,
+    title: `CC眼中的${friendly}`,
+    summary: primaryObservation
+      ? `这些画像来自最近的长期记忆、观察和里程碑。CC 正在把零散对话整理成可被你检查、修正和继续生长的理解。`
+      : `这里会逐步汇总 CC 在长期对话中形成的画像。现在先展示页面结构；有观察、里程碑和记忆文件后会自动替换为真实内容。`,
+    tags: deriveProfileTags(observations, totalFiles),
+    metrics: {
+      expression,
+      safety,
+      memory: memoryLabel,
+      companion: companionLabel,
+    },
+    insight: primaryObservation || "CC 还在收集足够的对话信号；等你们多聊几轮，这里会变成一句更贴近你的长期洞察。",
+    traits: [
+      {
+        icon: "♡",
+        title: "情绪表达",
+        body: observations.some(obs => obs.tone === "concern")
+          ? "压力和担心会被记录为需要照看的信号，CC 会尽量减少打扰式追问。"
+          : "更适合温和、具体、不过度解释的表达方式。",
+      },
+      {
+        icon: "☷",
+        title: "社交模式",
+        body: "偏好有上下文的深度交流，不喜欢冷启动式寒暄；回复质量比回复频率更重要。",
+      },
+      {
+        icon: "⚭",
+        title: "关系模式",
+        body: milestones.length > 0
+          ? "稳定的互动会被保留下来，CC 会把重要节点变成可回看的长期记忆。"
+          : "长期关系里的连续性会在这里积累，先从偏好、项目和最近关注点开始。",
+      },
+      {
+        icon: "♧",
+        title: "压力状态",
+        body: "压力升高时更需要清晰边界、低噪声提醒，以及能直接进入问题的协助。",
+      },
+    ],
+    preferences: [
+      { title: "喜欢", body: "具体、有上下文、能延续前文的回应。复杂事项先整理结构，再推进执行。" },
+      { title: "不喜欢", body: "泛泛寒暄、重复确认、没有记住前情的建议。" },
+      { title: "需要", body: "在重要项目和长期关系里保持连续性，同时允许你随时修正记忆。" },
+      { title: "风险", body: "画像只是辅助理解，不能替代你的真实表达；不确定的推断需要保持可见。" },
+    ],
+    snippets: remembered.length > 0
+      ? remembered.map((body, index) => ({
+          title: index === 0 ? "最近观察" : `记忆片段 ${index + 1}`,
+          body,
+        }))
+      : [
+          { title: "等待第一批观察", body: "当 Companion 写下 observation 后，这里会显示它记住的具体事情。" },
+          { title: "保留可编辑入口", body: "下方的记忆文件仍然可以打开、编辑和保存，方便你纠正 CC 的理解。" },
+          { title: "连接项目上下文", body: "项目、偏好和长期目标会逐步汇总到这里，而不是只散落在聊天记录里。" },
+          { title: "保持透明", body: "后续接入真实画像生成时，会继续保留来源和修正路径。" },
+        ],
+  }
+}
+
+/**
+ * @param {ObservationsList["observations"]} observations
+ * @param {number} totalFiles
+ */
+function deriveProfileTags(observations, totalFiles) {
+  const tags = ["长期关系型人格", "重视被记住", "偏好深度交流"]
+  if (observations.some(obs => obs.tone === "curious")) tags.unshift("强探索欲")
+  if (observations.some(obs => obs.tone === "concern")) tags.unshift("需要低打扰")
+  if (observations.some(obs => obs.tone === "proud")) tags.unshift("会被新进展点亮")
+  if (totalFiles > 0) tags.push("记忆可编辑")
+  return [...new Set(tags)].slice(0, 7)
+}
+
+/**
+ * @param {number} n
+ * @param {number} min
+ * @param {number} max
+ */
+function clamp(n, min, max) {
+  return Math.max(min, Math.min(max, n))
+}
+
 // Memory pane top zone — Claude's recent observations + milestone cards.
 // Loads from CLI: observations list + milestones list. Empty state already
 // in HTML (Task 9). Refresh on pane switch + manual button.
@@ -295,6 +522,9 @@ export async function loadMemoryTopZone(deps) {
       deps.invoke("wechat_cli_json", { args: ["milestones", "list", chatId, "--json"] }),
     ]))
     const observations = (obsResp.observations || []).slice(0, 3)
+    memoryState.observations = obsResp.observations || []
+    memoryState.milestones = msResp.milestones || []
+    renderMemoryProfileOverview(deps)
     if (observations.length === 0) {
       // Keep design-language §1.3 #5 — empty states have narrative, not "暂无数据"
       obsBox.innerHTML = `<p class="empty-state">Claude 还没注意到什么——这是它的安静日子。</p>`

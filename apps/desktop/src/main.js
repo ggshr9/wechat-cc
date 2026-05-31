@@ -539,6 +539,26 @@ function wireEvents() {
   )
   wireMemoryButtons(deps)
 
+  document.getElementById("memory-sources-toggle")?.addEventListener("click", () => {
+    const toggle = document.getElementById("memory-sources-toggle")
+    const panel = document.getElementById("memory-sources-panel")
+    if (!toggle || !panel) return
+    const wasOpen = toggle.getAttribute("aria-expanded") === "true"
+    toggle.setAttribute("aria-expanded", wasOpen ? "false" : "true")
+    panel.hidden = wasOpen
+  })
+
+  for (const id of ["memory-observations", "memory-archive"]) {
+    document.getElementById(`${id}-toggle`)?.addEventListener("click", () => {
+      const toggle = document.getElementById(`${id}-toggle`)
+      const body = document.getElementById(`${id}-body`)
+      if (!toggle || !body) return
+      const wasOpen = toggle.getAttribute("aria-expanded") === "true"
+      toggle.setAttribute("aria-expanded", wasOpen ? "false" : "true")
+      body.hidden = wasOpen
+    })
+  }
+
   // Memory top zone — handle archive button clicks via delegation
   document.getElementById("memory-observations")?.addEventListener("click", async (e) => {
     const archiveBtn = /** @type {HTMLElement | null} */ (e.target instanceof HTMLElement ? e.target.closest("[data-action='archive-observation']") : null)
