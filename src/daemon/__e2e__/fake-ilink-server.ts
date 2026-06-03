@@ -1,11 +1,13 @@
 /**
  * Fake ilink HTTP server for daemon e2e tests.
  *
- * Emulates 4 endpoints:
+ * Emulates these endpoints:
  *   POST /ilink/bot/getupdates  → returns queued RawUpdate[], clears queue
  *   POST /ilink/bot/sendmessage → captures into outbox
  *   POST /ilink/bot/sendfile    → captures into outbox
- *   POST /ilink/bot/typing      → no-op, returns ok
+ *   POST /ilink/bot/getconfig   → returns a typing_ticket (typing keepalive)
+ *   POST /ilink/bot/sendtyping  → no-op, captures as 'typing'
+ *   POST /ilink/bot/typing      → no-op, returns ok (legacy path)
  *
  * Bun.serve on random port. Tests await waitForOutbound(predicate) to
  * synchronize on the daemon's async polling loop.
@@ -88,12 +90,15 @@ export async function startFakeIlink(): Promise<FakeIlinkHandle> {
         })
         return Response.json({ errcode: 0, msg_id: `f${captured.length}` })
       }
-      if (url.pathname === '/ilink/bot/typing') {
-        captured.push({
-          endpoint: 'typing',
-          chatId: String(msg.to_user_id ?? body.ilink_user_id ?? ''),
-          raw: body,
-        })
+      // Typing keepalive flow: getconfig (for a typing_ticket) → sendtyping.
+      // Serving both keeps the daemon from logging a harmless-but-misleading
+      // `[TYPING] error … getconfig 404` on every dispatch (see transport.ts).
+      // These are NOT captured into the outbox — it holds user-facing sends
+      // only (sendmessage/sendfile); tests assert outbox()[0] is the reply.
+      if (url.pathname === '/ilink/bot/getconfig') {
+        return Response.json({ errcode: 0, typing_ticket: 'fake-typing-ticket' })
+      }
+      if (url.pathname === '/ilink/bot/sendtyping' || url.pathname === '/ilink/bot/typing') {
         return Response.json({ errcode: 0 })
       }
       return new Response('not found', { status: 404 })
