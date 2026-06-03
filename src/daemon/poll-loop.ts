@@ -31,7 +31,14 @@ export interface RawMessageItem {
   image_item?: { media?: RawMediaItem; aeskey?: string }
   file_item?: { media?: RawMediaItem; file_name?: string }
   video_item?: { media?: RawMediaItem }
-  ref_msg?: { title?: string; message_item?: { text_item?: { text?: string } } }
+  ref_msg?: {
+    title?: string
+    message_item?: {
+      type?: number
+      text_item?: { text?: string }
+      unsupported_item?: { text?: string }
+    }
+  }
 }
 
 export interface RawUpdate {
@@ -49,6 +56,18 @@ export interface RawUpdate {
 export interface ParseDeps {
   accountId: string
   resolveUserName: (chatId: string) => string | undefined
+}
+
+/** Map an ilink item `type` (1=text … 5=video) to a human label for <quote>. */
+function quotedTypeLabel(type?: number): string {
+  switch (type) {
+    case 1: return 'text'
+    case 2: return 'image'
+    case 3: return 'voice'
+    case 4: return 'file'
+    case 5: return 'video'
+    default: return 'unknown'
+  }
 }
 
 /**
@@ -72,20 +91,22 @@ export function parseUpdates(
 
     const textParts: string[] = []
     const attachments: InboundMsg['attachments'] = []
-    let quoteTo: string | undefined
+    let quote: InboundMsg['quote']
 
     for (const item of msg.item_list ?? []) {
-      // Detect quote/ref_msg — capture the msg_id of the item that carries the ref
-      if (item.ref_msg) {
-        if (!quoteTo && item.msg_id) {
-          quoteTo = item.msg_id
-        }
-        const refText = item.ref_msg.title
-          ?? item.ref_msg.message_item?.text_item?.text
-        if (refText) {
-          textParts.push(`[引用: ${refText}]`)
-        } else {
-          textParts.push('[引用]')
+      // Capture the first quoted message as structured content. ilink inlines
+      // the quoted text in ref_msg (no stable id), richest field first. A
+      // degenerate ref_msg with neither a known type nor any text is skipped
+      // so we don't emit an empty <quote>.
+      if (item.ref_msg && !quote) {
+        const ri = item.ref_msg.message_item
+        const text = ri?.text_item?.text
+          ?? ri?.unsupported_item?.text
+          ?? item.ref_msg.title
+          ?? ''
+        const type = quotedTypeLabel(ri?.type)
+        if (text !== '' || type !== 'unknown') {
+          quote = { type, text }
         }
       }
 
@@ -153,7 +174,7 @@ export function parseUpdates(
       msgType,
       createTimeMs: msg.create_time_ms ?? 0,
       accountId: deps.accountId,
-      ...(quoteTo !== undefined ? { quoteTo } : {}),
+      ...(quote !== undefined ? { quote } : {}),
       // ilink puts context_token on every inbound message; threading it
       // through to onInbound lets the daemon persist it before replying.
       // See InboundMsg.contextToken docstring for the regression history.
