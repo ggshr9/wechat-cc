@@ -14,9 +14,12 @@
 // Scenario — tier maps to codex SDK options:
 //   Two chats on the same daemon — one in `admins`, one not, both with
 //   mode=solo+codex — produce different `sandboxMode` + `approvalPolicy`
-//   on `Codex.startThread()` at spawn time. Admin gets
-//   `danger-full-access` + `never`; guest gets `read-only` +
-//   `untrusted`.
+//   on `Codex.startThread()` at spawn time. Under strict mode
+//   (dangerously=false) admin gets `workspace-write` + `never`; guest
+//   gets `read-only` + `untrusted`. (Post-RFC-05, admin no longer gets
+//   `danger-full-access` in strict mode — its destructive ops relay, and
+//   codex can't honor a relay, so it drops to workspace-write. Only
+//   `--dangerously` yields `danger-full-access`, regardless of tier.)
 //
 // Tier-change-invalidation is NOT re-exercised here — user-tier.e2e
 // already proves that conceptual invariant (the access invalidator is
@@ -89,12 +92,15 @@ describe('e2e: user-tier permissions (codex)', () => {
       // implemented in the fake) can't add records.
       expect(spawns.length).toBe(2)
 
-      const adminSpawn = spawns.find(s => s.sandboxMode === 'danger-full-access')
-      expect(adminSpawn, 'expected a danger-full-access spawn for admin_chat').toBeTruthy()
+      const adminSpawn = spawns.find(s => s.sandboxMode === 'workspace-write')
+      expect(adminSpawn, 'expected a workspace-write spawn for admin_chat').toBeTruthy()
       if (adminSpawn) {
-        // Admin profile: full access + no approval prompt — matches the
-        // old --dangerously posture that session-manager used to emit
-        // unconditionally pre-tiers.
+        // Admin profile under strict mode: write within cwd, no approval
+        // prompt. Pre-RFC-05 this was danger-full-access, but the
+        // 2026-05-26 policy made ADMIN_RELAY non-empty (destructive ops
+        // relay), and codex has no canUseTool gate to honor that relay —
+        // so admin drops to workspace-write. danger-full-access is now
+        // --dangerously-only (see tierProfileToCodexSdkOpts).
         expect(adminSpawn.approvalPolicy).toBe('never')
       }
 

@@ -12,12 +12,18 @@
 // cursor when mode says cursor, or if cursor provider's spawnOpts
 // contract drifts, this test fails.
 //
-// Scenario — tier maps to cursor SDK options:
+// Scenario — strict mode sandboxes every cursor tier:
 //   Two chats on the same daemon, same alias, both pinned to solo+cursor
-//   — one in `admins`, one not — produce different
-//   `local.sandboxOptions.enabled` shapes on `Agent.create()` at spawn
-//   time. Admin gets `enabled: false` (no sandbox = full access); guest
-//   gets `enabled: true` (sandboxed = restricted).
+//   — one in `admins`, one not — both spawn with
+//   `local.sandboxOptions.enabled: true` on `Agent.create()`. Cursor has
+//   only one knob (sandbox on/off) and no canUseTool relay, so post-RFC-05
+//   the safe default under strict mode is "sandboxed for every tier";
+//   `enabled: false` (full access) is reachable only via `--dangerously`.
+//   Per-tier separation for cursor guests is a documented limitation —
+//   route guests to Claude when strict separation is required. What this
+//   still guards: the wiring (session-manager threads tierProfile into
+//   cursor.spawn; coordinator routes solo+cursor to the cursor provider)
+//   and that no cursor chat is left unsandboxed under strict mode.
 //
 // The per-chat isolation comes from the user-tier session-manager refactor
 // keying sessions by `(alias, provider, chat_id)` — so two chats on the
@@ -58,7 +64,7 @@ describe('e2e: user-tier permissions (cursor)', () => {
     else process.env.CURSOR_API_KEY = prevCursorApiKey
   })
 
-  it('admin/guest get tier-specific cursor sandboxOptions at Agent.create', async () => {
+  it('strict mode sandboxes every cursor tier at Agent.create', async () => {
     // CURSOR_API_KEY must be present at boot — bootstrap reads it
     // synchronously to decide whether to register the cursor provider.
     // (The harness has no `env` option, so we mutate process.env directly
@@ -109,10 +115,12 @@ describe('e2e: user-tier permissions (cursor)', () => {
     // two distinct sessions = two Agent.create calls.
     expect(spawns.length).toBe(2)
 
-    const adminSpawn = spawns.find(s => s.enabled === false)
-    expect(adminSpawn, 'expected a sandboxOptions.enabled=false spawn for admin_chat').toBeTruthy()
-
-    const guestSpawn = spawns.find(s => s.enabled === true)
-    expect(guestSpawn, 'expected a sandboxOptions.enabled=true spawn for guest_chat').toBeTruthy()
+    // Post-RFC-05, cursor sandbox no longer varies by tier in strict mode:
+    // the only knob is sandbox on/off and there's no canUseTool relay, so
+    // the safe default is "sandboxed unless --dangerously". Both admin and
+    // guest therefore spawn with sandboxOptions.enabled=true. The
+    // security-relevant guarantee held here: no cursor chat runs unsandboxed
+    // under strict mode. (admin sent first ⇒ spawns[0]=admin, spawns[1]=guest.)
+    expect(spawns.map(s => s.enabled)).toEqual([true, true])
   })
 })

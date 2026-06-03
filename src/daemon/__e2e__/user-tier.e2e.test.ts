@@ -19,9 +19,12 @@
 //
 // Scenario A — tier maps to SDK options:
 //   Two chats on the same daemon — one in `admins`, one not — produce
-//   different SDK option snapshots at spawn time. Admin gets
-//   `bypassPermissions` + no `disallowedTools`; guest gets `default` +
-//   a `disallowedTools` array that includes `Bash`.
+//   different SDK option snapshots at spawn time. Under strict mode
+//   (dangerously=false) BOTH spawn in `default` permissionMode; the tier
+//   distinction now lives in `disallowedTools` — admin has none (empty
+//   deny set), guest's includes `Bash`/`Write`/`Edit`. Post-RFC-05,
+//   `bypassPermissions` is `--dangerously`-only (regardless of tier);
+//   admin's destructive ops relay via canUseTool instead.
 //
 // Scenario B — tier demotion invalidates live sessions:
 //   Rewriting access.json to remove a chat from `admins` triggers the
@@ -96,26 +99,28 @@ describe('e2e: user-tier permissions', () => {
       // streaming path only, so cheapEval/moderator won't add records.
       expect(spawns.length).toBe(2)
 
-      const adminSpawn = spawns.find(s => s.permissionMode === 'bypassPermissions')
-      expect(adminSpawn, 'expected a bypassPermissions spawn for admin_chat').toBeTruthy()
-      if (adminSpawn) {
-        // Admin profile has empty deny set → disallowedTools absent
-        // (the bootstrap drops the key when the array is empty via the
-        // conditional-spread).
-        expect(adminSpawn.disallowedTools ?? []).toEqual([])
-      }
+      // Under strict mode both tiers spawn in `default` permissionMode —
+      // post-RFC-05, admin no longer gets a bypassPermissions SDK spawn (its
+      // destructive ops relay via canUseTool instead). The tier distinction
+      // is in `disallowedTools`, not `permissionMode`. Admin sent first and
+      // we awaited its reply before guest, so spawns[0]=admin, spawns[1]=guest.
+      const adminSpawn = spawns[0]
+      const guestSpawn = spawns[1]
 
-      const guestSpawn = spawns.find(s => s.permissionMode === 'default')
-      expect(guestSpawn, 'expected a default-mode spawn for guest_chat').toBeTruthy()
-      if (guestSpawn) {
-        expect(guestSpawn.disallowedTools, 'guest must have disallowedTools populated').toBeTruthy()
-        // The headline guarantee: a chat that can DM the bot but isn't
-        // an admin can't pop a Bash shell.
-        expect(guestSpawn.disallowedTools ?? []).toContain('Bash')
-        // Sanity: a couple of other built-ins guest profile denies.
-        expect(guestSpawn.disallowedTools ?? []).toContain('Write')
-        expect(guestSpawn.disallowedTools ?? []).toContain('Edit')
-      }
+      expect(adminSpawn?.permissionMode, 'admin spawns in default mode under strict').toBe('default')
+      // Admin profile has empty deny set → disallowedTools absent
+      // (the bootstrap drops the key when the array is empty via the
+      // conditional-spread).
+      expect(adminSpawn?.disallowedTools ?? []).toEqual([])
+
+      expect(guestSpawn?.permissionMode, 'guest spawns in default mode').toBe('default')
+      expect(guestSpawn?.disallowedTools, 'guest must have disallowedTools populated').toBeTruthy()
+      // The headline guarantee: a chat that can DM the bot but isn't
+      // an admin can't pop a Bash shell.
+      expect(guestSpawn?.disallowedTools ?? []).toContain('Bash')
+      // Sanity: a couple of other built-ins guest profile denies.
+      expect(guestSpawn?.disallowedTools ?? []).toContain('Write')
+      expect(guestSpawn?.disallowedTools ?? []).toContain('Edit')
 
       // ── Scenario B — tier demotion invalidates the live session ──────
       // Rewrite access.json so admin_chat is no longer in `admins`.
@@ -159,7 +164,10 @@ describe('e2e: user-tier permissions', () => {
 
       expect(spawns.length).toBeGreaterThanOrEqual(3)
       const reSpawn = spawns[2]
-      expect(reSpawn?.permissionMode, 'demoted chat should respawn as guest = default mode').toBe('default')
+      // permissionMode is always `default` under strict mode, so the
+      // meaningful demotion signal is that the respawn now carries guest's
+      // `disallowedTools` — the chat lost its Bash access.
+      expect(reSpawn?.permissionMode, 'strict-mode spawns are always default').toBe('default')
       expect(reSpawn?.disallowedTools ?? [], 'demoted chat must lose Bash').toContain('Bash')
     } finally {
       // Belt-and-braces — module-level access cache + invalidator are

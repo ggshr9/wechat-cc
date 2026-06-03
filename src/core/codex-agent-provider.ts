@@ -29,9 +29,11 @@ export interface CodexTierSdkOpts {
  * Tier enforcement is therefore coarser:
  *   - `permissionMode='dangerously'` → full access on every chat (operator
  *     opted into bypass; tier doesn't matter)
- *   - admin/admin-equivalent → full access (admin tier still gets
- *     destructive Bash relay on the Claude side via canUseTool; codex
- *     has no equivalent gate, so it's full-access)
+ *   - admin → workspace-write sandbox. Admin's destructive ops relay on
+ *     the Claude side via canUseTool, but codex has no equivalent gate to
+ *     honor that relay — so rather than hand admin unconditional
+ *     danger-full-access, it drops to workspace-write (write within cwd,
+ *     no approval). danger-full-access is `--dangerously`-only.
  *   - trusted → workspace-write sandbox (no admin UI to field
  *     'on-request' prompts, so we use 'never' approval — destructive
  *     ops within the workspace cwd are still possible; documented
