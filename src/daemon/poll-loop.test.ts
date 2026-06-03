@@ -75,7 +75,7 @@ describe('parseUpdates', () => {
     expect(msg!.text).toBe('this')
   })
 
-  it('falls back to title then unsupported_item, labels non-text quote types', () => {
+  it('prefers unsupported_item.text over title, labels non-text quote types', () => {
     const raw: RawUpdate[] = [{
       from_user_id: 'u',
       create_time_ms: 1000,
@@ -85,7 +85,7 @@ describe('parseUpdates', () => {
         {
           type: 1,
           ref_msg: {
-            title: '[图片]',
+            title: '[图片-截断标题]',
             message_item: { type: 2, unsupported_item: { text: '[图片]' } },
           },
         },
@@ -94,6 +94,21 @@ describe('parseUpdates', () => {
     }]
     const [msg] = parseUpdates(raw, { accountId: 'A', resolveUserName: () => undefined })
     expect(msg!.quote).toEqual({ type: 'image', text: '[图片]' })
+  })
+
+  it('falls back to title when no message_item text or unsupported_item', () => {
+    const raw: RawUpdate[] = [{
+      from_user_id: 'u',
+      create_time_ms: 1000,
+      message_type: 1,
+      message_state: 2,
+      item_list: [
+        { type: 1, ref_msg: { title: '短摘要…' } },
+        { type: 1, text_item: { text: 'reply' } },
+      ],
+    }]
+    const [msg] = parseUpdates(raw, { accountId: 'A', resolveUserName: () => undefined })
+    expect(msg!.quote).toEqual({ type: 'unknown', text: '短摘要…' })
   })
 
   it('does not set quote for a degenerate ref_msg with no type and no text', () => {
