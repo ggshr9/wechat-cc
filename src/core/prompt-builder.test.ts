@@ -16,6 +16,7 @@ describe('buildSystemPrompt', () => {
     expect(p).toContain('wechat-cc 的消息通道')
     expect(p).toContain('reply')
     expect(p).toContain('FALLBACK_REPLY')   // accurate fallback log tag (RFC 03 review #4)
+    expect(p).toContain('<quote')
   })
 
   it('opens with `你是 ${providerId}` so the agent knows its own identity (chatroom mode peer disambiguation)', () => {
