@@ -5,7 +5,13 @@ export interface InboundMsg {
   text: string
   msgType: string
   createTimeMs: number
-  quoteTo?: string
+  /**
+   * A quoted/replied-to message, extracted inline from ilink's `ref_msg`.
+   * ilink gives us the content (text or a media-type label), never a stable
+   * id — so this is the actual quoted text, not a lookup key. Rendered as a
+   * `<quote type="…">…</quote>` element inside the <wechat> envelope.
+   */
+  quote?: { type: string; text: string }
   accountId: string
   /**
    * ilink-issued per-chat context token. ilink requires it on outbound
@@ -29,7 +35,6 @@ export function formatInbound(m: InboundMsg): string {
     `account="${escAttr(m.accountId)}"`,
     `msg_type="${escAttr(m.msgType)}"`,
     `ts="${new Date(m.createTimeMs).toISOString()}"`,
-    m.quoteTo ? `quote_to="${escAttr(m.quoteTo)}"` : '',
   ].filter(Boolean).join(' ')
 
   const attachmentLines = (m.attachments ?? []).map(a => {
@@ -37,7 +42,10 @@ export function formatInbound(m: InboundMsg): string {
     return `[${a.kind}:${a.path}]${caption}`
   })
 
-  const body = [escBody(m.text), ...attachmentLines].filter(Boolean).join('\n')
+  const quoteEl = m.quote
+    ? `<quote type="${escAttr(m.quote.type)}">${escBody(m.quote.text)}</quote>`
+    : ''
+  const body = [quoteEl, escBody(m.text), ...attachmentLines].filter(Boolean).join('\n')
   return `<wechat ${attrs}>\n${body}\n</wechat>`
 }
 

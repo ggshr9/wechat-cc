@@ -33,13 +33,31 @@ describe('formatInbound', () => {
     expect(out).toContain('[image:/home/u/.claude/channels/wechat/inbox/a/b.jpg]')
   })
 
-  it('includes quote reference when quoteTo set', () => {
+  it('renders full quoted content as a <quote> element', () => {
     const out = formatInbound({
       chatId: 'c', userId: 'u', userName: 'x',
       text: '这条', msgType: 'text', createTimeMs: 1, accountId: 'a',
-      quoteTo: 'prev-msg-id',
+      quote: { type: 'text', text: '明天下午三点的会议改到周四了' },
     })
-    expect(out).toContain('quote_to="prev-msg-id"')
+    expect(out).toContain('<quote type="text">明天下午三点的会议改到周四了</quote>')
+    expect(out).not.toContain('quote_to')
+  })
+
+  it('escapes quote body and preserves newlines', () => {
+    const out = formatInbound({
+      chatId: 'c', userId: 'u', userName: 'x',
+      text: '回', msgType: 'text', createTimeMs: 1, accountId: 'a',
+      quote: { type: 'text', text: 'a < b\nsecond line' },
+    })
+    expect(out).toContain('<quote type="text">a &lt; b\nsecond line</quote>')
+  })
+
+  it('omits <quote> entirely when no quote present', () => {
+    const out = formatInbound({
+      chatId: 'c', userId: 'u', userName: 'x',
+      text: 'hi', msgType: 'text', createTimeMs: 1, accountId: 'a',
+    })
+    expect(out).not.toContain('<quote')
   })
 
   it('emits ts as ISO-8601 UTC (legible to the agent), not raw epoch ms', () => {
