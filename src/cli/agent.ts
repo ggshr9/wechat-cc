@@ -316,18 +316,25 @@ export function cmdAgentEdit(stateDir: string, id: string, opts: AgentEditOpts):
 }
 
 export function cmdAgentActivity(stateDir: string, id: string, limit: number): void {
+  // Close the db handle before returning — a leaked SQLite handle blocks the
+  // file from being deleted on Windows (EBUSY), breaking both this one-shot
+  // CLI command's hygiene and any caller that later rm's the state dir.
   const db = openWechatDb(stateDir)
-  const store = makeA2AEventsStore(db)
-  const rows = store.recentForAgent(id, limit)
-  if (rows.length === 0) {
-    console.log(`no activity for ${id}`)
-    return
-  }
-  for (const r of rows) {
-    const arrow = r.direction === 'in' ? '<-' : '->'
-    const statusNote = r.status === 'ok' ? '' : ` [${r.status}${r.http_status ? ' ' + r.http_status : ''}]`
-    const text = r.text.length > 80 ? r.text.slice(0, 80) + '...' : r.text
-    console.log(`${r.ts} ${arrow} ${text}${statusNote}`)
+  try {
+    const store = makeA2AEventsStore(db)
+    const rows = store.recentForAgent(id, limit)
+    if (rows.length === 0) {
+      console.log(`no activity for ${id}`)
+      return
+    }
+    for (const r of rows) {
+      const arrow = r.direction === 'in' ? '<-' : '->'
+      const statusNote = r.status === 'ok' ? '' : ` [${r.status}${r.http_status ? ' ' + r.http_status : ''}]`
+      const text = r.text.length > 80 ? r.text.slice(0, 80) + '...' : r.text
+      console.log(`${r.ts} ${arrow} ${text}${statusNote}`)
+    }
+  } finally {
+    db.close()
   }
 }
 

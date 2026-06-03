@@ -357,6 +357,18 @@ describe('cmdAgentPause + cmdAgentRemove', () => {
 describe('cmdAgentActivity', () => {
   let stateDir: string
 
+  // Open the db, seed events, and CLOSE it before returning. A leaked SQLite
+  // handle blocks rmSync on Windows (EBUSY) — see the same guard in
+  // cmdAgentActivity itself.
+  function seed(fn: (store: ReturnType<typeof makeA2AEventsStore>) => void): void {
+    const db = openDb({ path: join(stateDir, 'wechat-cc.db') })
+    try {
+      fn(makeA2AEventsStore(db))
+    } finally {
+      db.close()
+    }
+  }
+
   beforeEach(() => {
     stateDir = tempState()
     writeConfig(stateDir, [agentRec('alpha')])
@@ -372,11 +384,11 @@ describe('cmdAgentActivity', () => {
   })
 
   it('prints recent events newest-first', async () => {
-    const db = openDb({ path: join(stateDir, 'wechat-cc.db') })
-    const store = makeA2AEventsStore(db)
-    store.append({ direction: 'in', agent_id: 'alpha', text: 'first message', status: 'ok' })
-    store.append({ direction: 'in', agent_id: 'alpha', text: 'second message', status: 'ok' })
-    store.append({ direction: 'out', agent_id: 'alpha', text: 'outbound reply', status: 'ok' })
+    seed(store => {
+      store.append({ direction: 'in', agent_id: 'alpha', text: 'first message', status: 'ok' })
+      store.append({ direction: 'in', agent_id: 'alpha', text: 'second message', status: 'ok' })
+      store.append({ direction: 'out', agent_id: 'alpha', text: 'outbound reply', status: 'ok' })
+    })
 
     const out = await captureLog(() => cmdAgentActivity(stateDir, 'alpha', 20))
     expect(out.length).toBeGreaterThanOrEqual(3)
@@ -386,27 +398,27 @@ describe('cmdAgentActivity', () => {
   })
 
   it('respects the limit parameter', async () => {
-    const db = openDb({ path: join(stateDir, 'wechat-cc.db') })
-    const store = makeA2AEventsStore(db)
-    for (let i = 0; i < 10; i++) {
-      store.append({ direction: 'in', agent_id: 'alpha', text: `msg-${i}`, status: 'ok' })
-    }
+    seed(store => {
+      for (let i = 0; i < 10; i++) {
+        store.append({ direction: 'in', agent_id: 'alpha', text: `msg-${i}`, status: 'ok' })
+      }
+    })
     const out = await captureLog(() => cmdAgentActivity(stateDir, 'alpha', 3))
     expect(out).toHaveLength(3)
   })
 
   it('shows error status in brackets when status != ok', async () => {
-    const db = openDb({ path: join(stateDir, 'wechat-cc.db') })
-    const store = makeA2AEventsStore(db)
-    store.append({ direction: 'out', agent_id: 'alpha', text: 'failed call', status: 'http_error', http_status: 502 })
+    seed(store => {
+      store.append({ direction: 'out', agent_id: 'alpha', text: 'failed call', status: 'http_error', http_status: 502 })
+    })
     const out = await captureLog(() => cmdAgentActivity(stateDir, 'alpha', 10))
     expect(out.some(l => l.includes('[http_error') && l.includes('502'))).toBe(true)
   })
 
   it('truncates long text to 80 chars + ellipsis', async () => {
-    const db = openDb({ path: join(stateDir, 'wechat-cc.db') })
-    const store = makeA2AEventsStore(db)
-    store.append({ direction: 'in', agent_id: 'alpha', text: 'x'.repeat(200), status: 'ok' })
+    seed(store => {
+      store.append({ direction: 'in', agent_id: 'alpha', text: 'x'.repeat(200), status: 'ok' })
+    })
     const out = await captureLog(() => cmdAgentActivity(stateDir, 'alpha', 10))
     expect(out[0]).toContain('...')
     // The text part should be at most 80 chars + '...'
@@ -415,9 +427,9 @@ describe('cmdAgentActivity', () => {
   })
 
   it('prints inbound arrow <- for direction=in', async () => {
-    const db = openDb({ path: join(stateDir, 'wechat-cc.db') })
-    const store = makeA2AEventsStore(db)
-    store.append({ direction: 'in', agent_id: 'alpha', text: 'inbound', status: 'ok' })
+    seed(store => {
+      store.append({ direction: 'in', agent_id: 'alpha', text: 'inbound', status: 'ok' })
+    })
     const out = await captureLog(() => cmdAgentActivity(stateDir, 'alpha', 10))
     expect(out.some(l => l.includes('<-'))).toBe(true)
   })
