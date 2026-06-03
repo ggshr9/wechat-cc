@@ -51,19 +51,64 @@ describe('parseUpdates', () => {
     expect(msg!.attachments![0]).toMatchObject({ kind: 'image' })
   })
 
-  it('preserves quoteTo when ref_msg is present in an item', () => {
+  it('extracts full quoted text (prefers message_item text over title) + type', () => {
     const raw: RawUpdate[] = [{
       from_user_id: 'u',
       create_time_ms: 1000,
       message_type: 1,
       message_state: 2,
       item_list: [
-        { type: 1, msg_id: 'prev-1', ref_msg: { title: 'quoted text' } },
+        {
+          type: 1,
+          msg_id: 'cur-1',
+          ref_msg: {
+            title: '明天下午三点的会议…',
+            message_item: { type: 1, text_item: { text: '明天下午三点的会议改到周四了，记得通知大家' } },
+          },
+        },
         { type: 1, text_item: { text: 'this' } },
       ],
     }]
     const [msg] = parseUpdates(raw, { accountId: 'A', resolveUserName: () => undefined })
-    expect(msg!.quoteTo).toBe('prev-1')
+    expect(msg!.quote).toEqual({ type: 'text', text: '明天下午三点的会议改到周四了，记得通知大家' })
+    expect(msg!.text).not.toContain('[引用')
+    expect(msg!.text).toBe('this')
+  })
+
+  it('falls back to title then unsupported_item, labels non-text quote types', () => {
+    const raw: RawUpdate[] = [{
+      from_user_id: 'u',
+      create_time_ms: 1000,
+      message_type: 1,
+      message_state: 2,
+      item_list: [
+        {
+          type: 1,
+          ref_msg: {
+            title: '[图片]',
+            message_item: { type: 2, unsupported_item: { text: '[图片]' } },
+          },
+        },
+        { type: 1, text_item: { text: 'what is this' } },
+      ],
+    }]
+    const [msg] = parseUpdates(raw, { accountId: 'A', resolveUserName: () => undefined })
+    expect(msg!.quote).toEqual({ type: 'image', text: '[图片]' })
+  })
+
+  it('does not set quote for a degenerate ref_msg with no type and no text', () => {
+    const raw: RawUpdate[] = [{
+      from_user_id: 'u',
+      create_time_ms: 1000,
+      message_type: 1,
+      message_state: 2,
+      item_list: [
+        { type: 1, ref_msg: {} },
+        { type: 1, text_item: { text: 'hello' } },
+      ],
+    }]
+    const [msg] = parseUpdates(raw, { accountId: 'A', resolveUserName: () => undefined })
+    expect(msg!.quote).toBeUndefined()
   })
 
   it('falls back userName=undefined when resolver returns undefined', () => {
