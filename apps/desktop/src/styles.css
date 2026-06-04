@@ -3613,3 +3613,24 @@ input { font: inherit; color: inherit; }
   color: var(--ink-2);
   text-decoration-color: var(--ink-3);
 }
+
+/* ── sessions contact sidebar (multi-chat nav) ───────────────── */
+.sessions-main { display: flex; flex: 1; min-height: 0; }
+.sessions-sidebar {
+  width: 168px;
+  flex: 0 0 168px;
+  border-right: 1px solid var(--hair, #e5e5e5);
+  overflow-y: auto;
+  padding: 6px 0;
+}
+.sessions-sidebar[hidden] { display: none; }
+.sessions-main > .sessions-body { flex: 1; min-width: 0; }
+.contact-row {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 8px 12px; border: 0; background: none;
+  text-align: left; cursor: pointer; font-size: 13px; color: var(--ink, #222);
+}
+.contact-row:hover { background: var(--paper-2, rgba(0,0,0,.04)); }
+.contact-row.active { background: var(--tint, rgba(0,0,0,.07)); font-weight: 600; }
+.contact-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.contact-row .count { font-size: 11px; color: var(--ink-3, #999); }

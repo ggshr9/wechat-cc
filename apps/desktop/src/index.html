@@ -497,8 +497,11 @@
             <div class="sessions-search-wrap">
               <input type="search" id="sessions-search" class="sessions-search" placeholder="跨所有 session 搜索…" autocomplete="off">
             </div>
-            <div class="sessions-body" id="sessions-body">
-              <p class="empty-state" id="sessions-empty">还没有项目会话——你跟 Claude 第一次说话之后这里就会有内容。</p>
+            <div class="sessions-main" id="sessions-main">
+              <aside class="sessions-sidebar" id="sessions-sidebar" hidden></aside>
+              <div class="sessions-body" id="sessions-body">
+                <p class="empty-state" id="sessions-empty">还没有项目会话——你跟 Claude 第一次说话之后这里就会有内容。</p>
+              </div>
             </div>
             <div class="sessions-detail dismissed" id="sessions-detail" aria-hidden="true">
               <div class="sessions-detail-bar">
