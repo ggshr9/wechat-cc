@@ -602,6 +602,9 @@ describe('SessionsListChatsOutput', () => {
     })
     expect(ok.chats[0]!.user_name).toBeNull()
   })
+  it('rejects when ok is missing', () => {
+    expect(SessionsListChatsOutput.safeParse({ chats: [] }).success).toBe(false)
+  })
 })
 
 // ── wechat-cc sessions read-jsonl --json ─────────────────────────────────────
