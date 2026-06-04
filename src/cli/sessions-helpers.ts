@@ -1,5 +1,13 @@
 import type { SessionRecord } from '../core/session-store'
 
+export interface ProjectEntryShape {
+  alias: string
+  session_id: string
+  last_used_at: string
+  summary: string | null
+  summary_updated_at: string | null
+}
+
 export interface ChatEntry {
   chat_id: string
   user_name: string | null
@@ -35,4 +43,25 @@ export function groupChats(
       last_used_at: g.last,
     }))
     .sort((a, b) => Date.parse(b.last_used_at) - Date.parse(a.last_used_at))
+}
+
+/**
+ * Rows for one chat, deduped to one entry per alias (most-recent row wins).
+ * Mirrors the existing list-projects ProjectEntry shape so the UI render
+ * path is unchanged.
+ */
+export function filterProjectsByChat(records: SessionRecord[], chatId: string): ProjectEntryShape[] {
+  const byAlias: Record<string, SessionRecord> = {}
+  for (const r of records) {
+    if (r.chat_id !== chatId) continue
+    const prev = byAlias[r.alias]
+    if (!prev || Date.parse(r.last_used_at) > Date.parse(prev.last_used_at)) byAlias[r.alias] = r
+  }
+  return Object.values(byAlias).map(r => ({
+    alias: r.alias,
+    session_id: r.session_id,
+    last_used_at: r.last_used_at,
+    summary: r.summary ?? null,
+    summary_updated_at: r.summary_updated_at ?? null,
+  }))
 }

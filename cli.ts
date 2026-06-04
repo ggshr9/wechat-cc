@@ -451,6 +451,7 @@ const sessionsListProjectsCmd = defineCommand({
   args: {
     json: { type: 'boolean', description: 'JSON envelope' },
     'out-file': { type: 'string', description: 'Write JSON to a sibling file (avoids pipe buffer truncation in compiled binaries)' },
+    chat: { type: 'string', description: 'Filter to one contact (chat_id)' },
   },
   async run({ args }) {
     const outFile = args['out-file']
@@ -458,25 +459,27 @@ const sessionsListProjectsCmd = defineCommand({
     const { openWechatDb } = await import('./src/lib/db')
     const db = openWechatDb(STATE_DIR)
     const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
-    const all = store.all()
-    // v0.6 Task 8: all() is keyed by `${alias}|${provider}|${chatId}`.
-    // The legacy CLI surface presents one row per alias — dedupe to the
-    // most-recently-used (alias) row across providers/chats so existing
-    // dashboards keep rendering. Per-chat browsing is a v0.7+ feature.
-    const byAlias: Record<string, typeof all[string]> = {}
-    for (const rec of Object.values(all)) {
-      const prev = byAlias[rec.alias]
-      if (!prev || Date.parse(rec.last_used_at) > Date.parse(prev.last_used_at)) {
-        byAlias[rec.alias] = rec
+    const records = Object.values(store.all())
+    let projects
+    if (args.chat) {
+      const { filterProjectsByChat } = await import('./src/cli/sessions-helpers')
+      projects = filterProjectsByChat(records, args.chat)
+    } else {
+      // Unchanged legacy behavior: one row per alias across all chats so
+      // existing dashboards keep rendering.
+      const byAlias: Record<string, typeof records[number]> = {}
+      for (const rec of records) {
+        const prev = byAlias[rec.alias]
+        if (!prev || Date.parse(rec.last_used_at) > Date.parse(prev.last_used_at)) byAlias[rec.alias] = rec
       }
+      projects = Object.values(byAlias).map(rec => ({
+        alias: rec.alias,
+        session_id: rec.session_id,
+        last_used_at: rec.last_used_at,
+        summary: rec.summary ?? null,
+        summary_updated_at: rec.summary_updated_at ?? null,
+      }))
     }
-    const projects = Object.values(byAlias).map(rec => ({
-      alias: rec.alias,
-      session_id: rec.session_id,
-      last_used_at: rec.last_used_at,
-      summary: rec.summary ?? null,
-      summary_updated_at: rec.summary_updated_at ?? null,
-    }))
     if (args.json) emitJson(SessionsListProjectsOutput.parse({ ok: true, projects }), outFile)
     else console.log(projects.map(p => `${p.alias} ${p.last_used_at}`).join('\n'))
 

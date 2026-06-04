@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { groupChats } from './sessions-helpers'
+import { groupChats, filterProjectsByChat } from './sessions-helpers'
 import type { SessionRecord } from '../core/session-store'
 
 function rec(p: Partial<SessionRecord>): SessionRecord {
@@ -29,5 +29,24 @@ describe('groupChats', () => {
 
   it('returns [] for no records', () => {
     expect(groupChats([], () => null, () => null)).toEqual([])
+  })
+})
+
+describe('filterProjectsByChat', () => {
+  const records = [
+    rec({ chat_id: 'c1', alias: 'wechat-cc', last_used_at: '2026-06-01T10:00:00.000Z', session_id: 's1' }),
+    rec({ chat_id: 'c1', alias: 'wechat-cc', provider: 'codex', last_used_at: '2026-06-03T10:00:00.000Z', session_id: 's2' }),
+    rec({ chat_id: 'c1', alias: 'blog', last_used_at: '2026-06-02T10:00:00.000Z', session_id: 's3' }),
+    rec({ chat_id: 'c2', alias: 'wechat-cc', last_used_at: '2026-06-04T10:00:00.000Z', session_id: 's4' }),
+  ]
+
+  it('returns only the given chat, one row per alias (most-recent provider wins)', () => {
+    const out = filterProjectsByChat(records, 'c1')
+    expect(out.map(p => [p.alias, p.session_id]).sort()).toEqual([['blog', 's3'], ['wechat-cc', 's2']])
+  })
+
+  it('excludes other chats entirely', () => {
+    const out = filterProjectsByChat(records, 'c2')
+    expect(out).toEqual([{ alias: 'wechat-cc', session_id: 's4', last_used_at: '2026-06-04T10:00:00.000Z', summary: null, summary_updated_at: null }])
   })
 })
