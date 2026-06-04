@@ -26,6 +26,16 @@ const WEEK_MS = 7 * TODAY_MS
 const FAV_STORAGE_KEY = 'wechat-cc:favorite-sessions'
 const MODE_STORAGE_KEY = 'wechat-cc:session-detail-mode'
 
+/**
+ * Append `--chat <chatId>` to a sessions CLI arg list when chatId is set.
+ * @param {string[]} args
+ * @param {string|null|undefined} chatId
+ * @returns {string[]}
+ */
+function withChat(args, chatId) {
+  return chatId ? [...args, "--chat", chatId] : args
+}
+
 // Detail view 「精简 / 完整」 toggle. 精简 (compact) is the default — extracts
 // only the actual user message + Claude's actual reply, hiding all SDK noise
 // (attachments, ToolSearch / memory_list / memory_read tool calls, raw JSON
@@ -472,7 +482,7 @@ export async function loadSessionsList(deps) {
 /**
  * @param {Deps} deps
  * @param {string} alias
- * @param {{ focusTurn?: number|null, preserveScroll?: { wasAtBottom: boolean, scrollTop: number }|null }} [opts]
+ * @param {{ focusTurn?: number|null, preserveScroll?: { wasAtBottom: boolean, scrollTop: number }|null, chatId?: string }} [opts]
  */
 export async function openProjectDetail(deps, alias, opts = {}) {
   const { focusTurn = null } = opts
@@ -482,6 +492,10 @@ export async function openProjectDetail(deps, alias, opts = {}) {
   if (!detail || !meta || !jsonlBox) return
 
   detail.dataset.alias = alias
+  // chatId may come from the click (opts.chatId) or, on auto-refresh ticks,
+  // already be on the element — preserve it if the caller didn't pass one.
+  const chatId = opts.chatId ?? detail.dataset.chat ?? ''
+  detail.dataset.chat = chatId
   // Don't blank the body during auto-refresh ticks — would flash empty.
   if (!opts.preserveScroll) {
     jsonlBox.innerHTML = `<p class="empty-state">加载中…</p>`
@@ -493,7 +507,7 @@ export async function openProjectDetail(deps, alias, opts = {}) {
   if (!opts.preserveScroll) startDetailAutoRefresh(deps)
 
   try {
-    const resp = /** @type {SessionsReadJsonl} */ (await deps.invoke("wechat_cli_json_via_file", { args: ["sessions", "read-jsonl", alias, "--json"] }))
+    const resp = /** @type {SessionsReadJsonl} */ (await deps.invoke("wechat_cli_json_via_file", { args: withChat(["sessions", "read-jsonl", alias, "--json"], chatId || null) }))
     if (!resp.ok) {
       jsonlBox.innerHTML = `<p class="empty-state">${escapeHtml(resp.error || '读取失败')}</p>`
       meta.textContent = alias
@@ -1005,7 +1019,7 @@ export function setSessionsDetailMode(deps, mode) {
   const detail = document.getElementById('sessions-detail')
   const alias = detail?.dataset.alias
   if (alias && !detail?.classList.contains('dismissed')) {
-    openProjectDetail(deps, alias)
+    openProjectDetail(deps, alias, { chatId: detail?.dataset.chat || '' })
     return
   }
   const searchInput = /** @type {HTMLInputElement|null} */ (document.getElementById('sessions-search'))
@@ -1101,7 +1115,8 @@ export async function exportProjectMarkdown(deps) {
   try {
     // via_file path: CLI dumps JSON to a temp file and Rust reads it back.
     // Plain stdout truncates at MB-scale for bun --compile binaries.
-    const resp = /** @type {SessionsReadJsonl} */ (await deps.invoke("wechat_cli_json_via_file", { args: ["sessions", "read-jsonl", alias, "--json"] }))
+    const chatId = detail?.dataset.chat || null
+    const resp = /** @type {SessionsReadJsonl} */ (await deps.invoke("wechat_cli_json_via_file", { args: withChat(["sessions", "read-jsonl", alias, "--json"], chatId) }))
     if (!resp.ok) {
       // alert() blocks the webview thread + looks like a popup virus
       // on macOS. Inline error strip is consistent with how the rest
@@ -1172,7 +1187,8 @@ export async function deleteProject(deps) {
     btn.textContent = '删除'
     btn.classList.remove('is-confirming')
     try {
-      await /** @type {Promise<SessionsDelete>} */ (deps.invoke("wechat_cli_json", { args: ["sessions", "delete", alias, "--json"] }))
+      const chatId = detail?.dataset.chat || null
+      await /** @type {Promise<SessionsDelete>} */ (deps.invoke("wechat_cli_json", { args: withChat(["sessions", "delete", alias, "--json"], chatId) }))
       closeProjectDetail()
       await loadSessionsList(deps)
     } catch (err) {
