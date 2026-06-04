@@ -14,7 +14,7 @@ import {
   AccountRemoveOutput, DaemonKillOutput, ProviderShowOutput,
   MemoryListOutput, MemoryReadOutput, MemoryWriteOutput,
   EventsListOutput, ObservationsListOutput, ObservationsArchiveOutput, MilestonesListOutput,
-  SessionsListProjectsOutput, SessionsReadJsonlOutput, SessionsDeleteOutput, SessionsSearchOutput,
+  SessionsListProjectsOutput, SessionsListChatsOutput, SessionsReadJsonlOutput, SessionsDeleteOutput, SessionsSearchOutput,
   DemoSeedOutput, DemoUnseedOutput, ReplyOutput,
   UpdateCheckOutput, UpdateApplyOutput, ConversationsListOutput,
   GuardStatusOutput, GuardEnableOutput, GuardDisableOutput,
@@ -102,11 +102,13 @@ Usage:
                         Mark an observation archived (user "ignore").
   wechat-cc milestones list <chat-id> [--json]
                         Per-chat milestones (id-deduped).
-  wechat-cc sessions list-projects [--json]
+  wechat-cc sessions list-chats [--json]
+                        Contacts (chats) that have sessions.
+  wechat-cc sessions list-projects [--chat <chat_id>] [--json]
                         Project sessions with cached summaries.
-  wechat-cc sessions read-jsonl <alias> [--json]
+  wechat-cc sessions read-jsonl <alias> [--chat <chat_id>] [--json]
                         Read all turns from the alias's session jsonl.
-  wechat-cc sessions delete <alias> [--json]
+  wechat-cc sessions delete <alias> [--chat <chat_id>] [--json]
                         Remove the sessions.json entry (jsonl on disk untouched).
   wechat-cc sessions search <query> [--limit N] [--json]
                         Naive case-insensitive substring search across
@@ -451,6 +453,7 @@ const sessionsListProjectsCmd = defineCommand({
   args: {
     json: { type: 'boolean', description: 'JSON envelope' },
     'out-file': { type: 'string', description: 'Write JSON to a sibling file (avoids pipe buffer truncation in compiled binaries)' },
+    chat: { type: 'string', description: 'Filter to one contact (chat_id)' },
   },
   async run({ args }) {
     const outFile = args['out-file']
@@ -458,25 +461,27 @@ const sessionsListProjectsCmd = defineCommand({
     const { openWechatDb } = await import('./src/lib/db')
     const db = openWechatDb(STATE_DIR)
     const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
-    const all = store.all()
-    // v0.6 Task 8: all() is keyed by `${alias}|${provider}|${chatId}`.
-    // The legacy CLI surface presents one row per alias — dedupe to the
-    // most-recently-used (alias) row across providers/chats so existing
-    // dashboards keep rendering. Per-chat browsing is a v0.7+ feature.
-    const byAlias: Record<string, typeof all[string]> = {}
-    for (const rec of Object.values(all)) {
-      const prev = byAlias[rec.alias]
-      if (!prev || Date.parse(rec.last_used_at) > Date.parse(prev.last_used_at)) {
-        byAlias[rec.alias] = rec
+    const records = Object.values(store.all())
+    let projects
+    if (args.chat) {
+      const { filterProjectsByChat } = await import('./src/cli/sessions-helpers')
+      projects = filterProjectsByChat(records, args.chat)
+    } else {
+      // Unchanged legacy behavior: one row per alias across all chats so
+      // existing dashboards keep rendering.
+      const byAlias: Record<string, typeof records[number]> = {}
+      for (const rec of records) {
+        const prev = byAlias[rec.alias]
+        if (!prev || Date.parse(rec.last_used_at) > Date.parse(prev.last_used_at)) byAlias[rec.alias] = rec
       }
+      projects = Object.values(byAlias).map(rec => ({
+        alias: rec.alias,
+        session_id: rec.session_id,
+        last_used_at: rec.last_used_at,
+        summary: rec.summary ?? null,
+        summary_updated_at: rec.summary_updated_at ?? null,
+      }))
     }
-    const projects = Object.values(byAlias).map(rec => ({
-      alias: rec.alias,
-      session_id: rec.session_id,
-      last_used_at: rec.last_used_at,
-      summary: rec.summary ?? null,
-      summary_updated_at: rec.summary_updated_at ?? null,
-    }))
     if (args.json) emitJson(SessionsListProjectsOutput.parse({ ok: true, projects }), outFile)
     else console.log(projects.map(p => `${p.alias} ${p.last_used_at}`).join('\n'))
 
@@ -522,6 +527,7 @@ const sessionsReadJsonlCmd = defineCommand({
   meta: { name: 'read-jsonl', description: "Read all turns from the alias's session jsonl" },
   args: {
     alias: { type: 'positional', required: true, description: 'Session alias', valueHint: 'alias' },
+    chat: { type: 'string', description: 'Scope to one contact (chat_id)' },
     json: { type: 'boolean', description: 'JSON envelope' },
     'out-file': { type: 'string', description: 'Write JSON to a sibling file (avoids pipe buffer truncation in compiled binaries)' },
   },
@@ -534,11 +540,9 @@ const sessionsReadJsonlCmd = defineCommand({
     // v0.6 Task 8: the store is now triple-keyed (alias, provider, chatId).
     // The legacy CLI takes only an alias — pick the most-recent row across
     // every provider/chat under that alias so existing scripts keep working.
-    let rec: ReturnType<typeof store.get> = null
-    for (const r of Object.values(store.all())) {
-      if (r.alias !== args.alias) continue
-      if (!rec || Date.parse(r.last_used_at) > Date.parse(rec.last_used_at)) rec = r
-    }
+    // With --chat, scope to that contact's row instead.
+    const { pickReadRecord } = await import('./src/cli/sessions-helpers')
+    const rec = pickReadRecord(Object.values(store.all()), args.alias, args.chat)
     if (!rec) {
       // v0.5.11 — error paths must also honour --out-file. Without this,
       // the dashboard's via-file shim path reads ENOENT instead of an
@@ -586,6 +590,7 @@ const sessionsDeleteCmd = defineCommand({
   meta: { name: 'delete', description: 'Remove the sessions table entry (jsonl on disk untouched)' },
   args: {
     alias: { type: 'positional', required: true, description: 'Session alias', valueHint: 'alias' },
+    chat: { type: 'string', description: 'Delete only this contact\'s session under the alias' },
     json: { type: 'boolean', description: 'JSON envelope' },
   },
   async run({ args }) {
@@ -593,12 +598,8 @@ const sessionsDeleteCmd = defineCommand({
     const { openWechatDb } = await import('./src/lib/db')
     const db = openWechatDb(STATE_DIR)
     const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
-    // v0.6 Task 8: store.delete needs (alias, chatId). The CLI deletes by
-    // alias only — walk every chat row matching this alias.
-    const chats = new Set<string>()
-    for (const rec of Object.values(store.all())) {
-      if (rec.alias === args.alias) chats.add(rec.chat_id)
-    }
+    const { chatsToDelete } = await import('./src/cli/sessions-helpers')
+    const chats = chatsToDelete(Object.values(store.all()), args.alias, args.chat)
     for (const chatId of chats) store.delete({ alias: args.alias, chatId })
     await store.flush()
     console.log(args.json ? JSON.stringify(SessionsDeleteOutput.parse({ ok: true, deleted: args.alias }), null, 2) : `deleted ${args.alias}`)
@@ -626,9 +627,36 @@ const sessionsSearchCmd = defineCommand({
   },
 })
 
+const sessionsListChatsCmd = defineCommand({
+  meta: { name: 'list-chats', description: 'Contacts (chats) that have sessions, for the pane sidebar' },
+  args: {
+    json: { type: 'boolean', description: 'JSON envelope' },
+    'out-file': { type: 'string', description: 'Write JSON to a sibling file (avoids pipe truncation in compiled binaries)' },
+  },
+  async run({ args }) {
+    const outFile = args['out-file']
+    const { makeSessionStore } = await import('./src/core/session-store')
+    const { makeConversationStore } = await import('./src/core/conversation-store')
+    const { openWechatDb } = await import('./src/lib/db')
+    const { groupChats } = await import('./src/cli/sessions-helpers')
+    const db = openWechatDb(STATE_DIR)
+    const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
+    const convs = makeConversationStore(db)
+    const records = Object.values(store.all())
+    const chats = groupChats(
+      records,
+      id => convs.getIdentity(id)?.last_user_name ?? null,
+      id => convs.getIdentity(id)?.account_id ?? null,
+    )
+    if (args.json) emitJson(SessionsListChatsOutput.parse({ ok: true, chats }), outFile)
+    else console.log(chats.map(c => `${c.user_name ?? c.chat_id} (${c.session_count})`).join('\n'))
+  },
+})
+
 const sessionsCmd = defineCommand({
   meta: { name: 'sessions', description: 'Per-project session inspection (resume-id store + jsonl readers)' },
   subCommands: {
+    'list-chats': sessionsListChatsCmd,
     'list-projects': sessionsListProjectsCmd,
     'read-jsonl': sessionsReadJsonlCmd,
     delete: sessionsDeleteCmd,

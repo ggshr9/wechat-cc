@@ -276,7 +276,7 @@
           <div class="dash-brand">
             <span class="mark"><img src="./wechat-cc-logo.png" alt="" /></span>
             <span class="name">wechat-cc</span>
-            <span class="ver" id="dash-version">v0.6.1</span>
+            <span class="ver" id="dash-version">v0.6.2</span>
           </div>
 
           <nav class="dash-nav" aria-label="Dashboard">
@@ -403,54 +403,79 @@
 
           <!-- ── pane: memory ───────────────────────────────────────── -->
           <article class="dash-pane" data-pane="memory" hidden>
-            <div class="topbar">
-              <span class="crumb">记忆 · Memory <span class="meta" id="memory-meta">—</span></span>
-              <div class="actions">
-                <button id="memory-refresh" class="btn">
-                  <span class="ic"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 8a5 5 0 0 1 8.5-3.5M13 8a5 5 0 0 1-8.5 3.5"/><path d="M11.5 1.5v3h-3M4.5 14.5v-3h3"/></svg></span>
-                  刷新
-                </button>
-              </div>
-            </div>
-
-            <!-- NEW: top dynamic zone -->
-            <section class="memory-top-zone" id="memory-top-zone">
-              <div class="memory-observations" id="memory-observations">
-                <p class="empty-state">Claude 还没注意到什么——这是它的安静日子。</p>
-              </div>
-              <div class="memory-milestones" id="memory-milestones"></div>
-            </section>
-
-            <!-- existing static archive zone (UNCHANGED) -->
-            <div class="mem">
-              <aside class="mem-list" id="memory-sidebar"></aside>
-              <section class="mem-doc">
-                <div class="crumb" id="memory-content-head" hidden>
-                  <span id="memory-content-path">—</span>
-                  <span class="mtime" id="memory-content-mtime">—</span>
-                  <span class="mem-actions">
-                    <button id="memory-edit-btn" class="btn ghost" hidden>编辑</button>
-                    <button id="memory-cancel-btn" class="btn ghost" hidden>取消</button>
-                    <button id="memory-save-btn" class="btn primary" hidden>保存</button>
-                  </span>
-                </div>
-                <div class="memory-rendered" id="memory-rendered">
-                  <p class="empty-state">从左边选一个文件查看。</p>
-                </div>
-                <textarea id="memory-editor" class="memory-editor" spellcheck="false" hidden></textarea>
-                <div id="memory-status" class="memory-status" hidden></div>
-              </section>
-            </div>
-
-            <!-- NEW: bottom collapsed decisions zone -->
-            <section class="memory-decisions">
-              <button class="memory-decisions-toggle" id="memory-decisions-toggle" aria-expanded="false">
-                <span>🤔 Claude 的最近决策</span>
+            <section class="memory-profile-overview" id="memory-profile-overview">
+              <button class="memory-library-trigger" id="memory-sources-toggle" aria-expanded="false">
+                <span>记忆库</span>
+                <span class="meta" id="memory-meta">—</span>
                 <span class="chev">▾</span>
               </button>
-              <div class="memory-decisions-body" id="memory-decisions-body" hidden>
-                <p class="empty-state">还没记录到决策。</p>
+
+              <div id="memory-profile-content">
+                <p class="empty-state">正在整理 CC 眼中的你…</p>
               </div>
+
+              <aside class="memory-sources-panel" id="memory-sources-panel" hidden>
+                <div class="memory-sources-head">
+                  <span>记忆来源</span>
+                  <button id="memory-refresh" class="btn">
+                    <span class="ic"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 8a5 5 0 0 1 8.5-3.5M13 8a5 5 0 0 1-8.5 3.5"/><path d="M11.5 1.5v3h-3M4.5 14.5v-3h3"/></svg></span>
+                    刷新
+                  </button>
+                </div>
+
+                <section class="memory-fold">
+                  <button class="memory-fold-toggle" id="memory-observations-toggle" aria-expanded="false">
+                    <span>最近观察和里程碑</span>
+                    <span class="chev">▾</span>
+                  </button>
+                  <div class="memory-fold-body" id="memory-observations-body" hidden>
+                    <section class="memory-top-zone" id="memory-top-zone">
+                      <div class="memory-observations" id="memory-observations">
+                        <p class="empty-state">Claude 还没注意到什么——这是它的安静日子。</p>
+                      </div>
+                      <div class="memory-milestones" id="memory-milestones"></div>
+                    </section>
+                  </div>
+                </section>
+
+                <section class="memory-fold">
+                  <button class="memory-fold-toggle" id="memory-archive-toggle" aria-expanded="false">
+                    <span>查看 / 编辑原始记忆文件</span>
+                    <span class="chev">▾</span>
+                  </button>
+                  <div class="memory-fold-body" id="memory-archive-body" hidden>
+                    <div class="mem">
+                      <aside class="mem-list" id="memory-sidebar"></aside>
+                      <section class="mem-doc">
+                        <div class="crumb" id="memory-content-head" hidden>
+                          <span id="memory-content-path">—</span>
+                          <span class="mtime" id="memory-content-mtime">—</span>
+                          <span class="mem-actions">
+                            <button id="memory-edit-btn" class="btn ghost" hidden>编辑</button>
+                            <button id="memory-cancel-btn" class="btn ghost" hidden>取消</button>
+                            <button id="memory-save-btn" class="btn primary" hidden>保存</button>
+                          </span>
+                        </div>
+                        <div class="memory-rendered" id="memory-rendered">
+                          <p class="empty-state">从左边选一个文件查看。</p>
+                        </div>
+                        <textarea id="memory-editor" class="memory-editor" spellcheck="false" hidden></textarea>
+                        <div id="memory-status" class="memory-status" hidden></div>
+                      </section>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="memory-decisions">
+                  <button class="memory-decisions-toggle" id="memory-decisions-toggle" aria-expanded="false">
+                    <span>Claude 的最近决策</span>
+                    <span class="chev">▾</span>
+                  </button>
+                  <div class="memory-decisions-body" id="memory-decisions-body" hidden>
+                    <p class="empty-state">还没记录到决策。</p>
+                  </div>
+                </section>
+              </aside>
             </section>
           </article>
 
@@ -472,13 +497,17 @@
             <div class="sessions-search-wrap">
               <input type="search" id="sessions-search" class="sessions-search" placeholder="跨所有 session 搜索…" autocomplete="off">
             </div>
-            <div class="sessions-body" id="sessions-body">
-              <p class="empty-state" id="sessions-empty">还没有项目会话——你跟 Claude 第一次说话之后这里就会有内容。</p>
+            <div class="sessions-main" id="sessions-main">
+              <aside class="sessions-sidebar" id="sessions-sidebar" hidden></aside>
+              <div class="sessions-body" id="sessions-body">
+                <p class="empty-state" id="sessions-empty">还没有项目会话——你跟 Claude 第一次说话之后这里就会有内容。</p>
+              </div>
             </div>
             <div class="sessions-detail dismissed" id="sessions-detail" aria-hidden="true">
               <div class="sessions-detail-bar">
                 <button id="sessions-back" class="btn ghost"><span class="ic">←</span>返回列表</button>
                 <span class="sessions-detail-meta" id="sessions-detail-meta">—</span>
+                <span id="sessions-export-error" class="export-error-strip" hidden></span>
                 <div class="sessions-detail-actions">
                   <button id="sessions-export" class="btn ghost">导出 markdown</button>
                   <button id="sessions-delete" class="btn danger">删除</button>

@@ -459,6 +459,22 @@ export const SessionsListProjectsOutput = z.object({
 })
 export type SessionsListProjectsOutputT = z.infer<typeof SessionsListProjectsOutput>
 
+// ── wechat-cc sessions list-chats --json ──────────────────────────────────────
+// Emits { ok: true, chats: ChatEntry[] } for the desktop contact sidebar.
+const ChatEntry = z.object({
+  chat_id: z.string(),
+  user_name: z.string().nullable(),
+  account_id: z.string().nullable(),
+  session_count: z.number(),
+  last_used_at: z.string(),
+})
+
+export const SessionsListChatsOutput = z.object({
+  ok: z.literal(true),
+  chats: z.array(ChatEntry),
+})
+export type SessionsListChatsOutputT = z.infer<typeof SessionsListChatsOutput>
+
 // ── wechat-cc sessions read-jsonl --json ──────────────────────────────────────
 // Discriminated union: success emits { ok: true, alias, session_id, turns }
 // (codex sessions additionally carry provider:'codex'); error paths emit

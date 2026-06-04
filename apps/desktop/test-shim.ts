@@ -81,7 +81,7 @@ const __mockState: {
   // mirror the "everything healthy" path; tests that need to drive the
   // hero into "暂时失去连接" tone pass daemonAlive: false explicitly.
   daemonAlive: boolean
-  sessions: Array<{ id: string; project: string; created_at: number; favorited: boolean }>
+  sessions: Array<{ id: string; project: string; created_at: number; favorited: boolean; chat_id?: string }>
   qrScanComplete?: boolean
   qrScanFails?: boolean
   envCheck?: { binary_missing?: string }
@@ -334,6 +334,7 @@ Bun.serve({
             chat_id?: string
             daemonAlive?: boolean
             withSessions?: boolean
+            oneContact?: boolean
           } | undefined
           const chatId = args?.chat_id ?? 'test_chat'
           __mockState.daemonAlive = args?.daemonAlive ?? true
@@ -364,10 +365,14 @@ Bun.serve({
           // Sessions are opt-in so playwright can exercise the empty-state
           // path while still having accounts bound (state.mode must reach
           // 'dashboard', which requires accounts).
-          __mockState.sessions = args?.withSessions === false ? [] : [
-            { id: 'sess_1', project: 'wechat-cc', created_at: Date.now(), favorited: false },
-            { id: 'sess_2', project: 'compass', created_at: Date.now() - 3600000, favorited: false },
-          ]
+          __mockState.sessions = args?.withSessions === false ? [] : (args?.oneContact ? [
+            { id: 'sess_1', project: 'wechat-cc', created_at: Date.now(),           favorited: false, chat_id: 'chatA@im.wechat' },
+            { id: 'sess_2', project: 'compass',   created_at: Date.now() - 3600000, favorited: false, chat_id: 'chatA@im.wechat' },
+          ] : [
+            { id: 'sess_1', project: 'wechat-cc', created_at: Date.now(),           favorited: false, chat_id: 'chatA@im.wechat' },
+            { id: 'sess_2', project: 'compass',   created_at: Date.now() - 3600000, favorited: false, chat_id: 'chatA@im.wechat' },
+            { id: 'sess_3', project: 'blog',      created_at: Date.now() - 7200000, favorited: false, chat_id: 'chatB@im.wechat' },
+          ])
           // Reset QR + env-check state when re-seeding
           __mockState.qrScanComplete = false
           __mockState.qrScanFails = false
@@ -635,12 +640,39 @@ Bun.serve({
             cliArgs[0] === 'sessions' &&
             cliArgs[1] === 'list-projects'
           ) {
-            const projects = __mockState.sessions.map(s => ({
-              alias: s.project,
-              last_used_at: new Date(s.created_at).toISOString(),
-              summary: null,
-            }))
+            const chatIdx = cliArgs.indexOf('--chat')
+            const chatFilter = chatIdx >= 0 ? cliArgs[chatIdx + 1] : null
+            const projects = __mockState.sessions
+              .filter(s => !chatFilter || (s.chat_id || '_legacy') === chatFilter)
+              .map(s => ({
+                alias: s.project,
+                session_id: `sess-${s.id}`,
+                last_used_at: new Date(s.created_at).toISOString(),
+                summary: null,
+                summary_updated_at: null,
+              }))
             return Response.json({ result: { projects } })
+          }
+
+          if (
+            dryRun &&
+            body.command === 'wechat_cli_json' &&
+            cliArgs[0] === 'sessions' &&
+            cliArgs[1] === 'list-chats'
+          ) {
+            const names: Record<string, string> = { 'chatA@im.wechat': '小白', 'chatB@im.wechat': '小明' }
+            const byChat = new Map<string, { aliases: Set<string>; last: number }>()
+            for (const s of __mockState.sessions) {
+              const id = s.chat_id || '_legacy'
+              const g = byChat.get(id) ?? { aliases: new Set<string>(), last: 0 }
+              g.aliases.add(s.project)
+              if (s.created_at > g.last) g.last = s.created_at
+              byChat.set(id, g)
+            }
+            const chats = [...byChat.entries()]
+              .map(([chat_id, g]) => ({ chat_id, user_name: names[chat_id] ?? null, account_id: 'bot1', session_count: g.aliases.size, last_used_at: new Date(g.last).toISOString() }))
+              .sort((a, b) => Date.parse(b.last_used_at) - Date.parse(a.last_used_at))
+            return Response.json({ result: { ok: true, chats } })
           }
 
           // Intercept setup --qr-json in DRY_RUN for QR auto-pass flow.
@@ -847,6 +879,13 @@ Bun.serve({
                 entries,
               },
             })
+          }
+
+          if (dryRun && cliArgs[0] === 'sessions' && cliArgs[1] === 'read-jsonl') {
+            const alias = cliArgs[2]
+            const exists = __mockState.sessions.some(s => s.project === alias)
+            if (!exists) return Response.json({ result: { ok: false, error: 'no such alias' } })
+            return Response.json({ result: { ok: true, alias, session_id: `sess-${alias}`, turns: [] } })
           }
 
           const tmp = join(process.env.TMPDIR ?? '/tmp', `wechat-cc-shim-${Date.now()}-${process.pid}.json`)

@@ -35,12 +35,28 @@ async function switchToMemoryPane(page: import('@playwright/test').Page) {
   await expect(page.locator('article.dash-pane[data-pane="memory"]')).toBeVisible()
 }
 
+async function openMemorySources(page: import('@playwright/test').Page) {
+  await page.locator('#memory-sources-toggle').click()
+  await expect(page.locator('#memory-sources-panel')).toBeVisible()
+}
+async function openMemoryObservations(page: import('@playwright/test').Page) {
+  await openMemorySources(page)
+  await page.locator('#memory-observations-toggle').click()
+  await expect(page.locator('#memory-observations-body')).toBeVisible()
+}
+async function openMemoryArchive(page: import('@playwright/test').Page) {
+  await openMemorySources(page)
+  await page.locator('#memory-archive-toggle').click()
+  await expect(page.locator('#memory-archive-body')).toBeVisible()
+}
+
 // ── observations + milestones top zone ──────────────────────────────────
 
 test('memory top zone renders observations from seeded data', async ({ page, shimUrl, shim }) => {
   await shim.invoke('demo.seed', { chat_id: 'test_chat' })
   await bootIntoDashboard(page, shimUrl)
   await switchToMemoryPane(page)
+  await openMemoryObservations(page)
 
   // loadMemoryTopZone slices observations to top 3.
   const obsBox = page.locator('#memory-observations')
@@ -73,6 +89,7 @@ test('memory top zone shows empty-state copy when no observations', async ({ pag
   await shim.invoke('demo.unseed')
   await bootIntoDashboard(page, shimUrl)
   await switchToMemoryPane(page)
+  await openMemoryObservations(page)
   // The empty-state copy is design-language §1.3 — narrative, not "暂无数据".
   // The text only renders if memoryState.users resolves to a chat first.
   // Without seed, currentChatId returns null and the load no-ops, leaving
@@ -89,6 +106,7 @@ test('memory sidebar populates with seeded user', async ({ page, shimUrl, shim }
   await shim.invoke('demo.seed', { chat_id: 'test_chat' })
   await bootIntoDashboard(page, shimUrl)
   await switchToMemoryPane(page)
+  await openMemoryArchive(page)
 
   const sidebar = page.locator('#memory-sidebar')
   await expect(sidebar).toBeVisible()
@@ -114,6 +132,7 @@ test('memory sidebar empty-state when no chats', async ({ page, shimUrl, shim })
   await shim.invoke('demo.unseed')
   await bootIntoDashboard(page, shimUrl)
   await switchToMemoryPane(page)
+  await openMemoryArchive(page)
   const sidebar = page.locator('#memory-sidebar')
   await expect(sidebar).toBeVisible()
   // The narrative empty-state from renderMemorySidebar uses "Claude 还没".
@@ -126,6 +145,7 @@ test('clicking #memory-refresh re-issues the load (visible: no error)', async ({
   await shim.invoke('demo.seed', { chat_id: 'test_chat' })
   await bootIntoDashboard(page, shimUrl)
   await switchToMemoryPane(page)
+  await openMemoryObservations(page)
   // Wait for initial render to settle.
   await expect(page.locator('#memory-observations')).toContainText(/demo observation/, { timeout: 5_000 })
   // Refresh button should fire loadMemoryTopZone again. With unchanged

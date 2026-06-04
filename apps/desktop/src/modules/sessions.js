@@ -26,6 +26,16 @@ const WEEK_MS = 7 * TODAY_MS
 const FAV_STORAGE_KEY = 'wechat-cc:favorite-sessions'
 const MODE_STORAGE_KEY = 'wechat-cc:session-detail-mode'
 
+/**
+ * Append `--chat <chatId>` to a sessions CLI arg list when chatId is set.
+ * @param {string[]} args
+ * @param {string|null|undefined} chatId
+ * @returns {string[]}
+ */
+function withChat(args, chatId) {
+  return chatId ? [...args, "--chat", chatId] : args
+}
+
 // Detail view 「精简 / 完整」 toggle. 精简 (compact) is the default — extracts
 // only the actual user message + Claude's actual reply, hiding all SDK noise
 // (attachments, ToolSearch / memory_list / memory_read tool calls, raw JSON
@@ -429,15 +439,21 @@ export function toggleFavorite(alias) {
   localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify([...favs]))
 }
 
-/** @param {Deps} deps */
-export async function loadSessionsList(deps) {
+/**
+ * @param {Deps} deps
+ * @param {string|null} [chatId]
+ */
+export async function loadSessionsList(deps, chatId = selectedChatId) {
   const body = document.getElementById("sessions-body")
   const empty = document.getElementById("sessions-empty")
   const meta = document.getElementById("sessions-meta")
   if (!body) return
+  // Record the active chat on the list container so the open-project click
+  // (wired in main.js) can pass it to openProjectDetail without cross-module state.
+  body.dataset.chat = chatId || ''
 
   try {
-    const resp = /** @type {SessionsListProjects} */ (await deps.invoke("wechat_cli_json", { args: ["sessions", "list-projects", "--json"] }))
+    const resp = /** @type {SessionsListProjects} */ (await deps.invoke("wechat_cli_json", { args: withChat(["sessions", "list-projects", "--json"], chatId) }))
     const projects = resp.projects || []
 
     if (projects.length === 0) {
@@ -472,7 +488,7 @@ export async function loadSessionsList(deps) {
 /**
  * @param {Deps} deps
  * @param {string} alias
- * @param {{ focusTurn?: number|null, preserveScroll?: { wasAtBottom: boolean, scrollTop: number }|null }} [opts]
+ * @param {{ focusTurn?: number|null, preserveScroll?: { wasAtBottom: boolean, scrollTop: number }|null, chatId?: string }} [opts]
  */
 export async function openProjectDetail(deps, alias, opts = {}) {
   const { focusTurn = null } = opts
@@ -482,6 +498,10 @@ export async function openProjectDetail(deps, alias, opts = {}) {
   if (!detail || !meta || !jsonlBox) return
 
   detail.dataset.alias = alias
+  // chatId may come from the click (opts.chatId) or, on auto-refresh ticks,
+  // already be on the element — preserve it if the caller didn't pass one.
+  const chatId = opts.chatId ?? detail.dataset.chat ?? ''
+  detail.dataset.chat = chatId
   // Don't blank the body during auto-refresh ticks — would flash empty.
   if (!opts.preserveScroll) {
     jsonlBox.innerHTML = `<p class="empty-state">加载中…</p>`
@@ -493,7 +513,7 @@ export async function openProjectDetail(deps, alias, opts = {}) {
   if (!opts.preserveScroll) startDetailAutoRefresh(deps)
 
   try {
-    const resp = /** @type {SessionsReadJsonl} */ (await deps.invoke("wechat_cli_json_via_file", { args: ["sessions", "read-jsonl", alias, "--json"] }))
+    const resp = /** @type {SessionsReadJsonl} */ (await deps.invoke("wechat_cli_json_via_file", { args: withChat(["sessions", "read-jsonl", alias, "--json"], chatId || null) }))
     if (!resp.ok) {
       jsonlBox.innerHTML = `<p class="empty-state">${escapeHtml(resp.error || '读取失败')}</p>`
       meta.textContent = alias
@@ -631,6 +651,74 @@ export function closeProjectDetail() {
 // near-real-time feel when the WeChat user sends a new message. Clears
 // itself when the detail closes, the user changes panes, or a new
 // detail is opened (which will start its own timer).
+/** @type {string|null} — the contact whose sessions are shown. null = unfiltered (zero/one contact). */
+let selectedChatId = null
+
+/**
+ * Render the contact sidebar from list-chats rows. Hides the sidebar when
+ * there's <=1 contact (no navigation needed — pane looks like single-chat).
+ * @param {Array<{chat_id:string,user_name:string|null,session_count:number}>} chats
+ */
+function renderSessionsSidebar(chats) {
+  const sidebar = document.getElementById("sessions-sidebar")
+  if (!sidebar) return
+  if (chats.length <= 1) {
+    sidebar.hidden = true
+    sidebar.innerHTML = ''
+    return
+  }
+  sidebar.hidden = false
+  sidebar.innerHTML = chats.map(c => {
+    const name = c.user_name || (c.chat_id === '_legacy' ? '（早期会话）' : c.chat_id.split("@")[0])
+    const active = c.chat_id === selectedChatId ? ' active' : ''
+    return `<button class="contact-row${active}" data-action="select-chat" data-chat="${escapeHtml(c.chat_id)}">
+      <span class="name">${escapeHtml(name)}</span>
+      <span class="count">${c.session_count}</span>
+    </button>`
+  }).join("")
+}
+
+/**
+ * Switch the active contact: update state, re-highlight, reload the list.
+ * @param {Deps} deps
+ * @param {string} chatId
+ */
+export async function selectChat(deps, chatId) {
+  selectedChatId = chatId
+  document.querySelectorAll("#sessions-sidebar .contact-row").forEach(el => {
+    const btn = /** @type {HTMLElement} */ (el)
+    el.classList.toggle("active", btn.dataset.chat === chatId)
+  })
+  closeProjectDetail()
+  await loadSessionsList(deps, chatId)
+}
+
+/**
+ * Pane entry point: load contacts, render the sidebar, auto-select the
+ * most-recent, then load that contact's session list.
+ * @param {Deps} deps
+ */
+export async function loadSessionsChats(deps) {
+  try {
+    const resp = /** @type {{ ok: boolean, chats?: Array<{chat_id:string,user_name:string|null,session_count:number,last_used_at:string}> }} */ (
+      await deps.invoke("wechat_cli_json", { args: ["sessions", "list-chats", "--json"] })
+    )
+    const chats = resp.chats || []
+    // list-chats is already sorted most-recent-first by the CLI.
+    // Preserve the user's current selection across refreshes; only fall back to
+    // the most-recent contact when the selection is gone (or there's just one).
+    selectedChatId = (selectedChatId && chats.some(c => c.chat_id === selectedChatId))
+      ? selectedChatId
+      : (chats.length > 1 ? (chats[0]?.chat_id ?? null) : null)
+    renderSessionsSidebar(chats)
+    await loadSessionsList(deps, selectedChatId)
+  } catch (err) {
+    console.error("sessions list-chats failed", err)
+    selectedChatId = null
+    await loadSessionsList(deps, null)
+  }
+}
+
 /** @type {ReturnType<typeof setInterval>|null} */
 let detailAutoTimer = null
 
@@ -1005,7 +1093,7 @@ export function setSessionsDetailMode(deps, mode) {
   const detail = document.getElementById('sessions-detail')
   const alias = detail?.dataset.alias
   if (alias && !detail?.classList.contains('dismissed')) {
-    openProjectDetail(deps, alias)
+    openProjectDetail(deps, alias, { chatId: detail?.dataset.chat || '' })
     return
   }
   const searchInput = /** @type {HTMLInputElement|null} */ (document.getElementById('sessions-search'))
@@ -1101,7 +1189,8 @@ export async function exportProjectMarkdown(deps) {
   try {
     // via_file path: CLI dumps JSON to a temp file and Rust reads it back.
     // Plain stdout truncates at MB-scale for bun --compile binaries.
-    const resp = /** @type {SessionsReadJsonl} */ (await deps.invoke("wechat_cli_json_via_file", { args: ["sessions", "read-jsonl", alias, "--json"] }))
+    const chatId = detail?.dataset.chat || null
+    const resp = /** @type {SessionsReadJsonl} */ (await deps.invoke("wechat_cli_json_via_file", { args: withChat(["sessions", "read-jsonl", alias, "--json"], chatId) }))
     if (!resp.ok) {
       // alert() blocks the webview thread + looks like a popup virus
       // on macOS. Inline error strip is consistent with how the rest
@@ -1172,7 +1261,8 @@ export async function deleteProject(deps) {
     btn.textContent = '删除'
     btn.classList.remove('is-confirming')
     try {
-      await /** @type {Promise<SessionsDelete>} */ (deps.invoke("wechat_cli_json", { args: ["sessions", "delete", alias, "--json"] }))
+      const chatId = detail?.dataset.chat || null
+      await /** @type {Promise<SessionsDelete>} */ (deps.invoke("wechat_cli_json", { args: withChat(["sessions", "delete", alias, "--json"], chatId) }))
       closeProjectDetail()
       await loadSessionsList(deps)
     } catch (err) {
@@ -1214,7 +1304,7 @@ export function startSessionsAutoRefresh(deps, intervalMs = 30000) {
     // a transcript, not the list.
     const detail = document.getElementById("sessions-detail")
     if (detail && !detail.classList.contains('dismissed')) return
-    loadSessionsList(deps).catch(err => console.error("sessions auto-refresh failed", err))
+    loadSessionsChats(deps).catch(err => console.error("sessions auto-refresh failed", err))
   }, intervalMs)
 }
 
@@ -1250,6 +1340,9 @@ async function runSearch(deps, query) {
   }
   const body = document.getElementById("sessions-body")
   if (!body) return
+  // Search is global (across all contacts) — clear any per-contact filter so
+  // opening a search hit resolves the alias's session without a stale --chat.
+  body.dataset.chat = ''
   body.innerHTML = `<p class="empty-state">搜索中…</p>`
   try {
     const resp = /** @type {SessionsSearch} */ (await deps.invoke("wechat_cli_json", { args: ["sessions", "search", trimmed, "--json"] }))

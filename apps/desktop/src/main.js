@@ -30,7 +30,7 @@ import { renderDashboard, renderRestartButton, setPending, updateClock, restartD
 import { renderConversations } from "./modules/conversations.js"
 import { loadMemoryPane, wireMemoryButtons, loadMemoryTopZone, loadMemoryDecisions, archiveObservation } from "./modules/memory.js"
 import { loadLogsPane, startLogsAutoRefresh, stopLogsAutoRefresh } from "./modules/logs.js"
-import { loadSessionsList, openProjectDetail, closeProjectDetail, toggleFavorite, exportProjectMarkdown, deleteProject, wireSearch, startSessionsAutoRefresh, stopSessionsAutoRefresh, stopDetailAutoRefresh, setSessionsDetailMode } from "./modules/sessions.js"
+import { loadSessionsList, loadSessionsChats, selectChat, openProjectDetail, closeProjectDetail, toggleFavorite, exportProjectMarkdown, deleteProject, wireSearch, startSessionsAutoRefresh, stopSessionsAutoRefresh, stopDetailAutoRefresh, setSessionsDetailMode } from "./modules/sessions.js"
 import { initA2AAgentsTab, refresh as refreshA2AAgents } from "./modules/a2a-agents.js"
 import { loadUpdateProbe, applyUpdate } from "./modules/update.js"
 import { wireSettingsDrawer, openSettingsDrawer } from "./modules/settings-drawer.js"
@@ -417,7 +417,7 @@ function switchPane(name) {
     loadMemoryTopZone(deps).catch(err => console.error("memory top zone failed", err))
   }
   if (name === "sessions") {
-    loadSessionsList(deps).catch(err => console.error("sessions load failed", err))
+    loadSessionsChats(deps).catch(err => console.error("sessions load failed", err))
     startSessionsAutoRefresh(deps)
   } else {
     stopSessionsAutoRefresh()
@@ -539,6 +539,26 @@ function wireEvents() {
   )
   wireMemoryButtons(deps)
 
+  document.getElementById("memory-sources-toggle")?.addEventListener("click", () => {
+    const toggle = document.getElementById("memory-sources-toggle")
+    const panel = document.getElementById("memory-sources-panel")
+    if (!toggle || !panel) return
+    const wasOpen = toggle.getAttribute("aria-expanded") === "true"
+    toggle.setAttribute("aria-expanded", wasOpen ? "false" : "true")
+    panel.hidden = wasOpen
+  })
+
+  for (const id of ["memory-observations", "memory-archive"]) {
+    document.getElementById(`${id}-toggle`)?.addEventListener("click", () => {
+      const toggle = document.getElementById(`${id}-toggle`)
+      const body = document.getElementById(`${id}-body`)
+      if (!toggle || !body) return
+      const wasOpen = toggle.getAttribute("aria-expanded") === "true"
+      toggle.setAttribute("aria-expanded", wasOpen ? "false" : "true")
+      body.hidden = wasOpen
+    })
+  }
+
   // Memory top zone — handle archive button clicks via delegation
   document.getElementById("memory-observations")?.addEventListener("click", async (e) => {
     const archiveBtn = /** @type {HTMLElement | null} */ (e.target instanceof HTMLElement ? e.target.closest("[data-action='archive-observation']") : null)
@@ -548,7 +568,10 @@ function wireEvents() {
     }
   })
 
-  // Memory decisions — toggle folded zone, lazy-load on first expand
+  // Memory decisions — toggle folded zone, lazy-load on FIRST expand only.
+  // Closure flag persists across clicks (wireEvents runs once at boot) so we
+  // don't re-read events.jsonl on every expand.
+  let memoryDecisionsLoaded = false
   document.getElementById("memory-decisions-toggle")?.addEventListener("click", () => {
     const toggle = document.getElementById("memory-decisions-toggle")
     const body = document.getElementById("memory-decisions-body")
@@ -556,7 +579,10 @@ function wireEvents() {
     const wasOpen = toggle.getAttribute("aria-expanded") === "true"
     toggle.setAttribute("aria-expanded", wasOpen ? "false" : "true")
     body.hidden = wasOpen
-    if (!wasOpen) loadMemoryDecisions(deps).catch(err => console.error("decisions load failed", err))
+    if (!wasOpen && !memoryDecisionsLoaded) {
+      memoryDecisionsLoaded = true
+      loadMemoryDecisions(deps).catch(err => console.error("decisions load failed", err))
+    }
   })
 
   // Memory decisions — click row to expand reasoning (CSS handles the visual via .expanded class)
@@ -568,7 +594,9 @@ function wireEvents() {
     withRefreshFeedback(/** @type {HTMLButtonElement} */ (e.currentTarget), () => loadLogsPane(deps)),
   )
   document.getElementById("sessions-refresh")?.addEventListener("click", (e) =>
-    withRefreshFeedback(/** @type {HTMLButtonElement} */ (e.currentTarget), () => loadSessionsList(deps)),
+    // loadSessionsChats (not loadSessionsList) so a manual refresh also picks up
+    // a newly-arrived contact in the sidebar, matching the 30s auto-refresh.
+    withRefreshFeedback(/** @type {HTMLButtonElement} */ (e.currentTarget), () => loadSessionsChats(deps)),
   )
   // Sessions — list-row clicks. closest('[data-action]') routes to the
   // innermost match: clicking the star toggles favorite (and stops there);
@@ -586,9 +614,16 @@ function wireEvents() {
     if (action === 'open-project') {
       if (!alias) return
       const turnIdx = actionEl.dataset.turnIndex
-      const opts = turnIdx !== undefined ? { focusTurn: Number(turnIdx) } : {}
+      const chatId = document.getElementById("sessions-body")?.dataset.chat || ''
+      const opts = turnIdx !== undefined ? { focusTurn: Number(turnIdx), chatId } : { chatId }
       openProjectDetail(deps, alias, opts)
     }
+  })
+  document.getElementById("sessions-sidebar")?.addEventListener("click", (e) => {
+    const el = /** @type {HTMLElement | null} */ (e.target instanceof HTMLElement ? e.target.closest("[data-action='select-chat']") : null)
+    if (!el) return
+    const chatId = el.dataset.chat
+    if (chatId) selectChat(deps, chatId).catch(err => console.error("select-chat failed", err))
   })
   document.getElementById("sessions-back")?.addEventListener("click", closeProjectDetail)
   document.getElementById("sessions-export")?.addEventListener("click", () => exportProjectMarkdown(deps))
@@ -883,7 +918,7 @@ function reopenCurrentSession(deps) {
   const detail = document.getElementById("sessions-detail")
   const alias = detail?.dataset.alias
   if (alias) {
-    import("./modules/sessions.js").then(m => m.openProjectDetail(deps, alias))
+    import("./modules/sessions.js").then(m => m.openProjectDetail(deps, alias, { chatId: detail?.dataset.chat || '' }))
   }
 }
 

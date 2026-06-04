@@ -21,6 +21,7 @@ import {
   ObservationsArchiveOutput,
   MilestonesListOutput,
   SessionsListProjectsOutput,
+  SessionsListChatsOutput,
   SessionsReadJsonlOutput,
   SessionsDeleteOutput,
   SessionsSearchOutput,
@@ -583,6 +584,26 @@ describe('SessionsListProjectsOutput', () => {
   })
   it('rejects when ok is missing', () => {
     expect(SessionsListProjectsOutput.safeParse({ projects: [] }).success).toBe(false)
+  })
+})
+
+describe('SessionsListChatsOutput', () => {
+  it('parses a valid chats envelope', () => {
+    const ok = SessionsListChatsOutput.parse({
+      ok: true,
+      chats: [{ chat_id: 'c1', user_name: '小白', account_id: 'bot1', session_count: 2, last_used_at: '2026-06-03T10:00:00.000Z' }],
+    })
+    expect(ok.chats[0]!.chat_id).toBe('c1')
+  })
+  it('allows null name/account', () => {
+    const ok = SessionsListChatsOutput.parse({
+      ok: true,
+      chats: [{ chat_id: 'c2', user_name: null, account_id: null, session_count: 1, last_used_at: '2026-06-04T10:00:00.000Z' }],
+    })
+    expect(ok.chats[0]!.user_name).toBeNull()
+  })
+  it('rejects when ok is missing', () => {
+    expect(SessionsListChatsOutput.safeParse({ chats: [] }).success).toBe(false)
   })
 })
 
