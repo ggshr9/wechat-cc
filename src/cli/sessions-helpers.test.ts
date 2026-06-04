@@ -83,4 +83,7 @@ describe('chatsToDelete', () => {
   it('ignores other aliases', () => {
     expect(chatsToDelete(records, 'blog', undefined)).toEqual(['c1'])
   })
+  it('with a chatId that has no row, returns [] (clean no-op, never deletes)', () => {
+    expect(chatsToDelete(records, 'wechat-cc', 'nonexistent')).toEqual([])
+  })
 })
