@@ -72,7 +72,11 @@ describe('bootstrap', () => {
       || Array.isArray(sp)
       || (typeof sp === 'object' && sp !== null && (sp as { type?: string }).type === 'preset')
     expect(ok).toBe(true)
-  })
+    // 15s timeout (vs the 5s default): this is the first buildBootstrap call in
+    // the file, so it bears one-time cold-import cost (SDK + MCP spec assembly)
+    // that intermittently exceeds 5s on slow Windows CI runners. See the
+    // 2026-06-03 windows-latest flake.
+  }, 15_000)
 
   it('resolve uses projects.current', async () => {
     const b = await buildBootstrap({
