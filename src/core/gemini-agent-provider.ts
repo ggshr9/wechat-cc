@@ -11,7 +11,7 @@
  * Decoupled from bootstrap via injected genai / mcpConnect / buildGate so the
  * loop is unit-testable. See docs/superpowers/specs/2026-06-04-gemini-provider-design.md.
  */
-import type { PermissionMode, ProviderCapabilities } from './agent-provider'
+import type { AgentEvent, PermissionMode, ProviderCapabilities } from './agent-provider'
 import type { TierProfile } from './user-tier'
 
 /** RFC 05 Phase 2 capability declaration. We OWN the loop → per-tool gating is
@@ -62,4 +62,86 @@ export function mcpToolsToFunctionDeclarations(tools: McpToolDef[]): GeminiFunct
     }
     return fn
   })
+}
+
+/** Minimal genai surface the loop needs (real: ai.models). */
+export interface GenaiPort {
+  generateContent(req: {
+    model: string
+    contents: unknown[]
+    config?: { systemInstruction?: string; tools?: Array<{ functionDeclarations: GeminiFunctionDeclaration[] }> }
+  }): Promise<{ text: string; functionCalls?: Array<{ name: string; args: Record<string, unknown> }> }>
+}
+/** Minimal MCP surface the loop needs (real: @modelcontextprotocol/sdk Client). */
+export interface McpPort {
+  callTool(name: string, args: Record<string, unknown>): Promise<{ content: unknown[]; isError?: boolean }>
+}
+
+export interface DispatchLoopArgs {
+  genai: GenaiPort
+  mcp: McpPort
+  gate: ToolGate
+  model: string
+  systemInstruction: string
+  functionDeclarations: GeminiFunctionDeclaration[]
+  /** Mutated in place — the running conversation history (persists across dispatches). */
+  history: unknown[]
+  sessionId: string
+  userText: string
+  /** Safety cap on tool rounds per dispatch (default 12). */
+  maxRounds?: number
+}
+
+/** The tool-use loop. Yields AgentEvents; mutates `history`. */
+export async function* runDispatchLoop(args: DispatchLoopArgs): AsyncIterable<AgentEvent> {
+  const startMs = Date.now()
+  const cap = args.maxRounds ?? 12
+  args.history.push({ role: 'user', parts: [{ text: args.userText }] })
+  const config = {
+    systemInstruction: args.systemInstruction,
+    ...(args.functionDeclarations.length > 0 ? { tools: [{ functionDeclarations: args.functionDeclarations }] } : {}),
+  }
+  let rounds = 0
+  try {
+    while (true) {
+      rounds++
+      const resp = await args.genai.generateContent({ model: args.model, contents: args.history, config })
+      const text = resp.text ?? ''
+      const calls = resp.functionCalls ?? []
+
+      if (text) yield { kind: 'text', text }
+
+      if (calls.length === 0) {
+        if (text) args.history.push({ role: 'model', parts: [{ text }] })
+        yield { kind: 'result', sessionId: args.sessionId, numTurns: rounds, durationMs: Date.now() - startMs }
+        return
+      }
+
+      args.history.push({ role: 'model', parts: calls.map(c => ({ functionCall: { name: c.name, args: c.args } })) })
+
+      const responseParts: unknown[] = []
+      for (const call of calls) {
+        yield { kind: 'tool_call', server: 'wechat', tool: call.name }
+        const decision = await args.gate(call.name, call.args)
+        if (!decision.allow) {
+          responseParts.push({ functionResponse: { name: call.name, response: { error: decision.message } } })
+          continue
+        }
+        try {
+          const result = await args.mcp.callTool(call.name, call.args)
+          responseParts.push({ functionResponse: { name: call.name, response: { content: result.content } } })
+        } catch (err) {
+          responseParts.push({ functionResponse: { name: call.name, response: { error: err instanceof Error ? err.message : String(err) } } })
+        }
+      }
+      args.history.push({ role: 'user', parts: responseParts })
+
+      if (rounds >= cap) {
+        yield { kind: 'result', sessionId: args.sessionId, numTurns: rounds, durationMs: Date.now() - startMs }
+        return
+      }
+    }
+  } catch (err) {
+    yield { kind: 'error', message: err instanceof Error ? err.message : String(err) }
+  }
 }
