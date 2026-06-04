@@ -1970,11 +1970,20 @@ input { font: inherit; color: inherit; }
   font-weight: 760;
 }
 #memory-profile-content {
-  flex: 1;
   min-height: 0;
-  height: 100%;
+  width: 100%;
   display: block;
   position: relative;
+  overflow: hidden;
+  /* The artboard is a fixed 1680x1180 box scaled via transform; a CSS
+     transform does not shrink the LAYOUT box, so a flex:1 / height:100%
+     container can't shrink-wrap the scaled artboard — its 1180px box
+     overflows (and gets clipped) at viewports shorter/narrower than design.
+     fitMemoryArtboard writes the post-scale height into
+     --memory-artboard-scaled-height; track it here so the container box
+     matches the visible (scaled) artboard. Not flex:1 on purpose: flex-grow
+     would stretch the box back to fill and defeat the var. */
+  height: var(--memory-artboard-scaled-height, 100%);
 }
 .memory-artboard {
   --memory-artboard-scale: 1;

@@ -65,7 +65,15 @@ export async function loadMemoryPane(deps) {
   if (metaEl) metaEl.textContent = `${memoryState.users.length} 个用户 · ${totalFiles} 文件`
   const navCount = document.getElementById("memory-count")
   if (navCount) navCount.textContent = totalFiles > 0 ? String(totalFiles) : ""
-  renderMemoryProfileOverview(deps)
+  // NOTE: profile-overview render intentionally lives in loadMemoryTopZone,
+  // which runs after observations are loaded. Rendering here too would race:
+  // loadMemoryPane + loadMemoryTopZone fire concurrently on pane switch, and a
+  // render here paints stale (empty-observations) data that flashes/overwrites
+  // the real one. loadMemoryTopZone is the single source of truth for the
+  // overview, and it always follows loadMemoryPane (see main.js pane switch +
+  // memory-refresh; currentChatId also backfills users first). If this is ever
+  // changed so loadMemoryPane runs without loadMemoryTopZone, restore a render
+  // here guarded on observations being loaded.
 }
 
 /** @param {Deps} deps */
@@ -313,18 +321,18 @@ function renderMemoryProfileOverview(deps) {
       </div>
       <div class="memory-profile-companion" aria-label="人格画像指标">
         <div class="metric-bubble metric-bubble-a">
-          <strong>${profile.metrics.expression}%</strong>
+          <strong>${escapeHtml(String(profile.metrics.expression))}%</strong>
           <span>表达欲</span>
         </div>
         <div class="metric-bubble metric-bubble-b">
-          <strong>${profile.metrics.safety}%</strong>
+          <strong>${escapeHtml(String(profile.metrics.safety))}%</strong>
           <span>安全感</span>
         </div>
         <div class="memory-avatar-wrap">
           <img src="./assets/memory-companion.png" alt="" />
         </div>
         <div class="metric-bubble metric-bubble-c">
-          <strong>${profile.metrics.memory}</strong>
+          <strong>${escapeHtml(profile.metrics.memory)}</strong>
           <span>记忆密度</span>
         </div>
         <div class="metric-bubble metric-bubble-d">
@@ -347,7 +355,7 @@ function renderMemoryProfileOverview(deps) {
         <div class="profile-trait-list">
           ${profile.traits.map(trait => `
             <article class="profile-trait">
-              <span class="trait-icon" aria-hidden="true">${trait.icon}</span>
+              <span class="trait-icon" aria-hidden="true">${escapeHtml(trait.icon)}</span>
               <div>
                 <h3>${escapeHtml(trait.title)}</h3>
                 <p>${escapeHtml(trait.body)}</p>
@@ -392,13 +400,22 @@ function fitMemoryArtboard() {
   const root = document.getElementById("memory-profile-content")
   const board = document.getElementById("memory-artboard")
   if (!root || !board) return
-  const rootRect = root.getBoundingClientRect()
-  const boardRect = board.getBoundingClientRect()
+  // Measure the AVAILABLE space from the parent overview's content box, not
+  // from `root` itself: root's height now tracks --memory-artboard-scaled-height
+  // (set below), so measuring root here would feed its own output back into the
+  // scale calc and shrink the board on every resize. The parent's content box
+  // is governed by flex layout and is stable across our writes.
+  const host = root.parentElement || root
+  const hostCs = getComputedStyle(host)
+  const availWidth = host.clientWidth - parseFloat(hostCs.paddingLeft || "0") - parseFloat(hostCs.paddingRight || "0")
+  const availHeight = host.clientHeight - parseFloat(hostCs.paddingTop || "0") - parseFloat(hostCs.paddingBottom || "0")
   const designWidth = 1680
   const designHeight = 1180
-  const scale = Math.min(rootRect.width / designWidth, rootRect.height / designHeight, 1.08)
+  // Cap at 1 so the artboard never grows beyond its design size (which would
+  // break the fixed-position layout); only ever scale down to fit.
+  const scale = Math.min(availWidth / designWidth, availHeight / designHeight, 1)
   board.style.setProperty("--memory-artboard-scale", String(Math.max(0.1, scale)))
-  root.style.setProperty("--memory-artboard-scaled-height", `${designHeight * scale}px`)
+  root.style.setProperty("--memory-artboard-scaled-height", `${designHeight * Math.max(0.1, scale)}px`)
 }
 
 if (typeof window !== "undefined") {

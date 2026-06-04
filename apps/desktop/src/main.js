@@ -568,7 +568,10 @@ function wireEvents() {
     }
   })
 
-  // Memory decisions — toggle folded zone, lazy-load on first expand
+  // Memory decisions — toggle folded zone, lazy-load on FIRST expand only.
+  // Closure flag persists across clicks (wireEvents runs once at boot) so we
+  // don't re-read events.jsonl on every expand.
+  let memoryDecisionsLoaded = false
   document.getElementById("memory-decisions-toggle")?.addEventListener("click", () => {
     const toggle = document.getElementById("memory-decisions-toggle")
     const body = document.getElementById("memory-decisions-body")
@@ -576,7 +579,10 @@ function wireEvents() {
     const wasOpen = toggle.getAttribute("aria-expanded") === "true"
     toggle.setAttribute("aria-expanded", wasOpen ? "false" : "true")
     body.hidden = wasOpen
-    if (!wasOpen) loadMemoryDecisions(deps).catch(err => console.error("decisions load failed", err))
+    if (!wasOpen && !memoryDecisionsLoaded) {
+      memoryDecisionsLoaded = true
+      loadMemoryDecisions(deps).catch(err => console.error("decisions load failed", err))
+    }
   })
 
   // Memory decisions — click row to expand reasoning (CSS handles the visual via .expanded class)
