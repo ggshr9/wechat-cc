@@ -646,8 +646,10 @@ Bun.serve({
               .filter(s => !chatFilter || (s.chat_id || '_legacy') === chatFilter)
               .map(s => ({
                 alias: s.project,
+                session_id: `sess-${s.id}`,
                 last_used_at: new Date(s.created_at).toISOString(),
                 summary: null,
+                summary_updated_at: null,
               }))
             return Response.json({ result: { projects } })
           }

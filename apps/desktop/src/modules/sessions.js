@@ -669,7 +669,7 @@ function renderSessionsSidebar(chats) {
   }
   sidebar.hidden = false
   sidebar.innerHTML = chats.map(c => {
-    const name = c.user_name || c.chat_id.split("@")[0]
+    const name = c.user_name || (c.chat_id === '_legacy' ? '（早期会话）' : c.chat_id.split("@")[0])
     const active = c.chat_id === selectedChatId ? ' active' : ''
     return `<button class="contact-row${active}" data-action="select-chat" data-chat="${escapeHtml(c.chat_id)}">
       <span class="name">${escapeHtml(name)}</span>

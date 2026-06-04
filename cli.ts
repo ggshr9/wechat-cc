@@ -102,11 +102,13 @@ Usage:
                         Mark an observation archived (user "ignore").
   wechat-cc milestones list <chat-id> [--json]
                         Per-chat milestones (id-deduped).
-  wechat-cc sessions list-projects [--json]
+  wechat-cc sessions list-chats [--json]
+                        Contacts (chats) that have sessions.
+  wechat-cc sessions list-projects [--chat <chat_id>] [--json]
                         Project sessions with cached summaries.
-  wechat-cc sessions read-jsonl <alias> [--json]
+  wechat-cc sessions read-jsonl <alias> [--chat <chat_id>] [--json]
                         Read all turns from the alias's session jsonl.
-  wechat-cc sessions delete <alias> [--json]
+  wechat-cc sessions delete <alias> [--chat <chat_id>] [--json]
                         Remove the sessions.json entry (jsonl on disk untouched).
   wechat-cc sessions search <query> [--limit N] [--json]
                         Naive case-insensitive substring search across
