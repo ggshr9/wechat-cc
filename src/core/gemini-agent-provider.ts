@@ -182,10 +182,22 @@ export function createGeminiAgentProvider(opts: GeminiAgentProviderOptions): Age
   return {
     async spawn(_project: AgentProject, ctx: SpawnContext): Promise<AgentSession> {
       const conn = await opts.mcpConnect()
-      const mcpTools = await conn.listTools()
-      const functionDeclarations = mcpToolsToFunctionDeclarations(mcpTools)
-      const gate: ToolGate = opts.buildGate ? opts.buildGate(ctx) : async () => ({ allow: true })
+      let functionDeclarations: GeminiFunctionDeclaration[]
+      let gate: ToolGate
+      try {
+        const mcpTools = await conn.listTools()
+        functionDeclarations = mcpToolsToFunctionDeclarations(mcpTools)
+        gate = opts.buildGate ? opts.buildGate(ctx) : async () => ({ allow: true })
+      } catch (err) {
+        // Setup failed after the MCP client connected — close it so we don't
+        // orphan the stdio subprocess, then propagate.
+        await conn.close().catch(() => {})
+        throw err
+      }
       const sessionId = ctx.resumeSessionId ?? newSessionId()
+      // Fresh history each spawn — resumeSessionId is reused only as an event
+      // label since GEMINI_CAPABILITIES.supportsResume = false (no history
+      // serialisation yet).
       const history: unknown[] = []
 
       return {
