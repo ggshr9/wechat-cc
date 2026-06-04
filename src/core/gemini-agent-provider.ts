@@ -38,3 +38,28 @@ export function tierProfileToGeminiSdkOpts(_tp: TierProfile, permissionMode: Per
  *  from effectivePolicy + askUser; tests inject a fake. */
 export type ToolGateDecision = { allow: true } | { allow: false; message: string }
 export type ToolGate = (toolName: string, input: Record<string, unknown>) => Promise<ToolGateDecision>
+
+export interface McpToolDef {
+  name: string
+  description?: string
+  inputSchema?: Record<string, unknown>
+}
+export interface GeminiFunctionDeclaration {
+  name: string
+  description?: string
+  parameters?: Record<string, unknown>
+}
+
+/** Strip JSON-Schema meta keys Gemini rejects ($schema, additionalProperties)
+ *  and reshape an MCP tool's inputSchema into a Gemini FunctionDeclaration. */
+export function mcpToolsToFunctionDeclarations(tools: McpToolDef[]): GeminiFunctionDeclaration[] {
+  return tools.map(t => {
+    const fn: GeminiFunctionDeclaration = { name: t.name }
+    if (t.description) fn.description = t.description
+    if (t.inputSchema) {
+      const { $schema: _s, additionalProperties: _a, ...rest } = t.inputSchema as Record<string, unknown>
+      fn.parameters = rest
+    }
+    return fn
+  })
+}
