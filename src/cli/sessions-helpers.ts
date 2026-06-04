@@ -65,3 +65,21 @@ export function filterProjectsByChat(records: SessionRecord[], chatId: string): 
     summary_updated_at: r.summary_updated_at ?? null,
   }))
 }
+
+/**
+ * The session row to read for (alias[, chatId]). With chatId, scope to that
+ * contact; without it, the legacy "most-recent across all chats" pick.
+ */
+export function pickReadRecord(
+  records: SessionRecord[],
+  alias: string,
+  chatId: string | undefined,
+): SessionRecord | null {
+  let best: SessionRecord | null = null
+  for (const r of records) {
+    if (r.alias !== alias) continue
+    if (chatId && r.chat_id !== chatId) continue
+    if (!best || Date.parse(r.last_used_at) > Date.parse(best.last_used_at)) best = r
+  }
+  return best
+}

@@ -525,6 +525,7 @@ const sessionsReadJsonlCmd = defineCommand({
   meta: { name: 'read-jsonl', description: "Read all turns from the alias's session jsonl" },
   args: {
     alias: { type: 'positional', required: true, description: 'Session alias', valueHint: 'alias' },
+    chat: { type: 'string', description: 'Scope to one contact (chat_id)' },
     json: { type: 'boolean', description: 'JSON envelope' },
     'out-file': { type: 'string', description: 'Write JSON to a sibling file (avoids pipe buffer truncation in compiled binaries)' },
   },
@@ -537,11 +538,9 @@ const sessionsReadJsonlCmd = defineCommand({
     // v0.6 Task 8: the store is now triple-keyed (alias, provider, chatId).
     // The legacy CLI takes only an alias — pick the most-recent row across
     // every provider/chat under that alias so existing scripts keep working.
-    let rec: ReturnType<typeof store.get> = null
-    for (const r of Object.values(store.all())) {
-      if (r.alias !== args.alias) continue
-      if (!rec || Date.parse(r.last_used_at) > Date.parse(rec.last_used_at)) rec = r
-    }
+    // With --chat, scope to that contact's row instead.
+    const { pickReadRecord } = await import('./src/cli/sessions-helpers')
+    const rec = pickReadRecord(Object.values(store.all()), args.alias, args.chat)
     if (!rec) {
       // v0.5.11 — error paths must also honour --out-file. Without this,
       // the dashboard's via-file shim path reads ENOENT instead of an
