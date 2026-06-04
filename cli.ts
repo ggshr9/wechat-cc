@@ -14,7 +14,7 @@ import {
   AccountRemoveOutput, DaemonKillOutput, ProviderShowOutput,
   MemoryListOutput, MemoryReadOutput, MemoryWriteOutput,
   EventsListOutput, ObservationsListOutput, ObservationsArchiveOutput, MilestonesListOutput,
-  SessionsListProjectsOutput, SessionsReadJsonlOutput, SessionsDeleteOutput, SessionsSearchOutput,
+  SessionsListProjectsOutput, SessionsListChatsOutput, SessionsReadJsonlOutput, SessionsDeleteOutput, SessionsSearchOutput,
   DemoSeedOutput, DemoUnseedOutput, ReplyOutput,
   UpdateCheckOutput, UpdateApplyOutput, ConversationsListOutput,
   GuardStatusOutput, GuardEnableOutput, GuardDisableOutput,
@@ -626,9 +626,36 @@ const sessionsSearchCmd = defineCommand({
   },
 })
 
+const sessionsListChatsCmd = defineCommand({
+  meta: { name: 'list-chats', description: 'Contacts (chats) that have sessions, for the pane sidebar' },
+  args: {
+    json: { type: 'boolean', description: 'JSON envelope' },
+    'out-file': { type: 'string', description: 'Write JSON to a sibling file (avoids pipe truncation in compiled binaries)' },
+  },
+  async run({ args }) {
+    const outFile = args['out-file']
+    const { makeSessionStore } = await import('./src/core/session-store')
+    const { makeConversationStore } = await import('./src/core/conversation-store')
+    const { openWechatDb } = await import('./src/lib/db')
+    const { groupChats } = await import('./src/cli/sessions-helpers')
+    const db = openWechatDb(STATE_DIR)
+    const store = makeSessionStore(db, { migrateFromFile: join(STATE_DIR, 'sessions.json') })
+    const convs = makeConversationStore(db)
+    const records = Object.values(store.all())
+    const chats = groupChats(
+      records,
+      id => convs.getIdentity(id)?.last_user_name ?? null,
+      id => convs.getIdentity(id)?.account_id ?? null,
+    )
+    if (args.json) emitJson(SessionsListChatsOutput.parse({ ok: true, chats }), outFile)
+    else console.log(chats.map(c => `${c.user_name ?? c.chat_id} (${c.session_count})`).join('\n'))
+  },
+})
+
 const sessionsCmd = defineCommand({
   meta: { name: 'sessions', description: 'Per-project session inspection (resume-id store + jsonl readers)' },
   subCommands: {
+    'list-chats': sessionsListChatsCmd,
     'list-projects': sessionsListProjectsCmd,
     'read-jsonl': sessionsReadJsonlCmd,
     delete: sessionsDeleteCmd,
