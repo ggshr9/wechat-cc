@@ -1577,12 +1577,49 @@ input { font: inherit; color: inherit; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.dialogue-topic-main {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+.dialogue-topic.has-tags {
+  min-height: 74px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  align-items: start;
+}
+.dialogue-topic-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.dialogue-topic-tags span {
+  min-height: 20px;
+  padding: 1px 8px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #eadfcd;
+  border-radius: 5px;
+  background: rgba(255, 252, 247, .75);
+  color: #d79020;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.dialogue-topic.has-tags.is-active .dialogue-topic-tags span {
+  background: #fffaf1;
+  border-color: #e5d4b9;
+}
 .dialogue-progress {
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: #edf5ff;
-  color: var(--dialogue-blue);
-  font-size: 12px;
+  min-height: 20px;
+  padding: 1px 8px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #eadfcd;
+  border-radius: 5px;
+  background: rgba(255, 252, 247, .75);
+  color: #d79020;
+  font-size: 11px;
   white-space: nowrap;
 }
 .dialogue-locked-row {
@@ -1618,17 +1655,23 @@ input { font: inherit; color: inherit; }
   background: #fff;
   box-shadow: 0 12px 35px rgba(73, 75, 120, .06);
 }
+.dialogue-document-head {
+  position: relative;
+  z-index: 15;
+  padding: 28px 36px 18px;
+  background: #fff;
+  border-bottom: 1px solid rgba(0, 0, 0, .04);
+}
 .dialogue-scroll {
   flex: 1;
   min-height: 0;
-  padding: 22px 36px 40px;
+  padding: 0 36px 40px;
   overflow-y: auto;
   scrollbar-width: none;
 }
 .dialogue-scroll::-webkit-scrollbar { display: none; }
 .dialogue-action-pill {
   width: fit-content;
-  margin-bottom: 24px;
   padding: 7px 13px;
   display: inline-flex;
   align-items: center;
@@ -1687,9 +1730,9 @@ input { font: inherit; color: inherit; }
   font-size: 14px;
   font-weight: 500;
 }
-.dialogue-turn p { margin: 0 0 12px; color: #4d4d54; font-size: 14px; line-height: 1.75; }
+.dialogue-turn p { margin: 0 0 12px; color: #4d4d54; font-size: 13px; line-height: 1.75; }
 .dialogue-turn ol { margin: 0 0 14px; padding-left: 20px; color: #4d4d54; }
-.dialogue-turn li { margin-bottom: 4px; font-size: 14px; line-height: 1.7; }
+.dialogue-turn li { margin-bottom: 4px; font-size: 13px; line-height: 1.7; }
 .dialogue-turn strong { color: #303035; font-weight: 700; }
 .privacy-submit {
   height: 36px;

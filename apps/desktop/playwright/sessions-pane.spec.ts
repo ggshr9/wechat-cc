@@ -14,6 +14,14 @@ test('dialogue page reuses the existing dashboard navigation and document layout
   await expect(page.locator('.dialogue-document')).toContainText('介绍一下 AI FDE 这个岗位')
 })
 
+test('knowledge topics show key-content tags for quick scanning', async ({ page, shimUrl, shim }) => {
+  await bootAndOpenDialogue(page, shimUrl, shim)
+
+  const knowledge = page.locator('.dialogue-group').filter({ hasText: '知识' })
+  await expect(knowledge.locator('.dialogue-topic.has-tags')).toHaveCount(3)
+  await expect(knowledge.locator('.dialogue-topic-tags')).toContainText(['figma插件skill', 'UI设计', '设计规范'])
+})
+
 test('stories and emotions stay hidden until the shared privacy password is entered', async ({ page, shimUrl, shim }) => {
   await bootAndOpenDialogue(page, shimUrl, shim)
   await expect(page.locator('.dialogue-locked-row')).toHaveCount(2)

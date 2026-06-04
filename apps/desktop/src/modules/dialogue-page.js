@@ -20,9 +20,9 @@ const groups = [
     label: "知识",
     icon: "knowledge.svg",
     items: [
-      ["利用Figma插件优化设计流程", ""],
-      ["无障碍设计在现代UI中的重要性", ""],
-      ["跨团队协作中的设计规范建立", ""],
+      ["利用Figma插件优化设计流程", "", ["figma", "插件", "skill"]],
+      ["无障碍设计在现代UI中的重要性", "", ["UI", "设计"]],
+      ["跨团队协作中的设计规范建立", "", ["设计规范"]],
     ],
   },
   {
@@ -65,10 +65,6 @@ function avatar(type) {
 
 function conversationHtml() {
   return `
-    <div class="dialogue-action-pill">
-      <img src="${DIALOGUE_ASSET_ROOT}/document.svg" alt="" />
-      <span>整理成知识文档</span>
-    </div>
     <div class="dialogue-turn">
       ${avatar("user")}
       <div class="dialogue-turn-body">
@@ -127,9 +123,12 @@ function renderGroups(root, unlocked, selected) {
           <span>${lockIcon()}</span>
           <span>内容已锁定</span>
         </button>`
-      : group.items.map(([title, progress]) => `
-          <button class="dialogue-topic${title === selected ? " is-active" : ""}" data-topic="${title}">
-            <span class="dialogue-topic-title">${title}</span>
+      : group.items.map(([title, progress, tags]) => `
+          <button class="dialogue-topic${tags?.length ? " has-tags" : ""}${title === selected ? " is-active" : ""}" data-topic="${title}">
+            <span class="dialogue-topic-main">
+              <span class="dialogue-topic-title">${title}</span>
+              ${tags?.length ? `<span class="dialogue-topic-tags">${tags.map(tag => `<span>${tag}</span>`).join("")}</span>` : ""}
+            </span>
             ${progress ? `<span class="dialogue-progress">进度${progress}</span>` : ""}
           </button>
         `).join("")
@@ -155,6 +154,12 @@ export function initDialoguePage() {
     </aside>
     <section class="dialogue-stage">
       <div class="dialogue-document">
+        <div class="dialogue-document-head">
+          <div class="dialogue-action-pill">
+            <img src="${DIALOGUE_ASSET_ROOT}/document.svg" alt="" />
+            <span>整理成知识文档</span>
+          </div>
+        </div>
         <div class="dialogue-scroll">${conversationHtml()}</div>
       </div>
     </section>
