@@ -606,7 +606,8 @@ function wireEvents() {
     if (action === 'open-project') {
       if (!alias) return
       const turnIdx = actionEl.dataset.turnIndex
-      const opts = turnIdx !== undefined ? { focusTurn: Number(turnIdx) } : {}
+      const chatId = document.getElementById("sessions-body")?.dataset.chat || ''
+      const opts = turnIdx !== undefined ? { focusTurn: Number(turnIdx), chatId } : { chatId }
       openProjectDetail(deps, alias, opts)
     }
   })

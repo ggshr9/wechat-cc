@@ -439,15 +439,21 @@ export function toggleFavorite(alias) {
   localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify([...favs]))
 }
 
-/** @param {Deps} deps */
-export async function loadSessionsList(deps) {
+/**
+ * @param {Deps} deps
+ * @param {string|null} [chatId]
+ */
+export async function loadSessionsList(deps, chatId = selectedChatId) {
   const body = document.getElementById("sessions-body")
   const empty = document.getElementById("sessions-empty")
   const meta = document.getElementById("sessions-meta")
   if (!body) return
+  // Record the active chat on the list container so the open-project click
+  // (wired in main.js) can pass it to openProjectDetail without cross-module state.
+  body.dataset.chat = chatId || ''
 
   try {
-    const resp = /** @type {SessionsListProjects} */ (await deps.invoke("wechat_cli_json", { args: ["sessions", "list-projects", "--json"] }))
+    const resp = /** @type {SessionsListProjects} */ (await deps.invoke("wechat_cli_json", { args: withChat(["sessions", "list-projects", "--json"], chatId) }))
     const projects = resp.projects || []
 
     if (projects.length === 0) {
@@ -645,6 +651,9 @@ export function closeProjectDetail() {
 // near-real-time feel when the WeChat user sends a new message. Clears
 // itself when the detail closes, the user changes panes, or a new
 // detail is opened (which will start its own timer).
+/** @type {string|null} — the contact whose sessions are shown. null = unfiltered (zero/one contact). */
+let selectedChatId = null
+
 /** @type {ReturnType<typeof setInterval>|null} */
 let detailAutoTimer = null
 
