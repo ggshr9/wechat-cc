@@ -121,5 +121,7 @@ describe('runDispatchLoop', () => {
     })
     const summary = await collectTurn(events)
     expect(summary.result || summary.error).toBeTruthy()
+    // multi-dispatch safety: capped history must end on a model turn, not user
+    expect((history.at(-1) as any).role).toBe('model')
   })
 })

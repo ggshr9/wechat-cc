@@ -70,7 +70,7 @@ export interface GenaiPort {
     model: string
     contents: unknown[]
     config?: { systemInstruction?: string; tools?: Array<{ functionDeclarations: GeminiFunctionDeclaration[] }> }
-  }): Promise<{ text: string; functionCalls?: Array<{ name: string; args: Record<string, unknown> }> }>
+  }): Promise<{ text?: string; functionCalls?: Array<{ name: string; args: Record<string, unknown> }> }>
 }
 /** Minimal MCP surface the loop needs (real: @modelcontextprotocol/sdk Client). */
 export interface McpPort {
@@ -137,6 +137,10 @@ export async function* runDispatchLoop(args: DispatchLoopArgs): AsyncIterable<Ag
       args.history.push({ role: 'user', parts: responseParts })
 
       if (rounds >= cap) {
+        // Cap hit mid-tool-loop: history currently ends on a user(functionResponse)
+        // turn. Append a synthetic model turn so the NEXT dispatch (this session
+        // reuses `history`) doesn't produce two consecutive user turns.
+        args.history.push({ role: 'model', parts: [{ text: '[max tool rounds reached]' }] })
         yield { kind: 'result', sessionId: args.sessionId, numTurns: rounds, durationMs: Date.now() - startMs }
         return
       }
