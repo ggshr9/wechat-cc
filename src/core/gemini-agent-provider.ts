@@ -11,7 +11,7 @@
  * Decoupled from bootstrap via injected genai / mcpConnect / buildGate so the
  * loop is unit-testable. See docs/superpowers/specs/2026-06-04-gemini-provider-design.md.
  */
-import type { AgentEvent, PermissionMode, ProviderCapabilities } from './agent-provider'
+import type { AgentEvent, AgentProject, AgentProvider, AgentSession, PermissionMode, ProviderCapabilities, SpawnContext } from './agent-provider'
 import type { TierProfile } from './user-tier'
 
 /** RFC 05 Phase 2 capability declaration. We OWN the loop → per-tool gating is
@@ -147,5 +147,72 @@ export async function* runDispatchLoop(args: DispatchLoopArgs): AsyncIterable<Ag
     }
   } catch (err) {
     yield { kind: 'error', message: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/** The real genai client shape we use (ai.models.generateContent). */
+export interface GenaiClient {
+  models: GenaiPort
+}
+/** A connected MCP session: list tools + call them + close. The factory's
+ *  mcpConnect builds this (real: @modelcontextprotocol/sdk Client over stdio). */
+export interface McpConnection {
+  listTools(): Promise<McpToolDef[]>
+  callTool(name: string, args: Record<string, unknown>): Promise<{ content: unknown[]; isError?: boolean }>
+  close(): Promise<void>
+}
+
+export interface GeminiAgentProviderOptions {
+  genai: GenaiClient
+  model: string
+  systemInstruction: string
+  /** Connect an MCP client to the daemon's wechat server (per spawn). */
+  mcpConnect: () => Promise<McpConnection>
+  /** Build the per-spawn tool gate from the SpawnContext. Phase B supplies the
+   *  real one (effectivePolicy + askUser); default = allow-all (e.g. delegate). */
+  buildGate?: (ctx: SpawnContext) => ToolGate
+  /** cheapEval model (default = the dispatch model). */
+  cheapModel?: string
+}
+
+export function createGeminiAgentProvider(opts: GeminiAgentProviderOptions): AgentProvider {
+  let uuidCounter = 0
+  const newSessionId = () => `gemini-${Date.now()}-${++uuidCounter}`
+
+  return {
+    async spawn(_project: AgentProject, ctx: SpawnContext): Promise<AgentSession> {
+      const conn = await opts.mcpConnect()
+      const mcpTools = await conn.listTools()
+      const functionDeclarations = mcpToolsToFunctionDeclarations(mcpTools)
+      const gate: ToolGate = opts.buildGate ? opts.buildGate(ctx) : async () => ({ allow: true })
+      const sessionId = ctx.resumeSessionId ?? newSessionId()
+      const history: unknown[] = []
+
+      return {
+        dispatch(text: string) {
+          return runDispatchLoop({
+            genai: opts.genai.models,
+            mcp: { callTool: (n, a) => conn.callTool(n, a) },
+            gate,
+            model: opts.model,
+            systemInstruction: opts.systemInstruction,
+            functionDeclarations,
+            history,
+            sessionId,
+            userText: text,
+          })
+        },
+        async close() {
+          try { await conn.close() } catch { /* swallow */ }
+        },
+      }
+    },
+    async cheapEval(prompt: string): Promise<string> {
+      const resp = await opts.genai.models.generateContent({
+        model: opts.cheapModel ?? opts.model,
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      })
+      return resp.text ?? ''
+    },
   }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { GEMINI_CAPABILITIES, tierProfileToGeminiSdkOpts, mcpToolsToFunctionDeclarations, runDispatchLoop, type GenaiPort, type McpPort } from './gemini-agent-provider'
+import { GEMINI_CAPABILITIES, tierProfileToGeminiSdkOpts, mcpToolsToFunctionDeclarations, runDispatchLoop, createGeminiAgentProvider, type GenaiPort, type McpPort } from './gemini-agent-provider'
 import { TIER_PROFILES } from './user-tier'
 import { collectTurn } from './agent-provider'
 
@@ -123,5 +123,42 @@ describe('runDispatchLoop', () => {
     expect(summary.result || summary.error).toBeTruthy()
     // multi-dispatch safety: capped history must end on a model turn, not user
     expect((history.at(-1) as any).role).toBe('model')
+  })
+})
+
+describe('createGeminiAgentProvider', () => {
+  function deps(genaiResponses: any[], gate = async () => ({ allow: true as const })) {
+    const calls: string[] = []
+    const provider = createGeminiAgentProvider({
+      genai: (() => { let i = 0; return { models: { async generateContent() { return genaiResponses[i++] ?? { text: '' } } } } })() as any,
+      model: 'gemini-flash-latest',
+      systemInstruction: 'you are gemini',
+      async mcpConnect() {
+        return {
+          listTools: async () => ([{ name: 'reply', description: 'r', inputSchema: { type: 'object', properties: {} } }]),
+          callTool: async (name: string, _args: any) => { calls.push(name); return { content: [{ type: 'text', text: '{}' }] } },
+          close: async () => {},
+        }
+      },
+      buildGate: () => gate as any,
+    })
+    return { provider, calls }
+  }
+
+  it('spawn → dispatch streams text + result; uses listTools as functionDeclarations', async () => {
+    const { provider } = deps([{ text: 'hi from gemini' }])
+    const session = await provider.spawn({ alias: 'P', path: '/p' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: 'c1' })
+    const out: any[] = []
+    for await (const e of session.dispatch('hello')) out.push(e)
+    expect(out.some(e => e.kind === 'text' && e.text === 'hi from gemini')).toBe(true)
+    expect(out.at(-1).kind).toBe('result')
+    await session.close()
+  })
+
+  it('cheapEval does a no-tools generateContent and returns text', async () => {
+    const { provider } = deps([{ text: 'cheap answer' }])
+    expect(provider.cheapEval).toBeDefined()
+    const ans = await provider.cheapEval!('rate 1-10')
+    expect(ans).toBe('cheap answer')
   })
 })
