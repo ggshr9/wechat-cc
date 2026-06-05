@@ -124,7 +124,14 @@ export async function* runDispatchLoop(args: DispatchLoopArgs): AsyncIterable<Ag
 
       if (text) yield { kind: 'text', text }
 
-      if (calls.length === 0) {
+      // Drop any nameless functionCall (genai's FunctionCall.name is optional) — it
+      // has no executable target. validCalls drives BOTH the model turn's functionCall
+      // parts AND the functionResponse parts below, keeping the two counts equal:
+      // Gemini 400s if a turn's functionResponse count != its functionCall count.
+      const validCalls = calls.filter(c => c.name)
+
+      if (validCalls.length === 0) {
+        // No executable calls (none at all, or only nameless/malformed ones).
         // ALWAYS push a model turn (even on empty text) to preserve user/model
         // alternation — Flash routinely returns empty text after a tool chain.
         args.history.push({ role: 'model', parts: text ? [{ text }] : [{ text: '' }] })
@@ -132,36 +139,32 @@ export async function* runDispatchLoop(args: DispatchLoopArgs): AsyncIterable<Ag
         return
       }
 
-      // Model turn: keep the assistant's reasoning text alongside the calls, and
-      // drop any nameless functionCall (the genai FunctionCall.name is optional).
+      // Model turn: keep the assistant's reasoning text alongside the named calls.
       args.history.push({ role: 'model', parts: [
         ...(text ? [{ text }] : []),
-        ...calls.filter(c => c.name).map(c => ({ functionCall: { name: c.name, args: c.args ?? {} } })),
+        ...validCalls.map(c => ({ functionCall: { name: c.name, args: c.args ?? {} } })),
       ] })
 
       const responseParts: unknown[] = []
-      for (const call of calls) {
-        if (!call.name) {
-          responseParts.push({ functionResponse: { name: '', response: { error: 'model returned a function call with no name' } } })
-          continue
-        }
+      for (const call of validCalls) {
+        const name = call.name!
         const callArgs = call.args ?? {}
-        yield { kind: 'tool_call', server: 'wechat', tool: call.name }
-        const decision = await args.gate(call.name, callArgs)
+        yield { kind: 'tool_call', server: 'wechat', tool: name }
+        const decision = await args.gate(name, callArgs)
         if (!decision.allow) {
-          responseParts.push({ functionResponse: { name: call.name, response: { error: decision.message } } })
+          responseParts.push({ functionResponse: { name, response: { error: decision.message } } })
           continue
         }
         try {
-          const result = await args.mcp.callTool(call.name, callArgs)
+          const result = await args.mcp.callTool(name, callArgs)
           if (result.isError) {
             const msg = result.content.map((c: any) => c?.text ?? '').join(' ') || 'tool reported an error'
-            responseParts.push({ functionResponse: { name: call.name, response: { error: msg } } })
+            responseParts.push({ functionResponse: { name, response: { error: msg } } })
           } else {
-            responseParts.push({ functionResponse: { name: call.name, response: { content: result.content } } })
+            responseParts.push({ functionResponse: { name, response: { content: result.content } } })
           }
         } catch (err) {
-          responseParts.push({ functionResponse: { name: call.name, response: { error: err instanceof Error ? err.message : String(err) } } })
+          responseParts.push({ functionResponse: { name, response: { error: err instanceof Error ? err.message : String(err) } } })
         }
       }
       args.history.push({ role: 'user', parts: responseParts })
@@ -230,12 +233,13 @@ const GEMINI_RELAY_TIMEOUT_MS = 120_000
  *  gemini→permission-relay→capability-matrix→gemini import cycle) djb2-ish hash →
  *  5-char base36. The relay hash MUST be exactly 5 alphanumeric chars so the admin's
  *  WeChat reply matches pending-permissions.ts's PERMISSION_REPLY_RE
- *  (/^([yn])\s+([A-Za-z0-9]{5})$/i) — anything else can NEVER be approved. A long,
- *  unique input string yields a uint32 ≥ 36^4 ≈ 1.7M, so base36 is reliably 5+ chars. */
+ *  (/^([yn])\s+([A-Za-z0-9]{5})$/i) — anything else can NEVER be approved. A base36
+ *  uint32 is 1–7 chars, so padStart guarantees the low end and slice(-5) the high end:
+ *  the result is ALWAYS exactly 5 alphanumeric chars. */
 function shortHash(s: string): string {
   let h = 0
   for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0
-  return (h >>> 0).toString(36).slice(0, 5)
+  return (h >>> 0).toString(36).padStart(5, '0').slice(-5)
 }
 
 /** Build the per-spawn tool gate. Replicates makeCanUseTool's allow/relay/deny

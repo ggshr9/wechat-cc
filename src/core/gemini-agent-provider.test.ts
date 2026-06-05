@@ -152,21 +152,42 @@ describe('runDispatchLoop', () => {
     expect((history.at(-1) as any).role).toBe('model')
   })
 
-  it('skips a functionCall with no name (synthesizes an error, no crash)', async () => {
+  it('nameless-only functionCall batch: no execution, terminal, alternation preserved', async () => {
     const history: any[] = []
     let executed = false
     const events = runDispatchLoop({
-      genai: fakeGenai([{ functionCalls: [{ name: undefined as any, args: undefined as any }] }, { text: 'done' }]),
+      genai: fakeGenai([{ functionCalls: [{ name: undefined as any, args: undefined as any }] }]),
       mcp: { async callTool() { executed = true; return { content: [] } } },
       gate: async () => ({ allow: true }),
       model: 'm', systemInstruction: 's', functionDeclarations: [], history, sessionId: 's', userText: 'x',
     })
-    const evs: any[] = []
-    for await (const e of events) evs.push(e)
+    for await (const _ of events) { /* drain */ }
     expect(executed).toBe(false)
-    expect(evs.some(e => e.kind === 'text' && e.text === 'done')).toBe(true)
-    // the functionResponse for the nameless call is an error
-    expect(JSON.stringify(history)).toContain('no name')
+    // No executable call → terminal: history ends on a model turn (no crash, no
+    // dangling user turn, no empty functionResponse turn that would 400 on Gemini).
+    expect((history.at(-1) as any).role).toBe('model')
+    expect(history.length).toBe(2)
+  })
+
+  it('mixed named+nameless batch: drops nameless, keeps functionCall/functionResponse counts equal', async () => {
+    const history: any[] = []
+    const events = runDispatchLoop({
+      genai: fakeGenai([
+        { functionCalls: [{ name: 'reply', args: { x: 1 } }, { name: undefined as any, args: undefined as any }] },
+        { text: 'done' },
+      ]),
+      mcp: { async callTool() { return { content: [{ type: 'text', text: 'ok' }] } } },
+      gate: async () => ({ allow: true }),
+      model: 'm', systemInstruction: 's', functionDeclarations: [{ name: 'reply' }], history, sessionId: 's', userText: 'x',
+    })
+    for await (const _ of events) { /* drain */ }
+    // Gemini 400s unless a turn's functionResponse count == its functionCall count.
+    const modelCalls = (history[1] as any).parts.filter((p: any) => p.functionCall)
+    const userResponses = (history[2] as any).parts.filter((p: any) => p.functionResponse)
+    expect(modelCalls.length).toBe(1)
+    expect(userResponses.length).toBe(1)
+    expect(modelCalls[0].functionCall.name).toBe('reply')
+    expect(userResponses[0].functionResponse.name).toBe('reply')
   })
 
   it('MCP isError result becomes an error functionResponse (model sees failure)', async () => {
