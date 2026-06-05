@@ -61,6 +61,7 @@ export function makeModeCommands(deps: ModeCommandsDeps): ModeCommands {
     if (lower === 'cc') return 'claude'
     if (lower === 'codex') return 'codex'
     if (lower === 'cursor') return 'cursor'
+    if (lower === 'gemini') return 'gemini'
     return null
   }
 
@@ -75,6 +76,7 @@ export function makeModeCommands(deps: ModeCommandsDeps): ModeCommands {
     if (primary === 'claude') return 'codex'
     if (primary === 'codex') return 'claude'
     if (primary === 'cursor') return 'claude'
+    if (primary === 'gemini') return 'claude'
     return null
   }
 
@@ -186,7 +188,7 @@ export function makeModeCommands(deps: ModeCommandsDeps): ModeCommands {
           const peerSlash = peerMatch[1]!
           const peerProviderId = isProviderCommand(peerSlash)
           if (!peerProviderId) {
-            await reply(msg.chatId, `❓ 未知的 peer \`${peerSlash}\`。支持: cc, codex, cursor`)
+            await reply(msg.chatId, `❓ 未知的 peer \`${peerSlash}\`。支持: cc, codex, cursor, gemini`)
             return true
           }
           if (peerProviderId === providerId) {
@@ -242,7 +244,7 @@ export function makeModeCommands(deps: ModeCommandsDeps): ModeCommands {
           `已注册 provider: ${deps.registry.list().join(', ')}`,
           `默认: ${deps.defaultProviderId}`,
           '',
-          '可用命令: /cc /codex /cursor /both [p...] /chat [p...] /cc + codex /codex + cc /solo /stop /mode',
+          '可用命令: /cc /codex /cursor /gemini /both [p...] /chat [p...] /cc + codex /codex + cc /solo /stop /mode',
         ]
         await reply(msg.chatId, lines.join('\n'))
         return true

@@ -394,6 +394,39 @@ describe('makeModeCommands', () => {
     expect(sentMessages[0]?.[1]).toContain('claude')
   })
 
+  it('/gemini switches mode to solo+gemini', async () => {
+    const { cmds, set, sentMessages } = setup({ registered: ['claude', 'codex', 'gemini'] })
+    const consumed = await cmds.handle(inbound('/gemini'))
+    expect(consumed).toBe(true)
+    expect(set).toHaveBeenCalledWith('chat-1', { kind: 'solo', provider: 'gemini' })
+    expect(sentMessages[0]?.[1]).toContain('Gemini')
+    expect(sentMessages[0]?.[1]).toContain('solo')
+  })
+
+  it('/gemini rejects with helpful message when gemini is not registered', async () => {
+    const { cmds, set, sentMessages } = setup({ registered: ['claude', 'codex'] })
+    const consumed = await cmds.handle(inbound('/gemini'))
+    expect(consumed).toBe(true)
+    expect(set).not.toHaveBeenCalled()
+    expect(sentMessages[0]?.[1]).toContain('未注册')
+    expect(sentMessages[0]?.[1]).toContain('gemini')
+  })
+
+  it('/gemini + cc succeeds — gemini session is wired to delegate_claude', async () => {
+    const { cmds, set } = setup({ registered: ['claude', 'codex', 'gemini'] })
+    const consumed = await cmds.handle(inbound('/gemini + cc'))
+    expect(consumed).toBe(true)
+    expect(set).toHaveBeenCalledWith('chat-1', { kind: 'primary_tool', primary: 'gemini' })
+  })
+
+  it('/gemini + codex is rejected — gemini session has delegate_claude (not delegate_codex)', async () => {
+    const { cmds, set, sentMessages } = setup({ registered: ['claude', 'codex', 'gemini'] })
+    const consumed = await cmds.handle(inbound('/gemini + codex'))
+    expect(consumed).toBe(true)
+    expect(set).not.toHaveBeenCalled()
+    expect(sentMessages[0]?.[1]).toContain('claude')
+  })
+
   it('returns false for unrecognised slash words like /health (lets admin-commands handle)', async () => {
     const { cmds, sendMessage } = setup()
     const consumed = await cmds.handle(inbound('/health'))
