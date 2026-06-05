@@ -226,14 +226,33 @@ function gateEffectivePolicy(
 
 const GEMINI_RELAY_TIMEOUT_MS = 120_000
 
+/** Inlined (NOT imported from permission-relay.ts, which would recreate the
+ *  gemini→permission-relay→capability-matrix→gemini import cycle) djb2-ish hash →
+ *  5-char base36. The relay hash MUST be exactly 5 alphanumeric chars so the admin's
+ *  WeChat reply matches pending-permissions.ts's PERMISSION_REPLY_RE
+ *  (/^([yn])\s+([A-Za-z0-9]{5})$/i) — anything else can NEVER be approved. A long,
+ *  unique input string yields a uint32 ≥ 36^4 ≈ 1.7M, so base36 is reliably 5+ chars. */
+function shortHash(s: string): string {
+  let h = 0
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0
+  return (h >>> 0).toString(36).slice(0, 5)
+}
+
 /** Build the per-spawn tool gate. Replicates makeCanUseTool's allow/relay/deny
  *  but returns ToolGateDecision and normalizes the wechat MCP server's BARE tool
  *  names (`reply`) into the `mcp__wechat__reply` form classifyToolUse expects. */
 export function makeGeminiToolGate(deps: GeminiGateDeps): (ctx: SpawnContext) => ToolGate {
-  let relaySeq = 0
   return (ctx: SpawnContext): ToolGate => {
+    // Per-spawn relay counter — each session owns its own, so hashes don't couple
+    // across chats. Combined with chatId in the hash input → unique per relay.
+    let relaySeq = 0
     return async (toolName, input) => {
       if (ctx.permissionMode === 'dangerously') return { allow: true }
+      // Reject any bare name already containing '__': prefixing `mcp__wechat__`
+      // onto it (e.g. `mcp__wechat__shell` → `mcp__wechat__mcp__wechat__shell`)
+      // yields a malformed name classifyToolUse may misclassify as unknown→allow,
+      // letting a gated tool slip through. Deny outright.
+      if (toolName.includes('__')) return { allow: false, message: `invalid tool name '${toolName}'` }
       const kind = classifyToolUse(`mcp__wechat__${toolName}`, input)
       const base = deps.lookupBase(deps.modeFor(ctx.chatId), ctx.permissionMode)
       const decision = gateEffectivePolicy(base, ctx.tierProfile, kind)
@@ -241,7 +260,9 @@ export function makeGeminiToolGate(deps: GeminiGateDeps): (ctx: SpawnContext) =>
       if (decision === 'deny') return { allow: false, message: `tool '${toolName}' (${kind}) not allowed for this tier` }
       const admin = deps.adminFor(ctx.chatId)
       if (!admin) return { allow: false, message: 'no admin configured to approve permission requests' }
-      const answer = await deps.askUser(admin, `Gemini wants to run ${toolName}`, `${toolName}-${++relaySeq}`, GEMINI_RELAY_TIMEOUT_MS)
+      const seq = ++relaySeq
+      const hash = shortHash(`${ctx.chatId}:${toolName}:${seq}`)
+      const answer = await deps.askUser(admin, `Gemini wants to run ${toolName}`, hash, GEMINI_RELAY_TIMEOUT_MS)
       if (answer === 'allow') return { allow: true }
       return { allow: false, message: answer === 'timeout' ? 'no reply in time; denied' : 'denied by operator' }
     }
@@ -254,9 +275,10 @@ export interface GeminiAgentProviderOptions {
   systemInstruction: string
   /** Connect an MCP client to the daemon's wechat server (per spawn). */
   mcpConnect: () => Promise<McpConnection>
-  /** Build the per-spawn tool gate from the SpawnContext. Phase B supplies the
-   *  real one (effectivePolicy + askUser); default = allow-all (e.g. delegate). */
-  buildGate?: (ctx: SpawnContext) => ToolGate
+  /** Build the per-spawn tool gate from the SpawnContext. REQUIRED — a missing
+   *  gate would silently allow every tool (security footgun). Bootstrap supplies
+   *  the real one (effectivePolicy + askUser); tests inject a fake. */
+  buildGate: (ctx: SpawnContext) => ToolGate
   /** cheapEval model (default = the dispatch model). */
   cheapModel?: string
 }
@@ -304,7 +326,7 @@ export function createGeminiAgentProvider(opts: GeminiAgentProviderOptions): Age
       try {
         const mcpTools = await conn.listTools()
         functionDeclarations = mcpToolsToFunctionDeclarations(mcpTools)
-        gate = opts.buildGate ? opts.buildGate(ctx) : async () => ({ allow: true })
+        gate = opts.buildGate(ctx)
       } catch (err) {
         // Setup failed after the MCP client connected — close it so we don't
         // orphan the stdio subprocess, then propagate.

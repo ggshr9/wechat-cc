@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { GEMINI_CAPABILITIES, tierProfileToGeminiSdkOpts, mcpToolsToFunctionDeclarations, runDispatchLoop, createGeminiAgentProvider, makeGeminiToolGate, type GenaiPort, type McpPort, type GeminiGateDeps } from './gemini-agent-provider'
+import { GEMINI_CAPABILITIES, tierProfileToGeminiSdkOpts, mcpToolsToFunctionDeclarations, runDispatchLoop, createGeminiAgentProvider, makeGeminiToolGate, type GenaiPort, type McpPort, type GeminiGateDeps, type ToolGate } from './gemini-agent-provider'
 import { TIER_PROFILES } from './user-tier'
 import { collectTurn } from './agent-provider'
 
@@ -199,7 +199,7 @@ describe('runDispatchLoop', () => {
 })
 
 describe('createGeminiAgentProvider', () => {
-  function deps(genaiResponses: any[], gate = async () => ({ allow: true as const })) {
+  function deps(genaiResponses: any[], gate: ToolGate = async () => ({ allow: true })) {
     const calls: string[] = []
     const provider = createGeminiAgentProvider({
       genai: (() => { let i = 0; return { models: { async generateContent() { return genaiResponses[i++] ?? { text: '' } } } } })() as any,
@@ -232,6 +232,18 @@ describe('createGeminiAgentProvider', () => {
     expect(provider.cheapEval).toBeDefined()
     const ans = await provider.cheapEval!('rate 1-10')
     expect(ans).toBe('cheap answer')
+  })
+
+  // Bug 9b: buildGate is required and ALWAYS consulted — a deny-all gate must block execution.
+  it('spawn always consults buildGate — a deny-all gate blocks tool execution', async () => {
+    const { provider, calls } = deps(
+      [{ functionCalls: [{ name: 'reply', args: {} }] }, { text: 'ok' }],
+      async () => ({ allow: false, message: 'denied' }),
+    )
+    const session = await provider.spawn({ alias: 'P', path: '/p' }, { tierProfile: TIER_PROFILES.guest, permissionMode: 'strict', chatId: 'c' })
+    for await (const _ of session.dispatch('hi')) { /* drain */ }
+    await session.close()
+    expect(calls).toEqual([])
   })
 })
 
@@ -268,5 +280,43 @@ describe('makeGeminiToolGate', () => {
   it('relay but no admin ⇒ deny', async () => {
     const gate = makeGeminiToolGate(deps({ adminFor: () => null }))(ctx('trusted'))
     expect((await gate('a2a_send', {})).allow).toBe(false)
+  })
+
+  // Bug 7: the relay hash MUST match pending-permissions.ts's PERMISSION_REPLY_RE
+  // (replicated here — that module is not exported; source: src/daemon/pending-permissions.ts).
+  const PERMISSION_REPLY_RE = /^([yn])\s+([A-Za-z0-9]{5})$/i
+  it('relay hash matches the admin permission-reply regex (5 alphanumeric)', async () => {
+    let capturedHash = ''
+    const gate = makeGeminiToolGate(deps({
+      askUser: async (_admin, _prompt, hash) => { capturedHash = hash; return 'deny' },
+    }))(ctx('trusted'))
+    await gate('a2a_send', { agent_id: 'x', text: 't' })
+    // The reply the admin must type is `y ${capturedHash}` — it has to match the regex:
+    expect(`y ${capturedHash}`).toMatch(PERMISSION_REPLY_RE)
+    expect(capturedHash).toMatch(/^[A-Za-z0-9]{5}$/)
+  })
+
+  // Bug 8: a toolName already containing "__" must be denied (double-prefix bypass guard).
+  it('denies a toolName containing "__" (double-prefix bypass guard)', async () => {
+    const gate = makeGeminiToolGate(deps())(ctx('guest'))
+    expect((await gate('mcp__wechat__shell', {})).allow).toBe(false)
+    expect((await gate('wechat__reply', {})).allow).toBe(false)
+  })
+
+  // Bug 9a: relaySeq is per-spawn — two spawns from the same factory get independent
+  // counters, so hashes don't collide-by-coupling across sessions. Each spawn's first
+  // relay uses its own seq; combined with chatId the hash is unique per relay.
+  it('relaySeq is per-spawn (independent counters across spawns)', async () => {
+    const hashes: string[] = []
+    const factory = makeGeminiToolGate(deps({
+      askUser: async (_admin, _prompt, hash) => { hashes.push(hash); return 'deny' },
+    }))
+    const gateA = factory(ctx('trusted'))
+    const gateB = factory(ctx('trusted'))
+    await gateA('a2a_send', {})
+    await gateB('a2a_send', {})
+    // Both first-relays of their respective spawns; each is a valid 5-char hash.
+    expect(hashes).toHaveLength(2)
+    for (const h of hashes) expect(h).toMatch(/^[A-Za-z0-9]{5}$/)
   })
 })
