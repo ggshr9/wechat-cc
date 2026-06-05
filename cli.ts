@@ -839,7 +839,7 @@ const providerSetCmd = defineCommand({
 })
 
 const providerCmd = defineCommand({
-  meta: { name: 'provider', description: 'Agent provider config (claude / codex)' },
+  meta: { name: 'provider', description: 'Agent provider config (claude / codex / cursor / gemini)' },
   subCommands: {
     show: providerShowCmd,
     set: providerSetCmd,

@@ -269,7 +269,7 @@ export function analyzeDoctor(deps: DoctorDeps): DoctorReport {
         // doctor output left-to-right will fix that, then re-run to see
         // the SDK leg).
         fix: !geminiProbe.apiKeySet
-          ? { action: 'export GEMINI_API_KEY=<your-key>' }
+          ? { action: 'export GEMINI_API_KEY=<your-key>  (or GOOGLE_API_KEY)' }
           : { command: 'bun add @google/genai' },
       }),
     },
@@ -310,7 +310,7 @@ export function analyzeDoctor(deps: DoctorDeps): DoctorReport {
                 : { command: 'bun add @cursor/sdk' })
             : agent.provider === 'gemini'
               ? (!geminiProbe.apiKeySet
-                  ? { action: 'export GEMINI_API_KEY=<your-key>' }
+                  ? { action: 'export GEMINI_API_KEY=<your-key>  (or GOOGLE_API_KEY)' }
                   : { command: 'bun add @google/genai' })
               : { command: 'npm install -g @anthropic-ai/claude-code', link: 'https://docs.claude.com/en/docs/claude-code/install' },
       }),
@@ -589,6 +589,7 @@ export function printDoctor(report: DoctorReport): void {
   console.log(`claude: ${fmtWithVersion(report.checks.claude)}`)
   console.log(`codex: ${fmtWithVersion(report.checks.codex)}`)
   console.log(`cursor: ${fmtCursor(report.checks.cursor)}`)
+  console.log(`gemini: ${fmtCursor(report.checks.gemini)}`)
   console.log(`provider: ${report.checks.provider.provider}${report.checks.provider.model ? ` (${report.checks.provider.model})` : ''}`)
   console.log(`accounts: ${report.checks.accounts.count}`)
   console.log(`access: ${report.checks.access.dmPolicy}, allowed=${report.checks.access.allowFromCount}`)
