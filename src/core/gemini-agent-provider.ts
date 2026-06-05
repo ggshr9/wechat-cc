@@ -228,6 +228,37 @@ export interface GeminiAgentProviderOptions {
   cheapModel?: string
 }
 
+/** Stdio launch spec for an MCP server (matches bootstrap's McpStdioSpec). */
+export interface GeminiMcpStdioSpec {
+  command: string
+  args: string[]
+  env: Record<string, string>
+}
+
+/** Connect an MCP client over stdio to a server (the daemon's wechat server) and
+ *  adapt it to the McpConnection the provider consumes. Dynamic-imports the MCP
+ *  SDK so this module stays import-light. */
+export async function connectWechatMcp(spec: GeminiMcpStdioSpec): Promise<McpConnection> {
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js')
+  const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js')
+  const transport = new StdioClientTransport({ command: spec.command, args: spec.args, env: spec.env })
+  const client = new Client({ name: 'wechat-cc-gemini', version: '0.0.0' }, { capabilities: {} })
+  await client.connect(transport)
+  return {
+    async listTools() {
+      const res = await client.listTools()
+      return res.tools as McpToolDef[]
+    },
+    async callTool(name, args) {
+      const res = await client.callTool({ name, arguments: args })
+      return { content: (res.content as unknown[]) ?? [], isError: res.isError as boolean | undefined }
+    },
+    async close() {
+      try { await client.close() } catch { /* swallow */ }
+    },
+  }
+}
+
 export function createGeminiAgentProvider(opts: GeminiAgentProviderOptions): AgentProvider {
   let uuidCounter = 0
   const newSessionId = () => `gemini-${Date.now()}-${++uuidCounter}`
