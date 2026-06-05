@@ -43,7 +43,7 @@ import { makeSessionStore } from '../../core/session-store'
 import type { Db } from '../../lib/db'
 import { homedir } from 'node:os'
 import { loadAgentConfig } from '../../lib/agent-config'
-import type { AgentConfig } from '../../lib/agent-config'
+import type { AgentConfig, AgentProviderKind } from '../../lib/agent-config'
 import { loadAccess, setSessionInvalidator, type Access } from '../../lib/access'
 import { loadCompanionConfig, type CompanionConfig } from '../companion/config'
 import { wechatStdioMcpSpec, delegateStdioMcpSpec, type McpStdioSpec } from './mcp-specs'
@@ -168,7 +168,7 @@ export interface BootstrapDeps {
    */
   fallbackProject?: () => { alias: string; path: string } | null
   dangerouslySkipPermissions?: boolean
-  agentProviderKind?: 'claude' | 'codex'
+  agentProviderKind?: AgentProviderKind
   /**
    * When provided, the standalone wechat-mcp stdio MCP server (RFC 03 §5)
    * is registered with both providers as `wechat`. The MCP child

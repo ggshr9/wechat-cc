@@ -97,9 +97,10 @@ export interface TestDaemonOpts {
    * no file written — bootstrap's loadAgentConfig falls back to defaults.
    */
   agentConfig?: {
-    provider?: 'claude' | 'codex' | 'cursor'
+    provider?: 'claude' | 'codex' | 'cursor' | 'gemini'
     model?: string
     cursorModel?: string
+    geminiModel?: string
     dangerouslySkipPermissions?: boolean
     autoStart?: boolean
     closeStopsDaemon?: boolean
@@ -167,6 +168,7 @@ export async function startTestDaemon(opts: TestDaemonOpts = {}): Promise<Daemon
       provider: opts.agentConfig.provider ?? 'claude',
       ...(opts.agentConfig.model ? { model: opts.agentConfig.model } : {}),
       ...(opts.agentConfig.cursorModel ? { cursorModel: opts.agentConfig.cursorModel } : {}),
+      ...(opts.agentConfig.geminiModel ? { geminiModel: opts.agentConfig.geminiModel } : {}),
       dangerouslySkipPermissions: opts.agentConfig.dangerouslySkipPermissions ?? false,
       autoStart: opts.agentConfig.autoStart ?? false,
       closeStopsDaemon: opts.agentConfig.closeStopsDaemon ?? false,

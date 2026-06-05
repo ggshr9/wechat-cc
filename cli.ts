@@ -823,18 +823,27 @@ const providerSetCmd = defineCommand({
     const next = {
       ...existing,
       provider,
-      ...(args.model !== undefined ? { model: args.model } : {}),
+      ...(args.model !== undefined
+        ? provider === 'gemini' ? { geminiModel: args.model }
+        : provider === 'cursor' ? { cursorModel: args.model }
+        : { model: args.model }
+        : {}),
       ...(unattended !== undefined ? { dangerouslySkipPermissions: unattended } : {}),
       ...(autoStart !== undefined ? { autoStart } : {}),
       ...(closeStopsDaemon !== undefined ? { closeStopsDaemon } : {}),
     }
-    // When switching provider, drop a stale model from the previous provider
-    // unless the caller explicitly set one.
+    // When switching provider, drop stale provider-specific model fields
+    // from the previous provider unless the caller explicitly set one.
     if (existing.provider !== provider && args.model === undefined) {
       delete (next as Partial<typeof next>).model
+      delete (next as Partial<typeof next>).cursorModel
+      delete (next as Partial<typeof next>).geminiModel
     }
     saveAgentConfig(STATE_DIR, next)
-    console.log(`provider set: ${next.provider}${next.model ? ` (${next.model})` : ''} unattended=${next.dangerouslySkipPermissions} autoStart=${next.autoStart} closeStopsDaemon=${next.closeStopsDaemon}`)
+    const modelLabel = provider === 'gemini' ? next.geminiModel
+      : provider === 'cursor' ? next.cursorModel
+      : next.model
+    console.log(`provider set: ${next.provider}${modelLabel ? ` (${modelLabel})` : ''} unattended=${next.dangerouslySkipPermissions} autoStart=${next.autoStart} closeStopsDaemon=${next.closeStopsDaemon}`)
   },
 })
 
