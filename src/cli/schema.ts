@@ -59,7 +59,7 @@ const ServiceSnapshot = z.object({
   kind: ServiceKind,
 })
 
-const AgentProviderKind = z.enum(['claude', 'codex', 'cursor'])
+const AgentProviderKind = z.enum(['claude', 'codex', 'cursor', 'gemini'])
 
 const DmPolicy = z.enum(['allowlist', 'disabled'])
 
@@ -185,6 +185,7 @@ const AgentConfigSchema = z.object({
   provider: AgentProviderKind,
   model: z.string().optional(),
   cursorModel: z.string().optional(),
+  geminiModel: z.string().optional(),
   dangerouslySkipPermissions: z.boolean(),
   autoStart: z.boolean(),
   closeStopsDaemon: z.boolean(),

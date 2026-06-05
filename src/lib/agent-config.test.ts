@@ -227,6 +227,16 @@ describe('agent-config — A2A fields', () => {
   })
 })
 
+describe('loadAgentConfig — gemini provider', () => {
+  it('resolves provider=gemini + geminiModel', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentcfg-'))
+    writeFileSync(join(dir, 'agent-config.json'), JSON.stringify({ provider: 'gemini', geminiModel: 'gemini-flash-latest' }))
+    const cfg = loadAgentConfig(dir)
+    expect(cfg.provider).toBe('gemini')
+    expect(cfg.geminiModel).toBe('gemini-flash-latest')
+  })
+})
+
 describe('loadAgentConfig — cursor provider', () => {
   it('accepts provider="cursor" with cursorModel', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agent-cfg-'))
