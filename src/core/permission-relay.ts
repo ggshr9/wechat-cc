@@ -105,7 +105,9 @@ export function makeCanUseTool(deps: PermissionRelayDeps): CanUseTool {
 function shortHash(s: string): string {
   let h = 0
   for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0
-  return (h >>> 0).toString(36).slice(0, 5)
+  // A base36 uint32 is 1–7 chars; the admin reply regex (pending-permissions.ts
+  // PERMISSION_REPLY_RE) requires EXACTLY 5. padStart guards <5, slice(-5) guards >5.
+  return (h >>> 0).toString(36).padStart(5, '0').slice(-5)
 }
 
 function compactInput(input: Record<string, unknown>): string {

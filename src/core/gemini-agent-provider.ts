@@ -51,16 +51,28 @@ export interface GeminiFunctionDeclaration {
   parameters?: Record<string, unknown>
 }
 
+/** Recursively drop JSON-Schema meta keys Gemini rejects ($schema,
+ *  additionalProperties) from a schema node and all nested objects/arrays. */
+function stripSchemaMeta(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(stripSchemaMeta)
+  if (node && typeof node === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (k === '$schema' || k === 'additionalProperties') continue
+      out[k] = stripSchemaMeta(v)
+    }
+    return out
+  }
+  return node
+}
+
 /** Strip JSON-Schema meta keys Gemini rejects ($schema, additionalProperties)
  *  and reshape an MCP tool's inputSchema into a Gemini FunctionDeclaration. */
 export function mcpToolsToFunctionDeclarations(tools: McpToolDef[]): GeminiFunctionDeclaration[] {
   return tools.map(t => {
     const fn: GeminiFunctionDeclaration = { name: t.name }
     if (t.description) fn.description = t.description
-    if (t.inputSchema) {
-      const { $schema: _s, additionalProperties: _a, ...rest } = t.inputSchema as Record<string, unknown>
-      fn.parameters = rest
-    }
+    if (t.inputSchema) fn.parameters = stripSchemaMeta(t.inputSchema) as Record<string, unknown>
     return fn
   })
 }
@@ -71,7 +83,7 @@ export interface GenaiPort {
     model: string
     contents: unknown[]
     config?: { systemInstruction?: string; tools?: Array<{ functionDeclarations: GeminiFunctionDeclaration[] }> }
-  }): Promise<{ text?: string; functionCalls?: Array<{ name: string; args: Record<string, unknown> }> }>
+  }): Promise<{ text?: string; functionCalls?: Array<{ name?: string; args?: Record<string, unknown> }> }>
 }
 /** Minimal MCP surface the loop needs (real: @modelcontextprotocol/sdk Client). */
 export interface McpPort {
@@ -112,27 +124,47 @@ export async function* runDispatchLoop(args: DispatchLoopArgs): AsyncIterable<Ag
 
       if (text) yield { kind: 'text', text }
 
-      if (calls.length === 0) {
-        if (text) args.history.push({ role: 'model', parts: [{ text }] })
+      // Drop any nameless functionCall (genai's FunctionCall.name is optional) — it
+      // has no executable target. validCalls drives BOTH the model turn's functionCall
+      // parts AND the functionResponse parts below, keeping the two counts equal:
+      // Gemini 400s if a turn's functionResponse count != its functionCall count.
+      const validCalls = calls.filter(c => c.name)
+
+      if (validCalls.length === 0) {
+        // No executable calls (none at all, or only nameless/malformed ones).
+        // ALWAYS push a model turn (even on empty text) to preserve user/model
+        // alternation — Flash routinely returns empty text after a tool chain.
+        args.history.push({ role: 'model', parts: text ? [{ text }] : [{ text: '' }] })
         yield { kind: 'result', sessionId: args.sessionId, numTurns: rounds, durationMs: Date.now() - startMs }
         return
       }
 
-      args.history.push({ role: 'model', parts: calls.map(c => ({ functionCall: { name: c.name, args: c.args } })) })
+      // Model turn: keep the assistant's reasoning text alongside the named calls.
+      args.history.push({ role: 'model', parts: [
+        ...(text ? [{ text }] : []),
+        ...validCalls.map(c => ({ functionCall: { name: c.name, args: c.args ?? {} } })),
+      ] })
 
       const responseParts: unknown[] = []
-      for (const call of calls) {
-        yield { kind: 'tool_call', server: 'wechat', tool: call.name }
-        const decision = await args.gate(call.name, call.args)
+      for (const call of validCalls) {
+        const name = call.name!
+        const callArgs = call.args ?? {}
+        yield { kind: 'tool_call', server: 'wechat', tool: name }
+        const decision = await args.gate(name, callArgs)
         if (!decision.allow) {
-          responseParts.push({ functionResponse: { name: call.name, response: { error: decision.message } } })
+          responseParts.push({ functionResponse: { name, response: { error: decision.message } } })
           continue
         }
         try {
-          const result = await args.mcp.callTool(call.name, call.args)
-          responseParts.push({ functionResponse: { name: call.name, response: { content: result.content } } })
+          const result = await args.mcp.callTool(name, callArgs)
+          if (result.isError) {
+            const msg = result.content.map((c: any) => c?.text ?? '').join(' ') || 'tool reported an error'
+            responseParts.push({ functionResponse: { name, response: { error: msg } } })
+          } else {
+            responseParts.push({ functionResponse: { name, response: { content: result.content } } })
+          }
         } catch (err) {
-          responseParts.push({ functionResponse: { name: call.name, response: { error: err instanceof Error ? err.message : String(err) } } })
+          responseParts.push({ functionResponse: { name, response: { error: err instanceof Error ? err.message : String(err) } } })
         }
       }
       args.history.push({ role: 'user', parts: responseParts })
@@ -147,6 +179,10 @@ export async function* runDispatchLoop(args: DispatchLoopArgs): AsyncIterable<Ag
       }
     }
   } catch (err) {
+    // Preserve alternation: if we error out with the loop's user turn still
+    // trailing (e.g. generateContent threw), roll it back so the next dispatch
+    // doesn't push a second consecutive user turn → API 400.
+    if ((args.history.at(-1) as any)?.role === 'user') args.history.pop()
     yield { kind: 'error', message: err instanceof Error ? err.message : String(err) }
   }
 }
@@ -193,14 +229,34 @@ function gateEffectivePolicy(
 
 const GEMINI_RELAY_TIMEOUT_MS = 120_000
 
+/** Inlined (NOT imported from permission-relay.ts, which would recreate the
+ *  gemini→permission-relay→capability-matrix→gemini import cycle) djb2-ish hash →
+ *  5-char base36. The relay hash MUST be exactly 5 alphanumeric chars so the admin's
+ *  WeChat reply matches pending-permissions.ts's PERMISSION_REPLY_RE
+ *  (/^([yn])\s+([A-Za-z0-9]{5})$/i) — anything else can NEVER be approved. A base36
+ *  uint32 is 1–7 chars, so padStart guarantees the low end and slice(-5) the high end:
+ *  the result is ALWAYS exactly 5 alphanumeric chars. */
+function shortHash(s: string): string {
+  let h = 0
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0
+  return (h >>> 0).toString(36).padStart(5, '0').slice(-5)
+}
+
 /** Build the per-spawn tool gate. Replicates makeCanUseTool's allow/relay/deny
  *  but returns ToolGateDecision and normalizes the wechat MCP server's BARE tool
  *  names (`reply`) into the `mcp__wechat__reply` form classifyToolUse expects. */
 export function makeGeminiToolGate(deps: GeminiGateDeps): (ctx: SpawnContext) => ToolGate {
-  let relaySeq = 0
   return (ctx: SpawnContext): ToolGate => {
+    // Per-spawn relay counter — each session owns its own, so hashes don't couple
+    // across chats. Combined with chatId in the hash input → unique per relay.
+    let relaySeq = 0
     return async (toolName, input) => {
       if (ctx.permissionMode === 'dangerously') return { allow: true }
+      // Reject any bare name already containing '__': prefixing `mcp__wechat__`
+      // onto it (e.g. `mcp__wechat__shell` → `mcp__wechat__mcp__wechat__shell`)
+      // yields a malformed name classifyToolUse may misclassify as unknown→allow,
+      // letting a gated tool slip through. Deny outright.
+      if (toolName.includes('__')) return { allow: false, message: `invalid tool name '${toolName}'` }
       const kind = classifyToolUse(`mcp__wechat__${toolName}`, input)
       const base = deps.lookupBase(deps.modeFor(ctx.chatId), ctx.permissionMode)
       const decision = gateEffectivePolicy(base, ctx.tierProfile, kind)
@@ -208,7 +264,9 @@ export function makeGeminiToolGate(deps: GeminiGateDeps): (ctx: SpawnContext) =>
       if (decision === 'deny') return { allow: false, message: `tool '${toolName}' (${kind}) not allowed for this tier` }
       const admin = deps.adminFor(ctx.chatId)
       if (!admin) return { allow: false, message: 'no admin configured to approve permission requests' }
-      const answer = await deps.askUser(admin, `Gemini wants to run ${toolName}`, `${toolName}-${++relaySeq}`, GEMINI_RELAY_TIMEOUT_MS)
+      const seq = ++relaySeq
+      const hash = shortHash(`${ctx.chatId}:${toolName}:${seq}`)
+      const answer = await deps.askUser(admin, `Gemini wants to run ${toolName}`, hash, GEMINI_RELAY_TIMEOUT_MS)
       if (answer === 'allow') return { allow: true }
       return { allow: false, message: answer === 'timeout' ? 'no reply in time; denied' : 'denied by operator' }
     }
@@ -221,9 +279,10 @@ export interface GeminiAgentProviderOptions {
   systemInstruction: string
   /** Connect an MCP client to the daemon's wechat server (per spawn). */
   mcpConnect: () => Promise<McpConnection>
-  /** Build the per-spawn tool gate from the SpawnContext. Phase B supplies the
-   *  real one (effectivePolicy + askUser); default = allow-all (e.g. delegate). */
-  buildGate?: (ctx: SpawnContext) => ToolGate
+  /** Build the per-spawn tool gate from the SpawnContext. REQUIRED — a missing
+   *  gate would silently allow every tool (security footgun). Bootstrap supplies
+   *  the real one (effectivePolicy + askUser); tests inject a fake. */
+  buildGate: (ctx: SpawnContext) => ToolGate
   /** cheapEval model (default = the dispatch model). */
   cheapModel?: string
 }
@@ -271,7 +330,7 @@ export function createGeminiAgentProvider(opts: GeminiAgentProviderOptions): Age
       try {
         const mcpTools = await conn.listTools()
         functionDeclarations = mcpToolsToFunctionDeclarations(mcpTools)
-        gate = opts.buildGate ? opts.buildGate(ctx) : async () => ({ allow: true })
+        gate = opts.buildGate(ctx)
       } catch (err) {
         // Setup failed after the MCP client connected — close it so we don't
         // orphan the stdio subprocess, then propagate.

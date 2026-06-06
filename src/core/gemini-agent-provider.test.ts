@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { GEMINI_CAPABILITIES, tierProfileToGeminiSdkOpts, mcpToolsToFunctionDeclarations, runDispatchLoop, createGeminiAgentProvider, makeGeminiToolGate, type GenaiPort, type McpPort, type GeminiGateDeps } from './gemini-agent-provider'
+import { GEMINI_CAPABILITIES, tierProfileToGeminiSdkOpts, mcpToolsToFunctionDeclarations, runDispatchLoop, createGeminiAgentProvider, makeGeminiToolGate, type GenaiPort, type McpPort, type GeminiGateDeps, type ToolGate } from './gemini-agent-provider'
 import { TIER_PROFILES } from './user-tier'
 import { collectTurn } from './agent-provider'
 
@@ -31,6 +31,14 @@ describe('mcpToolsToFunctionDeclarations', () => {
       { name: 'reply', description: 'reply to the user', parameters: { type: 'object', properties: { chat_id: { type: 'string' }, text: { type: 'string' } }, required: ['chat_id', 'text'] } },
       { name: 'ping', description: 'ping', parameters: { type: 'object', properties: {} } },
     ])
+  })
+
+  it('strips $schema/additionalProperties recursively (nested objects too)', () => {
+    const fns = mcpToolsToFunctionDeclarations([{ name: 't', inputSchema: { type: 'object', additionalProperties: false, properties: { addr: { type: 'object', additionalProperties: false, properties: { city: { type: 'string' } } } }, $schema: 'x' } }])
+    const json = JSON.stringify(fns[0]!.parameters)
+    expect(json).not.toContain('additionalProperties')
+    expect(json).not.toContain('$schema')
+    expect(json).toContain('city')
   })
 })
 
@@ -124,10 +132,95 @@ describe('runDispatchLoop', () => {
     // multi-dispatch safety: capped history must end on a model turn, not user
     expect((history.at(-1) as any).role).toBe('model')
   })
+
+  it('on generateContent error: yields error AND leaves history alternating (no trailing user turn)', async () => {
+    const history: any[] = [{ role: 'user', parts: [{ text: 'prev' }] }, { role: 'model', parts: [{ text: 'ok' }] }]
+    const genai: GenaiPort = { async generateContent() { throw new Error('503 overloaded') } }
+    const events = runDispatchLoop({ genai, mcp: fakeMcp({}), gate: async () => ({ allow: true }), model: 'm', systemInstruction: 's', functionDeclarations: [], history, sessionId: 's', userText: 'hi' })
+    const evs: any[] = []
+    for await (const e of events) evs.push(e)
+    expect(evs.some(e => e.kind === 'error')).toBe(true)
+    // the user turn we pushed for 'hi' must be rolled back (history ends on a model turn)
+    expect((history.at(-1) as any).role).toBe('model')
+  })
+
+  it('empty-text terminal response still pushes a model turn (alternation preserved)', async () => {
+    const history: any[] = []
+    const events = runDispatchLoop({ genai: fakeGenai([{ text: '' }]), mcp: fakeMcp({}), gate: async () => ({ allow: true }), model: 'm', systemInstruction: 's', functionDeclarations: [], history, sessionId: 's', userText: 'hi' })
+    await collectTurn(events)
+    expect(history.length).toBe(2)
+    expect((history.at(-1) as any).role).toBe('model')
+  })
+
+  it('nameless-only functionCall batch: no execution, terminal, alternation preserved', async () => {
+    const history: any[] = []
+    let executed = false
+    const events = runDispatchLoop({
+      genai: fakeGenai([{ functionCalls: [{ name: undefined as any, args: undefined as any }] }]),
+      mcp: { async callTool() { executed = true; return { content: [] } } },
+      gate: async () => ({ allow: true }),
+      model: 'm', systemInstruction: 's', functionDeclarations: [], history, sessionId: 's', userText: 'x',
+    })
+    for await (const _ of events) { /* drain */ }
+    expect(executed).toBe(false)
+    // No executable call → terminal: history ends on a model turn (no crash, no
+    // dangling user turn, no empty functionResponse turn that would 400 on Gemini).
+    expect((history.at(-1) as any).role).toBe('model')
+    expect(history.length).toBe(2)
+  })
+
+  it('mixed named+nameless batch: drops nameless, keeps functionCall/functionResponse counts equal', async () => {
+    const history: any[] = []
+    const events = runDispatchLoop({
+      genai: fakeGenai([
+        { functionCalls: [{ name: 'reply', args: { x: 1 } }, { name: undefined as any, args: undefined as any }] },
+        { text: 'done' },
+      ]),
+      mcp: { async callTool() { return { content: [{ type: 'text', text: 'ok' }] } } },
+      gate: async () => ({ allow: true }),
+      model: 'm', systemInstruction: 's', functionDeclarations: [{ name: 'reply' }], history, sessionId: 's', userText: 'x',
+    })
+    for await (const _ of events) { /* drain */ }
+    // Gemini 400s unless a turn's functionResponse count == its functionCall count.
+    const modelCalls = (history[1] as any).parts.filter((p: any) => p.functionCall)
+    const userResponses = (history[2] as any).parts.filter((p: any) => p.functionResponse)
+    expect(modelCalls.length).toBe(1)
+    expect(userResponses.length).toBe(1)
+    expect(modelCalls[0].functionCall.name).toBe('reply')
+    expect(userResponses[0].functionResponse.name).toBe('reply')
+  })
+
+  it('MCP isError result becomes an error functionResponse (model sees failure)', async () => {
+    const history: any[] = []
+    const events = runDispatchLoop({
+      genai: fakeGenai([{ functionCalls: [{ name: 'reply', args: { x: 1 } }] }, { text: 'ack' }]),
+      mcp: { async callTool() { return { content: [{ type: 'text', text: 'chat not found' }], isError: true } } },
+      gate: async () => ({ allow: true }),
+      model: 'm', systemInstruction: 's', functionDeclarations: [{ name: 'reply' }], history, sessionId: 's', userText: 'x',
+    })
+    for await (const _ of events) { /* drain */ }
+    const fr = (history[2] as any).parts[0].functionResponse
+    expect(fr.response.error).toBeDefined()
+    expect(fr.response.content).toBeUndefined()
+  })
+
+  it('keeps assistant text in the model turn when text accompanies a functionCall', async () => {
+    const history: any[] = []
+    const events = runDispatchLoop({
+      genai: fakeGenai([{ text: 'let me check', functionCalls: [{ name: 'reply', args: {} }] }, { text: 'done' }]),
+      mcp: fakeMcp({}), gate: async () => ({ allow: true }),
+      model: 'm', systemInstruction: 's', functionDeclarations: [{ name: 'reply' }], history, sessionId: 's', userText: 'x',
+    })
+    for await (const _ of events) { /* drain */ }
+    const modelTurn = history[1] as any
+    expect(modelTurn.role).toBe('model')
+    expect(modelTurn.parts.some((p: any) => p.text === 'let me check')).toBe(true)
+    expect(modelTurn.parts.some((p: any) => p.functionCall?.name === 'reply')).toBe(true)
+  })
 })
 
 describe('createGeminiAgentProvider', () => {
-  function deps(genaiResponses: any[], gate = async () => ({ allow: true as const })) {
+  function deps(genaiResponses: any[], gate: ToolGate = async () => ({ allow: true })) {
     const calls: string[] = []
     const provider = createGeminiAgentProvider({
       genai: (() => { let i = 0; return { models: { async generateContent() { return genaiResponses[i++] ?? { text: '' } } } } })() as any,
@@ -160,6 +253,18 @@ describe('createGeminiAgentProvider', () => {
     expect(provider.cheapEval).toBeDefined()
     const ans = await provider.cheapEval!('rate 1-10')
     expect(ans).toBe('cheap answer')
+  })
+
+  // Bug 9b: buildGate is required and ALWAYS consulted — a deny-all gate must block execution.
+  it('spawn always consults buildGate — a deny-all gate blocks tool execution', async () => {
+    const { provider, calls } = deps(
+      [{ functionCalls: [{ name: 'reply', args: {} }] }, { text: 'ok' }],
+      async () => ({ allow: false, message: 'denied' }),
+    )
+    const session = await provider.spawn({ alias: 'P', path: '/p' }, { tierProfile: TIER_PROFILES.guest, permissionMode: 'strict', chatId: 'c' })
+    for await (const _ of session.dispatch('hi')) { /* drain */ }
+    await session.close()
+    expect(calls).toEqual([])
   })
 })
 
@@ -196,5 +301,43 @@ describe('makeGeminiToolGate', () => {
   it('relay but no admin ⇒ deny', async () => {
     const gate = makeGeminiToolGate(deps({ adminFor: () => null }))(ctx('trusted'))
     expect((await gate('a2a_send', {})).allow).toBe(false)
+  })
+
+  // Bug 7: the relay hash MUST match pending-permissions.ts's PERMISSION_REPLY_RE
+  // (replicated here — that module is not exported; source: src/daemon/pending-permissions.ts).
+  const PERMISSION_REPLY_RE = /^([yn])\s+([A-Za-z0-9]{5})$/i
+  it('relay hash matches the admin permission-reply regex (5 alphanumeric)', async () => {
+    let capturedHash = ''
+    const gate = makeGeminiToolGate(deps({
+      askUser: async (_admin, _prompt, hash) => { capturedHash = hash; return 'deny' },
+    }))(ctx('trusted'))
+    await gate('a2a_send', { agent_id: 'x', text: 't' })
+    // The reply the admin must type is `y ${capturedHash}` — it has to match the regex:
+    expect(`y ${capturedHash}`).toMatch(PERMISSION_REPLY_RE)
+    expect(capturedHash).toMatch(/^[A-Za-z0-9]{5}$/)
+  })
+
+  // Bug 8: a toolName already containing "__" must be denied (double-prefix bypass guard).
+  it('denies a toolName containing "__" (double-prefix bypass guard)', async () => {
+    const gate = makeGeminiToolGate(deps())(ctx('guest'))
+    expect((await gate('mcp__wechat__shell', {})).allow).toBe(false)
+    expect((await gate('wechat__reply', {})).allow).toBe(false)
+  })
+
+  // Bug 9a: relaySeq is per-spawn — two spawns from the same factory get independent
+  // counters, so hashes don't collide-by-coupling across sessions. Each spawn's first
+  // relay uses its own seq; combined with chatId the hash is unique per relay.
+  it('relaySeq is per-spawn (independent counters across spawns)', async () => {
+    const hashes: string[] = []
+    const factory = makeGeminiToolGate(deps({
+      askUser: async (_admin, _prompt, hash) => { hashes.push(hash); return 'deny' },
+    }))
+    const gateA = factory(ctx('trusted'))
+    const gateB = factory(ctx('trusted'))
+    await gateA('a2a_send', {})
+    await gateB('a2a_send', {})
+    // Both first-relays of their respective spawns; each is a valid 5-char hash.
+    expect(hashes).toHaveLength(2)
+    for (const h of hashes) expect(h).toMatch(/^[A-Za-z0-9]{5}$/)
   })
 })
