@@ -10,6 +10,7 @@ import { buildServicePlan, isServiceInstalled, type ServiceKind } from './servic
 import { compiledBinaryPath, compiledRepoRoot, isCompiledBundle } from '../lib/runtime-info'
 import { openWechatDb } from '../lib/db'
 import { makeConversationStore } from '../core/conversation-store'
+import { makeSessionStateStore } from '../daemon/session-state'
 import { makeHeartbeatStore } from '../daemon/connection-heartbeat'
 
 export interface BoundAccount {
@@ -466,24 +467,27 @@ export function defaultServiceSnapshot(stateDir: string): ServiceSnapshot {
 }
 
 export function readExpiredBots(stateDir: string): ExpiredBotEntry[] {
+  // PR7 migrated session state from session-state.json to the SQLite
+  // session_state table (the JSON is now session-state.json.migrated).
+  // Read from SQLite via SessionStateStore — the same store the passive
+  // poll loop (transport.ts errcode=-14) and the connection probe write to.
+  let db: ReturnType<typeof openWechatDb> | undefined
   try {
-    const parsed = JSON.parse(readFileSync(join(stateDir, 'session-state.json'), 'utf8')) as {
-      bots?: Record<string, { status?: string; first_seen_expired_at?: string; last_reason?: string }>
-    }
-    if (!parsed.bots) return []
-    const out: ExpiredBotEntry[] = []
-    for (const [botId, entry] of Object.entries(parsed.bots)) {
-      if (entry?.status !== 'expired' || typeof entry.first_seen_expired_at !== 'string') continue
-      out.push({
-        botId,
-        firstSeenExpiredAt: entry.first_seen_expired_at,
-        ...(typeof entry.last_reason === 'string' ? { lastReason: entry.last_reason } : {}),
-      })
-    }
-    out.sort((a, b) => a.firstSeenExpiredAt.localeCompare(b.firstSeenExpiredAt))
-    return out
+    db = openWechatDb(stateDir)
+    const rows = makeSessionStateStore(db).listExpired()
+    return rows.map(r => ({
+      // r.id is the account dir id (account.id) — the dashboard's
+      // expiredById lookup uses item.id (=account.id) as the key, so
+      // botId MUST carry account.id here (not the @im.bot botId field).
+      botId: r.id,
+      firstSeenExpiredAt: r.first_seen_expired_at,
+      ...(r.last_reason ? { lastReason: r.last_reason } : {}),
+    }))
+    // listExpired() already returns rows ORDER BY first_seen_expired_at ASC
   } catch {
     return []
+  } finally {
+    try { db?.close() } catch { /* best-effort */ }
   }
 }
 

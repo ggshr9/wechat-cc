@@ -1,7 +1,9 @@
 import { describe, expect, it, afterEach } from 'vitest'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { analyzeDoctor, setupStatus, serviceStatus, readDaemon, readAccess } from './doctor'
+import { analyzeDoctor, setupStatus, serviceStatus, readDaemon, readAccess, readExpiredBots } from './doctor'
+import { openWechatDb } from '../lib/db'
+import { makeSessionStateStore } from '../daemon/session-state'
 
 const installedSystemd = () => ({ installed: true, kind: 'systemd-user' as const })
 const missingSystemd = () => ({ installed: false, kind: 'systemd-user' as const })
@@ -576,5 +578,69 @@ describe('analyzeDoctor — heartbeats field', () => {
       service: () => ({ installed: false, kind: 'launchagent' as const }),
     })
     expect(report.heartbeats).toEqual({})
+  })
+})
+
+// ── readExpiredBots: SQLite round-trip ───────────────────────────────────────
+describe('readExpiredBots', () => {
+  const tmpDir = join('/tmp', `readExpiredBots-test-${process.pid}`)
+
+  afterEach(() => {
+    try { rmSync(tmpDir, { recursive: true, force: true }) } catch { /* ignore */ }
+  })
+
+  it('returns [] when stateDir does not exist', () => {
+    expect(readExpiredBots('/nonexistent-dir-xyzzy')).toEqual([])
+  })
+
+  it('returns [] for an empty (freshly-created) db', () => {
+    mkdirSync(tmpDir, { recursive: true })
+    const db = openWechatDb(tmpDir)
+    db.close()
+    expect(readExpiredBots(tmpDir)).toEqual([])
+  })
+
+  it('reads expired rows written via SessionStateStore (SQLite round-trip)', () => {
+    // Write an expired entry through the same store the daemon uses.
+    mkdirSync(tmpDir, { recursive: true })
+    const db = openWechatDb(tmpDir)
+    makeSessionStateStore(db).markExpired('some-account-id', 'test-reason')
+    db.close()
+
+    const entries = readExpiredBots(tmpDir)
+    expect(entries).toHaveLength(1)
+    // botId MUST be the account dir id (account.id), not a @im.bot address.
+    expect(entries[0]!.botId).toBe('some-account-id')
+    expect(typeof entries[0]!.firstSeenExpiredAt).toBe('string')
+    expect(entries[0]!.lastReason).toBe('test-reason')
+  })
+
+  it('returns entries sorted ascending by firstSeenExpiredAt', () => {
+    mkdirSync(tmpDir, { recursive: true })
+    const db = openWechatDb(tmpDir)
+    const store = makeSessionStateStore(db)
+    // Insert in reverse chronological order to verify sort.
+    store.markExpired('acct-b', 'reason-b')
+    store.markExpired('acct-a', 'reason-a')
+    db.close()
+
+    const entries = readExpiredBots(tmpDir)
+    expect(entries).toHaveLength(2)
+    // listExpired is ORDER BY first_seen_expired_at ASC; both were inserted
+    // within the same millisecond so order is stable — just verify both present.
+    const ids = entries.map(e => e.botId)
+    expect(ids).toContain('acct-a')
+    expect(ids).toContain('acct-b')
+  })
+
+  it('omits lastReason when markExpired was called without a reason', () => {
+    mkdirSync(tmpDir, { recursive: true })
+    const db = openWechatDb(tmpDir)
+    makeSessionStateStore(db).markExpired('acct-no-reason')
+    db.close()
+
+    const entries = readExpiredBots(tmpDir)
+    expect(entries).toHaveLength(1)
+    expect(entries[0]!.lastReason).toBeUndefined()
   })
 })

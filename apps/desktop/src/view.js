@@ -351,8 +351,9 @@ export function deleteAccountConfirmCopy(name, service) {
 // Each row for the dashboard accounts table. Resolve a friendly display
 // name through user_names.json (keyed by the wechat userId that owns the
 // scan); fall back to the short bot id (directory name minus -im-bot).
-// expiredBots — list of {botId, firstSeenExpiredAt} from session-state.json
-// drives the badge. Account rows for which there is no expired entry are
+// expiredBots — list of {botId, firstSeenExpiredAt} from the SQLite
+// session_state table (via the doctor report) drives the badge. Account
+// rows for which there is no expired entry are
 // shown as `active` (we don't have a positive heartbeat from ilink — only
 // the errcode=-14 negative signal).
 // admins — list of wechat userIds from access.json admins[]. Rows whose
