@@ -116,7 +116,13 @@ const __mockState: {
   //   providerInvokes: records `provider set <name>` calls from the provider
   //                   dropdown so Playwright tests can assert switching fired.
   providerInvokes: Array<{ provider: string; ts: number }>
-} = { chats: [], observations: [], milestones: [], sessions: [], daemonAlive: true, installProgress: null, installSimulationStep: 0, conversations: null, a2aAgents: [], a2aEvents: [], doctorOverride: null, doctorErrorOnce: false, serviceInvokes: [], healthProbeResult: true, logCalls: [], providerInvokes: [] }
+  //   connectionProbeState: controls what `connection probe --json` returns
+  //                         in DRY_RUN. Set per-test via mock.connection-probe.
+  //                         Defaults to 'taken_over' so the hero flips to
+  //                         本机未连接 (exercisable without a real bot).
+  //                         Valid values: 'taken_over' | 'connected' | 'inconclusive'
+  connectionProbeState: 'taken_over' | 'connected' | 'inconclusive'
+} = { chats: [], observations: [], milestones: [], sessions: [], daemonAlive: true, installProgress: null, installSimulationStep: 0, conversations: null, a2aAgents: [], a2aEvents: [], doctorOverride: null, doctorErrorOnce: false, serviceInvokes: [], healthProbeResult: true, logCalls: [], providerInvokes: [], connectionProbeState: 'taken_over' }
 
 // ─── A2A mock credentials ─────────────────────────────────────────────────────
 // The A2A routes (/v1/a2a/*) are served by the SAME Bun.serve instance as the
@@ -271,6 +277,7 @@ Bun.serve({
           __mockState.healthProbeResult = true
           __mockState.logCalls = []
           __mockState.providerInvokes = []
+          __mockState.connectionProbeState = 'taken_over'
           return Response.json({ result: { ok: true } })
         }
 
@@ -329,6 +336,21 @@ Bun.serve({
           return Response.json({ result: { ok: true } })
         }
 
+        // mock.connection-probe: set the state returned by `connection probe --json`
+        // for the next call(s). Used by Playwright connection-owner tests to drive
+        // both the "taken_over" path (hero → 本机未连接 + rebind button) and the
+        // "connected" path (hero → connected).
+        // Usage: POST /__invoke { command: "mock.connection-probe", args: { state: "taken_over" } }
+        // Valid states: "taken_over" | "connected" | "inconclusive"
+        if (body.command === 'mock.connection-probe') {
+          const r = body.args as { state?: string } | undefined
+          const s = r?.state
+          if (s === 'taken_over' || s === 'connected' || s === 'inconclusive') {
+            __mockState.connectionProbeState = s
+          }
+          return Response.json({ result: { ok: true, state: __mockState.connectionProbeState } })
+        }
+
         if (body.command === 'demo.seed') {
           const args = body.args as {
             chat_id?: string
@@ -384,6 +406,7 @@ Bun.serve({
           __mockState.serviceInvokes = []
           __mockState.logCalls = []
           __mockState.providerInvokes = []
+          __mockState.connectionProbeState = 'taken_over'
           return Response.json({ ok: true, seeded: true })
         }
 
@@ -504,6 +527,25 @@ Bun.serve({
           ) {
             __mockState.serviceInvokes.push('kill-residual')
             return Response.json({ result: { ok: true } })
+          }
+
+          // Intercept `connection probe --json` in DRY_RUN.
+          // Returns a single-account response whose state is controlled by
+          // __mockState.connectionProbeState (default: 'taken_over').
+          // Task 10 tests set it per-test via POST mock.connection-probe.
+          if (
+            dryRun &&
+            body.command === 'wechat_cli_json' &&
+            cliArgs[0] === 'connection' &&
+            cliArgs[1] === 'probe'
+          ) {
+            const state = __mockState.connectionProbeState
+            const detail = state === 'taken_over' ? 'session timeout'
+              : state === 'connected' ? 'this machine is the active owner'
+              : 'could not determine owner'
+            return Response.json({
+              result: { accounts: [{ id: 'mock-bot', state, detail }] },
+            })
           }
 
           // Intercept `log` calls in DRY_RUN — record in __mockState.logCalls
