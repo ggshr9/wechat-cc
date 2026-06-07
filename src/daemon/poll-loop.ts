@@ -209,6 +209,14 @@ export interface PollLoopOptions {
   parse: (updates: RawUpdate[], deps: ParseDeps) => InboundMsg[]
   resolveUserName?: (chatId: string) => string | undefined
   log?: (tag: string, line: string) => void
+  /**
+   * Called on each successful (non-expired, non-error) getUpdates response
+   * with the account id and the current ISO timestamp. Used to record
+   * heartbeats for the doctor report and the dashboard "上次活动" display.
+   * Optional — omitting it disables heartbeat recording (e.g. in tests
+   * that don't care about it).
+   */
+  recordHeartbeat?: (accountId: string, iso: string) => void
 }
 
 const RETRY_DELAY_MS = 2_000
@@ -258,7 +266,7 @@ interface LoopRecord {
  * one (for cleanup).
  */
 export function startLongPollLoops(opts: PollLoopOptions): PollLoopHandle {
-  const { onInbound, ilink, parse, log = () => {} } = opts
+  const { onInbound, ilink, parse, log = () => {}, recordHeartbeat } = opts
   const resolveUserName = opts.resolveUserName ?? (() => undefined)
 
   const loops = new Map<string, LoopRecord>()
@@ -301,6 +309,11 @@ export function startLongPollLoops(opts: PollLoopOptions): PollLoopHandle {
         if (resp.sync_buf !== undefined) {
           syncBuf = resp.sync_buf
         }
+
+        // Record a heartbeat for every successful (non-expired) poll.
+        // Placed after sync_buf update so the timestamp reflects a completed
+        // poll cycle. Omitted on expired/error branches.
+        recordHeartbeat?.(account.id, new Date().toISOString())
       } catch (err) {
         if (sig.aborted) break
         log('ERROR', `getUpdates failed: ${err}`)

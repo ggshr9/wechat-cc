@@ -282,3 +282,71 @@ describe('startLongPollLoops', () => {
     expect(Date.now() - start).toBeLessThan(1000)  // resolves promptly
   })
 })
+
+describe('startLongPollLoops — recordHeartbeat', () => {
+  const baseAcct: Account = {
+    id: 'A1', botId: 'b', userId: 'ubot', baseUrl: 'https://x', token: 'T', syncBuf: '',
+  }
+
+  it('calls recordHeartbeat(account.id, <iso>) on a successful getUpdates', async () => {
+    const getUpdates = vi.fn()
+      .mockResolvedValueOnce({ updates: [], sync_buf: 'buf1' })
+      // Second call blocks so the loop doesn't race past our assertion.
+      .mockImplementation(async () => new Promise(r => setTimeout(() => r({ updates: [] }), 200)))
+
+    const recordHeartbeat = vi.fn()
+    const handle = startLongPollLoops({
+      accounts: [baseAcct],
+      onInbound: async () => {},
+      ilink: { getUpdates },
+      parse: () => [],
+      recordHeartbeat,
+    })
+    // Wait for first poll to complete
+    await new Promise(r => setTimeout(r, 30))
+    await handle.stop()
+
+    expect(recordHeartbeat).toHaveBeenCalledWith('A1', expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/))
+  })
+
+  it('does NOT call recordHeartbeat when getUpdates returns expired=true', async () => {
+    const getUpdates = vi.fn().mockResolvedValue({ expired: true })
+    const recordHeartbeat = vi.fn()
+    const handle = startLongPollLoops({
+      accounts: [baseAcct],
+      onInbound: async () => {},
+      ilink: { getUpdates },
+      parse: () => [],
+      recordHeartbeat,
+    })
+    // Let the loop run until it self-terminates on expired
+    await handle.stop()
+    // Give extra tick for the loop's finally to flush
+    await new Promise(r => setTimeout(r, 20))
+
+    expect(recordHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('does NOT call recordHeartbeat when getUpdates throws', async () => {
+    // First call throws immediately, then blocks so loop is stuck in backoff/retry.
+    // We stop() before the retry resolves and verify no heartbeat was recorded.
+    const getUpdates = vi.fn()
+      .mockRejectedValueOnce(new Error('network error'))
+      .mockImplementation(async () => new Promise(() => {}))  // blocks forever
+
+    const recordHeartbeat = vi.fn()
+    const handle = startLongPollLoops({
+      accounts: [baseAcct],
+      onInbound: async () => {},
+      ilink: { getUpdates },
+      parse: () => [],
+      log: () => {},
+      recordHeartbeat,
+    })
+    // Give enough time for the error path to run but not the 2s retry delay.
+    await new Promise(r => setTimeout(r, 30))
+    await handle.stop()
+
+    expect(recordHeartbeat).not.toHaveBeenCalled()
+  })
+})
