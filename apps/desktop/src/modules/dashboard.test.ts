@@ -429,6 +429,86 @@ describe('renderDashboard admin row selection', () => {
   })
 })
 
+// ── renderDashboard: heartbeat display ───────────────────────────────────────
+// When hero state is "connected" and report.heartbeats[account.id] exists,
+// the "当前连接中的用户" slot should show "连接正常 · 上次活动 X 前".
+// When heartbeat is absent or hero is not "connected", fall back to "已连接".
+
+describe('renderDashboard heartbeat display', () => {
+  it('shows heartbeat copy when connected and heartbeat present', () => {
+    const els = installDashboardDom()
+    const report = {
+      checks: {
+        daemon: { alive: true, pid: 1234 },
+        accounts: {
+          count: 1,
+          items: [{ id: 'bot1-im-bot', botId: 'b1@im.bot', userId: 'u1', baseUrl: '' }],
+        },
+        provider: { provider: 'claude' },
+        access: { allowFromCount: 1 },
+        service: { installed: true },
+      },
+      userNames: { u1: '小白' },
+      expiredBots: [],
+      heartbeats: { 'bot1-im-bot': new Date(Date.now() - 60_000).toISOString() },
+    }
+
+    renderDashboard(report)
+
+    // Should contain the heartbeat copy, not bare "已连接"
+    expect(els.accountsCurrent.innerHTML).toContain('连接正常')
+    expect(els.accountsCurrent.innerHTML).toContain('上次活动')
+  })
+
+  it('falls back to "已连接" when heartbeats field is absent', () => {
+    const els = installDashboardDom()
+    const report = {
+      checks: {
+        daemon: { alive: true, pid: 1234 },
+        accounts: {
+          count: 1,
+          items: [{ id: 'bot1-im-bot', botId: 'b1@im.bot', userId: 'u1', baseUrl: '' }],
+        },
+        provider: { provider: 'claude' },
+        access: { allowFromCount: 1 },
+        service: { installed: true },
+      },
+      userNames: { u1: '小白' },
+      expiredBots: [],
+      // no heartbeats field
+    }
+
+    renderDashboard(report)
+
+    expect(els.accountsCurrent.innerHTML).toContain('已连接')
+    expect(els.accountsCurrent.innerHTML).not.toContain('连接正常')
+  })
+
+  it('falls back to "已连接" when heartbeat for account is null', () => {
+    const els = installDashboardDom()
+    const report = {
+      checks: {
+        daemon: { alive: true, pid: 1234 },
+        accounts: {
+          count: 1,
+          items: [{ id: 'bot1-im-bot', botId: 'b1@im.bot', userId: 'u1', baseUrl: '' }],
+        },
+        provider: { provider: 'claude' },
+        access: { allowFromCount: 1 },
+        service: { installed: true },
+      },
+      userNames: { u1: '小白' },
+      expiredBots: [],
+      heartbeats: { 'bot1-im-bot': null },
+    }
+
+    renderDashboard(report)
+
+    expect(els.accountsCurrent.innerHTML).toContain('已连接')
+    expect(els.accountsCurrent.innerHTML).not.toContain('连接正常')
+  })
+})
+
 describe('stopDaemon', () => {
   it('continues residual kill after service stop warning and marks disconnected when daemon is down', async () => {
     const els = installDashboardDom()

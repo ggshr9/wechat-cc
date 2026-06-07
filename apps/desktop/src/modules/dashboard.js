@@ -56,13 +56,17 @@ export function renderDashboard(report) {
       `
       tbody.innerHTML = ""
     } else {
-      // Daemon doesn't expose last-active timestamps (see view.js notes —
-      // ilink gives us errcode=-14 expiry but no positive heartbeat).
-      // Show honest copy: "已连接" for active, "连接已过期" for expired.
+      // Show honest connection status. For connected state, surface the last
+      // successful getUpdates heartbeat when available. For expired, show
+      // the expiry timestamp. For taken_over / recovering, keep existing copy.
       const currentExp = expiredById[currentRow.id]
+      const heartbeats = report.heartbeats || {}
+      const hb = heartbeats[currentRow.id]
       const currentSub = currentRow.expired
         ? `连接已过期${currentExp ? ` · ${formatRelativeTime(currentExp.firstSeenExpiredAt)}` : ""}`
-        : "已连接"
+        : hero.state === "connected" && hb
+          ? `连接正常 · 上次活动 ${formatRelativeTime(hb)}`
+          : "已连接"
       current.innerHTML = `
         <div class="user-avatar avatar-admin">${avatarSvg("admin")}</div>
         <div class="user-copy">

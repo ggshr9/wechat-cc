@@ -20,6 +20,7 @@ export async function mockInvoke(command, args, state) {
         service: { installed: false, kind: "launchagent" },
       },
       nextActions: ["run_wechat_setup", "install_service"],
+      heartbeats: {},
     }
   }
   if (command === "wechat_cli_json" && args.args?.[0] === "setup") {
