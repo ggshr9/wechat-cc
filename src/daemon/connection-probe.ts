@@ -17,6 +17,19 @@ export interface ProbeVerdict {
   detail?: string
 }
 
+// ── classifyProbeResult ──────────────────────────────────────────────────────
+
+export function classifyProbeResult(input: { resp?: GetUpdatesResp; error?: unknown }): ProbeVerdict {
+  if (input.error) {
+    return { state: 'inconclusive', detail: input.error instanceof Error ? input.error.message : String(input.error) }
+  }
+  const resp = input.resp ?? {}
+  if (resp.errcode === -14 || resp.ret === -14) {
+    return { state: 'taken_over', ...(resp.errmsg ? { detail: resp.errmsg } : {}) }
+  }
+  return { state: 'connected' }
+}
+
 // ── probeConnection ─────────────────────────────────────────────────────────
 
 export interface ProbeAccount { id: string; botId: string; baseUrl: string; token: string }
@@ -54,17 +67,4 @@ export async function probeConnection(deps: ProbeDeps): Promise<ProbeResult> {
     deps.markExpired(account.id, `connection probe errcode=-14: ${verdict.detail ?? ''}`)
   }
   return { id: account.id, state: verdict.state, ...(verdict.detail ? { detail: verdict.detail } : {}) }
-}
-
-// ── classifyProbeResult ──────────────────────────────────────────────────────
-
-export function classifyProbeResult(input: { resp?: GetUpdatesResp; error?: unknown }): ProbeVerdict {
-  if (input.error) {
-    return { state: 'inconclusive', detail: input.error instanceof Error ? input.error.message : String(input.error) }
-  }
-  const resp = input.resp ?? {}
-  if (resp.errcode === -14 || resp.ret === -14) {
-    return { state: 'taken_over', ...(resp.errmsg ? { detail: resp.errmsg } : {}) }
-  }
-  return { state: 'connected' }
 }

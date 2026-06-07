@@ -39,6 +39,13 @@ describe('probeConnection', () => {
     expect(r.state).toBe('inconclusive')
     expect(marked).toBe(false)
   })
+  it('passes probeTimeoutMs through to getUpdates', async () => {
+    let seenTimeout = 0
+    await probeConnection(deps({
+      getUpdates: async (_baseUrl, _token, timeoutMs) => { seenTimeout = timeoutMs; return { ret: 0, msgs: [] } },
+    }))
+    expect(seenTimeout).toBe(5000)
+  })
 })
 
 describe('classifyProbeResult', () => {
