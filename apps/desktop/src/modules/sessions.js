@@ -20,6 +20,7 @@
 
 import { escapeHtml } from "../view.js"
 import { formatRelativeTimeShort } from "./observations.js"
+import { icon } from "./icons.js"
 
 const TODAY_MS = 24 * 3600_000
 const WEEK_MS = 7 * TODAY_MS
@@ -913,47 +914,24 @@ function phoneFrameHtml({ contactName, chatContent }) {
         <div class="phone-status">
           <span class="phone-status-time">${time}</span>
           <span class="phone-status-icons">
-            <svg viewBox="0 0 17 11" width="17" height="11" fill="currentColor" aria-hidden="true"><rect x="0" y="6" width="3" height="5" rx="0.5"/><rect x="4.5" y="4" width="3" height="7" rx="0.5"/><rect x="9" y="2" width="3" height="9" rx="0.5"/><rect x="13.5" y="0" width="3" height="11" rx="0.5"/></svg>
-            <svg viewBox="0 0 16 12" width="16" height="12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2 5a8.5 8.5 0 0 1 12 0"/><path d="M4.5 7.5a5 5 0 0 1 7 0"/><circle cx="8" cy="10" r="1" fill="currentColor" stroke="none"/></svg>
-            <svg viewBox="0 0 24 12" width="24" height="12" fill="none" stroke="currentColor" stroke-width="1" aria-hidden="true"><rect x="0.5" y="0.5" width="20" height="11" rx="2.5"/><rect x="2" y="2" width="17" height="8" rx="1" fill="currentColor"/><rect x="21.5" y="3.5" width="2" height="5" rx="0.6" fill="currentColor"/></svg>
+            ${icon("signal-full-01", { size: 14 })}
+            ${icon("wifi-02", { size: 14 })}
+            ${icon("battery-full", { size: 18 })}
           </span>
         </div>
         <div class="phone-title">
-          <span class="phone-title-back" aria-hidden="true">⟨</span>
+          <span class="phone-title-back" aria-hidden="true">${icon("arrow-left-02", { size: 22 })}</span>
           <span class="phone-title-name">${name}</span>
-          <span class="phone-title-more" aria-hidden="true">⋯</span>
+          <span class="phone-title-more" aria-hidden="true">${icon("more-horizontal", { size: 22 })}</span>
         </div>
         <div class="phone-chat">${chatContent}</div>
         <div class="phone-input" aria-label="查看模式 — 只读">
-          <!-- 语音切换（圆形 + 内部声波竖条），左 -->
-          <svg class="phone-input-btn" viewBox="0 0 28 28" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
-            <circle cx="14" cy="14" r="11.5"/>
-            <line x1="10" y1="11" x2="10" y2="17"/>
-            <line x1="13" y1="9" x2="13" y2="19"/>
-            <line x1="16" y1="11" x2="16" y2="17"/>
-            <line x1="19" y1="13" x2="19" y2="15"/>
-          </svg>
-          <!-- 文本输入框（空白，右侧内嵌 mic） -->
+          <span class="phone-input-btn">${icon("mic-01", { size: 18 })}</span>
           <div class="phone-input-field">
-            <svg class="phone-input-mic" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
-              <rect x="9.5" y="4" width="5" height="11" rx="2.5"/>
-              <path d="M6.5 12a5.5 5.5 0 0 0 11 0"/>
-              <line x1="12" y1="17.5" x2="12" y2="20"/>
-            </svg>
+            ${icon("mic-01", { className: "phone-input-mic", size: 18 })}
           </div>
-          <!-- 表情 -->
-          <svg class="phone-input-btn" viewBox="0 0 28 28" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
-            <circle cx="14" cy="14" r="11.5"/>
-            <circle cx="10.5" cy="11.5" r="0.9" fill="currentColor"/>
-            <circle cx="17.5" cy="11.5" r="0.9" fill="currentColor"/>
-            <path d="M9.5 16c1 1.6 2.7 2.6 4.5 2.6s3.5-1 4.5-2.6"/>
-          </svg>
-          <!-- 加号 -->
-          <svg class="phone-input-btn" viewBox="0 0 28 28" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
-            <circle cx="14" cy="14" r="11.5"/>
-            <line x1="14" y1="9" x2="14" y2="19"/>
-            <line x1="9" y1="14" x2="19" y2="14"/>
-          </svg>
+          <span class="phone-input-btn">${icon("smile", { size: 18 })}</span>
+          <span class="phone-input-btn">${icon("plus-sign-circle", { size: 22 })}</span>
         </div>
       </div>
     </div>

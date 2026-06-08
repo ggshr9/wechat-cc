@@ -22,6 +22,7 @@
 import { escapeHtml, formatRelativeTime } from "../view.js"
 import { observationRow, milestoneCard } from "./observations.js"
 import { decisionRow } from "./decisions.js"
+import { icon } from "./icons.js"
 
 // `selected` doubles as the edit-target identity (userId + path) AND the
 // "we have a file open" flag for the edit button visibility. `editing`
@@ -355,7 +356,7 @@ function renderMemoryProfileOverview(deps) {
         <div class="profile-trait-list">
           ${profile.traits.map(trait => `
             <article class="profile-trait">
-              <span class="trait-icon" aria-hidden="true">${escapeHtml(trait.icon)}</span>
+              <span class="trait-icon" aria-hidden="true">${icon(trait.icon, { size: 34 })}</span>
               <div>
                 <h3>${escapeHtml(trait.title)}</h3>
                 <p>${escapeHtml(trait.body)}</p>
@@ -371,6 +372,7 @@ function renderMemoryProfileOverview(deps) {
           <div class="preference-grid">
             ${profile.preferences.map(item => `
               <article>
+                <span class="preference-icon" aria-hidden="true">${icon(item.icon, { size: 30 })}</span>
                 <h3>${escapeHtml(item.title)}</h3>
                 <p>${escapeHtml(item.body)}</p>
               </article>
@@ -455,35 +457,35 @@ function buildMemoryProfileModel(friendly, totalFiles, updatedAt) {
     insight: primaryObservation || `你正在从“设计执行者”过渡到“AI产品参与者”。你的优势不是一开始就懂技术，而是你愿意把不懂的东西拆开、追问、理解，并最终转化成可视化和产品表达。`,
     traits: [
       {
-        icon: "♡",
+        icon: "heart-check",
         title: "情绪表达",
         body: observations.some(obs => obs.tone === "concern")
           ? "压力和担心会被记录为需要照看的信号，CC 会尽量减少打扰式追问。"
           : "低爆发，高内耗。更习惯用温和表达承载复杂感受。",
       },
       {
-        icon: "☷",
+        icon: "user-group",
         title: "社交模式",
         body: "喜欢深度交流，不喜欢敷衍式寒暄，对回应质量敏感。",
       },
       {
-        icon: "⚭",
+        icon: "link-03",
         title: "关系模式",
         body: milestones.length > 0
           ? "稳定的互动会被保留下来，CC 会把重要节点变成可回看的长期记忆。"
           : "重视长期稳定的连接，会通过细节判断对方是否在意自己。",
       },
       {
-        icon: "♧",
+        icon: "alert-02",
         title: "压力状态",
         body: "压力升高时会减少表达，同时会去确认自己的价值。",
       },
     ],
     preferences: [
-      { title: "喜欢", body: "更习惯用温和表达承载复杂感受，对内在原则比较坚持。" },
-      { title: "不喜欢", body: "喜欢深度交流，不喜欢敷衍式寒暄，对回应质量敏感。" },
-      { title: "需要", body: "重视长期稳定的连接，不喜欢泛泛之交，比较重视友谊。" },
-      { title: "风险", body: "压力升高时会减少表达，同时会去确认自己的价值。" },
+      { icon: "heart-check", title: "喜欢", body: "更习惯用温和表达承载复杂感受，对内在原则比较坚持。" },
+      { icon: "cancel-01", title: "不喜欢", body: "喜欢深度交流，不喜欢敷衍式寒暄，对回应质量敏感。" },
+      { icon: "link-03", title: "需要", body: "重视长期稳定的连接，不喜欢泛泛之交，比较重视友谊。" },
+      { icon: "alert-02", title: "风险", body: "压力升高时会减少表达，同时会去确认自己的价值。" },
     ],
     snippets: remembered.length > 0
       ? remembered.map((body, index) => ({

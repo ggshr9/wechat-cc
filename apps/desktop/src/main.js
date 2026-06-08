@@ -26,7 +26,7 @@ import {
 } from "./modules/wizard.js"
 import { refreshQr } from "./modules/qr.js"
 import { serviceAction, forceKillDaemon } from "./modules/service.js"
-import { renderDashboard, renderRestartButton, setPending, updateClock, restartDaemon, stopDaemon, handleAccountRowClick, toggleProviderMenu, closeProviderMenu } from "./modules/dashboard.js"
+import { renderDashboard, renderRestartButton, setPending, updateClock, restartDaemon, stopDaemon, handleAccountRowClick, toggleProviderMenu, toggleUserProviderMenu, closeProviderMenu } from "./modules/dashboard.js"
 import { renderConversations } from "./modules/conversations.js"
 import { loadMemoryPane, wireMemoryButtons, loadMemoryTopZone, loadMemoryDecisions, archiveObservation } from "./modules/memory.js"
 import { loadLogsPane, startLogsAutoRefresh, stopLogsAutoRefresh } from "./modules/logs.js"
@@ -35,6 +35,7 @@ import { initDialoguePage } from "./modules/dialogue-page.js"
 import { initA2AAgentsTab, refresh as refreshA2AAgents } from "./modules/a2a-agents.js"
 import { loadUpdateProbe, applyUpdate } from "./modules/update.js"
 import { wireSettingsDrawer, openSettingsDrawer } from "./modules/settings-drawer.js"
+import { mountHugeicons } from "./modules/icons.js"
 import { pingHealth } from "./health-probe.js"
 
 const state = {
@@ -655,6 +656,12 @@ function wireEvents() {
   document.getElementById("update-apply-btn")?.addEventListener("click", () => applyUpdate(deps))
 
   document.getElementById("accounts-body")?.addEventListener("click", ev => handleAccountRowClick(deps, ev))
+  document.getElementById("accounts-body")?.addEventListener("click", ev => {
+    const btn = ev.target instanceof HTMLElement ? ev.target.closest(".card-menu") : null
+    if (!btn) return
+    ev.stopPropagation()
+    toggleUserProviderMenu(deps, btn, doctorPoller.current)
+  })
 
   // Provider-switch dropdown. The .provider-switch button lives inside
   // #accounts-current which is re-rendered on every doctor poll, so we
@@ -969,6 +976,7 @@ function showDevBannerIfShim() {
 
 async function boot() {
   showDevBannerIfShim()
+  mountHugeicons()
   wireDoctorSubscribers()
   wireEvents()
   await loadAgentConfig().catch(err => console.error("agent config load failed", err))

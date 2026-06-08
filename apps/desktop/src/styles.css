@@ -91,6 +91,21 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 input { font: inherit; color: inherit; }
 ::selection { background: var(--green); color: #fff; }
 
+.hg-icon {
+  display: block;
+  width: 1em;
+  height: 1em;
+  flex-shrink: 0;
+  color: currentColor;
+}
+
+.ic .hg-icon,
+.plug-icon .hg-icon,
+.add-ic .hg-icon {
+  width: 100%;
+  height: 100%;
+}
+
 /* ─── mode visibility ────────────────────────────────────────────────── */
 [data-mode="wizard"]    .dashboard,
 [data-mode="dashboard"] .wizard,
@@ -2097,11 +2112,18 @@ input { font: inherit; color: inherit; }
   top: 5px;
   right: 8px;
   color: #b2b2b2;
-  font-size: 10px;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
   line-height: 1;
 }
 .mini-action {
   margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   color: #9a9a9a;
   font-size: 12px;
 }
@@ -2597,6 +2619,8 @@ input { font: inherit; color: inherit; }
   background: #fff;
 }
 .trait-icon {
+  display: grid;
+  place-items: center;
   color: #000;
   font-size: 32px;
   line-height: 1;
@@ -2616,6 +2640,21 @@ input { font: inherit; color: inherit; }
   border: 1px solid #e8eaf6;
   border-radius: 14px;
   background: rgba(255,255,255,.96);
+}
+.preference-grid article {
+  position: relative;
+  padding-left: 74px;
+}
+.preference-icon {
+  position: absolute;
+  top: 26px;
+  left: 28px;
+  color: #000;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  font-size: 30px;
 }
 
 .memory-fold,
@@ -3276,7 +3315,7 @@ input { font: inherit; color: inherit; }
 }
 .phone-title-back  { color: #1A1A1A; font-size: 22px; line-height: 1; }
 .phone-title-name  { text-align: center; font-size: 15.5px; font-weight: 500; color: #1A1A1A; }
-.phone-title-more  { color: #1A1A1A; font-size: 22px; text-align: right; line-height: 1; letter-spacing: 0.05em; }
+.phone-title-more  { color: #1A1A1A; font-size: 22px; display: flex; justify-content: flex-end; line-height: 1; }
 .phone-chat {
   flex: 1; min-height: 0;
   overflow-y: auto;
@@ -3314,6 +3353,12 @@ input { font: inherit; color: inherit; }
   flex-shrink: 0;
 }
 .phone-input-btn {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
   color: #4A4A4A;
   flex-shrink: 0;
 }

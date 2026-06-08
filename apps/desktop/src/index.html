@@ -31,7 +31,7 @@
             <span class="mark"><img src="./wechat-cc-logo.png" alt="" /></span>
             <span class="name">wechat-cc</span>
           </div>
-          <button class="wz-back" data-action="open-dashboard" title="关闭启动页" aria-label="关闭启动页">×</button>
+          <button class="wz-back" data-action="open-dashboard" title="关闭启动页" aria-label="关闭启动页"><span data-hg-icon="cancel-01" data-hg-size="18"></span></button>
         </div>
 
         <div class="wz-body">
@@ -53,16 +53,12 @@
                 </div>
                 <div class="provider-status-list">
                   <div class="provider-status-card" id="claude-status-card">
-                    <span class="plug-icon" aria-hidden="true">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 2v6M16 2v6M6 8h12v5a6 6 0 0 1-12 0V8Z"/><path d="M12 19v3M4 13h16"/></svg>
-                    </span>
+                    <span class="plug-icon" data-hg-icon="plug-01" aria-hidden="true"></span>
                     <span class="provider-status-name">Claude Code <b id="claude-status-label">检测中</b></span>
                     <a class="provider-install-btn" id="claude-install-link" href="https://docs.claude.com/en/docs/claude-code/install" target="_blank" rel="noopener">去安装 <span>›</span></a>
                   </div>
                   <div class="provider-status-card" id="codex-status-card">
-                    <span class="plug-icon" aria-hidden="true">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 2v6M16 2v6M6 8h12v5a6 6 0 0 1-12 0V8Z"/><path d="M12 19v3M4 13h16"/></svg>
-                    </span>
+                    <span class="plug-icon" data-hg-icon="plug-01" aria-hidden="true"></span>
                     <span class="provider-status-name">Codex <b id="codex-status-label">检测中</b></span>
                     <a class="provider-install-btn" id="codex-install-link" href="https://github.com/openai/codex#installation" target="_blank" rel="noopener">去安装 <span>›</span></a>
                   </div>
@@ -156,7 +152,7 @@
                 <div class="desc" id="service-summary"></div>
                 <div class="bg-actions">
                   <button id="service-install" class="btn primary">
-                    <span class="ic"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M5 3.5l7 4.5-7 4.5z"/></svg></span>
+                    <span class="ic" data-hg-icon="play" data-hg-size="16"></span>
                     安装并启动
                   </button>
                 </div>
@@ -238,7 +234,7 @@
     <aside id="settings-drawer" class="settings-drawer">
       <header class="drawer-head">
         <h2>设置</h2>
-        <button id="settings-close" class="drawer-close" type="button" aria-label="关闭">×</button>
+        <button id="settings-close" class="drawer-close" type="button" aria-label="关闭"><span data-hg-icon="cancel-01" data-hg-size="18"></span></button>
       </header>
       <div class="drawer-body">
         <section class="drawer-section">
@@ -290,21 +286,21 @@
 
           <nav class="dash-nav" aria-label="Dashboard">
             <button class="dash-nav-link active" data-pane="overview">
-              <span class="ic"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M2 7h12"/></svg></span>
+              <span class="ic" data-hg-icon="power" data-hg-size="16"></span>
               <span>此刻</span>
             </button>
             <button class="dash-nav-link" data-pane="memory">
-              <span class="ic"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 3h7l3 3v7a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"/><path d="M10 3v3h3"/></svg></span>
+              <span class="ic" data-hg-icon="archive" data-hg-size="16"></span>
               <span>记忆</span>
               <span class="count" id="memory-count"></span>
             </button>
             <button class="dash-nav-link" data-pane="sessions">
-              <span class="ic"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="6" cy="6" r="2.4"/><circle cx="11" cy="10" r="2.4"/><path d="M4 13.5c.6-1.2 1.7-2 3-2"/></svg></span>
+              <span class="ic" data-hg-icon="user" data-hg-size="16"></span>
               <span>对话</span>
               <span class="count" id="sessions-count"></span>
             </button>
             <button class="dash-nav-link" data-pane="a2a-agents">
-              <span class="ic"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="5" cy="5" r="2"/><circle cx="11" cy="5" r="2"/><circle cx="8" cy="11" r="2"/><path d="M5 7v1.5M11 7v1.5M8 9v0"/><path d="M5 8.5c1-.5 5-.5 6 0"/></svg></span>
+              <span class="ic" data-hg-icon="settings-01" data-hg-size="16"></span>
               <span>Agent</span>
             </button>
           </nav>
@@ -322,22 +318,12 @@
                (e.g. on the add-user card). -->
           <div class="dash-utilities">
             <button class="dash-nav-link dash-utility-link" data-pane="logs" title="日志">
-              <span class="ic">
-                <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5">
-                  <path d="M9 1.8 15 5.3v7L9 15.8 3 12.3v-7L9 1.8Z"/>
-                  <circle cx="9" cy="8.8" r="2.2"/>
-                </svg>
-              </span>
+              <span class="ic" data-hg-icon="archive" data-hg-size="18"></span>
               <span>日志</span>
               <span class="count" id="logs-count"></span>
             </button>
             <button id="settings-open" class="rail-gear" type="button" title="设置" aria-label="设置">
-              <span class="ic">
-                <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5">
-                  <path d="M9 1.8 15 5.3v7L9 15.8 3 12.3v-7L9 1.8Z"/>
-                  <circle cx="9" cy="8.8" r="2.2"/>
-                </svg>
-              </span>
+              <span class="ic" data-hg-icon="settings-01" data-hg-size="18"></span>
               <span>设置</span>
             </button>
           </div>
@@ -358,11 +344,11 @@
                 <div class="moment-actions">
                   <span class="pending" id="dash-pending"></span>
                   <button id="dash-stop" class="moment-connect-btn">
-                    <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 2v6M16 2v6M6 8h12v5a6 6 0 0 1-12 0V8Z"/><path d="M12 19v3"/></svg></span>
+                    <span class="ic" data-hg-icon="plug-01"></span>
                     断开连接
                   </button>
                   <button id="dash-restart" class="moment-connect-btn">
-                    <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 2v6M16 2v6M6 8h12v5a6 6 0 0 1-12 0V8Z"/><path d="M12 19v3"/></svg></span>
+                    <span class="ic" data-hg-icon="refresh"></span>
                     重新连接
                   </button>
                   <button id="dash-refresh" class="btn ghost" hidden>刷新</button>
@@ -392,7 +378,7 @@
                 <!-- "+ 绑定新账号" entry point. Wired by main.js via
                      getElementById('add-account-btn') (opens QR modal). -->
                 <button id="add-account-btn" class="add-user-card" type="button">
-                  <span class="add-ic">+</span>
+                  <span class="add-ic" data-hg-icon="user-add-01"></span>
                   <span>添加用户</span>
                 </button>
               </section>
@@ -434,7 +420,7 @@
                 <div class="memory-sources-head">
                   <span>记忆来源</span>
                   <button id="memory-refresh" class="btn">
-                    <span class="ic"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 8a5 5 0 0 1 8.5-3.5M13 8a5 5 0 0 1-8.5 3.5"/><path d="M11.5 1.5v3h-3M4.5 14.5v-3h3"/></svg></span>
+                    <span class="ic" data-hg-icon="refresh" data-hg-size="16"></span>
                     刷新
                   </button>
                 </div>
@@ -512,7 +498,7 @@
                   <option value="500">500 行</option>
                 </select>
                 <button id="logs-refresh" class="btn">
-                  <span class="ic"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 8a5 5 0 0 1 8.5-3.5M13 8a5 5 0 0 1-8.5 3.5"/><path d="M11.5 1.5v3h-3M4.5 14.5v-3h3"/></svg></span>
+                  <span class="ic" data-hg-icon="refresh" data-hg-size="16"></span>
                   刷新
                 </button>
               </div>
@@ -527,7 +513,7 @@
             <div class="topbar">
               <span class="crumb">Agents (A2A)</span>
               <div class="actions">
-                <button id="a2a-add-btn" class="btn">+ Add Agent</button>
+                <button id="a2a-add-btn" class="btn"><span class="ic" data-hg-icon="add-01" data-hg-size="16"></span> Add Agent</button>
               </div>
             </div>
             <div class="a2a-agents-body">
@@ -546,7 +532,7 @@
     <!-- A2A Add Agent modal — top-level overlay so it's not clipped by
          the dashboard main pane. Sibling to #qr-modal. -->
     <dialog id="a2a-add-modal" class="a2a-modal">
-      <button id="a2a-add-modal-close" class="a2a-modal-x" type="button" aria-label="关闭">×</button>
+      <button id="a2a-add-modal-close" class="a2a-modal-x" type="button" aria-label="关闭"><span data-hg-icon="cancel-01" data-hg-size="18"></span></button>
       <h3>Add A2A Agent</h3>
       <form id="a2a-add-form">
         <label>Agent URL <input type="url" name="url" required placeholder="https://example.com/a2a"></label>
@@ -575,7 +561,7 @@
     <!-- A2A Test modal — validate inbound (notify → WeChat chat) or outbound
          (call external agent) without dropping to CLI. -->
     <dialog id="a2a-test-modal" class="a2a-modal">
-      <button id="a2a-test-modal-close" class="a2a-modal-x" type="button" aria-label="关闭">×</button>
+      <button id="a2a-test-modal-close" class="a2a-modal-x" type="button" aria-label="关闭"><span data-hg-icon="cancel-01" data-hg-size="18"></span></button>
       <h3 id="a2a-test-title">Test agent</h3>
       <p class="a2a-test-help">
         <strong>Inbound</strong>: send a synthetic notify to your own WeChat chat (validates server + key + routing).<br>
@@ -597,7 +583,7 @@
     <aside id="a2a-activity-drawer" class="a2a-drawer" hidden>
       <header class="a2a-drawer-head">
         <h3 id="a2a-activity-title">Activity</h3>
-        <button id="a2a-activity-close" class="drawer-close" type="button" aria-label="关闭">×</button>
+        <button id="a2a-activity-close" class="drawer-close" type="button" aria-label="关闭"><span data-hg-icon="cancel-01" data-hg-size="18"></span></button>
       </header>
       <ul id="a2a-activity-list" class="a2a-activity-list"></ul>
     </aside>

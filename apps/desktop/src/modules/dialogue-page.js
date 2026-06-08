@@ -1,3 +1,5 @@
+import { icon } from "./icons.js"
+
 const PRIVATE_PASSWORD = "1234"
 const DIALOGUE_ASSET_ROOT = "./assets/dialogue"
 
@@ -51,10 +53,7 @@ const groups = [
 ]
 
 function lockIcon(unlocked = false) {
-  const shackle = unlocked
-    ? `<path d="M7 8.5V6.8a3 3 0 0 1 5.7-1.3"/>`
-    : `<path d="M7 8.5V6.7a3 3 0 0 1 6 0v1.8"/>`
-  return `<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4.5" y="8.5" width="11" height="8" rx="2"/>${shackle}</svg>`
+  return icon(unlocked ? "square-unlock-01" : "square-lock-01", { size: 20 })
 }
 
 function avatar(type) {
@@ -165,7 +164,7 @@ export function initDialoguePage() {
     </section>
     <div class="privacy-dialog" id="privacy-dialog" hidden>
       <form class="privacy-card">
-        <button class="privacy-close" type="button" aria-label="关闭">×</button>
+        <button class="privacy-close" type="button" aria-label="关闭">${icon("cancel-01", { size: 18 })}</button>
         <span class="privacy-lock-mark">${lockIcon()}</span>
         <h2>解锁私密内容</h2>
         <p>故事和情绪包含较私人的内容，输入隐私密码后才能查看。</p>

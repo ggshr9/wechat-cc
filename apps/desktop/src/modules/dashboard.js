@@ -9,6 +9,9 @@
 // on every successful poll automatically).
 
 import { dashboardHero, accountRows, formatRelativeTime, escapeHtml, restartButtonState, deleteAccountConfirmCopy, diagnose } from "../view.js"
+import { icon } from "./icons.js"
+
+const USER_CARD_PROVIDERS = ["claude", "codex", "gemini"]
 
 export function renderDashboard(report) {
   const hero = dashboardHero(report.checks.daemon, report.checks.accounts.count)
@@ -91,12 +94,15 @@ export function renderDashboard(report) {
       // account again. Non-expired rows keep the original danger-style
       // delete-only layout.
       const actCell = row.expired
-        ? `<button class="mini-action" data-action="rebind">重新扫码</button>
-           <button class="mini-action" data-action="ask-delete">删除</button>`
-        : row.demo ? "" : `<button class="mini-action" data-action="ask-delete">删除</button>`
+        ? `<button class="mini-action" data-action="rebind">${icon("refresh", { size: 13 })}重新扫码</button>
+           <button class="mini-action" data-action="ask-delete">${icon("delete-02", { size: 13 })}删除</button>`
+        : row.demo ? "" : `<button class="mini-action" data-action="ask-delete">${icon("delete-02", { size: 13 })}删除</button>`
+      const conversation = conversationForAccount(report?.conversations || [], row)
+      const currentProvider = providerFromMode(conversation?.mode) || report.checks.provider.provider || "claude"
+      const chatId = conversation?.chat_id || row.userId || row.id
       return `
-        <div class="sub-user-card" data-bot-id="${escapeHtml(row.id)}" data-name="${escapeHtml(row.name)}">
-          <button class="card-menu" aria-label="更多操作">•••</button>
+        <div class="sub-user-card" data-bot-id="${escapeHtml(row.id)}" data-chat-id="${escapeHtml(chatId)}" data-current-provider="${escapeHtml(currentProvider)}" data-name="${escapeHtml(row.name)}"${row.demo ? ` data-demo="true"` : ""}>
+          <button class="card-menu" aria-haspopup="true" aria-label="选择 Agent">${icon("more-horizontal", { size: 18 })}</button>
           <div class="user-avatar">${avatarSvg(row.avatar || index)}</div>
           <div class="user-copy">
             <div class="user-name">${escapeHtml(row.name)}</div>
@@ -113,6 +119,24 @@ export function renderDashboard(report) {
     : `${accounts.length} 个 · ${report.checks.access.allowFromCount} 用户允许`
   document.getElementById("accounts-meta").textContent = meta
 
+}
+
+function conversationForAccount(conversations, row) {
+  if (!Array.isArray(conversations)) return null
+  return conversations.find(c =>
+    c?.chat_id === row.userId
+    || c?.user_id === row.userId
+    || c?.chat_id === row.id
+  ) || null
+}
+
+function providerFromMode(mode) {
+  if (!mode || typeof mode !== "object") return null
+  if (mode.kind === "solo") return mode.provider || null
+  if (mode.kind === "primary_tool") return mode.primary || null
+  if (Array.isArray(mode.providers)) return mode.providers[0] || null
+  if (Array.isArray(mode.participants)) return mode.participants[0] || null
+  return null
 }
 
 function avatarSvg(seed) {
@@ -670,6 +694,84 @@ export async function toggleProviderMenu(deps, report) {
   document.addEventListener("keydown", _providerMenuKeyHandler)
 }
 
+export async function toggleUserProviderMenu(deps, anchor, _report) {
+  if (_providerMenuOpen) {
+    closeProviderMenu()
+    return
+  }
+
+  const menu = document.getElementById("provider-menu")
+  if (!menu || !anchor) return
+
+  const row = anchor.closest?.(".sub-user-card")
+  if (!row) return
+
+  const currentProvider = row.dataset.currentProvider || "claude"
+  const chatId = row.dataset.chatId
+  const isDemo = row.dataset.demo === "true" || !chatId
+
+  menu.innerHTML = USER_CARD_PROVIDERS.map(p => {
+    const active = p === currentProvider
+    return `<button class="${active ? "provider-menu-active" : ""}" data-provider="${escapeHtml(p)}">${escapeHtml(p)}</button>`
+  }).join("")
+
+  const rect = anchor.getBoundingClientRect()
+  menu.style.top = `${rect.bottom + 4}px`
+  menu.style.left = `${Math.max(8, rect.right - 144)}px`
+  menu.hidden = false
+  _providerMenuOpen = true
+
+  menu.querySelectorAll("button[data-provider]").forEach(btn => {
+    btn.addEventListener("click", async (ev) => {
+      ev.stopPropagation()
+      if (_providerSwitchInflight) return
+      const name = btn.dataset.provider
+      if (!name) return
+      if (name === currentProvider) {
+        closeProviderMenu()
+        return
+      }
+      if (isDemo) {
+        row.dataset.currentProvider = name
+        closeProviderMenu()
+        return
+      }
+
+      _providerSwitchInflight = true
+      menu.querySelectorAll("button").forEach(b => { b.disabled = true })
+      try {
+        await deps.invoke("wechat_cli_json", {
+          args: ["mode", "set", chatId, JSON.stringify({ kind: "solo", provider: name }), "--json"],
+        })
+      } catch (err) {
+        setPending(`切换 ${name} 失败：${deps.formatInvokeError ? deps.formatInvokeError(err) : String(err)}`)
+        setTimeout(() => setPending(""), 3000)
+        _providerSwitchInflight = false
+        closeProviderMenu()
+        return
+      }
+      row.dataset.currentProvider = name
+      closeProviderMenu()
+      setPending(`已切换到 ${name}`)
+      setTimeout(() => setPending(""), 2500)
+      _providerSwitchInflight = false
+      await deps.doctorPoller?.refresh?.()
+    })
+  })
+
+  _providerMenuOutsideHandler = (ev) => {
+    if (!menu.contains(ev.target) && !(anchor.contains && anchor.contains(ev.target))) {
+      closeProviderMenu()
+    }
+  }
+  document.addEventListener("click", _providerMenuOutsideHandler, true)
+
+  _providerMenuKeyHandler = (ev) => {
+    if (ev.key === "Escape") closeProviderMenu()
+  }
+  document.addEventListener("keydown", _providerMenuKeyHandler)
+}
+
 // Account row inline two-step confirm handler. Wired by main.js to the
 // #accounts-body click event. Returns true if it handled the click.
 export async function handleAccountRowClick(deps, ev) {
@@ -705,7 +807,7 @@ export async function handleAccountRowClick(deps, ev) {
   if (action === "cancel-delete") {
     const actCell = row.querySelector("td.act")
     const target = actCell || row.querySelector(".act")
-    target.innerHTML = `<button class="mini-action" data-action="ask-delete">删除</button>`
+    target.innerHTML = `<button class="mini-action" data-action="ask-delete">${icon("delete-02", { size: 13 })}删除</button>`
     return true
   }
   if (action === "confirm-delete") {

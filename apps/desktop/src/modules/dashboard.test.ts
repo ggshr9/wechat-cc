@@ -17,7 +17,7 @@ beforeEach(() => {
 })
 
 // Import AFTER document stub so setPending's getElementById doesn't crash
-const { renderDashboard, renderRestartButton, restartDaemon, runRestartSequence, stopDaemon, renderDiagnoseCard, hideDiagnoseCard, handleDiagnoseAction, __resetDiagnoseCardState, toggleProviderMenu, closeProviderMenu } = await import('./dashboard.js')
+const { renderDashboard, renderRestartButton, restartDaemon, runRestartSequence, stopDaemon, renderDiagnoseCard, hideDiagnoseCard, handleDiagnoseAction, __resetDiagnoseCardState, toggleProviderMenu, toggleUserProviderMenu, closeProviderMenu } = await import('./dashboard.js')
 
 function textNode(text = '') {
   return { nodeType: 3, textContent: text }
@@ -1197,5 +1197,53 @@ describe('provider menu', () => {
     expect(serviceStopCall).toBeUndefined()
     // Error toast should be visible
     expect(els.dashPending.textContent).toBe('切换 provider 失败')
+  })
+
+  it('toggleUserProviderMenu populates card menu with claude, codex, gemini buttons', async () => {
+    const { menuButtons } = installProviderMenuDom()
+    const row = { dataset: { chatId: 'chat-1', currentProvider: 'claude' } }
+    const anchor = {
+      ...fakeEl(),
+      closest: (sel: string) => sel === '.sub-user-card' ? row : null,
+      getBoundingClientRect: () => ({ bottom: 120, left: 280, top: 100, right: 340, width: 24, height: 24 }),
+      contains: (_node: any) => false,
+    }
+
+    await toggleUserProviderMenu(
+      { invoke: vi.fn(async () => ({ ok: true })), doctorPoller: { current: null } },
+      anchor,
+      makeProviderReport('claude'),
+    )
+
+    expect(menuButtons.map(b => b.dataset.provider)).toEqual(['claude', 'codex', 'gemini'])
+  })
+
+  it('user card provider click invokes mode set with JSON solo provider', async () => {
+    const { menuButtons } = installProviderMenuDom()
+    const row = { dataset: { chatId: 'chat-1', currentProvider: 'claude' } }
+    const anchor = {
+      ...fakeEl(),
+      closest: (sel: string) => sel === '.sub-user-card' ? row : null,
+      getBoundingClientRect: () => ({ bottom: 120, left: 280, top: 100, right: 340, width: 24, height: 24 }),
+      contains: (_node: any) => false,
+    }
+    const invoke = vi.fn(async () => ({ ok: true }))
+
+    await toggleUserProviderMenu({ invoke, doctorPoller: { refresh: vi.fn(async () => null) } }, anchor, makeProviderReport('claude'))
+    const geminiBtn = menuButtons.find(b => b.dataset.provider === 'gemini')
+    expect(geminiBtn).toBeDefined()
+    for (const handler of geminiBtn!._clickHandlers) {
+      await handler({ stopPropagation: () => {} })
+    }
+
+    const modeSetCall = invoke.mock.calls.find(c => {
+      const a = (c as any[])[1] as any
+      return a?.args?.[0] === 'mode' && a?.args?.[1] === 'set'
+    })
+    expect(modeSetCall).toBeDefined()
+    const args = (modeSetCall as any)[1].args
+    expect(args[2]).toBe('chat-1')
+    expect(JSON.parse(args[3])).toEqual({ kind: 'solo', provider: 'gemini' })
+    expect(args[4]).toBe('--json')
   })
 })

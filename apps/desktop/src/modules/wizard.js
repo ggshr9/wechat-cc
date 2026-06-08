@@ -9,6 +9,7 @@
 // Subscribes to: doctorPoller (renders env list on each successful poll)
 
 import { doctorRows, daemonStatusLine, escapeHtml } from "../view.js"
+import { icon } from "./icons.js"
 
 const STEP_ORDER = ["doctor", "provider", "wechat", "service"]
 
@@ -17,8 +18,8 @@ export function renderDoctorWizard(report) {
   if (list) {
     const rowsHtml = doctorRows(report).map(([name, check]) => {
       const ic = check.ok
-        ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-7"/></svg>'
-        : '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l8 8M12 4l-8 8"/></svg>'
+        ? icon("checkmark-circle-02", { size: 16 })
+        : icon("cancel-01", { size: 16 })
       const cls = check.ok ? "" : (check.severity === "hard" ? " bad bad-hard" : " bad")
       return `
         <div class="env-row${cls}">
