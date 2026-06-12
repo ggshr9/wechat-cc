@@ -19,6 +19,9 @@ import type { Access } from '../../lib/access'
 import type { PermissionMode } from '../../core/capability-matrix'
 import { makeMemoryFS } from '../memory/fs-api'
 import { parseAgenda, selectDue, markResolved } from '../companion/agenda'
+import { makeMessagesStore } from '../messages/store'
+import { makeThreadsStore } from '../threads/store'
+import { runThreadsExtraction } from '../threads/extractor'
 
 function errMsg(err: unknown): string { return err instanceof Error ? err.message : String(err) }
 
@@ -162,6 +165,25 @@ export function buildTickBodies(deps: TickDeps): TickBodies {
     })
     await runIntrospectTick({ events, observations, agent, chatId, log: deps.log })
     await saveCompanionConfig(deps.stateDir, { ...loadCompanionConfig(deps.stateDir), last_introspect_at: new Date().toISOString() })
+
+    // Threads extraction — independent eval, same cheap model, same tick.
+    // Parse failure is swallowed: watermark stays, retried next tick.
+    try {
+      const messagesStore = makeMessagesStore(deps.db)
+      const threadsStore = makeThreadsStore(deps.db)
+      await runThreadsExtraction({
+        chatId,
+        messages: messagesStore,
+        threads: threadsStore,
+        sdkEval,
+        recordEvent: async (reasoning) => {
+          await events.append({ kind: 'threads_extracted', trigger: 'introspect', reasoning })
+        },
+        log: deps.log,
+      })
+    } catch (err) {
+      deps.log('THREADS', `extraction failed: ${err instanceof Error ? err.message : err}`)
+    }
   }
 
   return { pushTick, introspectTick }

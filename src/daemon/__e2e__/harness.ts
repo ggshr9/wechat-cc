@@ -135,6 +135,13 @@ export interface DaemonHandle {
   waitForReplyTo(chatId: string, timeoutMs?: number): Promise<readonly OutboundMsg[]>
   /** Wait until any predicate over the outbox is satisfied. */
   waitForOutbound(predicate: (msgs: readonly OutboundMsg[]) => boolean, timeoutMs?: number): Promise<readonly OutboundMsg[]>
+  /**
+   * Eval-harness seam — manually fire one companion tick (bypasses scheduler
+   * gates). Returns when the tick body completes. Exposed so tests can
+   * trigger a tick at a specific virtual time rather than waiting for the
+   * scheduler to fire naturally.
+   */
+  fireTick(kind: 'push' | 'introspect', at?: Date): Promise<void>
   /** Stop daemon (signals SIGTERM equivalent), clean up stateDir. */
   stop(): Promise<void>
 }
@@ -201,12 +208,15 @@ export async function startTestDaemon(opts: TestDaemonOpts = {}): Promise<Daemon
   }
 
   // 5. Write companion config if provided
+  // Path mirrors companions/paths.ts: <stateDir>/companion/config.json
   if (opts.companion) {
-    writeFileSync(join(stateDir, 'companion-config.json'), JSON.stringify({
+    mkdirSync(join(stateDir, 'companion'), { recursive: true })
+    writeFileSync(join(stateDir, 'companion', 'config.json'), JSON.stringify({
       enabled: opts.companion.enabled ?? false,
       snooze_until: null,
       default_chat_id: opts.companion.default_chat_id ?? null,
       last_introspect_at: null,
+      timezone: 'UTC',
     }, null, 2))
   }
 
@@ -332,6 +342,9 @@ export async function startTestDaemon(opts: TestDaemonOpts = {}): Promise<Daemon
     },
     waitForOutbound(predicate, timeoutMs = 5000) {
       return ilink.waitForOutbound(predicate, timeoutMs)
+    },
+    fireTick(kind, at = new Date()) {
+      return daemonHandle.fireTick(kind, at)
     },
     async stop() {
       // Shut down via DaemonHandle — no SIGTERM, safe in test runner.
