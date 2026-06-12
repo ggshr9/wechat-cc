@@ -69,6 +69,33 @@ type A2AEvent = {
   http_status?: number
 }
 
+// Dialogue mock message shape (mirrors the CLI's Message type).
+type DialogueMessage = {
+  id: string
+  chatId: string
+  ts: string
+  direction: 'in' | 'out'
+  kind: string
+  text: string
+  provider?: string
+  source: string
+}
+
+// Dialogue mock thread shape (mirrors the CLI's Thread type).
+type DialogueThread = {
+  id: string
+  chatId: string
+  title: string
+  summary: string
+  facets: string[]
+  tags: string[]
+  private: boolean
+  status: 'active' | 'dormant' | 'done'
+  episodes: Array<{ from_ts: string; to_ts: string }>
+  createdTs: string
+  lastActive: string
+}
+
 const __mockState: {
   chats: Array<{ id: string; name: string; last_active: number; mode?: { kind: string; provider?: string } }>
   // Mirrors src/cli/schema.ts::ObservationEntry / MilestoneEntry so the
@@ -116,7 +143,16 @@ const __mockState: {
   //   providerInvokes: records `provider set <name>` calls from the provider
   //                   dropdown so Playwright tests can assert switching fired.
   providerInvokes: Array<{ provider: string; ts: number }>
-} = { chats: [], observations: [], milestones: [], sessions: [], daemonAlive: true, installProgress: null, installSimulationStep: 0, conversations: null, a2aAgents: [], a2aEvents: [], doctorOverride: null, doctorErrorOnce: false, serviceInvokes: [], healthProbeResult: true, logCalls: [], providerInvokes: [] }
+  // Dialogue mock state — seeded by demo.seed (always populated when chats
+  // are seeded). Provides realistic timeline + facet-thread data so dialogue-page
+  // specs don't need to hit the real SQLite DB.
+  dialogueMessages: DialogueMessage[]
+  dialogueThreads: DialogueThread[]
+  // Privacy-unlock passphrase for dialogue unlock mock. When set, the
+  // dialogue unlock intercept validates against this value.
+  dialoguePassphrase: string
+  dialogueUnlocked: boolean
+} = { chats: [], observations: [], milestones: [], sessions: [], daemonAlive: true, installProgress: null, installSimulationStep: 0, conversations: null, a2aAgents: [], a2aEvents: [], doctorOverride: null, doctorErrorOnce: false, serviceInvokes: [], healthProbeResult: true, logCalls: [], providerInvokes: [], dialogueMessages: [], dialogueThreads: [], dialoguePassphrase: '1234', dialogueUnlocked: false }
 
 // ─── A2A mock credentials ─────────────────────────────────────────────────────
 // The A2A routes (/v1/a2a/*) are served by the SAME Bun.serve instance as the
@@ -273,6 +309,9 @@ Bun.serve({
           __mockState.healthProbeResult = true
           __mockState.logCalls = []
           __mockState.providerInvokes = []
+          __mockState.dialogueMessages = []
+          __mockState.dialogueThreads = []
+          __mockState.dialogueUnlocked = false
           return Response.json({ result: { ok: true } })
         }
 
@@ -375,6 +414,61 @@ Bun.serve({
             { id: 'sess_2', project: 'compass',   created_at: Date.now() - 3600000, favorited: false, chat_id: 'chatA@im.wechat' },
             { id: 'sess_3', project: 'blog',      created_at: Date.now() - 7200000, favorited: false, chat_id: 'chatB@im.wechat' },
           ])
+          // Seed dialogue mock data — used by dialogue-page specs. These mirror
+          // the real daemon's `dialogue timeline` / `dialogue threads` output so
+          // dialogue-page.js has something to render in DRY_RUN without a real
+          // SQLite DB. Seeded unconditionally when chats are present so all
+          // "open 对话 pane" tests see a populated timeline by default.
+          // (chatId is already declared above as `args?.chat_id ?? 'test_chat'`)
+          __mockState.dialogueMessages = [
+            { id: 'msg_1', chatId, ts: new Date(Date.now() - 3_600_000).toISOString(), direction: 'in',  kind: 'text', text: '介绍一下 AI FDE 这个岗位', source: 'wechat' },
+            { id: 'msg_2', chatId, ts: new Date(Date.now() - 3_500_000).toISOString(), direction: 'out', kind: 'text', text: 'AI FDE（AI Field Detection Engineer）是…', source: 'daemon', provider: 'claude' },
+            { id: 'msg_3', chatId, ts: new Date(Date.now() - 3_400_000).toISOString(), direction: 'in',  kind: 'text', text: '有什么技能要求？', source: 'wechat' },
+            { id: 'msg_4', chatId, ts: new Date(Date.now() - 3_300_000).toISOString(), direction: 'out', kind: 'text', text: '主要需要 Python、SQL、机器学习基础…', source: 'daemon', provider: 'claude' },
+            { id: 'msg_5', chatId, ts: new Date(Date.now() - 600_000).toISOString(), direction: 'in',  kind: 'text', text: '今天天气怎么样？', source: 'wechat' },
+            { id: 'msg_6', chatId, ts: new Date(Date.now() - 580_000).toISOString(), direction: 'out', kind: 'text', text: '今天是晴天，温度 25°C。', source: 'daemon', provider: 'claude' },
+          ]
+          // Threads for facet views (knowledge/task/life). Private threads
+          // (stories/emotions) test the privacy-lock affordance.
+          __mockState.dialogueThreads = [
+            {
+              id: 'thread_career', chatId, title: 'AI FDE 岗位研究', summary: '了解 AI FDE 岗位要求',
+              facets: ['knowledge'], tags: ['figma插件skill', 'UI设计', '设计规范'], private: false,
+              status: 'done', episodes: [{ from_ts: new Date(Date.now() - 3_600_000).toISOString(), to_ts: new Date(Date.now() - 3_300_000).toISOString() }],
+              createdTs: new Date(Date.now() - 3_600_000).toISOString(), lastActive: new Date(Date.now() - 3_300_000).toISOString(),
+            },
+            {
+              id: 'thread_design', chatId, title: '设计规范讨论', summary: '关于 UI 设计规范的讨论',
+              facets: ['knowledge'], tags: ['UI设计'], private: false,
+              status: 'active', episodes: [], createdTs: new Date(Date.now() - 7_200_000).toISOString(),
+              lastActive: new Date(Date.now() - 7_000_000).toISOString(),
+            },
+            {
+              id: 'thread_figma', chatId, title: 'Figma 插件开发', summary: 'Figma 插件技能学习',
+              facets: ['knowledge'], tags: [], private: false,
+              status: 'dormant', episodes: [], createdTs: new Date(Date.now() - 14_400_000).toISOString(),
+              lastActive: new Date(Date.now() - 14_000_000).toISOString(),
+            },
+            {
+              id: 'thread_weather', chatId, title: '今日天气', summary: '今天天气相关对话',
+              facets: ['life'], tags: [], private: false,
+              status: 'done', episodes: [{ from_ts: new Date(Date.now() - 600_000).toISOString(), to_ts: new Date(Date.now() - 580_000).toISOString() }],
+              createdTs: new Date(Date.now() - 600_000).toISOString(), lastActive: new Date(Date.now() - 580_000).toISOString(),
+            },
+            {
+              id: 'thread_stories', chatId, title: '和花艺师闺蜜的周末', summary: '私密周末故事',
+              facets: ['life'], tags: [], private: true,
+              status: 'done', episodes: [], createdTs: new Date(Date.now() - 86_400_000).toISOString(),
+              lastActive: new Date(Date.now() - 86_000_000).toISOString(),
+            },
+            {
+              id: 'thread_emotions', chatId, title: '糟糕的心情', summary: '私密情绪记录',
+              facets: ['life'], tags: [], private: true,
+              status: 'done', episodes: [], createdTs: new Date(Date.now() - 172_800_000).toISOString(),
+              lastActive: new Date(Date.now() - 172_000_000).toISOString(),
+            },
+          ]
+          __mockState.dialogueUnlocked = false
           // Reset QR + env-check state when re-seeding
           __mockState.qrScanComplete = false
           __mockState.qrScanFails = false
@@ -397,6 +491,41 @@ Bun.serve({
         if (body.command === 'test.fail-qr-scan') {
           __mockState.qrScanFails = true
           return Response.json({ ok: true })
+        }
+
+        // ── Dialogue test-control commands ─────────────────────────────────
+        // dialogue.seed-messages: replace __mockState.dialogueMessages with a
+        // synthetic set of `count` messages. Used by dialogue-timeline.spec.ts
+        // to test upward paging (needs >100 messages so hasMore=true).
+        if (body.command === 'dialogue.seed-messages') {
+          const a = body.args as { count?: number; chat_id?: string } | undefined
+          const count = a?.count ?? 100
+          const cid = a?.chat_id ?? (__mockState.chats[0]?.id ?? 'test_chat')
+          const msgs: typeof __mockState.dialogueMessages = []
+          for (let i = 0; i < count; i++) {
+            const ts = new Date(Date.now() - (count - i) * 60_000).toISOString()
+            msgs.push({
+              id: `page_msg_${i}`,
+              chatId: cid,
+              ts,
+              direction: i % 2 === 0 ? 'in' : 'out',
+              kind: 'text',
+              text: i % 2 === 0 ? `用户消息 ${i + 1}` : `AI 回复 ${i + 1}`,
+              source: i % 2 === 0 ? 'wechat' : 'daemon',
+              provider: i % 2 === 0 ? undefined : 'claude',
+            })
+          }
+          __mockState.dialogueMessages = msgs
+          return Response.json({ result: { ok: true, count } })
+        }
+
+        // dialogue.set-no-lock: configure the unlock mock to return
+        // no_lock_configured on the next unlock call, regardless of passphrase.
+        // Used by dialogue-timeline.spec.ts to test the "no lock configured"
+        // path where the lock affordance should be hidden after any attempt.
+        if (body.command === 'dialogue.set-no-lock') {
+          __mockState.dialoguePassphrase = '\x00no_lock'  // sentinel: never matches any real passphrase
+          return Response.json({ result: { ok: true } })
         }
 
         // ── A2A test-control: seed agents + events ──────────────────────────
@@ -671,10 +800,132 @@ Bun.serve({
               if (s.created_at > g.last) g.last = s.created_at
               byChat.set(id, g)
             }
+            // When no sessions were seeded (e.g. dialogue-page tests that
+            // call demo.seed with chat_id but not withSessions), fall back to
+            // building the chat list from __mockState.chats so the dialogue
+            // chat-switcher still has something to show.
+            if (byChat.size === 0 && __mockState.chats.length > 0) {
+              for (const c of __mockState.chats) {
+                byChat.set(c.id, { aliases: new Set(['_default']), last: c.last_active })
+                names[c.id] = c.name
+              }
+            }
             const chats = [...byChat.entries()]
               .map(([chat_id, g]) => ({ chat_id, user_name: names[chat_id] ?? null, account_id: 'bot1', session_count: g.aliases.size, last_used_at: new Date(g.last).toISOString() }))
               .sort((a, b) => Date.parse(b.last_used_at) - Date.parse(a.last_used_at))
             return Response.json({ result: { ok: true, chats } })
+          }
+
+          // ── Dialogue namespace interceptors (DRY_RUN) ─────────────────────
+          // dialogue-page.js calls these to populate the 对话 pane without a
+          // real SQLite DB. All intercepts are unconditional in DRY_RUN so the
+          // page never falls through to the actual CLI (which would fail or leak
+          // real data in CI).
+          //
+          // dialogue timeline --chat-id X --limit N [--before T] --json
+          if (
+            dryRun &&
+            body.command === 'wechat_cli_json' &&
+            cliArgs[0] === 'dialogue' &&
+            cliArgs[1] === 'timeline'
+          ) {
+            const PAGE = 100
+            const beforeTs = cliArgs.includes('--before') ? cliArgs[cliArgs.indexOf('--before') + 1] : null
+            let msgs = __mockState.dialogueMessages
+            if (beforeTs) {
+              msgs = msgs.filter(m => m.ts < beforeTs)
+            }
+            const limitIdx = cliArgs.indexOf('--limit')
+            const limit = limitIdx >= 0 ? Number.parseInt(cliArgs[limitIdx + 1] ?? String(PAGE), 10) : PAGE
+            const slice = msgs.slice(-limit)
+            const hasMore = msgs.length > limit
+            return Response.json({ result: { messages: slice, hasMore } })
+          }
+
+          // dialogue threads --chat-id X --facet F [--include-private] --json
+          if (
+            dryRun &&
+            body.command === 'wechat_cli_json' &&
+            cliArgs[0] === 'dialogue' &&
+            cliArgs[1] === 'threads'
+          ) {
+            const facetIdx = cliArgs.indexOf('--facet')
+            const facet = facetIdx >= 0 ? cliArgs[facetIdx + 1] : null
+            const includePrivate = cliArgs.includes('--include-private') || __mockState.dialogueUnlocked
+            let threads = __mockState.dialogueThreads
+            if (facet) threads = threads.filter(t => t.facets.includes(facet))
+            if (!includePrivate) threads = threads.filter(t => !t.private)
+            return Response.json({ result: { threads } })
+          }
+
+          // dialogue thread-detail <id> --json
+          if (
+            dryRun &&
+            body.command === 'wechat_cli_json' &&
+            cliArgs[0] === 'dialogue' &&
+            cliArgs[1] === 'thread-detail'
+          ) {
+            const threadId = cliArgs[2]
+            const thread = __mockState.dialogueThreads.find(t => t.id === threadId)
+            if (!thread) return Response.json({ result: { ok: false, error: 'not_found' } })
+            // Build episodes from the thread's episode ranges + matching msgs.
+            const episodes = thread.episodes.map((ep, i) => ({
+              from_ts: ep.from_ts,
+              to_ts: ep.to_ts,
+              messages: __mockState.dialogueMessages.filter(m => m.ts >= ep.from_ts && m.ts <= ep.to_ts),
+            }))
+            return Response.json({ result: { thread, episodes } })
+          }
+
+          // dialogue search --chat-id X <query> --json
+          if (
+            dryRun &&
+            body.command === 'wechat_cli_json' &&
+            cliArgs[0] === 'dialogue' &&
+            cliArgs[1] === 'search'
+          ) {
+            // query is the 3rd positional arg (after --chat-id X which is flags)
+            const chatIdIdx = cliArgs.indexOf('--chat-id')
+            // collect remaining non-flag tokens as the query
+            const flags = new Set(['--chat-id', '--json', cliArgs[chatIdIdx + 1] ?? ''])
+            const query = cliArgs.filter(a => !a.startsWith('--') && !flags.has(a) && a !== 'dialogue' && a !== 'search').join(' ').toLowerCase().trim()
+            const hits = query.length >= 2
+              ? __mockState.dialogueMessages.filter(m => m.text.toLowerCase().includes(query))
+              : []
+            return Response.json({ result: { hits } })
+          }
+
+          // dialogue unlock --passphrase P --json
+          if (
+            dryRun &&
+            body.command === 'wechat_cli_json' &&
+            cliArgs[0] === 'dialogue' &&
+            cliArgs[1] === 'unlock'
+          ) {
+            const ppIdx = cliArgs.indexOf('--passphrase')
+            const passphrase = ppIdx >= 0 ? cliArgs[ppIdx + 1] : ''
+            // Sentinel '\x00no_lock' means the lock is not configured — return
+            // no_lock_configured so dialogue-page hides the lock affordance.
+            if (__mockState.dialoguePassphrase === '\x00no_lock') {
+              return Response.json({ result: { ok: false, error: 'no_lock_configured' } })
+            }
+            if (passphrase === __mockState.dialoguePassphrase) {
+              __mockState.dialogueUnlocked = true
+              return Response.json({ result: { ok: true } })
+            }
+            return Response.json({ result: { ok: false, error: 'wrong_passphrase' } })
+          }
+
+          // avatar info <key> --json — used by dialogue-page.js to resolve
+          // custom avatars. Return not-found for all keys in DRY_RUN so the
+          // page falls back to letter bubbles without making real file reads.
+          if (
+            dryRun &&
+            body.command === 'wechat_cli_json' &&
+            cliArgs[0] === 'avatar' &&
+            cliArgs[1] === 'info'
+          ) {
+            return Response.json({ result: { ok: true, exists: false, path: '' } })
           }
 
           // Intercept setup --qr-json in DRY_RUN for QR auto-pass flow.

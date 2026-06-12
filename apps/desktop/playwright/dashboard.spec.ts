@@ -123,15 +123,15 @@ test('memory pane has sidebar + observations + milestones + content viewer', asy
   await expect(pane.locator('#memory-meta')).toBeAttached()
 })
 
-test('sessions pane has detail-mode toggle + meta crumb', async ({ page, shimUrl, shim }) => {
+test('sessions pane mounts the dialogue-root container (Task 10 real-data page)', async ({ page, shimUrl, shim }) => {
   await shim.invoke('demo.seed', { chat_id: 'test_chat' })
   await bootIntoDashboard(page, shimUrl)
   await page.locator('button.dash-nav-link[data-pane="sessions"]').click()
   const pane = page.locator('article.dash-pane[data-pane="sessions"]')
   await expect(pane).toBeVisible()
-  // Real DOM from index.html — meta crumb + 精简/详细 mode toggle.
-  await expect(pane.locator('#sessions-meta')).toBeAttached()
-  await expect(pane.locator('#sessions-mode-compact')).toBeAttached()
+  // Task 10 replaced the static sessions scaffold with a single dynamic mount
+  // point; the old #sessions-meta / #sessions-mode-compact are gone.
+  await expect(pane.locator('#dialogue-root')).toBeAttached()
 })
 
 test('logs pane has meta crumb + content container', async ({ page, shimUrl, shim }) => {

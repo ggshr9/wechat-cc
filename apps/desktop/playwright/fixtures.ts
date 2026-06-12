@@ -25,7 +25,12 @@ async function waitForUrl(url: string, timeoutMs: number): Promise<void> {
   throw new Error(`Shim did not start at ${url} within ${timeoutMs}ms`)
 }
 
-const SHIM_PORT = 4174
+// Use a dedicated port for Playwright tests so they don't collide with a
+// running `bun run shim` (port 4174) on the developer's machine. The test
+// shim spawns its own ephemeral instance; EADDRINUSE is silently swallowed
+// by the fixture, which would cause tests to run against the non-DRY_RUN
+// shim and see real data. Using 4176 avoids that conflict.
+const SHIM_PORT = Number(process.env.PLAYWRIGHT_SHIM_PORT ?? '4176')
 const SHIM_URL = `http://127.0.0.1:${SHIM_PORT}`
 
 export const test = base.extend<ShimFixtures, WorkerShimFixtures>({

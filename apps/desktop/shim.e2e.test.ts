@@ -119,12 +119,13 @@ describe('apps/desktop shim — HTML structure', () => {
       'dash-stop', 'dash-restart', 'dash-refresh',
       'dash-rail-clock', 'dash-rail-text',
       'dev-banner',
-      // sessions pane (Task 9 — HTML scaffolding for v2.1)
-      'sessions-search', 'sessions-body', 'sessions-detail', 'sessions-back',
-      'sessions-export', 'sessions-delete', 'sessions-jsonl',
-      'sessions-refresh', 'sessions-meta', 'sessions-empty', 'sessions-detail-meta',
-      'sessions-count',
-      'sessions-mode-compact', 'sessions-mode-detailed',
+      // sessions pane — Task 10 replaced the static HTML scaffold with a
+      // single dynamic mount point rendered by dialogue-page.js. The old
+      // sessions-* IDs (sessions-search, sessions-body, sessions-detail, etc.)
+      // were removed. The nav badge and the root container are the only
+      // static anchors that remain.
+      'sessions-count',   // nav badge — still in index.html rail nav
+      'dialogue-root',    // dynamic mount point for dialogue-page.js
       // memory pane new zones (Task 9)
       'memory-top-zone', 'memory-observations', 'memory-milestones',
       'memory-decisions-toggle', 'memory-decisions-body',
