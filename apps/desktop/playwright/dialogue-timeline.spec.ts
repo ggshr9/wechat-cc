@@ -218,8 +218,10 @@ test('privacy lock: no_lock_configured response hides the lock affordance', asyn
   // Set the passphrase to empty so the shim returns no_lock_configured when
   // the user submits (the shim interprets an empty or mismatched passphrase
   // with the mock `no_lock` flag). We use `dialogue.set-no-lock` test-control.
-  await shim.invoke('dialogue.set-no-lock', {})
+  // Must run AFTER boot: demo.seed (inside bootAndOpenDialogue) restores the
+  // dialogue lock defaults so per-test state can't leak between specs.
   await bootAndOpenDialogue(page, shimUrl, shim)
+  await shim.invoke('dialogue.set-no-lock', {})
 
   await page.locator('#dialogue-views [data-view="life"]').click()
   const groups = page.locator('#dialogue-groups')

@@ -380,6 +380,12 @@ Bun.serve({
           const chatId = args?.chat_id ?? 'test_chat'
           __mockState.daemonAlive = args?.daemonAlive ?? true
           __mockState.chats = [{ id: chatId, name: 'Test User', last_active: Date.now() }]
+          // Seeding = known state. The shim process outlives individual
+          // playwright tests, so per-test mutations (dialogue.set-no-lock's
+          // sentinel passphrase, a prior unlock) must not leak into the next
+          // test's boot — restore the dialogue lock defaults here.
+          __mockState.dialoguePassphrase = '1234'
+          __mockState.dialogueUnlocked = false
           // Shape matches src/cli/schema.ts::ObservationEntry — { id, ts,
           // body, tone?, archived }. Earlier shim used `triggered_at` /
           // `label` on milestones which didn't match the CLI schema or

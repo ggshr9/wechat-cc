@@ -1251,7 +1251,10 @@ input { font: inherit; color: inherit; }
   position: fixed; top: 0; right: 0; bottom: 0; width: 380px;
   background: var(--paper); border-left: 1px solid var(--hair);
   box-shadow: -8px 0 24px rgba(0,0,0,0.08);
-  z-index: 50;
+  /* Above .window-drag-titlebar (1100): the drawer head's close × sits
+   * inside the drag strip's band; below the strip it would swallow the
+   * click as a window drag. Same rationale for .a2a-drawer / .lightbox. */
+  z-index: 1150;
   display: flex; flex-direction: column;
   transform: translateX(100%); transition: transform 200ms ease;
   pointer-events: none; visibility: hidden;
@@ -3688,7 +3691,7 @@ input { font: inherit; color: inherit; }
   position: fixed; inset: 0;
   background: rgba(0, 0, 0, 0.88);
   display: flex; align-items: center; justify-content: center;
-  z-index: 100;
+  z-index: 1150; /* above .window-drag-titlebar — top-band clicks must close, not drag */
   padding: 32px;
   cursor: zoom-out;
   animation: lightboxFade 180ms ease-out;
@@ -4115,7 +4118,7 @@ input { font: inherit; color: inherit; }
   background: var(--paper);
   border-left: 1px solid var(--hair);
   box-shadow: -4px 0 24px rgba(0,0,0,.10);
-  z-index: 300;
+  z-index: 1150; /* above .window-drag-titlebar — see .settings-drawer */
   display: flex;
   flex-direction: column;
 }
