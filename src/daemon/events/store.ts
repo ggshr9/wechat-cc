@@ -23,6 +23,7 @@ export type EventKind =
   | 'observation_written'
   | 'milestone'
   | 'memory_deleted'
+  | 'threads_extracted'
 
 export interface EventRecord {
   id: string                       // evt_<random>

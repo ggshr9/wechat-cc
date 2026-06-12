@@ -191,6 +191,59 @@ describe('migration v13 — events.kind adds memory_deleted + memory_path column
   })
 })
 
+describe('migration v13→v14 upgrade — events data preserved', () => {
+  it('preserves pre-v14 rows through the table recreate, memory_path intact', () => {
+    // Build a db that has run migrations 0..12 (user_version=13) so it
+    // has the v13 events schema (with memory_deleted kind + memory_path col)
+    // but has NOT yet run v14. We do this by running all migrations then
+    // rolling back user_version — but since SQLite doesn't support undoing
+    // DDL, the cleanest approach is to construct the v13 schema directly,
+    // matching the shape the v13 migration leaves behind, then run v14.
+    const db = new Database(':memory:')
+    // Replicate the exact v13 schema so runMigrations sees user_version=13
+    // and only applies v14.
+    db.exec(`
+      PRAGMA user_version = 13;
+      CREATE TABLE events (
+        id TEXT PRIMARY KEY NOT NULL,
+        chat_id TEXT NOT NULL,
+        ts TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN (
+          'cron_eval_pushed', 'cron_eval_skipped', 'cron_eval_failed',
+          'observation_written', 'milestone',
+          'memory_deleted'
+        )),
+        trigger TEXT NOT NULL,
+        reasoning TEXT NOT NULL,
+        push_text TEXT,
+        observation_id TEXT,
+        milestone_id TEXT,
+        jsonl_session_id TEXT,
+        memory_path TEXT
+      ) STRICT;
+      CREATE INDEX events_chat_ts ON events(chat_id, ts DESC);
+    `)
+    // Insert a row using the memory_deleted kind and a non-null memory_path
+    db.exec(
+      "INSERT INTO events(id, chat_id, ts, kind, trigger, reasoning, memory_path) " +
+      "VALUES ('evt_pre14', 'chat1', '2026-06-01T00:00:00.000Z', 'memory_deleted', 'mcp_tool_call', 'user said forget', '/foo/bar.md')"
+    )
+    // Run remaining migrations (only v14 applies, since user_version=13)
+    runMigrations(db)
+    // The row must have survived the CHECK rebuild
+    const row = db.query<{ reasoning: string; memory_path: string | null }, []>(
+      "SELECT reasoning, memory_path FROM events WHERE id = 'evt_pre14'"
+    ).get()
+    expect(row?.reasoning).toBe('user said forget')
+    expect(row?.memory_path).toBe('/foo/bar.md')
+    // And threads_extracted must now be accepted as a valid kind
+    expect(() => db.exec(
+      "INSERT INTO events(id, chat_id, ts, kind, trigger, reasoning) " +
+      "VALUES ('evt_new', 'chat1', '2026-06-11T00:00:00.000Z', 'threads_extracted', 'introspect', 'extracted threads')"
+    )).not.toThrow()
+  })
+})
+
 describe('dialogue migration', () => {
   it('creates messages / threads / thread_extract_state tables', () => {
     const db = openTestDb()

@@ -371,6 +371,8 @@ const EventKind = z.enum([
   'cron_eval_failed',
   'observation_written',
   'milestone',
+  'memory_deleted',
+  'threads_extracted',
 ])
 
 const EventEntry = z.object({
@@ -383,6 +385,7 @@ const EventEntry = z.object({
   observation_id: z.string().optional(),
   milestone_id: z.string().optional(),
   jsonl_session_id: z.string().optional(),
+  memory_path: z.string().optional(),
 })
 
 export const EventsListOutput = z.object({

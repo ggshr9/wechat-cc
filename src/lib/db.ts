@@ -343,7 +343,7 @@ const migrations: Migration[] = [
         extracted_to_ts TEXT NOT NULL
       ) STRICT;
     `)
-    // events CHECK 重建: 新建 → 拷贝 → 换名。列集与既有 schema 一致,仅 kind 集合扩大。
+    // events CHECK rebuild: create new → copy → rename. Column set matches the existing schema; only the kind set widens.
     // Guard: some unit-test harnesses skip the full migration chain and may
     // not have an events table (mirrors v11/v13 guard posture).
     const hasEvents = db
