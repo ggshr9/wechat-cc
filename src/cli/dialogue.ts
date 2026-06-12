@@ -231,6 +231,141 @@ export async function backfillFromCodexJsonl(
   return { scanned, inserted }
 }
 
+// ── Known-session backfill (spec-correct entry points) ────────────────
+
+/**
+ * Import only Claude session JSONLs whose session id the daemon actually
+ * knows (i.e. is present in `knownIds`). Walks `projectsRoot` one project
+ * dir at a time, but only reads files whose basename (minus .jsonl) is in
+ * `knownIds`. Unattributable files are silently skipped and counted in
+ * `skipped`.
+ *
+ * @returns knownSessions — count of ids supplied; filesFound — how many
+ *   resolved to an actual file on disk; scanned / inserted — turn-level counts.
+ */
+export async function backfillKnownClaudeSessions(
+  db: Db,
+  projectsRoot: string,
+  knownIds: ReadonlySet<string>,
+  chatId: string,
+  dryRun = false,
+): Promise<{ knownSessions: number; filesFound: number; scanned: number; inserted: number }> {
+  const store = makeMessagesStore(db)
+  let filesFound = 0
+  let scanned = 0
+  let inserted = 0
+
+  if (!existsSync(projectsRoot)) {
+    return { knownSessions: knownIds.size, filesFound, scanned, inserted }
+  }
+
+  let projectDirs: string[]
+  try {
+    projectDirs = readdirSync(projectsRoot, { withFileTypes: true })
+      .filter(e => e.isDirectory())
+      .map(e => join(projectsRoot, e.name))
+  } catch {
+    return { knownSessions: knownIds.size, filesFound, scanned, inserted }
+  }
+
+  for (const dirPath of projectDirs) {
+    let files: string[]
+    try {
+      files = readdirSync(dirPath).filter(f => f.endsWith('.jsonl'))
+    } catch {
+      continue
+    }
+    for (const f of files) {
+      const sessionId = f.replace(/\.jsonl$/, '')
+      if (!knownIds.has(sessionId)) continue // skip unattributable
+      filesFound++
+      const lines = readFileSync(join(dirPath, f), 'utf8')
+        .split('\n')
+        .filter(Boolean)
+      let idx = 0
+      for (const line of lines) {
+        idx++
+        const turn = parseClaudeJsonlLine(line)
+        if (!turn) continue
+        scanned++
+        if (dryRun) continue
+        const before = db.query<{ c: number }, []>('SELECT COUNT(*) c FROM messages').get()!.c
+        for (const rec of claudeTurnToMessages(turn, chatId, sessionId, idx)) {
+          await store.append(rec)
+        }
+        const after = db.query<{ c: number }, []>('SELECT COUNT(*) c FROM messages').get()!.c
+        inserted += after - before
+      }
+    }
+  }
+  return { knownSessions: knownIds.size, filesFound, scanned, inserted }
+}
+
+/**
+ * Import only Codex rollout files for thread ids that the daemon actually
+ * knows. For each id in `knownThreadIds`, uses `findCodexRollout` to locate
+ * its rollout file; resolves to null (skipped) when not found on disk.
+ * Does NOT walk the whole Codex sessions tree.
+ *
+ * @returns knownSessions — count of ids supplied; filesFound — how many
+ *   resolved to an actual file on disk; scanned / inserted — turn-level counts.
+ */
+export async function backfillKnownCodexSessions(
+  db: Db,
+  codexRoot: string,
+  knownThreadIds: ReadonlySet<string>,
+  chatId: string,
+  dryRun = false,
+): Promise<{ knownSessions: number; filesFound: number; scanned: number; inserted: number }> {
+  const { readCodexJsonlAsClaudeTurns, findCodexRollout } = await import('../lib/codex-jsonl')
+  const store = makeMessagesStore(db)
+  let filesFound = 0
+  let scanned = 0
+  let inserted = 0
+
+  for (const threadId of knownThreadIds) {
+    const rolloutPath = findCodexRollout(codexRoot, threadId)
+    if (!rolloutPath) continue // not found on disk — skip
+    filesFound++
+
+    const basename = rolloutPath.split('/').pop()!.replace(/\.jsonl$/, '')
+    const filenameAnchor = parseRolloutFilenameTs(basename)
+    const turns = readCodexJsonlAsClaudeTurns(rolloutPath)
+    let idx = 0
+    for (const turn of turns) {
+      idx++
+      const text = turn.message.content.map(b => b.text).join('\n')
+      if (!text) continue
+      scanned++
+      if (dryRun) continue
+      let ts: string
+      if (turn.ts) {
+        ts = turn.ts
+      } else if (filenameAnchor) {
+        const anchorMs = new Date(filenameAnchor).getTime()
+        ts = new Date(anchorMs + idx).toISOString()
+      } else {
+        continue
+      }
+      const rec: MessageRecord = {
+        id: `bf:codex:${basename}:${idx}`,
+        chatId,
+        ts,
+        direction: turn.type === 'user' ? 'in' : 'out',
+        kind: 'text',
+        text,
+        ...(turn.type === 'assistant' ? { provider: 'codex' } : {}),
+        source: 'backfill:codex',
+      }
+      const before = db.query<{ c: number }, []>('SELECT COUNT(*) c FROM messages').get()!.c
+      await store.append(rec)
+      const after = db.query<{ c: number }, []>('SELECT COUNT(*) c FROM messages').get()!.c
+      inserted += after - before
+    }
+  }
+  return { knownSessions: knownThreadIds.size, filesFound, scanned, inserted }
+}
+
 // ── Query functions ───────────────────────────────────────────────────
 
 export interface TimelineOpts {

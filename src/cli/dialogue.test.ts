@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { openTestDb } from '../lib/db'
 import {
   backfillFromClaudeJsonl, claudeTurnToMessages, backfillFromCodexJsonl,
+  backfillKnownClaudeSessions, backfillKnownCodexSessions,
   dialogueTimeline, dialogueThreads, dialogueSearch, dialogueThreadDetail,
   dialogueLockSet, dialogueUnlock,
 } from './dialogue'
@@ -142,6 +143,167 @@ describe('dialogue backfill', () => {
     const r = await backfillFromCodexJsonl(db, '/tmp/__nonexistent_codex_root__', 'chat1')
     expect(r.scanned).toBe(0)
     expect(r.inserted).toBe(0)
+  })
+})
+
+// ── backfillKnownClaudeSessions ───────────────────────────────────────
+
+describe('backfillKnownClaudeSessions', () => {
+  it('only imports files whose basename is in knownIds — others are skipped', async () => {
+    const db = openTestDb()
+    // Simulate ~/.claude/projects/ with two project dirs
+    const projectsRoot = mkdtempSync(join(tmpdir(), 'projects-'))
+    const projA = join(projectsRoot, '-home-user-projectA')
+    const projB = join(projectsRoot, '-home-user-projectB')
+    mkdirSync(projA)
+    mkdirSync(projB)
+
+    const knownId = 'sess-known-001'
+    const unknownId = 'sess-unknown-999'
+
+    // knownId lives in projA, unknownId lives in projB
+    writeFileSync(join(projA, `${knownId}.jsonl`), [
+      JSON.stringify({ type: 'user', message: { content: 'known session msg' }, timestamp: '2026-06-01T00:00:00Z' }),
+    ].join('\n'))
+    writeFileSync(join(projB, `${unknownId}.jsonl`), [
+      JSON.stringify({ type: 'user', message: { content: 'unknown session msg' }, timestamp: '2026-06-01T00:01:00Z' }),
+    ].join('\n'))
+
+    const knownIds = new Set([knownId])
+    const result = await backfillKnownClaudeSessions(db, projectsRoot, knownIds, 'chat1', false)
+
+    expect(result.knownSessions).toBe(1)
+    expect(result.filesFound).toBe(1)
+    expect(result.scanned).toBe(1)
+    expect(result.inserted).toBe(1)
+    // Only the known session's message should be in the db
+    const rows = db.query<{ text: string }, []>('SELECT text FROM messages').all()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.text).toBe('known session msg')
+  })
+
+  it('dry-run: counts but does not write', async () => {
+    const db = openTestDb()
+    const projectsRoot = mkdtempSync(join(tmpdir(), 'projects-dry-'))
+    const projDir = join(projectsRoot, '-home-user-proj')
+    mkdirSync(projDir)
+    const sessId = 'sess-dry-001'
+    writeFileSync(join(projDir, `${sessId}.jsonl`), [
+      JSON.stringify({ type: 'user', message: { content: 'dry run msg' }, timestamp: '2026-06-01T00:00:00Z' }),
+    ].join('\n'))
+
+    const result = await backfillKnownClaudeSessions(
+      db, projectsRoot, new Set([sessId]), 'chat1', true,
+    )
+    expect(result.knownSessions).toBe(1)
+    expect(result.filesFound).toBe(1)
+    expect(result.scanned).toBe(1)
+    expect(result.inserted).toBe(0)
+    expect(db.query('SELECT COUNT(*) c FROM messages').get()).toEqual({ c: 0 })
+  })
+
+  it('filesFound=0 when known ids do not correspond to any file on disk', async () => {
+    const db = openTestDb()
+    const projectsRoot = mkdtempSync(join(tmpdir(), 'projects-none-'))
+    const projDir = join(projectsRoot, '-home-user-proj')
+    mkdirSync(projDir)
+    // No files in dir; known id won't resolve
+    const result = await backfillKnownClaudeSessions(
+      db, projectsRoot, new Set(['sess-missing']), 'chat1', false,
+    )
+    expect(result.knownSessions).toBe(1)
+    expect(result.filesFound).toBe(0)
+    expect(result.scanned).toBe(0)
+    expect(result.inserted).toBe(0)
+  })
+
+  it('returns zero counts when projectsRoot does not exist', async () => {
+    const db = openTestDb()
+    const result = await backfillKnownClaudeSessions(
+      db, '/tmp/__nonexistent_projects_root__', new Set(['any-id']), 'chat1', false,
+    )
+    expect(result.knownSessions).toBe(1)
+    expect(result.filesFound).toBe(0)
+    expect(result.scanned).toBe(0)
+    expect(result.inserted).toBe(0)
+  })
+})
+
+// ── backfillKnownCodexSessions ────────────────────────────────────────
+
+describe('backfillKnownCodexSessions', () => {
+  it('locates rollout by thread id and imports only that file', async () => {
+    const db = openTestDb()
+    const codexRoot = mkdtempSync(join(tmpdir(), 'codex-known-'))
+    const dayDir = join(codexRoot, '2026', '06', '01')
+    mkdirSync(dayDir, { recursive: true })
+
+    const threadId = 'abc123'
+    const otherThreadId = 'xyz789'
+
+    // Write rollout for the known thread
+    const rolloutPath = join(dayDir, `rollout-2026-06-01T10-00-00-${threadId}.jsonl`)
+    writeFileSync(rolloutPath, [
+      JSON.stringify({ timestamp: '2026-06-01T10:00:01.000Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'known thread msg' }] } }),
+    ].join('\n'))
+
+    // Write rollout for an unrelated thread (should NOT be imported)
+    writeFileSync(join(dayDir, `rollout-2026-06-01T10-00-00-${otherThreadId}.jsonl`), [
+      JSON.stringify({ timestamp: '2026-06-01T10:00:02.000Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'other thread msg' }] } }),
+    ].join('\n'))
+
+    const result = await backfillKnownCodexSessions(
+      db, codexRoot, new Set([threadId]), 'chat1', false,
+    )
+    expect(result.knownSessions).toBe(1)
+    expect(result.filesFound).toBe(1)
+    expect(result.scanned).toBe(1)
+    expect(result.inserted).toBe(1)
+    const rows = db.query<{ text: string }, []>('SELECT text FROM messages').all()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.text).toBe('known thread msg')
+  })
+
+  it('dry-run: counts but does not write', async () => {
+    const db = openTestDb()
+    const codexRoot = mkdtempSync(join(tmpdir(), 'codex-known-dry-'))
+    const dayDir = join(codexRoot, '2026', '06', '01')
+    mkdirSync(dayDir, { recursive: true })
+    const threadId = 'drythread'
+    writeFileSync(join(dayDir, `rollout-2026-06-01T12-00-00-${threadId}.jsonl`), [
+      JSON.stringify({ timestamp: '2026-06-01T12:00:01.000Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'dry codex' }] } }),
+    ].join('\n'))
+    const result = await backfillKnownCodexSessions(
+      db, codexRoot, new Set([threadId]), 'chat1', true,
+    )
+    expect(result.filesFound).toBe(1)
+    expect(result.scanned).toBe(1)
+    expect(result.inserted).toBe(0)
+    expect(db.query('SELECT COUNT(*) c FROM messages').get()).toEqual({ c: 0 })
+  })
+
+  it('filesFound=0 when thread id has no rollout on disk', async () => {
+    const db = openTestDb()
+    const codexRoot = mkdtempSync(join(tmpdir(), 'codex-known-miss-'))
+    // No rollout files at all
+    const result = await backfillKnownCodexSessions(
+      db, codexRoot, new Set(['ghost-thread']), 'chat1', false,
+    )
+    expect(result.knownSessions).toBe(1)
+    expect(result.filesFound).toBe(0)
+    expect(result.scanned).toBe(0)
+    expect(result.inserted).toBe(0)
+  })
+
+  it('report shape: knownSessions / filesFound / scanned / inserted all present', async () => {
+    const db = openTestDb()
+    const result = await backfillKnownCodexSessions(
+      db, '/tmp/__nonexistent__', new Set(['t1', 't2']), 'chat1', false,
+    )
+    expect(result).toHaveProperty('knownSessions', 2)
+    expect(result).toHaveProperty('filesFound', 0)
+    expect(result).toHaveProperty('scanned', 0)
+    expect(result).toHaveProperty('inserted', 0)
   })
 })
 

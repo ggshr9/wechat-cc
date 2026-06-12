@@ -1938,37 +1938,61 @@ const dialogueBackfillCmd = defineCommand({
     const { homedir } = await import('node:os')
     const home = homedir()
 
-    // Claude sessions root: walk all project dirs under ~/.claude/projects/
-    // and collect every *.jsonl file, passing each directory to backfillFromClaudeJsonl.
-    // (backfillFromClaudeJsonl accepts a directory of *.jsonl files — so we
-    // pass the whole ~/.claude/projects/ tree one project-dir at a time.)
-    const { backfillFromClaudeJsonl, backfillFromCodexJsonl } = await import('./src/cli/dialogue')
-    const { existsSync, readdirSync } = await import('node:fs')
+    const { backfillKnownClaudeSessions, backfillKnownCodexSessions } = await import('./src/cli/dialogue')
     const { openWechatDb } = await import('./src/lib/db')
     const db = openWechatDb(STATE_DIR)
 
-    let claudeScanned = 0
-    let claudeInserted = 0
+    // ── Collect known Claude session ids from the daemon DB ──────────────
+    // Primary source: sessions table (provider='claude').
+    // Secondary source: events.jsonl_session_id (historical introspect references).
+    const claudeIdRows = db
+      .query<{ session_id: string }, []>(
+        "SELECT session_id FROM sessions WHERE provider='claude'",
+      )
+      .all()
+    const eventIdRows = db
+      .query<{ jsonl_session_id: string }, []>(
+        'SELECT DISTINCT jsonl_session_id FROM events WHERE jsonl_session_id IS NOT NULL',
+      )
+      .all()
+    const knownClaudeIds = new Set<string>([
+      ...claudeIdRows.map(r => r.session_id),
+      ...eventIdRows.map(r => r.jsonl_session_id),
+    ])
+
     const projectsRoot = join(home, '.claude', 'projects')
-    if (existsSync(projectsRoot)) {
-      for (const entry of readdirSync(projectsRoot, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue
-        const dirPath = join(projectsRoot, entry.name)
-        const r = await backfillFromClaudeJsonl(db, dirPath, chatId, dryRun)
-        claudeScanned += r.scanned
-        claudeInserted += r.inserted
-      }
-    }
+    const claudeResult = await backfillKnownClaudeSessions(
+      db, projectsRoot, knownClaudeIds, chatId, dryRun,
+    )
+
+    // ── Collect known Codex thread ids from the daemon DB ────────────────
+    const codexIdRows = db
+      .query<{ session_id: string }, []>(
+        "SELECT session_id FROM sessions WHERE provider='codex'",
+      )
+      .all()
+    const knownCodexIds = new Set<string>(codexIdRows.map(r => r.session_id))
 
     const codexRoot = join(home, '.codex', 'sessions')
-    const { scanned: codexScanned, inserted: codexInserted } =
-      await backfillFromCodexJsonl(db, codexRoot, chatId, dryRun)
+    const codexResult = await backfillKnownCodexSessions(
+      db, codexRoot, knownCodexIds, chatId, dryRun,
+    )
 
     const result = {
       chatId,
       dryRun,
-      claude: { scanned: claudeScanned, inserted: claudeInserted },
-      codex: { scanned: codexScanned, inserted: codexInserted },
+      claude: {
+        knownSessions: claudeResult.knownSessions,
+        filesFound: claudeResult.filesFound,
+        scanned: claudeResult.scanned,
+        inserted: claudeResult.inserted,
+      },
+      codex: {
+        knownSessions: codexResult.knownSessions,
+        filesFound: codexResult.filesFound,
+        scanned: codexResult.scanned,
+        inserted: codexResult.inserted,
+      },
     }
     console.log(JSON.stringify(result, null, 2))
   },
