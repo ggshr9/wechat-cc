@@ -42,7 +42,7 @@ describe('threads extractor', () => {
     await messages.append({ id: '1', chatId: 'c1', ts: '2026-06-11T01:00:00Z', direction: 'in', kind: 'text', text: 'x', source: 'live' })
     const res = await runThreadsExtraction({
       chatId: 'c1', messages, threads, log: () => {}, recordEvent: async () => {},
-      sdkEval: async () => '{"ops":[{"op":"touch","id":"thr_ghost","episode":{"from_ts":"a","to_ts":"b"}},{"op":"create","title":"y","summary":"","facets":["life"],"tags":[],"private":false,"episode":{"from_ts":"a","to_ts":"b"}}]}',
+      sdkEval: async () => '{"ops":[{"op":"touch","id":"thr_ghost","episode":{"from_ts":"2026-06-11T01:00:00Z","to_ts":"2026-06-11T01:00:00Z"}},{"op":"create","title":"y","summary":"","facets":["life"],"tags":[],"private":false,"episode":{"from_ts":"2026-06-11T01:00:00Z","to_ts":"2026-06-11T01:00:00Z"}}]}',
     })
     expect(res.applied).toBe(1)
     expect(res.skipped).toBe(1)

@@ -7,18 +7,21 @@
  */
 import type { Middleware } from './types'
 import type { MessageRecord } from '../../lib/messages-store'
-import { inboundMessageId } from '../../lib/messages-store'
+import { inboundMessageId, inboundFallbackMessageId } from '../../lib/messages-store'
 
 export interface MessagesMwDeps {
-  append(rec: MessageRecord): Promise<void>
+  append(rec: MessageRecord): Promise<number>
   log: (tag: string, line: string) => void
 }
 
 export function makeMwMessages(deps: MessagesMwDeps): Middleware {
   return async (ctx, next) => {
     const when = new Date(ctx.msg.createTimeMs || ctx.receivedAtMs)
+    const messageId = ctx.msg.createTimeMs
+      ? inboundMessageId(ctx.msg.userId, ctx.msg.createTimeMs)
+      : inboundFallbackMessageId(ctx.msg.userId, ctx.msg.text)
     const rec: MessageRecord = {
-      id: inboundMessageId(ctx.msg.userId, ctx.msg.createTimeMs || ctx.receivedAtMs),
+      id: messageId,
       chatId: ctx.msg.chatId,
       ts: when.toISOString(),
       direction: 'in',

@@ -73,6 +73,10 @@ export function buildExtractPrompt(input: ExtractPromptInput): string {
 - knowledge：了解和研究过的内容（技术、领域知识）
 - life：生活、情绪、闲聊、兴趣爱好
 
+## 时间戳规则
+
+时间戳必须原样复制消息列表中显示的 ts(UTC、以 Z 结尾),不要改写时区。
+
 ## 输出格式
 
 只输出一个 JSON 对象 \`{"ops":[...]}\`，不要添加 markdown、解释或其他内容。
@@ -154,7 +158,10 @@ ${messagesSection}
 // ── Zod schema ────────────────────────────────────────────────────────────────
 
 const FacetEnum = z.enum(['task', 'knowledge', 'life'])
-const EpisodeSchema = z.object({ from_ts: z.string(), to_ts: z.string() })
+
+/** Require UTC ISO 8601 with Z suffix so lexicographic comparison against db timestamps is stable. */
+const UtcIsoString = z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/)
+const EpisodeSchema = z.object({ from_ts: UtcIsoString, to_ts: UtcIsoString })
 const ThreadStatusEnum = z.enum(['active', 'dormant', 'done'])
 
 const CreateOpSchema = z.object({

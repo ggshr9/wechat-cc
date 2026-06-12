@@ -130,12 +130,9 @@ export async function backfillFromClaudeJsonl(
       if (!turn) continue
       scanned++
       if (dryRun) continue
-      const before = db.query<{ c: number }, []>('SELECT COUNT(*) c FROM messages').get()!.c
       for (const rec of claudeTurnToMessages(turn, chatId, sessionKey, idx)) {
-        await store.append(rec)
+        inserted += await store.append(rec)
       }
-      const after = db.query<{ c: number }, []>('SELECT COUNT(*) c FROM messages').get()!.c
-      inserted += after - before
     }
   }
   return { scanned, inserted }
@@ -222,10 +219,7 @@ export async function backfillFromCodexJsonl(
         ...(turn.type === 'assistant' ? { provider: 'codex' } : {}),
         source: 'backfill:codex',
       }
-      const before = db.query<{ c: number }, []>('SELECT COUNT(*) c FROM messages').get()!.c
-      await store.append(rec)
-      const after = db.query<{ c: number }, []>('SELECT COUNT(*) c FROM messages').get()!.c
-      inserted += after - before
+      inserted += await store.append(rec)
     }
   }
   return { scanned, inserted }
@@ -289,12 +283,9 @@ export async function backfillKnownClaudeSessions(
         if (!turn) continue
         scanned++
         if (dryRun) continue
-        const before = db.query<{ c: number }, []>('SELECT COUNT(*) c FROM messages').get()!.c
         for (const rec of claudeTurnToMessages(turn, chatId, sessionId, idx)) {
-          await store.append(rec)
+          inserted += await store.append(rec)
         }
-        const after = db.query<{ c: number }, []>('SELECT COUNT(*) c FROM messages').get()!.c
-        inserted += after - before
       }
     }
   }
@@ -357,10 +348,7 @@ export async function backfillKnownCodexSessions(
         ...(turn.type === 'assistant' ? { provider: 'codex' } : {}),
         source: 'backfill:codex',
       }
-      const before = db.query<{ c: number }, []>('SELECT COUNT(*) c FROM messages').get()!.c
-      await store.append(rec)
-      const after = db.query<{ c: number }, []>('SELECT COUNT(*) c FROM messages').get()!.c
-      inserted += after - before
+      inserted += await store.append(rec)
     }
   }
   return { knownSessions: knownThreadIds.size, filesFound, scanned, inserted }

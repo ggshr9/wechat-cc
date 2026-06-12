@@ -174,22 +174,35 @@ export function buildTickBodies(deps: TickDeps): TickBodies {
     }
 
     // Threads extraction — independent eval, same cheap model, same tick.
-    // Parse failure is swallowed: watermark stays, retried next tick.
+    // Run for every chat that has messages so other chats' conversations
+    // also accumulate threads, not just the companion default_chat_id.
+    // Parse failure per-chat is swallowed: watermark stays, retried next tick.
+    // One-chat failure does not abort extraction for the remaining chats.
+    const messagesStore = makeMessagesStore(deps.db)
+    const threadsStore = makeThreadsStore(deps.db)
+    let allChatIds: string[]
     try {
-      const messagesStore = makeMessagesStore(deps.db)
-      const threadsStore = makeThreadsStore(deps.db)
-      await runThreadsExtraction({
-        chatId,
-        messages: messagesStore,
-        threads: threadsStore,
-        sdkEval,
-        recordEvent: async (reasoning) => {
-          await events.append({ kind: 'threads_extracted', trigger: 'introspect', reasoning })
-        },
-        log: deps.log,
-      })
+      allChatIds = await messagesStore.listChatIds()
     } catch (err) {
-      deps.log('THREADS', `extraction failed: ${err instanceof Error ? err.message : err}`)
+      deps.log('THREADS', `listChatIds failed: ${err instanceof Error ? err.message : err}`)
+      allChatIds = []
+    }
+    for (const extractChatId of allChatIds) {
+      try {
+        const chatEvents = makeEventsStore(deps.db, extractChatId)
+        await runThreadsExtraction({
+          chatId: extractChatId,
+          messages: messagesStore,
+          threads: threadsStore,
+          sdkEval,
+          recordEvent: async (reasoning) => {
+            await chatEvents.append({ kind: 'threads_extracted', trigger: 'introspect', reasoning })
+          },
+          log: deps.log,
+        })
+      } catch (err) {
+        deps.log('THREADS', `extraction failed for chat ${extractChatId}: ${err instanceof Error ? err.message : err}`)
+      }
     }
   }
 

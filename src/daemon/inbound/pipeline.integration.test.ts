@@ -33,7 +33,7 @@ function fakeDeps(over: Partial<{
       log,
     },
     attachments: { materializeAttachments: async () => {}, inboxDir: '/tmp', log },
-    messages: { append: async () => {}, log },
+    messages: { append: async () => 1, log },
     activity: { recordInbound: activity, log },
     milestone: { fireMilestonesFor: milestone, log },
     welcome: { maybeWriteWelcomeObservation: welcome, log },

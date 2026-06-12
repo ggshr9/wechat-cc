@@ -120,6 +120,58 @@ describe('e2e: threads extraction on introspect tick', () => {
     }
   })
 
+  it('A2: two chats with messages both get threads + watermarks', { timeout: 40000 }, async () => {
+    // Pre-seed two distinct chats
+    const stateDir = mkdtempSync(join(tmpdir(), 'wechat-cc-e2e-twochats-'))
+    mkdirSync(join(stateDir, 'inbox'), { recursive: true })
+    mkdirSync(join(stateDir, 'memory'), { recursive: true })
+    mkdirSync(join(stateDir, 'accounts'), { recursive: true })
+    mkdirSync(join(stateDir, 'memory', 'chatA'), { recursive: true })
+    mkdirSync(join(stateDir, 'memory', 'chatB'), { recursive: true })
+
+    const preDb = openWechatDb(stateDir)
+    const preMessages = makeMessagesStore(preDb)
+    await preMessages.append({ id: 'a-1', chatId: 'chatA', ts: '2026-06-11T02:00:00Z', direction: 'in', kind: 'text', text: '排产A', source: 'live' })
+    await preMessages.append({ id: 'b-1', chatId: 'chatB', ts: '2026-06-11T03:00:00Z', direction: 'in', kind: 'text', text: '排产B', source: 'live' })
+    preDb.close()
+
+    let evalCount = 0
+
+    const daemon = await startTestDaemon({
+      stateDirOverride: stateDir,
+      dangerously: true,
+      companion: {
+        enabled: true,
+        default_chat_id: 'chatA',
+      },
+      claudeScript: {
+        async onDispatch(prompt: string) {
+          if (prompt.includes('新增对话片段')) {
+            evalCount++
+            return { toolCalls: [], finalText: '{"ops":[]}' }
+          }
+          return { toolCalls: [], finalText: '{"write":false,"reasoning":"skip"}' }
+        },
+      },
+    })
+
+    const db = openWechatDb(daemon.stateDir)
+    try {
+      await daemon.fireTick('introspect', new Date('2026-06-12T04:00:00Z'))
+
+      // Both chats should have received an extraction eval
+      expect(evalCount).toBeGreaterThanOrEqual(2)
+
+      // Both chats should have a watermark
+      const tStore = makeThreadsStore(db)
+      expect(await tStore.getWatermark('chatA')).toBe('2026-06-11T02:00:00Z')
+      expect(await tStore.getWatermark('chatB')).toBe('2026-06-11T03:00:00Z')
+    } finally {
+      db.close()
+      await daemon.stop()
+    }
+  })
+
   it('introspect tick with no messages skips threads eval entirely', { timeout: 20000 }, async () => {
     let threadsEvalFired = false
     let introspectEvalFired = false
