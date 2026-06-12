@@ -1817,6 +1817,143 @@ input { font: inherit; color: inherit; }
 .privacy-submit { margin-top: 18px; }
 .privacy-hint { margin-top: 12px; color: #aaaab2; text-align: center; font-size: 14px; }
 
+/* ── data-driven dialogue: chat switcher / search / views / hits ─────── */
+.dialogue-chat-switcher {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 16px;
+}
+.dialogue-chat-switcher[hidden] { display: none; }
+.dialogue-chat-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 11px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  color: #777780;
+  text-align: left;
+  font-size: 13px;
+}
+.dialogue-chat-row:hover { background: #f0f0f8; color: #37373c; }
+.dialogue-chat-row.is-active {
+  border-color: #66666f;
+  background: #fff;
+  color: #343439;
+}
+.dialogue-chat-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dialogue-chat-count {
+  flex: none;
+  min-width: 20px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #ededf1;
+  color: #85858d;
+  font-size: 11px;
+  text-align: center;
+}
+.dialogue-search {
+  position: relative;
+  margin-bottom: 14px;
+}
+.dialogue-search-icon {
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  color: #aaaab2;
+  pointer-events: none;
+}
+.dialogue-search-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+.dialogue-search input {
+  width: 100%;
+  height: 34px;
+  padding: 0 12px 0 34px;
+  border: 1px solid #d8d8df;
+  border-radius: 9px;
+  background: #fff;
+  font: inherit;
+  font-size: 13px;
+  color: var(--dialogue-ink);
+  outline: none;
+}
+.dialogue-search input:focus { border-color: #57575f; box-shadow: 0 0 0 3px rgba(60, 60, 70, .08); }
+.dialogue-search input::placeholder { color: #aaaab2; }
+.dialogue-views {
+  display: flex;
+  gap: 5px;
+  margin-bottom: 18px;
+}
+.dialogue-view-btn {
+  flex: 1;
+  height: 30px;
+  border-radius: 9px;
+  color: #777780;
+  font-size: 13px;
+  font-weight: 600;
+}
+.dialogue-view-btn:hover { background: #f0f0f8; color: #37373c; }
+.dialogue-view-btn.is-active {
+  background: #222226;
+  color: #fff;
+}
+/* command messages render as a muted single-line row */
+.dialogue-cmd {
+  max-width: 980px;
+  margin: 0 0 14px 42px;
+  padding: 4px 10px;
+  display: inline-block;
+  border-radius: 7px;
+  background: #f0f0f3;
+  color: #9898a2;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+/* search-hit flash on the anchored timeline message */
+.dialogue-hit { animation: dialogue-hit-flash 2.2s ease-out; }
+@keyframes dialogue-hit-flash {
+  0%, 30% { background: rgba(106, 157, 232, .16); }
+  100% { background: transparent; }
+}
+.dialogue-search-hits { display: grid; gap: 6px; padding-top: 8px; }
+.dialogue-hit-row {
+  display: grid;
+  gap: 4px;
+  padding: 11px 14px;
+  border: 1px solid #ececf2;
+  border-radius: 12px;
+  background: #fff;
+  text-align: left;
+}
+.dialogue-hit-row:hover { border-color: #c9c9d4; background: #fafaff; }
+.dialogue-hit-who { color: #252529; font-size: 13px; font-weight: 700; }
+.dialogue-hit-text { color: #6a6a72; font-size: 13px; line-height: 1.6; }
+/* thread detail in the stage */
+.dialogue-thread-summary {
+  max-width: 980px;
+  margin-bottom: 26px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid rgba(0, 0, 0, .05);
+}
+.dialogue-thread-title { margin-bottom: 8px; color: #252529; font-size: 19px; font-weight: 700; }
+.dialogue-thread-text { margin: 10px 0 14px; color: #4d4d54; font-size: 13px; line-height: 1.75; }
+.dialogue-episode { margin-bottom: 22px; }
+.dialogue-episode-head {
+  margin-bottom: 12px;
+  color: #9898a2;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .04em;
+}
+
 @media (max-width: 880px) {
   .dialogue-page { grid-template-columns: 250px minmax(0, 1fr); }
   .dialogue-sidebar { padding-left: 18px; }
