@@ -35,6 +35,10 @@ import { makeCompanion } from './ilink/companion'
 import { makeTransport } from './ilink/transport'
 import type { Db } from '../lib/db'
 import type { ConversationStore } from '../core/conversation-store'
+import { makeMessagesStore } from './messages/store'
+
+/** Monotonic counter to keep same-millisecond outbound IDs unique. */
+let outSeq = 0
 
 export type { Account } from './ilink/context'
 /** Alias for Account — used in polling-lifecycle public API. */
@@ -102,6 +106,7 @@ export function makeIlinkAdapter(opts: {
   conversationStore: ConversationStore
 }): IlinkAdapter {
   const ctx = makeIlinkContext(opts)
+  const messagesStore = makeMessagesStore(opts.db)
   const { stateDir, accounts, ctxStore, conversationStore, acctStore, sessionState, pending, sweepTimer, projectsFile, resolveAccount, assertChatRoutable } = ctx
 
   const voice = makeVoice(ctx)
@@ -148,6 +153,22 @@ export function makeIlinkAdapter(opts: {
         for (const part of chunks) {
           await ilinkSendMessage(acct.baseUrl, acct.token, botTextMessage(chatId, part, ctxToken))
         }
+        // Record ONE row with the full pre-chunk text (fire-and-forget;
+        // recording failure must never break the send result).
+        void messagesStore.append({
+          id: `out:${chatId}:${Date.now()}:${outSeq++}`,
+          chatId,
+          ts: new Date().toISOString(),
+          direction: 'out',
+          kind: 'text',
+          text,
+          // provider context is not available at the transport layer;
+          // the coordinator knows the provider but sendMessage is a generic
+          // send primitive called from many paths (admin, mode, onboarding,
+          // AI reply). Recorded as undefined — can be enriched later if needed.
+          provider: undefined,
+          source: 'live',
+        }).catch(err => log('MESSAGES', `outbound record failed: ${err instanceof Error ? err.message : err}`))
         return { msgId: `sent:${Date.now()}` }
       } catch (err) {
         return {
