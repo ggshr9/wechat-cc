@@ -191,6 +191,42 @@ describe('migration v13 — events.kind adds memory_deleted + memory_path column
   })
 })
 
+describe('dialogue migration', () => {
+  it('creates messages / threads / thread_extract_state tables', () => {
+    const db = openTestDb()
+    db.exec(`INSERT INTO messages(id, chat_id, ts, direction, kind, text, source)
+             VALUES ('m1', 'c1', '2026-06-11T00:00:00Z', 'in', 'text', 'hi', 'live')`)
+    db.exec(`INSERT INTO threads(id, chat_id, title, facets, created_ts, last_active)
+             VALUES ('t1', 'c1', '排产', '["task"]', '2026-06-11T00:00:00Z', '2026-06-11T00:00:00Z')`)
+    db.exec(`INSERT INTO thread_extract_state(chat_id, extracted_to_ts)
+             VALUES ('c1', '2026-06-11T00:00:00Z')`)
+    expect(db.query('SELECT COUNT(*) c FROM messages').get()).toEqual({ c: 1 })
+  })
+
+  it('messages.direction is constrained to in/out', () => {
+    const db = openTestDb()
+    expect(() => db.exec(
+      `INSERT INTO messages(id, chat_id, ts, direction, kind, text, source)
+       VALUES ('m2', 'c1', '2026-06-11T00:00:00Z', 'sideways', 'text', 'x', 'live')`,
+    )).toThrow()
+  })
+
+  it('events accepts the new threads_extracted kind and still accepts old kinds', () => {
+    const db = openTestDb()
+    db.exec(`INSERT INTO events(id, chat_id, ts, kind, trigger, reasoning)
+             VALUES ('e1', 'c1', '2026-06-11T00:00:00Z', 'threads_extracted', 'introspect', 'r')`)
+    db.exec(`INSERT INTO events(id, chat_id, ts, kind, trigger, reasoning)
+             VALUES ('e2', 'c1', '2026-06-11T00:00:00Z', 'observation_written', 'cron', 'r')`)
+    expect(db.query('SELECT COUNT(*) c FROM events').get()).toEqual({ c: 2 })
+  })
+
+  it('events rows survive the CHECK rebuild', () => {
+    const db = openTestDb()
+    const cols = db.query(`SELECT name FROM pragma_table_info('events')`).all() as Array<{ name: string }>
+    expect(cols.map(c => c.name)).toContain('observation_id')
+  })
+})
+
 describe('migration v11 — participants column', () => {
   it('adds nullable TEXT participants column to conversations', () => {
     const db = openDb({ path: ':memory:' })
