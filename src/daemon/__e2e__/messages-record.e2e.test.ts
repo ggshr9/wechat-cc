@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest'
 import { startTestDaemon } from './harness'
 import { openWechatDb } from '../../lib/db'
-import { makeMessagesStore } from '../messages/store'
+import { makeMessagesStore } from '../../lib/messages-store'
 
 describe('e2e: mw-messages records inbound into messages table', () => {
   it('sends "你好" and finds 1 row direction=in in messages', async () => {

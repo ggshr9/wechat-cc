@@ -6,8 +6,8 @@
  * here) — see build.ts ordering.
  */
 import type { Middleware } from './types'
-import type { MessageRecord } from '../messages/store'
-import { inboundMessageId } from '../messages/store'
+import type { MessageRecord } from '../../lib/messages-store'
+import { inboundMessageId } from '../../lib/messages-store'
 
 export interface MessagesMwDeps {
   append(rec: MessageRecord): Promise<void>

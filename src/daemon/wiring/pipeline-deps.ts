@@ -22,7 +22,7 @@ import { loadAgentConfig, saveAgentConfig } from '../../lib/agent-config'
 import { materializeAttachments } from '../media'
 import { loadGuardConfig } from '../guard/store'
 import { makeFireMilestonesFor, makeRecordInbound, makeMaybeWriteWelcomeObservation } from './side-effects'
-import { makeMessagesStore } from '../messages/store'
+import { makeMessagesStore } from '../../lib/messages-store'
 
 export interface PipelineDepsOpts {
   stateDir: string

@@ -15,7 +15,7 @@
  *
  * House pattern: src/daemon/observations/store.ts
  */
-import type { Db } from '../../lib/db'
+import type { Db } from './db'
 
 export type Facet = 'task' | 'knowledge' | 'life'
 export type ThreadStatus = 'active' | 'dormant' | 'done'

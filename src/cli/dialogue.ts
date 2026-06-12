@@ -26,8 +26,8 @@
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Db } from '../lib/db'
-import { makeMessagesStore, type MessageRecord } from '../daemon/messages/store'
-import { makeThreadsStore, type ThreadRecord, type Facet } from '../daemon/threads/store'
+import { makeMessagesStore, type MessageRecord } from '../lib/messages-store'
+import { makeThreadsStore, type ThreadRecord, type Facet } from '../lib/threads-store'
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -156,7 +156,7 @@ export async function backfillFromCodexJsonl(
   chatId: string,
   dryRun = false,
 ): Promise<{ scanned: number; inserted: number }> {
-  const { readCodexJsonlAsClaudeTurns } = await import('../daemon/sessions/codex-jsonl')
+  const { readCodexJsonlAsClaudeTurns } = await import('../lib/codex-jsonl')
   const store = makeMessagesStore(db)
   let scanned = 0
   let inserted = 0

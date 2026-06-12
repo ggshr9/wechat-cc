@@ -11,7 +11,7 @@
 // zod v4: `import { z } from 'zod'` resolves to undefined under vitest's
 // bundler; use the default export instead.
 import z from 'zod'
-import type { Facet, Episode, ThreadStatus } from './store'
+import type { Facet, Episode, ThreadStatus } from '../../lib/threads-store'
 
 // ── Public types ──────────────────────────────────────────────────────────────
 

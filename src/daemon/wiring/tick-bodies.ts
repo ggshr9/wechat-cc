@@ -19,8 +19,8 @@ import type { Access } from '../../lib/access'
 import type { PermissionMode } from '../../core/capability-matrix'
 import { makeMemoryFS } from '../memory/fs-api'
 import { parseAgenda, selectDue, markResolved } from '../companion/agenda'
-import { makeMessagesStore } from '../messages/store'
-import { makeThreadsStore } from '../threads/store'
+import { makeMessagesStore } from '../../lib/messages-store'
+import { makeThreadsStore } from '../../lib/threads-store'
 import { runThreadsExtraction } from '../threads/extractor'
 
 function errMsg(err: unknown): string { return err instanceof Error ? err.message : String(err) }

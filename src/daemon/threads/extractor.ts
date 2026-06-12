@@ -4,8 +4,8 @@
  * cheap model for thread ops, applies them, advances the watermark.
  * Parse failure → no watermark advance → retried next tick.
  */
-import type { MessagesStore } from '../messages/store'
-import type { ThreadsStore } from './store'
+import type { MessagesStore } from '../../lib/messages-store'
+import type { ThreadsStore } from '../../lib/threads-store'
 import { buildExtractPrompt, parseExtractResponse } from './extract-prompt'
 
 const BATCH_LIMIT = 500     // cap one round; remainder picked up next tick

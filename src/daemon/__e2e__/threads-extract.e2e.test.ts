@@ -18,8 +18,8 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { startTestDaemon } from './harness'
 import { openWechatDb } from '../../lib/db'
-import { makeMessagesStore } from '../messages/store'
-import { makeThreadsStore } from '../threads/store'
+import { makeMessagesStore } from '../../lib/messages-store'
+import { makeThreadsStore } from '../../lib/threads-store'
 import { makeEventsStore } from '../events/store'
 
 describe('e2e: threads extraction on introspect tick', () => {

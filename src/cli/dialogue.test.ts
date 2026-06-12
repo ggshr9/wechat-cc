@@ -9,8 +9,8 @@ import {
   dialogueLockSet, dialogueUnlock,
 } from './dialogue'
 import { loadAgentConfig, saveAgentConfig } from '../lib/agent-config'
-import { makeMessagesStore } from '../daemon/messages/store'
-import { makeThreadsStore } from '../daemon/threads/store'
+import { makeMessagesStore } from '../lib/messages-store'
+import { makeThreadsStore } from '../lib/threads-store'
 
 describe('dialogue backfill', () => {
   it('claudeTurnToMessages maps user/assistant turns to in/out records', () => {

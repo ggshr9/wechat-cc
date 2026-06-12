@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { openTestDb } from '../../lib/db'
-import { makeMessagesStore } from '../messages/store'
-import { makeThreadsStore } from './store'
+import { makeMessagesStore } from '../../lib/messages-store'
+import { makeThreadsStore } from '../../lib/threads-store'
 import { runThreadsExtraction } from './extractor'
 
 function setup() {

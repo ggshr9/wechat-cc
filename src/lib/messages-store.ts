@@ -3,7 +3,7 @@
  * Written by mw-messages (inbound) + ilink-glue (outbound) + backfill.
  * Read by `wechat-cc dialogue *` CLI and the threads extractor.
  */
-import type { Db } from '../../lib/db'
+import type { Db } from './db'
 
 export type MessageDirection = 'in' | 'out'
 

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { openTestDb } from '../../lib/db'
-import { makeThreadsStore } from './store'
+import { openTestDb } from './db'
+import { makeThreadsStore } from './threads-store'
 
 describe('threads store', () => {
   it('create + list returns thread with parsed facets/tags', async () => {

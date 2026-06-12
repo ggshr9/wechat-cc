@@ -35,7 +35,7 @@ import { makeCompanion } from './ilink/companion'
 import { makeTransport } from './ilink/transport'
 import type { Db } from '../lib/db'
 import type { ConversationStore } from '../core/conversation-store'
-import { makeMessagesStore } from './messages/store'
+import { makeMessagesStore } from '../lib/messages-store'
 
 /**
  * Monotonic counter to keep same-millisecond outbound IDs unique. Module

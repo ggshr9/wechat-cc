@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { openTestDb } from '../../lib/db'
-import { makeMessagesStore, inboundMessageId } from './store'
+import { openTestDb } from './db'
+import { makeMessagesStore, inboundMessageId } from './messages-store'
 
 describe('messages store', () => {
   it('append + listRange returns rows in ts order', async () => {

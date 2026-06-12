@@ -557,7 +557,7 @@ const sessionsReadJsonlCmd = defineCommand({
     // unchanged. Skipping is no longer the right answer; users who tested
     // /chat or /codex want to see their conversation just like with claude.
     if (rec.provider === 'codex') {
-      const { findCodexRollout, readCodexJsonlAsClaudeTurns } = await import('./src/daemon/sessions/codex-jsonl')
+      const { findCodexRollout, readCodexJsonlAsClaudeTurns } = await import('./src/lib/codex-jsonl')
       const { homedir } = await import('node:os')
       const codexRoot = join(homedir(), '.codex', 'sessions')
       const path = findCodexRollout(codexRoot, rec.session_id)
