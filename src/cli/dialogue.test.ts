@@ -6,7 +6,9 @@ import { openTestDb } from '../lib/db'
 import {
   backfillFromClaudeJsonl, claudeTurnToMessages, backfillFromCodexJsonl,
   dialogueTimeline, dialogueThreads, dialogueSearch, dialogueThreadDetail,
+  dialogueLockSet, dialogueUnlock,
 } from './dialogue'
+import { loadAgentConfig, saveAgentConfig } from '../lib/agent-config'
 import { makeMessagesStore } from '../daemon/messages/store'
 import { makeThreadsStore } from '../daemon/threads/store'
 
@@ -437,5 +439,47 @@ describe('dialogueThreadDetail', () => {
     })
     const result = await dialogueThreadDetail(db, id)
     expect(result!.episodes[0]!.messages.length).toBeLessThanOrEqual(200)
+  })
+})
+
+describe('dialogue lock', () => {
+  it('set → unlock roundtrip succeeds with correct passphrase', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dlock-'))
+    dialogueLockSet(dir, 'hunter2')
+    expect(dialogueUnlock(dir, 'hunter2')).toEqual({ ok: true })
+  })
+
+  it('unlock fails with wrong passphrase', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dlock-wrong-'))
+    dialogueLockSet(dir, 'correct horse')
+    expect(dialogueUnlock(dir, 'battery staple')).toEqual({ ok: false })
+  })
+
+  it('unlock with no lock configured returns no_lock_configured', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dlock-none-'))
+    expect(dialogueUnlock(dir, 'anything')).toEqual({ ok: false, error: 'no_lock_configured' })
+  })
+
+  it('set persists a salt:hexhash and a fresh salt each time', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dlock-salt-'))
+    dialogueLockSet(dir, 'p')
+    const first = loadAgentConfig(dir).dialogue_lock_hash
+    dialogueLockSet(dir, 'p')
+    const second = loadAgentConfig(dir).dialogue_lock_hash
+    expect(first).toMatch(/^[0-9a-f]+:[0-9a-f]+$/)
+    expect(first).not.toBe(second) // different salt → different stored hash
+    // both still verify
+    expect(dialogueUnlock(dir, 'p')).toEqual({ ok: true })
+  })
+
+  it('set preserves other agent-config fields', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dlock-preserve-'))
+    saveAgentConfig(dir, { provider: 'codex', dangerouslySkipPermissions: false, autoStart: false, closeStopsDaemon: true, bot_name: '小助手' })
+    dialogueLockSet(dir, 'secret')
+    const cfg = loadAgentConfig(dir)
+    expect(cfg.provider).toBe('codex')
+    expect(cfg.bot_name).toBe('小助手')
+    expect(cfg.closeStopsDaemon).toBe(true)
+    expect(dialogueUnlock(dir, 'secret')).toEqual({ ok: true })
   })
 })

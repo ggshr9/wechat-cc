@@ -1974,6 +1974,39 @@ const dialogueBackfillCmd = defineCommand({
   },
 })
 
+const dialogueLockSetCmd = defineCommand({
+  meta: { name: 'set', description: 'Set the dialogue private-thread passphrase (scrypt hash stored in agent-config.json)' },
+  args: {
+    passphrase: { type: 'string', required: true, description: 'Passphrase to lock private threads behind' },
+    json: { type: 'boolean', default: false },
+  },
+  async run({ args }) {
+    const { dialogueLockSet } = await import('./src/cli/dialogue')
+    dialogueLockSet(STATE_DIR, args.passphrase)
+    console.log(JSON.stringify({ ok: true }))
+  },
+})
+
+const dialogueLockCmd = defineCommand({
+  meta: { name: 'lock', description: 'Manage the dialogue private-thread passphrase' },
+  subCommands: {
+    set: dialogueLockSetCmd,
+  },
+})
+
+const dialogueUnlockCmd = defineCommand({
+  meta: { name: 'unlock', description: 'Verify the dialogue private-thread passphrase' },
+  args: {
+    passphrase: { type: 'string', required: true, description: 'Candidate passphrase' },
+    json: { type: 'boolean', default: false },
+  },
+  async run({ args }) {
+    const { dialogueUnlock } = await import('./src/cli/dialogue')
+    const result = dialogueUnlock(STATE_DIR, args.passphrase)
+    console.log(JSON.stringify(result))
+  },
+})
+
 const dialogueCmd = defineCommand({
   meta: { name: 'dialogue', description: 'Dialogue page data — backfill + query commands' },
   subCommands: {
@@ -1982,6 +2015,8 @@ const dialogueCmd = defineCommand({
     threads: dialogueThreadsCmd,
     search: dialogueSearchCmd,
     'thread-detail': dialogueThreadDetailCmd,
+    lock: dialogueLockCmd,
+    unlock: dialogueUnlockCmd,
   },
 })
 

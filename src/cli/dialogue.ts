@@ -352,6 +352,70 @@ export async function dialogueThreadDetail(db: Db, id: string): Promise<ThreadDe
   return { thread, episodes }
 }
 
+// ── Dialogue lock (private-thread passphrase) ──────────────────────────
+//
+// The desktop dialogue page hides private threads behind a passphrase. The
+// passphrase is never stored — only a scrypt-derived hash, persisted in
+// agent-config.json under `dialogue_lock_hash` as `salt:hexhash` (both hex).
+// Verification re-derives the key from the candidate passphrase + stored
+// salt and compares constant-time via timingSafeEqual.
+
+import { scryptSync, randomBytes, timingSafeEqual } from 'node:crypto'
+import { loadAgentConfig, saveAgentConfig } from '../lib/agent-config'
+
+const SCRYPT_KEYLEN = 32
+
+/**
+ * Derive a scrypt hash for `passphrase` against `saltHex`, returned as hex.
+ */
+function deriveHashHex(passphrase: string, saltHex: string): string {
+  return scryptSync(passphrase, Buffer.from(saltHex, 'hex'), SCRYPT_KEYLEN).toString('hex')
+}
+
+/**
+ * Store the scrypt hash of `passphrase` into agent-config.json
+ * (`dialogue_lock_hash` = `salt:hexhash`). A fresh random 16-byte salt is
+ * generated each time, so re-setting the same passphrase produces a new hash.
+ */
+export function dialogueLockSet(stateDir: string, passphrase: string): void {
+  const saltHex = randomBytes(16).toString('hex')
+  const hashHex = deriveHashHex(passphrase, saltHex)
+  const config = loadAgentConfig(stateDir)
+  saveAgentConfig(stateDir, { ...config, dialogue_lock_hash: `${saltHex}:${hashHex}` })
+}
+
+export interface DialogueUnlockResult {
+  ok: boolean
+  error?: 'no_lock_configured'
+}
+
+/**
+ * Verify `passphrase` against the stored dialogue lock hash.
+ *   - No hash configured  → { ok: false, error: 'no_lock_configured' }
+ *   - Correct passphrase  → { ok: true }
+ *   - Wrong passphrase    → { ok: false }
+ * Comparison is constant-time over the derived key.
+ */
+export function dialogueUnlock(stateDir: string, passphrase: string): DialogueUnlockResult {
+  const config = loadAgentConfig(stateDir)
+  const stored = config.dialogue_lock_hash
+  if (!stored) return { ok: false, error: 'no_lock_configured' }
+  const sep = stored.indexOf(':')
+  if (sep <= 0) return { ok: false }
+  const saltHex = stored.slice(0, sep)
+  const expectedHex = stored.slice(sep + 1)
+  let expected: Buffer
+  try {
+    expected = Buffer.from(expectedHex, 'hex')
+  } catch {
+    return { ok: false }
+  }
+  if (expected.length !== SCRYPT_KEYLEN) return { ok: false }
+  const candidate = scryptSync(passphrase, Buffer.from(saltHex, 'hex'), SCRYPT_KEYLEN)
+  if (candidate.length !== expected.length) return { ok: false }
+  return { ok: timingSafeEqual(candidate, expected) }
+}
+
 // ── Private helpers ───────────────────────────────────────────────────
 
 function safeReaddir(p: string): string[] {

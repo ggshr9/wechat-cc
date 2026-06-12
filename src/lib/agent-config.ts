@@ -35,6 +35,11 @@ export interface AgentConfig {
   // A2A: optional listener and registered peer agent records.
   a2a_listen?: A2AListen
   a2a_agents?: A2AAgentRecord[]
+  // Dialogue private-thread lock. Stores a scrypt-derived passphrase hash
+  // as `salt:hexhash` (both hex). Absent → no lock configured (the desktop
+  // dialogue page hides its unlock affordance). Set/verified via the
+  // `dialogue lock set` / `dialogue unlock` CLI commands.
+  dialogue_lock_hash?: string
 }
 
 // ── A2A sub-schemas ──────────────────────────────────────────────────────────
@@ -74,6 +79,7 @@ const AgentConfigSchema = z.object({
       }
     }),
   bot_name: z.string().nullable().optional(),
+  dialogue_lock_hash: z.string().optional(),
 })
 
 /**
@@ -130,6 +136,7 @@ export function loadAgentConfig(stateDir: string): AgentConfig {
       ...(a2aAgents && a2aAgents.length > 0 ? { a2a_agents: a2aAgents } : {}),
       ...(parsed.bot_name === null ? { bot_name: null } : {}),
       ...(typeof parsed.bot_name === 'string' ? { bot_name: parsed.bot_name } : {}),
+      ...(typeof parsed.dialogue_lock_hash === 'string' ? { dialogue_lock_hash: parsed.dialogue_lock_hash } : {}),
     }
   } catch {
     return { provider: 'claude', dangerouslySkipPermissions: true, autoStart: true, closeStopsDaemon: false }
