@@ -1,0 +1,160 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  discoverProjectMemory,
+  formatSynthesisPrompt,
+  projectDisplayName,
+  summarizeProjectMemories,
+  synthesizeOverview,
+  OVERVIEW_FILENAME,
+} from './memory-synthesis'
+
+let projectsRoot: string
+let stateDir: string
+
+// Lay down a Claude-style per-project memory dir under projectsRoot.
+function seedProject(encodedDir: string, files: Record<string, string>): void {
+  const memDir = join(projectsRoot, encodedDir, 'memory')
+  mkdirSync(memDir, { recursive: true })
+  for (const [rel, content] of Object.entries(files)) {
+    const abs = join(memDir, rel)
+    mkdirSync(join(abs, '..'), { recursive: true })
+    writeFileSync(abs, content)
+  }
+}
+
+beforeEach(() => {
+  projectsRoot = mkdtempSync(join(tmpdir(), 'wcc-proj-'))
+  stateDir = mkdtempSync(join(tmpdir(), 'wcc-state-'))
+})
+afterEach(() => {
+  rmSync(projectsRoot, { recursive: true, force: true })
+  rmSync(stateDir, { recursive: true, force: true })
+})
+
+describe('projectDisplayName', () => {
+  it('strips home prefix + container, keeps hyphenated project names', () => {
+    expect(projectDisplayName('-Users-me-Documents-sec-company', '/Users/me')).toBe('sec-company')
+    expect(projectDisplayName('-Users-me-Documents-wechat-cc', '/Users/me')).toBe('wechat-cc')
+    expect(projectDisplayName('-Users-me-Documents-kawanco-dev', '/Users/me')).toBe('kawanco-dev')
+  })
+  it('handles underscore-containing home dirs (encoded same as path sep)', () => {
+    // /Users/na_me → "-Users-na-me-"; project "my-proj" under Documents
+    expect(projectDisplayName('-Users-na-me-Documents-my-proj', '/Users/na_me')).toBe('my-proj')
+  })
+  it('falls back to the de-prefixed dir when home does not match', () => {
+    expect(projectDisplayName('-some-other-path', '/Users/me')).toBe('some-other-path')
+  })
+})
+
+describe('discoverProjectMemory', () => {
+  it('finds projects with a memory dir, splitting MEMORY.md from other files', () => {
+    seedProject('-Users-me-Documents-alpha', {
+      'MEMORY.md': '- [x](x.md) — hook',
+      'x.md': 'fact x',
+    })
+    seedProject('-Users-me-Documents-beta', { 'note.md': 'fact y' })
+    const found = discoverProjectMemory(projectsRoot)
+    expect(found.length).toBe(2)
+    const alpha = found.find(p => p.encodedDir.endsWith('alpha'))!
+    expect(alpha.index).toContain('hook')
+    expect(alpha.files.map(f => f.path)).toEqual(['x.md'])
+    const beta = found.find(p => p.encodedDir.endsWith('beta'))!
+    expect(beta.index).toBeNull()
+    expect(beta.files.length).toBe(1)
+  })
+
+  it('skips project dirs with no memory dir and empty memory dirs', () => {
+    mkdirSync(join(projectsRoot, '-no-memory-here'), { recursive: true })
+    mkdirSync(join(projectsRoot, '-empty', 'memory'), { recursive: true })
+    seedProject('-real', { 'a.md': 'x' })
+    const found = discoverProjectMemory(projectsRoot)
+    expect(found.map(p => p.encodedDir)).toEqual(['-real'])
+  })
+
+  it('returns [] when projectsRoot does not exist', () => {
+    expect(discoverProjectMemory(join(projectsRoot, 'nope'))).toEqual([])
+  })
+})
+
+describe('summarizeProjectMemories', () => {
+  it('returns read-only per-project metadata + content', () => {
+    seedProject('-real-alpha', { 'MEMORY.md': 'idx', 'a.md': 'hello' })
+    const out = summarizeProjectMemories(projectsRoot)
+    expect(out.length).toBe(1)
+    expect(out[0].index).toBe('idx')
+    expect(out[0].files).toEqual([{ path: 'a.md', bytes: 5, content: 'hello' }])
+    expect(out[0].totalBytes).toBeGreaterThan(0)
+  })
+})
+
+describe('formatSynthesisPrompt', () => {
+  it('embeds project names, counts, and content', () => {
+    const prompt = formatSynthesisPrompt([
+      { encodedDir: '-p-alpha', displayName: 'alpha', index: 'idx', files: [{ path: 'a.md', content: 'detail-a' }], totalBytes: 10 },
+    ])
+    expect(prompt).toContain('共 1 个项目')
+    expect(prompt).toContain('alpha')
+    expect(prompt).toContain('detail-a')
+    expect(prompt).toContain('项目地图')
+  })
+})
+
+describe('synthesizeOverview', () => {
+  it('dry-run discovers without calling eval or writing', async () => {
+    seedProject('-alpha', { 'MEMORY.md': 'idx', 'x.md': 'fact' })
+    let called = false
+    const res = await synthesizeOverview({
+      stateDir,
+      adminChatId: 'admin@im.wechat',
+      projectsRoot,
+      dryRun: true,
+      sdkEval: async () => { called = true; return 'should not run' },
+    })
+    expect(called).toBe(false)
+    expect(res.projectsFound).toBe(1)
+    expect(res.projectNames).toEqual(['alpha'])
+    expect(res.filesScanned).toBe(2)
+    expect(res.written).toBeUndefined()
+  })
+
+  it('writes _overview.md under the admin memory dir on a real run', async () => {
+    seedProject('-Users-me-Documents-alpha', { 'MEMORY.md': 'idx', 'x.md': 'fact' })
+    const res = await synthesizeOverview({
+      stateDir,
+      adminChatId: 'admin@im.wechat',
+      projectsRoot,
+      sdkEval: async (p) => `整理结果(based on ${p.length} chars)`,
+    })
+    expect(res.written?.path).toBe(OVERVIEW_FILENAME)
+    const onDisk = readFileSync(join(stateDir, 'memory', 'admin@im.wechat', OVERVIEW_FILENAME), 'utf8')
+    expect(onDisk).toContain('整理结果')
+    expect(onDisk).toContain('由 wechat-cc') // provenance stamp
+  })
+
+  it('no projects → no eval, no write', async () => {
+    let called = false
+    const res = await synthesizeOverview({
+      stateDir,
+      adminChatId: 'admin@im.wechat',
+      projectsRoot,
+      sdkEval: async () => { called = true; return 'x' },
+    })
+    expect(called).toBe(false)
+    expect(res.projectsFound).toBe(0)
+    expect(res.written).toBeUndefined()
+  })
+
+  it('empty eval result is not written', async () => {
+    seedProject('-p', { 'a.md': 'x' })
+    const res = await synthesizeOverview({
+      stateDir,
+      adminChatId: 'admin@im.wechat',
+      projectsRoot,
+      sdkEval: async () => '   ',
+    })
+    expect(res.written).toBeUndefined()
+  })
+})

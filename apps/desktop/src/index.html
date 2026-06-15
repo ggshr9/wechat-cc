@@ -426,6 +426,10 @@
               <aside class="memory-sources-panel" id="memory-sources-panel" hidden>
                 <div class="memory-sources-head">
                   <span>记忆来源</span>
+                  <button id="memory-synthesize-btn" class="btn" title="读本机 Claude 各项目记忆，重新整理出「CC 眼中的你」总体记忆（供 bot 使用）">
+                    <span class="ic" data-hg-icon="star" data-hg-size="16"></span>
+                    重新整理
+                  </button>
                   <button id="memory-refresh" class="btn">
                     <span class="ic" data-hg-icon="refresh" data-hg-size="16"></span>
                     刷新
@@ -444,6 +448,18 @@
                       </div>
                       <div class="memory-milestones" id="memory-milestones"></div>
                     </section>
+                  </div>
+                </section>
+
+                <section class="memory-fold">
+                  <button class="memory-fold-toggle" id="memory-projects-toggle" aria-expanded="false">
+                    <span>本机项目记忆（只读 · 总体记忆的来源）</span>
+                    <span class="chev">▾</span>
+                  </button>
+                  <div class="memory-fold-body" id="memory-projects-body" hidden>
+                    <div class="memory-projects" id="memory-projects">
+                      <p class="empty-state">展开后读取本机 Claude 各项目的记忆…</p>
+                    </div>
                   </div>
                 </section>
 

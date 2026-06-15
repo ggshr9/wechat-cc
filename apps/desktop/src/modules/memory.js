@@ -28,7 +28,8 @@ import { icon } from "./icons.js"
 // "we have a file open" flag for the edit button visibility. `editing`
 // flips the textarea/render visibility; `pristine` is the unsaved-content
 // snapshot used by the cancel path.
-/** @type {{ users: MemoryList, observations: ObservationsList["observations"], milestones: MilestonesList["milestones"], selected: { userId: string, path: string } | null, marked: { parse: (s: string) => string } | null, editing: boolean, pristine: string, dirtySwitchPending: string | null }} */
+/** @typedef {{ intro: string, projects: Array<{ name: string, summary: string }> }} OverviewModel */
+/** @type {{ users: MemoryList, observations: ObservationsList["observations"], milestones: MilestonesList["milestones"], selected: { userId: string, path: string } | null, marked: { parse: (s: string) => string } | null, editing: boolean, pristine: string, dirtySwitchPending: string | null, overview: OverviewModel | null }} */
 const memoryState = {
   users: [],
   observations: [],
@@ -37,6 +38,9 @@ const memoryState = {
   marked: null,
   editing: false,
   pristine: "",
+  // Parsed `_overview.md` (the synthesized "总体记忆") — drives the artboard's
+  // narrative + project map when present. Null until loaded / if absent.
+  overview: null,
   // Dirty-switch two-step: tracks "userId:relPath" of the file the user
   // tried to switch to while editing. Second click on the same file
   // within 3s commits the switch (§1.3 #8 绝不弹窗).
@@ -267,6 +271,28 @@ async function saveCurrent(deps) {
   await loadMemoryPane(deps).catch(() => {})
 }
 
+// Trigger a fresh synthesis of the admin's local Claude per-project memory
+// into the "overview memory" (_overview.md) the bot reads, then reload the
+// pane so the regenerated overview surfaces. Slow — one LLM call via the
+// admin conversation's provider — so callers should show progress. Throws on
+// a structured `ok:false` so the caller can surface the error.
+/**
+ * @param {Deps} deps
+ * @returns {Promise<{ ok?: boolean, error?: string, projectsFound?: number, projectNames?: string[], written?: { bytesWritten: number } }>}
+ */
+export async function synthesizeMemory(deps) {
+  const result = /** @type {{ ok?: boolean, error?: string, projectsFound?: number, projectNames?: string[], written?: { bytesWritten: number } }} */ (
+    await deps.invoke("wechat_cli_json", { args: ["memory", "synthesize", "--json"] })
+  )
+  if (result && result.ok === false) {
+    throw new Error(result.error || "synthesize failed")
+  }
+  // Surface the freshly written _overview.md (and any list changes).
+  await loadMemoryPane(deps).catch(() => {})
+  await loadMemoryTopZone(deps).catch(() => {})
+  return result
+}
+
 // Wire edit/save/cancel buttons. main.js calls this once at boot.
 /** @param {Deps} deps */
 export function wireMemoryButtons(deps) {
@@ -287,6 +313,49 @@ function formatBytes(n) {
   if (n < 1024) return `${n}B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}k`
   return `${(n / 1024 / 1024).toFixed(1)}M`
+}
+
+const OVERVIEW_PATH = "_overview.md"
+
+// Parse the synthesized `_overview.md` into an intro paragraph + project map.
+// Lenient by design — the LLM output varies: tolerates `- **name** — summary`,
+// `- name — summary`, `- name: summary`, with/without bold/backticks, and
+// em-dash / en-dash / hyphen / colon separators.
+/** @param {string} md @returns {OverviewModel | null} */
+function parseOverview(md) {
+  const body = String(md || "").replace(/<!--[\s\S]*?-->/g, "").trim()
+  if (!body) return null
+  const mapIdx = body.search(/^#{1,4}\s*项目地图/m)
+  const intro = (mapIdx >= 0 ? body.slice(0, mapIdx) : body).trim()
+  const mapText = mapIdx >= 0 ? body.slice(mapIdx) : ""
+  /** @type {Array<{ name: string, summary: string }>} */
+  const projects = []
+  for (const raw of mapText.split("\n")) {
+    const m = raw.match(/^\s*[-*]\s+(.+)$/)
+    if (!m) continue
+    const item = m[1].replace(/\*\*/g, "").replace(/`/g, "").trim()
+    // Separator must be spaced (` — `, ` - `) or a colon — otherwise a hyphen
+    // INSIDE a project name (e.g. "kawanco-dev") would be mis-split.
+    const sep = item.match(/^(.+?)(?:\s+[—–-]\s+|\s*[:：]\s+)(.+)$/)
+    if (sep) projects.push({ name: sep[1].trim(), summary: sep[2].trim() })
+    else if (item) projects.push({ name: item, summary: "" })
+  }
+  return { intro, projects }
+}
+
+// Load + parse the synthesized overview for `chatId` into memoryState.overview.
+// Missing file → overview stays null and the artboard falls back to its prior
+// observation-derived model.
+/** @param {Deps} deps @param {string} chatId */
+async function loadOverview(deps, chatId) {
+  try {
+    const result = /** @type {MemoryRead} */ (await deps.invoke("wechat_cli_json", { args: ["memory", "read", chatId, OVERVIEW_PATH, "--json"] }))
+    memoryState.overview = (result && result.ok && typeof result.content === "string")
+      ? parseOverview(result.content)
+      : null
+  } catch {
+    memoryState.overview = null
+  }
 }
 
 /** @param {Deps} deps */
@@ -381,7 +450,7 @@ function renderMemoryProfileOverview(deps) {
         </section>
 
         <section class="profile-panel">
-          <h2>CC记住你的事情</h2>
+          <h2>${memoryState.overview && memoryState.overview.projects.length ? "CC 了解的项目" : "CC记住你的事情"}</h2>
           <div class="memory-snippet-grid">
             ${profile.snippets.map(item => `
               <article>
@@ -441,20 +510,28 @@ function buildMemoryProfileModel(friendly, totalFiles, updatedAt) {
   const freshness = updatedAt ? ` · 更新于 ${formatRelativeTime(updatedAt)}` : ""
   const remembered = obsBodies.slice(0, 4)
 
+  // When the synthesized overview exists, it IS the real "CC 眼中的你" content
+  // (整体理解 + 项目地图). Use it for the hero narrative, insight, tags and the
+  // "记住的事情" cards; the observation/placeholder model is the fallback.
+  const ov = memoryState.overview
+  const ovIntro = ov && ov.intro ? ov.intro.trim() : ""
+  const ovProjects = ov ? ov.projects.filter(p => p.name) : []
+  const ovInsight = ovIntro ? ((ovIntro.split(/(?<=[。！？!?])/)[0] || ovIntro).trim()) : ""
+
   return {
-    kicker: `数字人格空间·实时更新${freshness}`,
+    kicker: ovIntro ? `本机记忆整理·CC 眼中的你${freshness}` : `数字人格空间·实时更新${freshness}`,
     title: `CC眼中的${friendly}`,
-    summary: primaryObservation
+    summary: ovIntro || (primaryObservation
       ? `这些画像来自最近的长期记忆、观察和里程碑。CC 正在把零散对话整理成可被你检查、修正和继续生长的理解。`
-      : `你是一个情绪细腻、长期主义、喜欢真实连接的人。\n你会被新世界点亮，也会在关系没有回应时反复确认自己的位置。`,
-    tags: deriveProfileTags(observations, totalFiles),
+      : `你是一个情绪细腻、长期主义、喜欢真实连接的人。\n你会被新世界点亮，也会在关系没有回应时反复确认自己的位置。`),
+    tags: ovProjects.length ? ovProjects.map(p => p.name).slice(0, 7) : deriveProfileTags(observations, totalFiles),
     metrics: {
       expression,
       safety,
       memory: memoryLabel,
       companion: companionLabel,
     },
-    insight: primaryObservation || `你正在从“设计执行者”过渡到“AI产品参与者”。你的优势不是一开始就懂技术，而是你愿意把不懂的东西拆开、追问、理解，并最终转化成可视化和产品表达。`,
+    insight: ovInsight || primaryObservation || `你正在从“设计执行者”过渡到“AI产品参与者”。你的优势不是一开始就懂技术，而是你愿意把不懂的东西拆开、追问、理解，并最终转化成可视化和产品表达。`,
     traits: [
       {
         icon: "heart-check",
@@ -487,7 +564,9 @@ function buildMemoryProfileModel(friendly, totalFiles, updatedAt) {
       { icon: "link-03", title: "需要", body: "重视长期稳定的连接，不喜欢泛泛之交，比较重视友谊。" },
       { icon: "alert-02", title: "风险", body: "压力升高时会减少表达，同时会去确认自己的价值。" },
     ],
-    snippets: remembered.length > 0
+    snippets: ovProjects.length > 0
+      ? ovProjects.map(p => ({ title: p.name, body: p.summary || "——" }))
+      : remembered.length > 0
       ? remembered.map((body, index) => ({
           title: index === 0 ? "最近观察" : `记忆片段 ${index + 1}`,
           body,
@@ -546,6 +625,9 @@ export async function loadMemoryTopZone(deps) {
     const observations = (obsResp.observations || []).slice(0, 3)
     memoryState.observations = obsResp.observations || []
     memoryState.milestones = msResp.milestones || []
+    // Pull the synthesized overview so the artboard shows real content (not
+    // the placeholder model) when it exists.
+    await loadOverview(deps, chatId)
     renderMemoryProfileOverview(deps)
     if (observations.length === 0) {
       // Keep design-language §1.3 #5 — empty states have narrative, not "暂无数据"
@@ -583,6 +665,50 @@ export async function loadMemoryDecisions(deps) {
   } catch (err) {
     console.error("memory decisions load failed", err)
   }
+}
+
+// Read-only view of the admin's local Claude per-project memory — the raw
+// source the synthesized overview is distilled from. Lazy-loaded on first
+// fold expand. Content comes inline from `memory projects --json` (the dirs
+// are local + small), so no per-file read round-trips. No editing here: this
+// memory belongs to Claude Code, not wechat-cc.
+/** @param {Deps} deps */
+export async function loadProjectMemory(deps) {
+  const box = document.getElementById("memory-projects")
+  if (!box) return
+  box.innerHTML = `<p class="empty-state">读取本机项目记忆中…</p>`
+  let resp
+  try {
+    resp = /** @type {{ ok?: boolean, projects?: Array<{ name: string, index: string | null, files: Array<{ path: string, content: string }> }> }} */ (
+      await deps.invoke("wechat_cli_json", { args: ["memory", "projects", "--json"] })
+    )
+  } catch (err) {
+    box.innerHTML = `<p class="empty-state">读取失败：${escapeHtml(deps.formatInvokeError(err))}</p>`
+    return
+  }
+  const projects = (resp && resp.projects) || []
+  if (projects.length === 0) {
+    box.innerHTML = `<p class="empty-state">本机 ~/.claude/projects 下还没有项目记忆。</p>`
+    return
+  }
+  const marked = await loadMarked()
+  box.innerHTML = projects.map(p => {
+    /** @type {Array<{ path: string, content: string }>} */
+    const files = []
+    if (p.index) files.push({ path: "MEMORY.md", content: p.index })
+    for (const f of p.files) files.push({ path: f.path, content: f.content })
+    return `
+      <div class="mem-proj-grp">
+        <div class="mem-proj-head"><span>${escapeHtml(p.name)}</span><span class="count">${files.length}</span></div>
+        ${files.map(f => `
+          <details class="mem-proj-file">
+            <summary>${escapeHtml(f.path)}</summary>
+            <div class="mem-proj-rendered">${marked.parse(f.content || "")}</div>
+          </details>
+        `).join("")}
+      </div>
+    `
+  }).join("")
 }
 
 /**

@@ -28,7 +28,7 @@ import { refreshQr } from "./modules/qr.js"
 import { serviceAction, forceKillDaemon } from "./modules/service.js"
 import { renderDashboard, renderRestartButton, setPending, updateClock, restartDaemon, stopDaemon, handleAccountRowClick, toggleProviderMenu, toggleUserProviderMenu, closeProviderMenu } from "./modules/dashboard.js"
 import { renderConversations } from "./modules/conversations.js"
-import { loadMemoryPane, wireMemoryButtons, loadMemoryTopZone, loadMemoryDecisions, archiveObservation } from "./modules/memory.js"
+import { loadMemoryPane, wireMemoryButtons, loadMemoryTopZone, loadMemoryDecisions, archiveObservation, synthesizeMemory, loadProjectMemory } from "./modules/memory.js"
 import { loadLogsPane, startLogsAutoRefresh, stopLogsAutoRefresh } from "./modules/logs.js"
 import { initDialoguePage, stopDialogueAutoRefresh } from "./modules/dialogue-page.js"
 import { initA2AAgentsTab, refresh as refreshA2AAgents } from "./modules/a2a-agents.js"
@@ -143,6 +143,10 @@ const deps = {
       renderRestartButtonIfActive(current)
     }
   },
+  // True when the user reached the disconnected state by explicitly clicking
+  // 断开连接 (vs. an unexpected daemon crash). Lets 重新连接 skip the diagnose
+  // card and restart directly — a dead daemon is expected here, not a fault.
+  isDisconnectedIntent: () => state.connectionIntent === "disconnected",
   // Diagnose-card callback: switch to the logs pane (secondary link on
   // codes 1 + 2 — daemon dead / never started).
   routeToLogsPane: () => {
@@ -554,6 +558,31 @@ function wireEvents() {
       await loadMemoryTopZone(deps)
     }),
   )
+  // "重新整理" — regenerate the overview memory from local Claude memory. This
+  // is a slow LLM call (not a reload), so it gets its own progress labels
+  // rather than withRefreshFeedback's "已刷新".
+  document.getElementById("memory-synthesize-btn")?.addEventListener("click", async (e) => {
+    const btn = /** @type {HTMLButtonElement} */ (e.currentTarget)
+    const labelNode = Array.from(btn.childNodes).find(
+      n => n.nodeType === Node.TEXT_NODE && n.textContent !== null && n.textContent.trim().length > 0,
+    )
+    const original = labelNode ? labelNode.textContent : null
+    btn.disabled = true
+    if (labelNode) labelNode.textContent = " 整理中…"
+    let ok = false
+    try {
+      const res = await synthesizeMemory(deps)
+      ok = !!(res && res.written)
+    } catch (err) {
+      console.error("memory synthesize failed", err)
+    } finally {
+      if (labelNode) labelNode.textContent = ok ? " 已整理 ✓" : " 整理失败"
+      setTimeout(() => {
+        if (labelNode && original !== null) labelNode.textContent = original
+        btn.disabled = false
+      }, 1600)
+    }
+  })
   wireMemoryButtons(deps)
 
   document.getElementById("memory-sources-toggle")?.addEventListener("click", () => {
@@ -575,6 +604,22 @@ function wireEvents() {
       body.hidden = wasOpen
     })
   }
+
+  // Local-project-memory fold: lazy-load on first expand (it's a CLI read of
+  // ~/.claude/projects, not needed until the user looks).
+  let projectMemoryLoaded = false
+  document.getElementById("memory-projects-toggle")?.addEventListener("click", () => {
+    const toggle = document.getElementById("memory-projects-toggle")
+    const body = document.getElementById("memory-projects-body")
+    if (!toggle || !body) return
+    const wasOpen = toggle.getAttribute("aria-expanded") === "true"
+    toggle.setAttribute("aria-expanded", wasOpen ? "false" : "true")
+    body.hidden = wasOpen
+    if (!wasOpen && !projectMemoryLoaded) {
+      projectMemoryLoaded = true
+      loadProjectMemory(deps).catch(err => console.error("project memory load failed", err))
+    }
+  })
 
   // Memory top zone — handle archive button clicks via delegation
   document.getElementById("memory-observations")?.addEventListener("click", async (e) => {

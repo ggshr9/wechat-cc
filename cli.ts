@@ -946,12 +946,135 @@ const memoryWriteCmd = defineCommand({
   },
 })
 
+const memorySynthesizeCmd = defineCommand({
+  meta: {
+    name: 'synthesize',
+    description: "Synthesize the admin's local Claude memory (across projects) into an _overview.md the bot reads",
+  },
+  args: {
+    'chat-id': { type: 'string', description: 'Admin chat_id (default: sole admin in access.json)' },
+    provider: { type: 'string', description: 'Force provider claude|codex (default: admin conversation provider)' },
+    'dry-run': { type: 'boolean', default: false, description: 'Discover + build prompt; make no LLM call and no write' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    const { readFileSync } = await import('node:fs')
+
+    // ── Resolve admin chat-id (same pattern as `dialogue backfill`) ──────
+    let chatId = args['chat-id']
+    if (!chatId) {
+      let access: { admins?: string[] } = {}
+      try {
+        access = JSON.parse(readFileSync(join(STATE_DIR, 'access.json'), 'utf8'))
+      } catch { /* missing/corrupt — fail below */ }
+      const admins = access.admins ?? []
+      if (admins.length === 1) chatId = admins[0]!
+      else {
+        const msg = admins.length === 0
+          ? 'No admins in access.json — pass --chat-id explicitly'
+          : `Multiple admins (${admins.join(', ')}) — pass --chat-id explicitly`
+        if (args.json) { console.log(JSON.stringify({ ok: false, error: msg })); return }
+        console.error(msg); process.exit(1)
+      }
+    }
+
+    // ── Resolve provider: explicit flag > admin conversation mode > claude ─
+    const { openWechatDb } = await import('./src/lib/db')
+    const db = openWechatDb(STATE_DIR)
+    let provider = args.provider
+    if (!provider) {
+      try {
+        const { makeConversationStore } = await import('./src/core/conversation-store')
+        const conv = makeConversationStore(db).get(chatId)
+        if (conv?.mode?.kind === 'solo') provider = conv.mode.provider
+      } catch { /* no conversation yet — default below */ }
+    }
+    provider = provider || 'claude'
+    db.close()
+
+    const dryRun = Boolean(args['dry-run'])
+
+    // ── Build the one-shot eval for the resolved provider ────────────────
+    // Mirrors each provider's cheapEval (claude haiku-class / codex minimal),
+    // built inline so the CLI doesn't need a live daemon ProviderRegistry.
+    const sdkEval = async (prompt: string): Promise<string> => {
+      if (provider === 'codex') {
+        const { Codex } = await import('@openai/codex-sdk')
+        const { resolveCodexCheapModel } = await import('./src/core/codex-cheap-model')
+        const { tmpdir } = await import('node:os')
+        const thread = new Codex().startThread({
+          model: resolveCodexCheapModel(),
+          sandboxMode: 'read-only',
+          approvalPolicy: 'never',
+          webSearchEnabled: false,
+          networkAccessEnabled: false,
+          workingDirectory: tmpdir(),
+          skipGitRepoCheck: true,
+        })
+        const turn = await thread.run(prompt)
+        return (turn.items as Array<{ type?: string; text?: string }>)
+          .filter(i => i.type === 'agent_message' && typeof i.text === 'string')
+          .map(i => i.text!)
+          .join('')
+      }
+      // claude (default)
+      const { query } = await import('@anthropic-ai/claude-agent-sdk')
+      const model = process.env['WECHAT_CLAUDE_CHEAP_MODEL'] || 'claude-haiku-4-5'
+      let text = ''
+      const q = query({ prompt, options: { model, maxTurns: 1 } })
+      for await (const raw of q as AsyncGenerator<import('@anthropic-ai/claude-agent-sdk').SDKMessage>) {
+        const msg = raw as unknown as { type: string; message?: { content?: unknown } }
+        if (msg.type === 'assistant' && Array.isArray(msg.message?.content)) {
+          for (const part of msg.message.content as Array<{ type?: string; text?: string }>) {
+            if (part.type === 'text' && typeof part.text === 'string') text += part.text
+          }
+        }
+      }
+      return text
+    }
+
+    const { synthesizeOverview } = await import('./src/cli/memory-synthesis')
+    const result = await synthesizeOverview({ stateDir: STATE_DIR, adminChatId: chatId, sdkEval, dryRun })
+
+    if (args.json) {
+      console.log(JSON.stringify({ ok: true, chatId, provider, dryRun, ...result }, null, 2))
+      return
+    }
+    console.log(`整理对象: ${chatId}  ·  provider: ${provider}${dryRun ? '  ·  (dry-run)' : ''}`)
+    console.log(`发现 ${result.projectsFound} 个项目: ${result.projectNames.join(', ') || '(无)'}  ·  ${result.filesScanned} 文件  ·  prompt ${result.promptChars} 字`)
+    if (dryRun) { console.log('(dry-run — 未调用 LLM、未写入)'); return }
+    if (result.written) console.log(`已写入 ${result.written.path} (${result.written.bytesWritten}B)`)
+    else console.log('未写入(无项目记忆或 LLM 返回空)')
+  },
+})
+
+const memoryProjectsCmd = defineCommand({
+  meta: {
+    name: 'projects',
+    description: "List the admin's local Claude per-project memory (read-only source for the desktop viewer)",
+  },
+  args: { json: { type: 'boolean', description: 'JSON envelope' } },
+  async run({ args }) {
+    const { summarizeProjectMemories } = await import('./src/cli/memory-synthesis')
+    const projects = summarizeProjectMemories()
+    if (args.json) { console.log(JSON.stringify({ ok: true, projects }, null, 2)); return }
+    if (projects.length === 0) { console.log('(no local project memory found under ~/.claude/projects)'); return }
+    for (const p of projects) {
+      console.log(`${p.name}  (${p.files.length + (p.index ? 1 : 0)} 文件 · ${p.totalBytes}B)  [${p.encodedDir}]`)
+      if (p.index) console.log('  - MEMORY.md (索引)')
+      for (const f of p.files) console.log(`  - ${f.path}  (${f.bytes}B)`)
+    }
+  },
+})
+
 const memoryCmd = defineCommand({
   meta: { name: 'memory', description: 'Companion v2 memory files (per user)' },
   subCommands: {
     list: memoryListCmd,
     read: memoryReadCmd,
     write: memoryWriteCmd,
+    synthesize: memorySynthesizeCmd,
+    projects: memoryProjectsCmd,
   },
 })
 

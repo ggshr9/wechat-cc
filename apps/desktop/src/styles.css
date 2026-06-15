@@ -2152,8 +2152,8 @@ input { font: inherit; color: inherit; }
   overflow: hidden;
 }
 .user-avatar svg {
-  width: 26px;
-  height: 26px;
+  width: 100%;
+  height: 100%;
 }
 .user-copy {
   min-width: 0;
@@ -2982,6 +2982,36 @@ input { font: inherit; color: inherit; }
 .mem-file:hover { background: var(--paper-2); }
 .mem-file.active { background: var(--tint); color: var(--ink); }
 .mem-file .b { color: var(--ink-4); font-size: 10px; }
+
+/* Read-only local-project-memory layer (memory sources fold). */
+.memory-projects { display: flex; flex-direction: column; gap: 10px; }
+.mem-proj-grp { border: 1px solid var(--line, #ececec); border-radius: 8px; overflow: hidden; }
+.mem-proj-head {
+  font-family: var(--cjk);
+  display: flex; align-items: baseline; justify-content: space-between;
+  padding: 7px 10px;
+  font-size: 12px; font-weight: 600; color: var(--ink-2);
+  background: var(--paper-2);
+}
+.mem-proj-head .count { font-family: var(--mono); font-size: 10.5px; color: var(--ink-4); font-weight: 400; }
+.mem-proj-file { border-top: 1px solid var(--line, #ececec); }
+.mem-proj-file > summary {
+  list-style: none; cursor: pointer;
+  padding: 6px 10px;
+  font-family: var(--mono); font-size: 11px; color: var(--ink-2);
+}
+.mem-proj-file > summary::-webkit-details-marker { display: none; }
+.mem-proj-file > summary::before { content: "▸ "; color: var(--ink-4); }
+.mem-proj-file[open] > summary::before { content: "▾ "; }
+.mem-proj-file > summary:hover { background: var(--paper-2); }
+.mem-proj-rendered {
+  padding: 4px 12px 12px;
+  font-size: 12px; line-height: 1.55; color: var(--ink-2);
+  border-top: 1px dashed var(--line, #ececec);
+}
+.mem-proj-rendered :is(h1, h2, h3) { font-size: 12.5px; margin: 8px 0 4px; }
+.mem-proj-rendered p { margin: 4px 0; }
+.mem-proj-rendered code { font-family: var(--mono); font-size: 11px; }
 
 .mem-doc {
   padding: 22px 28px;
