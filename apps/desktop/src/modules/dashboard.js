@@ -61,7 +61,7 @@ export function renderDashboard(report) {
         ? `连接已过期${currentExp ? ` · ${formatRelativeTime(currentExp.firstSeenExpiredAt)}` : ""}`
         : "已连接"
       current.innerHTML = `
-        <div class="user-avatar avatar-admin">${avatarSvg("admin")}</div>
+        <div class="user-avatar avatar-admin">${avatarSvg("admin", currentRow.name)}</div>
         <div class="user-copy">
           <div class="user-name">${escapeHtml(currentRow.name)} <span class="role-pill">管理员</span></div>
           <div class="user-sub">微信私聊，${currentSub}</div>
@@ -103,7 +103,7 @@ export function renderDashboard(report) {
       return `
         <div class="sub-user-card" data-bot-id="${escapeHtml(row.id)}" data-chat-id="${escapeHtml(chatId)}" data-current-provider="${escapeHtml(currentProvider)}" data-name="${escapeHtml(row.name)}"${row.demo ? ` data-demo="true"` : ""}>
           <button class="card-menu" aria-haspopup="true" aria-label="选择 Agent">${icon("more-horizontal", { size: 18 })}</button>
-          <div class="user-avatar">${avatarSvg(row.avatar || index)}</div>
+          <div class="user-avatar">${avatarSvg(row.avatar ?? index, row.name)}</div>
           <div class="user-copy">
             <div class="user-name">${escapeHtml(row.name)}</div>
             <div class="user-sub">${escapeHtml(expCell)}</div>
@@ -139,21 +139,37 @@ function providerFromMode(mode) {
   return null
 }
 
-function avatarSvg(seed) {
-  const kind = String(seed)
-  if (kind === "admin") {
-    return `<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="20" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9 42c2.8-9 7.8-13.5 15-13.5S36.2 33 39 42" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="20" cy="20" r="1.8" fill="currentColor"/><circle cx="28" cy="20" r="1.8" fill="currentColor"/><path d="M19 26c3 2 7 2 10 0" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`
-  }
-  const avatars = [
-    `<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 39V22M13 17c7 0 11 5 11 12C17 29 13 24 13 17Zm22 0c-7 0-11 5-11 12 7 0 11-5 11-12Z" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>`,
-    `<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 8l4.8 10 11 1.6-8 7.8 1.9 11-9.7-5.1-9.7 5.1 1.9-11-8-7.8 11-1.6L24 8Z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="20" cy="25" r="1.6" fill="currentColor"/><circle cx="28" cy="25" r="1.6" fill="currentColor"/></svg>`,
-    `<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M13 22c0-7 5-12 11-12s11 5 11 12v8c0 4-4 8-11 8s-11-4-11-8v-8Z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16 15l-5-6M32 15l5-6" stroke="currentColor" stroke-width="1.8" fill="none"/><circle cx="20" cy="25" r="1.8" fill="currentColor"/><circle cx="28" cy="25" r="1.8" fill="currentColor"/></svg>`,
-    `<svg viewBox="0 0 48 48" aria-hidden="true"><rect x="14" y="14" width="20" height="22" rx="8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M24 9v5M18 25h.1M30 25h.1M20 31h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`,
-    `<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M14 18h20l-2 20H16l-2-20Z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M17 14h14M19 28c4-4 8-4 12 0" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>`,
-    `<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M12 31c2-8 8-11 14-8 2-5 9-4 10 2 5 1 7 9 1 13H15c-5 0-7-4-3-7Z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="22" cy="33" r="1.8" fill="currentColor"/><circle cx="30" cy="33" r="1.8" fill="currentColor"/></svg>`,
-  ]
-  const n = Number.isFinite(Number(seed)) ? Number(seed) : Math.abs(kind.split("").reduce((sum, ch) => sum + ch.charCodeAt(0), 0))
-  return avatars[n % avatars.length]
+// Curated, evenly-spread avatar palette. Picking from a discrete set of
+// well-separated base hues (rather than `hash % 360`) keeps neighbouring
+// users visually distinct instead of clustering in one corner of the wheel
+// — 12 hues spaced ~30° apart so even small lists rarely collide.
+const AVATAR_HUES = [352, 18, 38, 62, 110, 142, 168, 196, 220, 248, 288, 320]
+
+// Initial-on-gradient avatar. Renders a colored disc (hue picked from the
+// palette by a stable hash of the label, so each user keeps the same color
+// across renders) with the first grapheme of their name — far more
+// legible/finished-looking than the old monochrome line-art placeholders,
+// and needs no real avatar image files. `label` drives both color and
+// glyph; `seed` is the fallback when there's no name (e.g. demo rows
+// passing a numeric avatar index).
+function avatarSvg(seed, label) {
+  const name = (label == null ? "" : String(label)).trim()
+  const glyph = name ? Array.from(name)[0] : (String(seed) === "admin" ? "我" : "?")
+  const basis = name || String(seed)
+  const hash = Math.abs(basis.split("").reduce((h, ch) => ((h * 31 + ch.charCodeAt(0)) | 0), 7))
+  // When `seed` is a row index (sub-user / demo cards pass their position),
+  // walk the palette by index so a rendered list never repeats a color.
+  // Otherwise (admin slot passes "admin") fall back to a label hash for a
+  // stable per-user color.
+  const seedNum = Number(seed)
+  const paletteIdx = Number.isFinite(seedNum)
+    ? Math.abs(Math.trunc(seedNum)) % AVATAR_HUES.length
+    : hash % AVATAR_HUES.length
+  const hue = AVATAR_HUES[paletteIdx]
+  const c1 = `hsl(${hue} 64% 62%)`
+  const c2 = `hsl(${(hue + 18) % 360} 66% 48%)`
+  const gid = `av-${hue}-${hash.toString(36)}`
+  return `<svg viewBox="0 0 48 48" aria-hidden="true"><defs><linearGradient id="${gid}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></linearGradient></defs><circle cx="24" cy="24" r="24" fill="url(#${gid})"/><text x="24" y="25" text-anchor="middle" dominant-baseline="central" font-size="20" font-weight="600" fill="#fff" font-family="-apple-system, system-ui, 'PingFang SC', sans-serif">${escapeHtml(glyph)}</text></svg>`
 }
 
 function demoSubUsers() {
@@ -540,6 +556,13 @@ export function handleDiagnoseAction(deps, action) {
 // a brief toast. The actual stop+kill+start chain lives in runRestartSequence
 // and is only invoked when the card's primary action says so.
 export async function restartDaemon(deps) {
+  // If the user got here by explicitly clicking 断开连接, the daemon being
+  // dead is the expected, self-inflicted state — not a fault to diagnose.
+  // Skip the diagnose card and go straight to a clean stop+kill+start so
+  // 断开 → 重连 is a single click instead of "进程挂了 → 再点重启后台".
+  if (deps.isDisconnectedIntent?.()) {
+    return runRestartSequence(deps)
+  }
   setPending("重新连接…")
   const report = await deps.doctorPoller.refresh() ?? deps.doctorPoller.current
 

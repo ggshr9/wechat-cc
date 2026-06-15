@@ -689,6 +689,28 @@ describe('restartDaemon (diagnose → card)', () => {
     expect(els.rdcPrimary.textContent).toBe('一键重启后台')
   })
 
+  it('disconnected-intent: skips the diagnose card and restarts directly (service start invoked, no card)', async () => {
+    const els = installDashboardDom()
+    const deps = makeDeps(deadDaemonReport(), { isDisconnectedIntent: () => true })
+    await restartDaemon(deps)
+    // Took the runRestartSequence path: service start was invoked...
+    const startCalled = deps.invoke.mock.calls.some(
+      (c: unknown[]) => Array.isArray((c[1] as { args?: unknown[] })?.args)
+        && (c[1] as { args: unknown[] }).args[0] === 'service'
+        && (c[1] as { args: unknown[] }).args[1] === 'start',
+    )
+    expect(startCalled).toBe(true)
+    // ...and the diagnose card never appeared (a dead daemon would normally show code-1).
+    expect(els.rdcCard.hidden).toBe(true)
+  })
+
+  it('default (no disconnected-intent): a dead daemon still shows the diagnose card', async () => {
+    const els = installDashboardDom()
+    await restartDaemon(makeDeps(deadDaemonReport(), { isDisconnectedIntent: () => false }))
+    expect(els.rdcCard.hidden).toBe(false)
+    expect(els.rdcTitle.textContent).toBe('后台服务挂了')
+  })
+
   it('code-5 (account expired): card shows "微信账号已过期"', async () => {
     const els = installDashboardDom()
     await restartDaemon(makeDeps(expiredAccountReport()))
