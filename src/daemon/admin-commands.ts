@@ -100,6 +100,14 @@ const SHOW_OVERVIEW_RE = /^\s*(?:\/overview|你对我的理解|看看你对我�
 // 让/派 (imperative) + 执行/跑 keeps casual speech from matching; an unknown
 // hand name still replies with the known list (doubles as discovery).
 const DELEGATE_RE = /^\s*(?:让|派)\s*(\S+?)\s*(?:执行|跑)\s*[:：]?\s*(\S[\s\S]*?)\s*$/
+// Pronouns aren't hand names — without this, casual speech like "让我执行一下X"
+// or "让它跑起来" would be hijacked as a delegate command (and reply "没找到叫
+// 「我」的手"). Excluding them lets such phrases fall through to normal chat;
+// real hands are named 家里/公司/home etc., never a pronoun.
+const DELEGATE_PRONOUNS = new Set(['我', '你', '您', '他', '她', '它', '咱', '俺', '我们', '你们', '他们', '她们', '它们', '咱们', '大家', '自己'])
+export function isDelegateName(name: string): boolean {
+  return !DELEGATE_PRONOUNS.has(name.trim())
+}
 
 // /botname <new-name>  — set the bot's user-facing self-name (admin only)
 // /botname 跳过 / 不用 / 没有 / skip / clear / 清除  — clear (fall back to mode-derived)
@@ -124,7 +132,11 @@ export function makeAdminCommands(deps: AdminCommandsDeps): AdminCommands {
   return {
     async handle(msg) {
       const text = msg.text.trim()
-      const isCmd = text === '/health' || HEALTH_AI_RE.test(text) || SYNTHESIZE_RE.test(text) || SHOW_OVERVIEW_RE.test(text) || DELEGATE_RE.test(text) || RESET_RE.test(text) || CLEANUP_RE.test(text) || HEARTH_INGEST_RE.test(text) || HEARTH_LIST_RE.test(text) || HEARTH_SHOW_RE.test(text) || HEARTH_APPLY_RE.test(text) || HEARTH_HELP_RE.test(text) || BOTNAME_RE.test(text)
+      // Match the delegate trigger once — and only treat it as a command when
+      // the name isn't a pronoun, so "让我执行一下X" falls through to normal chat.
+      const delegateMatch = DELEGATE_RE.exec(text)
+      const isDelegate = !!delegateMatch && isDelegateName(delegateMatch[1]!)
+      const isCmd = text === '/health' || HEALTH_AI_RE.test(text) || SYNTHESIZE_RE.test(text) || SHOW_OVERVIEW_RE.test(text) || isDelegate || RESET_RE.test(text) || CLEANUP_RE.test(text) || HEARTH_INGEST_RE.test(text) || HEARTH_LIST_RE.test(text) || HEARTH_SHOW_RE.test(text) || HEARTH_APPLY_RE.test(text) || HEARTH_HELP_RE.test(text) || BOTNAME_RE.test(text)
       if (!isCmd) return false
 
       if (!deps.isAdmin(msg.chatId)) {
@@ -159,10 +171,9 @@ export function makeAdminCommands(deps: AdminCommandsDeps): AdminCommands {
         return true
       }
 
-      const delegate = DELEGATE_RE.exec(text)
-      if (delegate) {
+      if (isDelegate) {
         // Fire-and-forget: the hand runs a full agent — slow. Ack + reply later.
-        void runDelegate(deps, msg.chatId, delegate[1]!.trim(), delegate[2]!.trim())
+        void runDelegate(deps, msg.chatId, delegateMatch![1]!.trim(), delegateMatch![2]!.trim())
         return true
       }
 

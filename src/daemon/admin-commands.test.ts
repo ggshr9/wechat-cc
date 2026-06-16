@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, existsSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { makeAdminCommands, friendlyDelegateReason, formatOverviewForDisplay, type AdminCommandsDeps } from './admin-commands'
+import { makeAdminCommands, friendlyDelegateReason, formatOverviewForDisplay, isDelegateName, type AdminCommandsDeps } from './admin-commands'
 import { makeSessionStateStore } from './session-state'
 import { openTestDb, type Db } from '../lib/db'
 import type { InboundMsg } from '../core/prompt-format'
@@ -421,6 +421,16 @@ describe('admin-commands', () => {
       expect(sentBody(1)).toContain('家里 README: 项目X')
     })
 
+    it('does NOT hijack casual pronoun phrases ("让我执行一下X" → normal chat)', async () => {
+      const delegateToHand = vi.fn()
+      const cmds = make({ delegateToHand: delegateToHand as unknown as AdminCommandsDeps['delegateToHand'] })
+      // Not consumed as a command → falls through to the normal conversation path.
+      expect(await cmds.handle(msg('让我执行一下这个脚本'))).toBe(false)
+      expect(await cmds.handle(msg('让它跑起来再说'))).toBe(false)
+      await flush()
+      expect(delegateToHand).not.toHaveBeenCalled()
+    })
+
     it('also matches 派…跑 form and a colon', async () => {
       const delegateToHand = vi.fn().mockResolvedValue({ ok: true, response: 'r' })
       const cmds = make({ delegateToHand: delegateToHand as unknown as AdminCommandsDeps['delegateToHand'] })
@@ -632,5 +642,14 @@ describe('formatOverviewForDisplay', () => {
   it('drops the comment even when it lacks a parseable timestamp', () => {
     const out = formatOverviewForDisplay('<!-- no ts here -->\n正文')
     expect(out).toBe('正文')
+  })
+})
+
+describe('isDelegateName', () => {
+  it('accepts real hand names', () => {
+    for (const n of ['家里', '公司', 'home', 'office-mac']) expect(isDelegateName(n)).toBe(true)
+  })
+  it('rejects pronouns (so casual speech is not a delegate command)', () => {
+    for (const n of ['我', '你', '他', '她', '它', '我们', '大家', '自己']) expect(isDelegateName(n)).toBe(false)
   })
 })
