@@ -2256,8 +2256,63 @@ const dialogueCmd = defineCommand({
 // updates itself, and there's no `cittyRoot.subCommands as Record<string,
 // unknown>` cast needed (which would have hidden a future Resolvable<>
 // refactor — citty's type allows lazy / promise forms — from typecheck).
+const handAddCmd = defineCommand({
+  meta: { name: 'add', description: 'Register a hand the brain can delegate tasks to (run on the BRAIN)' },
+  args: {
+    id: { type: 'positional', required: true, description: 'Hand id — lowercase slug, e.g. home', valueHint: 'id' },
+    url: { type: 'positional', required: true, description: "Hand's A2A url (tailnet), e.g. http://home.ts.net:7000/a2a", valueHint: 'url' },
+    name: { type: 'string', description: 'Display name (e.g. 家里) — used in 「让<name>执行 X」' },
+    token: { type: 'string', required: true, description: 'Shared pairing token (≥16 chars; the SAME on the hand)' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    const { addHand } = await import('./src/cli/hand-pairing.ts')
+    try {
+      addHand(STATE_DIR, { id: args.id, url: args.url, ...(args.name ? { name: args.name } : {}), token: args.token })
+      const label = args.name || args.id
+      if (args.json) { console.log(JSON.stringify({ ok: true, id: args.id })); return }
+      console.log(`已注册手「${label}」(${args.id}) → ${args.url}`)
+      console.log(`在「${label}」那台机器上跑: wechat-cc hand accept --token <同一个token>`)
+      console.log(`然后微信里说: 让${label}执行 <任务>`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (args.json) { console.log(JSON.stringify({ ok: false, error: msg })); return }
+      console.error(`hand add failed: ${msg}`); process.exit(1)
+    }
+  },
+})
+
+const handAcceptCmd = defineCommand({
+  meta: { name: 'accept', description: 'Accept a brain that may delegate tasks to THIS machine (run on the HAND)' },
+  args: {
+    token: { type: 'string', required: true, description: 'The shared pairing token (same as on the brain)' },
+    'brain-id': { type: 'string', default: 'wechat-cc', description: "Brain's a2a self-id (default wechat-cc; must match its WECHAT_A2A_SELF_ID)" },
+    'brain-url': { type: 'string', description: "Optional: brain's A2A url (only for the hand to call back later)" },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    const { acceptBrain } = await import('./src/cli/hand-pairing.ts')
+    try {
+      acceptBrain(STATE_DIR, { brainId: args['brain-id'], token: args.token, ...(args['brain-url'] ? { brainUrl: args['brain-url'] } : {}) })
+      if (args.json) { console.log(JSON.stringify({ ok: true, brainId: args['brain-id'] })); return }
+      console.log(`已接受大脑「${args['brain-id']}」—— 这台现在可被它派活。`)
+      console.log('确认本机 A2A 监听已开(daemon a2a enable + 绑 tailnet),且把本机地址填给了大脑的 hand add。')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (args.json) { console.log(JSON.stringify({ ok: false, error: msg })); return }
+      console.error(`hand accept failed: ${msg}`); process.exit(1)
+    }
+  },
+})
+
+const handCmd = defineCommand({
+  meta: { name: 'hand', description: 'Multi-machine (一个大脑多手): pair a brain with hands it can delegate tasks to' },
+  subCommands: { add: handAddCmd, accept: handAcceptCmd },
+})
+
 const SUBCOMMANDS = {
   status: statusCmd,
+  hand: handCmd,
   list: listCmd,
   install: installCmd,
   doctor: doctorCmd,

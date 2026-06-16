@@ -64,6 +64,7 @@ describe('citty migrated commands', () => {
       'doctor',
       'events',
       'guard',
+      'hand',
       'install',
       'install-progress',
       'list',
