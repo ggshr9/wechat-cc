@@ -52,6 +52,14 @@ export interface AdminCommandsDeps {
    * Wired in pipeline-deps where the registry + coordinator are in scope.
    */
   synthesizeMemory?: (adminChatId: string) => Promise<SynthesizeResult>
+  /**
+   * Optional. Delegate a task to a registered "hand" (another machine running
+   * wechat-cc with A2A exec). Returns the hand's result, or a list of known
+   * hands when the name doesn't resolve. Wired in pipeline-deps.
+   */
+  delegateToHand?: (handName: string, task: string) => Promise<
+    { ok: true; response: string } | { ok: false; reason: string; knownHands?: string[] }
+  >
 }
 
 export interface AdminCommands {
@@ -78,6 +86,10 @@ const HEALTH_AI_RE = /^\s*\/health\s+ai\s*$/
 // Natural-language Chinese phrasings + slash aliases — the admin just asks the
 // bot to refresh its understanding.
 const SYNTHESIZE_RE = /^\s*(?:\/(?:synthesize|整理记忆)|重新整理记忆|整理一下记忆|整理记忆|重新整理你对我的理解|更新你对我的理解|更新记忆)\s*$/
+// 让/派 <hand> 执行/跑 <task> — delegate a task to another machine ("hand").
+// 让/派 (imperative) + 执行/跑 keeps casual speech from matching; an unknown
+// hand name still replies with the known list (doubles as discovery).
+const DELEGATE_RE = /^\s*(?:让|派)\s*(\S+?)\s*(?:执行|跑)\s*[:：]?\s*(\S[\s\S]*?)\s*$/
 
 // /botname <new-name>  — set the bot's user-facing self-name (admin only)
 // /botname 跳过 / 不用 / 没有 / skip / clear / 清除  — clear (fall back to mode-derived)
@@ -102,7 +114,7 @@ export function makeAdminCommands(deps: AdminCommandsDeps): AdminCommands {
   return {
     async handle(msg) {
       const text = msg.text.trim()
-      const isCmd = text === '/health' || HEALTH_AI_RE.test(text) || SYNTHESIZE_RE.test(text) || RESET_RE.test(text) || CLEANUP_RE.test(text) || HEARTH_INGEST_RE.test(text) || HEARTH_LIST_RE.test(text) || HEARTH_SHOW_RE.test(text) || HEARTH_APPLY_RE.test(text) || HEARTH_HELP_RE.test(text) || BOTNAME_RE.test(text)
+      const isCmd = text === '/health' || HEALTH_AI_RE.test(text) || SYNTHESIZE_RE.test(text) || DELEGATE_RE.test(text) || RESET_RE.test(text) || CLEANUP_RE.test(text) || HEARTH_INGEST_RE.test(text) || HEARTH_LIST_RE.test(text) || HEARTH_SHOW_RE.test(text) || HEARTH_APPLY_RE.test(text) || HEARTH_HELP_RE.test(text) || BOTNAME_RE.test(text)
       if (!isCmd) return false
 
       if (!deps.isAdmin(msg.chatId)) {
@@ -129,6 +141,13 @@ export function makeAdminCommands(deps: AdminCommandsDeps): AdminCommands {
         // Fire-and-forget: synthesis is a slow LLM call — don't block the
         // message pipeline. We ack now and reply with the result when done.
         void runSynthesize(deps, msg.chatId)
+        return true
+      }
+
+      const delegate = DELEGATE_RE.exec(text)
+      if (delegate) {
+        // Fire-and-forget: the hand runs a full agent — slow. Ack + reply later.
+        void runDelegate(deps, msg.chatId, delegate[1]!.trim(), delegate[2]!.trim())
         return true
       }
 
@@ -390,6 +409,29 @@ async function runSynthesize(deps: AdminCommandsDeps, adminChatId: string): Prom
     deps.log('ADMIN_CMD', `synthesize failed chat=${adminChatId}: ${detail}`)
   } finally {
     synthesizeInFlight.delete(adminChatId)
+  }
+}
+
+async function runDelegate(deps: AdminCommandsDeps, adminChatId: string, handName: string, task: string): Promise<void> {
+  if (!deps.delegateToHand) {
+    await deps.sendMessage(adminChatId, '派活功能未启用(没配置 A2A / 没有可派的"手")。').catch(() => {})
+    return
+  }
+  try {
+    await deps.sendMessage(adminChatId, `🤝 派给「${handName}」执行中…`)
+    const r = await deps.delegateToHand(handName, task)
+    if (r.ok) {
+      await deps.sendMessage(adminChatId, `「${handName}」的结果:\n${r.response}`)
+    } else if (r.knownHands && r.knownHands.length) {
+      await deps.sendMessage(adminChatId, `没找到叫「${handName}」的手。已注册的:${r.knownHands.join('、')}`)
+    } else {
+      await deps.sendMessage(adminChatId, `派活失败:${r.reason}`)
+    }
+    deps.log('ADMIN_CMD', `delegate chat=${adminChatId} hand=${handName} ok=${r.ok}`)
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    await deps.sendMessage(adminChatId, `派活失败:${detail.slice(0, 160)}`).catch(() => {})
+    deps.log('ADMIN_CMD', `delegate failed chat=${adminChatId} hand=${handName}: ${detail}`)
   }
 }
 

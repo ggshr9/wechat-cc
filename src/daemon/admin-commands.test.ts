@@ -333,6 +333,53 @@ describe('admin-commands', () => {
     })
   })
 
+  describe('让/派 <hand> 执行/跑 <task> (delegate to a hand)', () => {
+    const flush = () => new Promise(r => setTimeout(r, 0))
+
+    it('parses hand + task, calls delegateToHand, replies the result', async () => {
+      const delegateToHand = vi.fn().mockResolvedValue({ ok: true, response: '家里 README: 项目X' })
+      const cmds = make({ delegateToHand: delegateToHand as unknown as AdminCommandsDeps['delegateToHand'] })
+      expect(await cmds.handle(msg('让家里执行 看下README'))).toBe(true)
+      await flush()
+      expect(delegateToHand).toHaveBeenCalledWith('家里', '看下README')
+      expect(sentBody(1)).toContain('家里 README: 项目X')
+    })
+
+    it('also matches 派…跑 form and a colon', async () => {
+      const delegateToHand = vi.fn().mockResolvedValue({ ok: true, response: 'r' })
+      const cmds = make({ delegateToHand: delegateToHand as unknown as AdminCommandsDeps['delegateToHand'] })
+      expect(await cmds.handle(msg('派公司跑：跑下测试'))).toBe(true)
+      await flush()
+      expect(delegateToHand).toHaveBeenCalledWith('公司', '跑下测试')
+    })
+
+    it('unknown hand → replies the known list (discovery)', async () => {
+      const delegateToHand = vi.fn().mockResolvedValue({ ok: false, reason: 'unknown_hand', knownHands: ['家里', '公司'] })
+      const cmds = make({ delegateToHand: delegateToHand as unknown as AdminCommandsDeps['delegateToHand'] })
+      await cmds.handle(msg('让火星执行 X'))
+      await flush()
+      expect(sentBody(1)).toContain('已注册的')
+      expect(sentBody(1)).toContain('家里')
+    })
+
+    it('not wired → tells the operator it is off', async () => {
+      const cmds = make()  // no delegateToHand
+      expect(await cmds.handle(msg('让家里执行 X'))).toBe(true)
+      await flush()
+      expect(sentBody(0)).toContain('派活功能未启用')
+    })
+
+    it('non-admin is consumed but does NOT delegate', async () => {
+      isAdmin.mockReturnValue(false)
+      const delegateToHand = vi.fn()
+      const cmds = make({ delegateToHand: delegateToHand as unknown as AdminCommandsDeps['delegateToHand'] })
+      expect(await cmds.handle(msg('让家里执行 X'))).toBe(true)
+      await flush()
+      expect(delegateToHand).not.toHaveBeenCalled()
+      expect(sendMessage).not.toHaveBeenCalled()
+    })
+  })
+
   describe('/botname command', () => {
     let getBotName: ReturnType<typeof vi.fn>
     let setBotName: ReturnType<typeof vi.fn>

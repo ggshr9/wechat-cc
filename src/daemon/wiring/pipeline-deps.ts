@@ -108,6 +108,21 @@ export function buildPipelineDeps(opts: PipelineDepsOpts, refs: PipelineDepsRefs
       // Pass the daemon db so the overview also folds in the life-side memory.
       return synthesizeOverview({ stateDir, adminChatId, sdkEval: (p) => cheapEval(p), db })
     },
+    // Delegate a task to a registered "hand" (another machine running wechat-cc
+    // with A2A exec). Resolves the hand by id or name, then calls its /a2a/exec
+    // and returns the result (one-brain-many-hands).
+    delegateToHand: async (handName, task) => {
+      const a2a = boot.a2aDeps
+      if (!a2a) return { ok: false as const, reason: 'A2A 未启用(agent-config 没配 a2a_listen / 没注册手)' }
+      const agents = a2a.registry.list()
+      const hand = agents.find(a => a.id === handName || a.name === handName)
+      if (!hand) return { ok: false as const, reason: 'unknown_hand', knownHands: agents.map(a => a.name || a.id) }
+      const { delegateToHand: doDelegate } = await import('../../core/a2a-delegate')
+      // The brain's id as the hand knows it (the hand registers the brain under
+      // this id + a matching key). Configurable; defaults to a stable slug.
+      const selfId = process.env.WECHAT_A2A_SELF_ID || 'wechat-cc'
+      return doDelegate(a2a.client, { hand, selfId, prompt: task })
+    },
   })
 
   const modeHandler = makeModeCommands({
