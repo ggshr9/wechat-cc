@@ -1184,9 +1184,31 @@ const accountImportCmd = defineCommand({
   },
 })
 
+const accountTakeoverCmd = defineCommand({
+  meta: { name: 'takeover', description: 'Take over the bot session on THIS machine (re-poll a stood-by account) — no daemon restart' },
+  args: { json: { type: 'boolean', description: 'JSON envelope' } },
+  async run({ args }) {
+    const { requestTakeover } = await import('./src/cli/account-transfer.ts')
+    const { existsSync, readFileSync } = await import('node:fs')
+    try {
+      const { pid } = requestTakeover({
+        readPid: (p) => (existsSync(p) ? readFileSync(p, 'utf8') : null),
+        kill: (pidNum, sig) => process.kill(pidNum, sig),
+      }, STATE_DIR)
+      if (args.json) { console.log(JSON.stringify({ ok: true, pid })); return }
+      console.log(`已通知本机 daemon (pid ${pid}) 接管 —— 重读账号、重启待命的轮询。`)
+      console.log('几秒后这台成为活跃端,另一台会优雅待命。')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (args.json) { console.log(JSON.stringify({ ok: false, error: msg })); return }
+      console.error(`account takeover failed: ${msg}`); process.exit(1)
+    }
+  },
+})
+
 const accountCmd = defineCommand({
-  meta: { name: 'account', description: 'Account management (export/import for multi-device, decommission a bound bot)' },
-  subCommands: { remove: accountRemoveCmd, export: accountExportCmd, import: accountImportCmd },
+  meta: { name: 'account', description: 'Account management (export/import + takeover for multi-device, decommission a bound bot)' },
+  subCommands: { remove: accountRemoveCmd, export: accountExportCmd, import: accountImportCmd, takeover: accountTakeoverCmd },
 })
 
 const daemonKillCmd = defineCommand({

@@ -129,3 +129,27 @@ export function importAccount(stateDir: string, blob: Buffer, passphrase: string
   markMultiDevice(stateDir, bundle.botId)
   return { botId: bundle.botId, overwritten }
 }
+
+export interface TakeoverDeps {
+  /** Read server.pid, or null if absent. */
+  readPid: (path: string) => string | null
+  /** process.kill(pid, signal). */
+  kill: (pid: number, signal: string) => void
+}
+
+/**
+ * Tell THIS machine's running daemon to take over the bot session: send it
+ * SIGUSR1, which the daemon handles as a reconcile() — it re-reads accounts and
+ * (re)starts polling for any account not currently looping, including one that
+ * stood by after a sibling device took the session. No daemon restart needed.
+ *
+ * (Unix only — SIGUSR1 isn't a thing on Windows, same as the daemon's handler.)
+ */
+export function requestTakeover(deps: TakeoverDeps, stateDir: string): { pid: number } {
+  const raw = deps.readPid(join(stateDir, 'server.pid'))
+  if (!raw) throw new Error('daemon 没在本机运行(无 server.pid)— 先启动本机 daemon')
+  const pid = parseInt(raw.trim(), 10)
+  if (!Number.isFinite(pid) || pid <= 0) throw new Error(`server.pid 内容无效: ${raw.trim()}`)
+  deps.kill(pid, 'SIGUSR1')
+  return { pid }
+}

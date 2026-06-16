@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { MULTIDEVICE_MARKER, decryptBundle, exportAccount, importAccount, markMultiDevice, resolveAccountId } from './account-transfer'
+import { MULTIDEVICE_MARKER, decryptBundle, exportAccount, importAccount, markMultiDevice, requestTakeover, resolveAccountId } from './account-transfer'
 
 let src: string
 let dst: string
@@ -103,5 +103,26 @@ describe('encryption guards', () => {
     seedAccount(src, 'a-im-bot', { token: 'SUPER-SECRET-TOKEN' })
     const blob = exportAccount(src, 'a-im-bot', 'pw')
     expect(blob.toString('latin1')).not.toContain('SUPER-SECRET-TOKEN')
+  })
+})
+
+describe('requestTakeover', () => {
+  it('reads server.pid and signals SIGUSR1', () => {
+    writeFileSync(join(src, 'server.pid'), '4321\n')
+    const killed: Array<{ pid: number; sig: string }> = []
+    const res = requestTakeover({
+      readPid: (p) => readFileSync(p, 'utf8'),
+      kill: (pid, sig) => killed.push({ pid, sig }),
+    }, src)
+    expect(res.pid).toBe(4321)
+    expect(killed).toEqual([{ pid: 4321, sig: 'SIGUSR1' }])
+  })
+
+  it('throws when the daemon is not running here (no server.pid)', () => {
+    expect(() => requestTakeover({ readPid: () => null, kill: () => {} }, src)).toThrow(/没在本机运行/)
+  })
+
+  it('throws on an invalid pid', () => {
+    expect(() => requestTakeover({ readPid: () => 'garbage', kill: () => {} }, src)).toThrow(/无效/)
   })
 })
