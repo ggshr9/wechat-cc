@@ -2,7 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    # `dev` is included so the essential gate (typecheck + unit tests + build)
+    # runs on the integration branch too — it sat uncovered while 91 commits
+    # piled up, which is how type errors accumulated unnoticed. The heavy e2e
+    # jobs below stay master/PR-only to keep routine dev pushes fast.
+    branches: [master, dev]
   pull_request:
     branches: [master]
 
@@ -56,6 +60,9 @@ jobs:
         run: bun run test
 
   e2e:
+    # Heavy suite — skip on direct dev pushes; still runs on master pushes and
+    # on every PR (where base is master).
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -70,6 +77,8 @@ jobs:
     # CSP, attachment path-guard. The spec fixture spawns its own DRY_RUN
     # test-shim on :4174, and playwright.config.ts defaults CSP injection on,
     # so this runs headless with no extra wiring beyond a chromium install.
+    # Heavy suite — master/PR only (skipped on direct dev pushes).
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
