@@ -31,6 +31,18 @@ describe('buildMemorySnapshot', () => {
     expect(snap).toContain('总结请像朋友说话')
   })
 
+  it('orders deterministically with _overview.md first, then the rest alphabetically', async () => {
+    const dir = join(stateDir, 'memory', 'chat_x')
+    mkdirSync(dir, { recursive: true })
+    // Written in a non-alphabetical order; the synthesized overview must lead.
+    writeFileSync(join(dir, 'zeta.md'), 'Z')
+    writeFileSync(join(dir, 'preferences.md'), 'P')
+    writeFileSync(join(dir, '_overview.md'), 'OV')
+    const snap = await buildMemorySnapshot(stateDir, 'chat_x')
+    const order = [...snap.matchAll(/^# (\S+\.md)$/gm)].map(m => m[1])
+    expect(order).toEqual(['_overview.md', 'preferences.md', 'zeta.md'])
+  })
+
   it('skips non-md files in the same dir', async () => {
     const dir = join(stateDir, 'memory', 'chat_x')
     mkdirSync(dir, { recursive: true })
