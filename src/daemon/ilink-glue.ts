@@ -74,6 +74,7 @@ export interface IlinkAdapter {
     updates?: unknown[]
     sync_buf?: string
     expired?: boolean
+    standby?: boolean
   }>
   handlePermissionReply(text: string): boolean
   /** Session state accessor for admin commands (/health, cleanup). */

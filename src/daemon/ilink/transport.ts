@@ -6,6 +6,8 @@
  * otherwise don't interact with higher-level features (voice, companion),
  * so grouping them keeps the ilink-glue composer leaner.
  */
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { ilinkSendTyping, ilinkGetConfig, ilinkGetUpdates } from '../../lib/ilink'
 import { log } from '../../lib/log'
 import type { IlinkContext } from './context'
@@ -16,6 +18,8 @@ export interface TransportMethods {
     updates?: unknown[]
     sync_buf?: string
     expired?: boolean
+    /** expired-but-recoverable: a sibling device took the session (multi-device). */
+    standby?: boolean
   }>
   markChatActive(chatId: string, accountId?: string): void
   captureContextToken(chatId: string, ctxToken?: string): void
@@ -30,7 +34,7 @@ export interface TransportOpts {
 }
 
 export function makeTransport(ctx: IlinkContext, opts: TransportOpts = {}): TransportMethods {
-  const { accounts, acctStore, ctxStore, typingTickets, typingTTLMs, sessionState, lastActiveRef } = ctx
+  const { stateDir, accounts, acctStore, ctxStore, typingTickets, typingTTLMs, sessionState, lastActiveRef } = ctx
 
   return {
     async sendTyping(chatId, accountId) {
@@ -72,6 +76,18 @@ export function makeTransport(ctx: IlinkContext, opts: TransportOpts = {}): Tran
     async getUpdatesForLoop(accountId, baseUrl, token, syncBuf) {
       const resp = await ilinkGetUpdates(baseUrl, token, syncBuf)
       if (resp.errcode === -14 || resp.ret === -14) {
+        // errcode=-14 = "this token's session was taken over elsewhere". For a
+        // MULTI-DEVICE account (shared via `account export/import` — marked by a
+        // `.multidevice` file), that's an expected, recoverable handoff: a
+        // sibling machine took the session. We stand DOWN quietly (no expired
+        // mark, no scary fan-out) and can take it back later by re-polling.
+        // For a single-device account it's a genuine rebind → keep the old
+        // expired + notify behavior.
+        const shared = existsSync(join(stateDir, 'accounts', accountId, '.multidevice'))
+        if (shared) {
+          log('SESSION_STANDBY', `${accountId} — handed off to another device; standing by (re-activate this machine to take back)`)
+          return { expired: true, standby: true }
+        }
         const reason = `ilink/getupdates errcode=-14: ${resp.errmsg ?? ''} (likely rebound elsewhere)`
         const transitioned = sessionState.markExpired(accountId, reason)
         if (transitioned) {

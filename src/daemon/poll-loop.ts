@@ -204,6 +204,7 @@ export interface PollLoopOptions {
       updates?: RawUpdate[]
       sync_buf?: string
       expired?: boolean
+      standby?: boolean
     }>
   }
   parse: (updates: RawUpdate[], deps: ParseDeps) => InboundMsg[]
@@ -278,7 +279,11 @@ export function startLongPollLoops(opts: PollLoopOptions): PollLoopHandle {
         // ilink-glue wrapper has already written to SessionStateStore, so
         // /health admin command will show this bot as expired.
         if (resp.expired) {
-          log('SESSION_EXPIRED', `bot ${account.id} — stopping loop (/health to view, "清理 ${account.id}" to remove)`)
+          if (resp.standby) {
+            log('SESSION_STANDBY', `bot ${account.id} — handed off to another device; loop stopped, re-activate to take back`)
+          } else {
+            log('SESSION_EXPIRED', `bot ${account.id} — stopping loop (/health to view, "清理 ${account.id}" to remove)`)
+          }
           break
         }
 

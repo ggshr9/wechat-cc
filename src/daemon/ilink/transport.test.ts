@@ -13,18 +13,21 @@ vi.mock('../../lib/ilink', () => ({
   ilinkGetConfig: vi.fn(),
 }))
 
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { makeTransport } from './transport'
 import { ilinkGetUpdates } from '../../lib/ilink'
 import type { IlinkContext } from './context'
 import { makeConversationStore } from '../../core/conversation-store'
 import { openTestDb } from '../../lib/db'
 
-function makeStubCtx(): IlinkContext {
+function makeStubCtx(stateDir = '/tmp'): IlinkContext {
   // Minimal context shape — only fields read by getUpdatesForLoop matter
   // for these tests. Other methods aren't exercised.
   const transitions = new Map<string, string>()
   return {
-    stateDir: '/tmp',
+    stateDir,
     accounts: [],
     projectsFile: '/tmp/projects.json',
     ctxStore: { get: () => undefined, set: () => {}, all: () => ({}), flush: async () => {} } as never,
@@ -113,5 +116,45 @@ describe('transport getUpdatesForLoop — onAccountExpired', () => {
     const result = await transport.getUpdatesForLoop('acct1', 'http://x', 'tok', '')
     expect(result).toEqual({ expired: true })
     // No throw — that's the assertion
+  })
+})
+
+describe('transport getUpdatesForLoop — multi-device standby', () => {
+  let stateDir: string
+  beforeEach(() => {
+    vi.mocked(ilinkGetUpdates).mockReset()
+    stateDir = mkdtempSync(join(tmpdir(), 'transport-md-'))
+  })
+
+  function markShared(accountId: string) {
+    const dir = join(stateDir, 'accounts', accountId)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, '.multidevice'), '')
+  }
+
+  it('-14 on a multi-device account → standby, NO expired mark, NO notify', async () => {
+    markShared('acct1')
+    vi.mocked(ilinkGetUpdates).mockResolvedValue({ errcode: -14, errmsg: 'rebound' })
+    const calls: string[] = []
+    const transport = makeTransport(makeStubCtx(stateDir), { onAccountExpired: (id) => calls.push(id) })
+
+    const result = await transport.getUpdatesForLoop('acct1', 'http://x', 'tok', '')
+
+    expect(result).toEqual({ expired: true, standby: true })
+    expect(calls).toHaveLength(0)  // graceful — no scary fan-out
+    rmSync(stateDir, { recursive: true, force: true })
+  })
+
+  it('-14 on a NON-multi-device account → expired + notify (unchanged)', async () => {
+    // no marker for acct1
+    vi.mocked(ilinkGetUpdates).mockResolvedValue({ errcode: -14 })
+    const calls: string[] = []
+    const transport = makeTransport(makeStubCtx(stateDir), { onAccountExpired: (id) => calls.push(id) })
+
+    const result = await transport.getUpdatesForLoop('acct1', 'http://x', 'tok', '')
+
+    expect(result).toEqual({ expired: true })
+    expect(calls).toEqual(['acct1'])
+    rmSync(stateDir, { recursive: true, force: true })
   })
 })

@@ -1130,9 +1130,63 @@ const accountRemoveCmd = defineCommand({
   },
 })
 
+const accountExportCmd = defineCommand({
+  meta: { name: 'export', description: 'Export a bound bot (encrypted) so another machine can drive it — no re-scan' },
+  args: {
+    'bot-id': { type: 'string', description: 'Which account (default: the sole bound one)' },
+    passphrase: { type: 'string', required: true, description: 'Encrypts the bundle (you type the same on import)' },
+    out: { type: 'string', description: 'Output file (default: <botId>.wccaccount)' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    const { resolveAccountId, exportAccount, markMultiDevice } = await import('./src/cli/account-transfer.ts')
+    try {
+      const id = resolveAccountId(STATE_DIR, args['bot-id'])
+      const blob = exportAccount(STATE_DIR, id, args.passphrase)
+      // Exporting = this bot is now shared → mark the source too, so when the
+      // other device takes over, THIS machine also stands by gracefully.
+      markMultiDevice(STATE_DIR, id)
+      const outPath = args.out ?? join(process.cwd(), `${id}.wccaccount`)
+      const { writeFileSync } = await import('node:fs')
+      writeFileSync(outPath, blob, { mode: 0o600 })
+      if (args.json) { console.log(JSON.stringify({ ok: true, botId: id, out: outPath, bytes: blob.length })); return }
+      console.log(`exported ${id} → ${outPath} (${blob.length}B, encrypted)`)
+      console.log('⚠ 这个文件含你 bot 的完整凭证 — 安全传到另一台机器,用同一口令 `account import` 导入。')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (args.json) { console.log(JSON.stringify({ ok: false, error: msg })); return }
+      console.error(`account export failed: ${msg}`); process.exit(1)
+    }
+  },
+})
+
+const accountImportCmd = defineCommand({
+  meta: { name: 'import', description: 'Import an account bundle from another machine — drive the same bot without re-scanning' },
+  args: {
+    file: { type: 'positional', required: true, description: 'The .wccaccount bundle', valueHint: 'file' },
+    passphrase: { type: 'string', required: true, description: 'The passphrase used on export' },
+    json: { type: 'boolean', description: 'JSON envelope' },
+  },
+  async run({ args }) {
+    const { importAccount } = await import('./src/cli/account-transfer.ts')
+    try {
+      const { readFileSync } = await import('node:fs')
+      const blob = readFileSync(args.file)
+      const res = importAccount(STATE_DIR, blob, args.passphrase)
+      if (args.json) { console.log(JSON.stringify({ ok: true, ...res })); return }
+      console.log(`imported ${res.botId}${res.overwritten ? ' (overwrote existing)' : ''}`)
+      console.log('\n重启 daemon 即接管该 bot(会从另一台手里接管会话,对方退到后台)。')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (args.json) { console.log(JSON.stringify({ ok: false, error: msg })); return }
+      console.error(`account import failed: ${msg}`); process.exit(1)
+    }
+  },
+})
+
 const accountCmd = defineCommand({
-  meta: { name: 'account', description: 'Account management (decommission a bound bot)' },
-  subCommands: { remove: accountRemoveCmd },
+  meta: { name: 'account', description: 'Account management (export/import for multi-device, decommission a bound bot)' },
+  subCommands: { remove: accountRemoveCmd, export: accountExportCmd, import: accountImportCmd },
 })
 
 const daemonKillCmd = defineCommand({
