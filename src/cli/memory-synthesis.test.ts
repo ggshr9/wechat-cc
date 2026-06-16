@@ -89,9 +89,9 @@ describe('summarizeProjectMemories', () => {
     seedProject('-real-alpha', { 'MEMORY.md': 'idx', 'a.md': 'hello' })
     const out = summarizeProjectMemories(projectsRoot)
     expect(out.length).toBe(1)
-    expect(out[0].index).toBe('idx')
-    expect(out[0].files).toEqual([{ path: 'a.md', bytes: 5, content: 'hello' }])
-    expect(out[0].totalBytes).toBeGreaterThan(0)
+    expect(out[0]!.index).toBe('idx')
+    expect(out[0]!.files).toEqual([{ path: 'a.md', bytes: 5, content: 'hello' }])
+    expect(out[0]!.totalBytes).toBeGreaterThan(0)
   })
 })
 

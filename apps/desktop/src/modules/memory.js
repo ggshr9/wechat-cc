@@ -337,14 +337,15 @@ function parseOverview(md) {
   if (mapIdx >= 0) {
     const after = body.slice(mapIdx).split("\n")
     for (let i = 1; i < after.length; i++) {
-      if (/^\s*#{1,6}\s/.test(after[i])) break  // next section heading → stop
-      const m = after[i].match(/^\s*[-*]\s+(.+)$/)
+      const line = after[i] ?? ""
+      if (/^\s*#{1,6}\s/.test(line)) break  // next section heading → stop
+      const m = line.match(/^\s*[-*]\s+(.+)$/)
       if (!m) continue
-      const item = m[1].replace(/\*\*/g, "").replace(/`/g, "").trim()
+      const item = (m[1] ?? "").replace(/\*\*/g, "").replace(/`/g, "").trim()
       // Separator must be spaced (` — `, ` - `) or a colon — otherwise a hyphen
       // INSIDE a project name (e.g. "kawanco-dev") would be mis-split.
       const sep = item.match(/^(.+?)(?:\s+[—–-]\s+|\s*[:：]\s+)(.+)$/)
-      if (sep) projects.push({ name: sep[1].trim(), summary: sep[2].trim() })
+      if (sep) projects.push({ name: (sep[1] ?? "").trim(), summary: (sep[2] ?? "").trim() })
       else if (item) projects.push({ name: item, summary: "" })
     }
   }

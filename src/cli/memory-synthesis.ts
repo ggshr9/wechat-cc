@@ -79,7 +79,7 @@ export function projectDisplayName(encodedDir: string, home: string = homedir())
     rest = rest.slice(encHome.length).replace(/^-+/, '')
   }
   const segs = rest.split('-').filter(Boolean)
-  if (segs.length > 1 && CONTAINER_SEGMENTS.has(segs[0].toLowerCase())) segs.shift()
+  if (segs.length > 1 && CONTAINER_SEGMENTS.has(segs[0]!.toLowerCase())) segs.shift()
   return segs.join('-') || encodedDir.replace(/^-+/, '') || encodedDir
 }
 

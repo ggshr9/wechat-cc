@@ -93,7 +93,8 @@ describe('encryption guards', () => {
   it('tampered ciphertext fails (GCM auth)', () => {
     seedAccount(src, 'a-im-bot')
     const blob = exportAccount(src, 'a-im-bot', 'pw')
-    blob[blob.length - 1] ^= 0xff
+    const last = blob.length - 1
+    blob[last] = blob[last]! ^ 0xff
     expect(() => decryptBundle(blob, 'pw')).toThrow(/wrong passphrase or corrupt/)
   })
   it('rejects a non-bundle blob', () => {
