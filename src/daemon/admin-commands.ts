@@ -412,6 +412,21 @@ async function runSynthesize(deps: AdminCommandsDeps, adminChatId: string): Prom
   }
 }
 
+/**
+ * Map the machine reason codes delegateToHand can surface into a short
+ * human line for WeChat. Unknown reasons pass through (already-readable
+ * messages, or codes worth seeing verbatim) so we never hide real errors.
+ */
+export function friendlyDelegateReason(reason: string): string {
+  if (reason === 'paused') return '那台手当前已暂停。'
+  if (reason === 'timeout' || /timed? ?out/i.test(reason)) return '那台手超时未响应(任务太久或离线)。'
+  if (reason === 'malformed hand response') return '那台手返回了无法识别的结果。'
+  if (/^http_401$|unauthorized/i.test(reason)) return '配对密钥不匹配,需要重新配对(hand invite / hand join)。'
+  if (/^http_/.test(reason)) return `那台手返回错误(${reason})。`
+  if (/fetch failed|ECONNREFUSED|ENOTFOUND|network|abort/i.test(reason)) return '连不上那台手(检查它是否开机、A2A 是否在 Tailscale IP 上监听)。'
+  return reason
+}
+
 async function runDelegate(deps: AdminCommandsDeps, adminChatId: string, handName: string, task: string): Promise<void> {
   if (!deps.delegateToHand) {
     await deps.sendMessage(adminChatId, '派活功能未启用(没配置 A2A / 没有可派的"手")。').catch(() => {})
@@ -422,10 +437,14 @@ async function runDelegate(deps: AdminCommandsDeps, adminChatId: string, handNam
     const r = await deps.delegateToHand(handName, task)
     if (r.ok) {
       await deps.sendMessage(adminChatId, `「${handName}」的结果:\n${r.response}`)
-    } else if (r.knownHands && r.knownHands.length) {
-      await deps.sendMessage(adminChatId, `没找到叫「${handName}」的手。已注册的:${r.knownHands.join('、')}`)
+    } else if (r.reason === 'unknown_hand') {
+      // No hand by that name. If some are registered, list them (doubles as
+      // discovery); if none are, guide the operator to pair one.
+      await deps.sendMessage(adminChatId, r.knownHands && r.knownHands.length
+        ? `没找到叫「${handName}」的手。已注册的:${r.knownHands.join('、')}`
+        : '还没配对任何手。在那台机器上跑 wechat-cc hand invite,再在这台 hand join。')
     } else {
-      await deps.sendMessage(adminChatId, `派活失败:${r.reason}`)
+      await deps.sendMessage(adminChatId, `派活失败:${friendlyDelegateReason(r.reason)}`)
     }
     deps.log('ADMIN_CMD', `delegate chat=${adminChatId} hand=${handName} ok=${r.ok}`)
   } catch (err) {

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, existsSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { makeAdminCommands, type AdminCommandsDeps } from './admin-commands'
+import { makeAdminCommands, friendlyDelegateReason, type AdminCommandsDeps } from './admin-commands'
 import { makeSessionStateStore } from './session-state'
 import { openTestDb, type Db } from '../lib/db'
 import type { InboundMsg } from '../core/prompt-format'
@@ -362,6 +362,23 @@ describe('admin-commands', () => {
       expect(sentBody(1)).toContain('家里')
     })
 
+    it('unknown hand with NO hands registered → guides to pair one', async () => {
+      const delegateToHand = vi.fn().mockResolvedValue({ ok: false, reason: 'unknown_hand', knownHands: [] })
+      const cmds = make({ delegateToHand: delegateToHand as unknown as AdminCommandsDeps['delegateToHand'] })
+      await cmds.handle(msg('让家里执行 X'))
+      await flush()
+      expect(sentBody(1)).toContain('hand invite')
+      expect(sentBody(1)).not.toContain('unknown_hand')   // no raw code leak
+    })
+
+    it('a failure reason is shown in friendly form, not a raw code', async () => {
+      const delegateToHand = vi.fn().mockResolvedValue({ ok: false, reason: 'http_401' })
+      const cmds = make({ delegateToHand: delegateToHand as unknown as AdminCommandsDeps['delegateToHand'] })
+      await cmds.handle(msg('让家里执行 X'))
+      await flush()
+      expect(sentBody(1)).toContain('重新配对')
+    })
+
     it('not wired → tells the operator it is off', async () => {
       const cmds = make()  // no delegateToHand
       expect(await cmds.handle(msg('让家里执行 X'))).toBe(true)
@@ -509,5 +526,18 @@ describe('admin-commands', () => {
       expect(setBotName).not.toHaveBeenCalled()
       expect(sendMessage).not.toHaveBeenCalled()
     })
+  })
+})
+
+describe('friendlyDelegateReason', () => {
+  it('maps known reason codes to readable lines', () => {
+    expect(friendlyDelegateReason('paused')).toContain('暂停')
+    expect(friendlyDelegateReason('timeout')).toContain('超时')
+    expect(friendlyDelegateReason('http_401')).toContain('重新配对')
+    expect(friendlyDelegateReason('http_500')).toContain('http_500')   // shown verbatim inside the line
+    expect(friendlyDelegateReason('fetch failed')).toContain('连不上')
+  })
+  it('passes through an unrecognized (already-readable) reason', () => {
+    expect(friendlyDelegateReason('某个自定义说明')).toBe('某个自定义说明')
   })
 })
