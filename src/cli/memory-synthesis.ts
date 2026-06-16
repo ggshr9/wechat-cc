@@ -273,15 +273,18 @@ export async function gatherLifeContext(opts: { db: Db; stateDir: string; adminC
   const { db, stateDir, adminChatId } = opts
   const memoryRoot = join(stateDir, 'memory')
   const out: LifeContext = { observations: [], milestones: [], memoryNotes: [] }
+  // Stores return oldest→newest (ORDER BY ts ASC), so take the LAST N — the
+  // most RECENT life context is what makes the overview feel current ("懂你"
+  // is about now, not the first things ever noticed).
   try {
     const { makeObservationsStore } = await import('../daemon/observations/store')
     const store = makeObservationsStore(db, adminChatId, { migrateFromFile: join(memoryRoot, adminChatId, 'observations.jsonl') })
-    out.observations = (await store.listActive()).map(o => o.body).filter(Boolean).slice(0, 20)
+    out.observations = (await store.listActive()).map(o => o.body).filter(Boolean).slice(-20)
   } catch { /* best-effort */ }
   try {
     const { makeMilestonesStore } = await import('../daemon/milestones/store')
     const store = makeMilestonesStore(db, adminChatId, { migrateFromFile: join(memoryRoot, adminChatId, 'milestones.jsonl') })
-    out.milestones = (await store.list()).map(m => m.body).filter(Boolean).slice(0, 20)
+    out.milestones = (await store.list()).map(m => m.body).filter(Boolean).slice(-20)
   } catch { /* best-effort */ }
   try {
     const dir = join(memoryRoot, adminChatId)

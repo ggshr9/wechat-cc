@@ -9,6 +9,7 @@ import { writeMemoryFile } from './memory'
 import {
   discoverProjectMemory,
   formatSynthesisPrompt,
+  gatherLifeContext,
   projectDisplayName,
   summarizeProjectMemories,
   synthesizeOverview,
@@ -184,6 +185,19 @@ describe('synthesizeOverview', () => {
     expect(prompt).toContain('喜欢猫')
     expect(prompt).toContain('生活侧')
     expect(res.written).toBeDefined()
+  })
+
+  it('gatherLifeContext keeps the MOST RECENT observations (last 20), not the oldest', async () => {
+    const db = openTestDb()
+    const adminChatId = 'admin@im.wechat'
+    const { makeObservationsStore } = await import('../daemon/observations/store')
+    const store = makeObservationsStore(db, adminChatId, {})
+    for (let i = 1; i <= 25; i++) await store.append({ body: `obs-${i}` })
+    const life = await gatherLifeContext({ db, stateDir, adminChatId })
+    db.close()
+    expect(life.observations.length).toBe(20)
+    expect(life.observations).toContain('obs-25')  // newest kept
+    expect(life.observations).not.toContain('obs-1')  // oldest dropped
   })
 
   it('synthesizes from life alone when there are zero projects', async () => {
