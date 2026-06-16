@@ -105,7 +105,8 @@ export function buildPipelineDeps(opts: PipelineDepsOpts, refs: PipelineDepsRefs
       const provider = mode && mode.kind === 'solo' ? mode.provider : undefined
       const cheapEval = (provider ? boot.registry.get(provider)?.provider.cheapEval : null) ?? boot.registry.getCheapEval()
       if (!cheapEval) throw new Error('no LLM provider available for synthesis')
-      return synthesizeOverview({ stateDir, adminChatId, sdkEval: (p) => cheapEval(p) })
+      // Pass the daemon db so the overview also folds in the life-side memory.
+      return synthesizeOverview({ stateDir, adminChatId, sdkEval: (p) => cheapEval(p), db })
     },
   })
 

@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { openTestDb } from '../lib/db'
+import { makeObservationsStore } from '../daemon/observations/store'
+import { makeMilestonesStore } from '../daemon/milestones/store'
+import { writeMemoryFile } from './memory'
 import {
   discoverProjectMemory,
   formatSynthesisPrompt,
@@ -156,5 +160,45 @@ describe('synthesizeOverview', () => {
       sdkEval: async () => '   ',
     })
     expect(res.written).toBeUndefined()
+  })
+
+  it('folds the life side (observations / milestones / admin notes) into the prompt', async () => {
+    seedProject('-real-work', { 'MEMORY.md': 'idx', 'a.md': 'wrote code' })
+    const db = openTestDb()
+    const adminChatId = 'admin@im.wechat'
+    await makeObservationsStore(db, adminChatId, {}).append({ body: '他最近在准备搬家' })
+    await makeMilestonesStore(db, adminChatId, {}).fire({ id: 'ms_test', body: '第一次用语音功能' })
+    writeMemoryFile(stateDir, adminChatId, 'profile.md', '喜欢猫')
+
+    let prompt = ''
+    const res = await synthesizeOverview({
+      stateDir, adminChatId, projectsRoot, db,
+      sdkEval: async (p) => { prompt = p; return '整理结果' },
+    })
+    db.close()
+    expect(res.observationsFound).toBe(1)
+    expect(res.milestonesFound).toBe(1)
+    expect(res.memoryNotesFound).toBe(1)
+    expect(prompt).toContain('搬家')
+    expect(prompt).toContain('语音')
+    expect(prompt).toContain('喜欢猫')
+    expect(prompt).toContain('生活侧')
+    expect(res.written).toBeDefined()
+  })
+
+  it('synthesizes from life alone when there are zero projects', async () => {
+    const db = openTestDb()
+    const adminChatId = 'admin@im.wechat'
+    await makeObservationsStore(db, adminChatId, {}).append({ body: '生活观察一条' })
+    let called = false
+    const res = await synthesizeOverview({
+      stateDir, adminChatId, projectsRoot, db,  // projectsRoot is empty → 0 projects
+      sdkEval: async () => { called = true; return 'ok' },
+    })
+    db.close()
+    expect(res.projectsFound).toBe(0)
+    expect(res.observationsFound).toBe(1)
+    expect(called).toBe(true)
+    expect(res.written).toBeDefined()
   })
 })

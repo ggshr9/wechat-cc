@@ -326,19 +326,27 @@ function parseOverview(md) {
   const body = String(md || "").replace(/<!--[\s\S]*?-->/g, "").trim()
   if (!body) return null
   const mapIdx = body.search(/^#{1,4}\s*项目地图/m)
-  const intro = (mapIdx >= 0 ? body.slice(0, mapIdx) : body).trim()
-  const mapText = mapIdx >= 0 ? body.slice(mapIdx) : ""
+  // Intro = everything before 项目地图, with markdown heading lines (# 总体记忆 /
+  // ## 整体理解 …) stripped so the hero shows clean prose, not raw "#".
+  const introRaw = mapIdx >= 0 ? body.slice(0, mapIdx) : body
+  const intro = introRaw.split("\n").filter(l => !/^\s*#{1,6}\s/.test(l)).join("\n").trim()
+  // Project map = bullets BETWEEN 项目地图 and the next heading (e.g. 生活与关系) —
+  // otherwise a life-section bullet would be mis-parsed as a project.
   /** @type {Array<{ name: string, summary: string }>} */
   const projects = []
-  for (const raw of mapText.split("\n")) {
-    const m = raw.match(/^\s*[-*]\s+(.+)$/)
-    if (!m) continue
-    const item = m[1].replace(/\*\*/g, "").replace(/`/g, "").trim()
-    // Separator must be spaced (` — `, ` - `) or a colon — otherwise a hyphen
-    // INSIDE a project name (e.g. "kawanco-dev") would be mis-split.
-    const sep = item.match(/^(.+?)(?:\s+[—–-]\s+|\s*[:：]\s+)(.+)$/)
-    if (sep) projects.push({ name: sep[1].trim(), summary: sep[2].trim() })
-    else if (item) projects.push({ name: item, summary: "" })
+  if (mapIdx >= 0) {
+    const after = body.slice(mapIdx).split("\n")
+    for (let i = 1; i < after.length; i++) {
+      if (/^\s*#{1,6}\s/.test(after[i])) break  // next section heading → stop
+      const m = after[i].match(/^\s*[-*]\s+(.+)$/)
+      if (!m) continue
+      const item = m[1].replace(/\*\*/g, "").replace(/`/g, "").trim()
+      // Separator must be spaced (` — `, ` - `) or a colon — otherwise a hyphen
+      // INSIDE a project name (e.g. "kawanco-dev") would be mis-split.
+      const sep = item.match(/^(.+?)(?:\s+[—–-]\s+|\s*[:：]\s+)(.+)$/)
+      if (sep) projects.push({ name: sep[1].trim(), summary: sep[2].trim() })
+      else if (item) projects.push({ name: item, summary: "" })
+    }
   }
   return { intro, projects }
 }

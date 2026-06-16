@@ -990,7 +990,8 @@ const memorySynthesizeCmd = defineCommand({
       } catch { /* no conversation yet — default below */ }
     }
     provider = provider || 'claude'
-    db.close()
+    // db is kept open and passed to synthesizeOverview so it can also fold in
+    // the life-side memory (observations / milestones / admin notes).
 
     const dryRun = Boolean(args['dry-run'])
 
@@ -1034,17 +1035,23 @@ const memorySynthesizeCmd = defineCommand({
     }
 
     const { synthesizeOverview } = await import('./src/cli/memory-synthesis')
-    const result = await synthesizeOverview({ stateDir: STATE_DIR, adminChatId: chatId, sdkEval, dryRun })
+    let result
+    try {
+      result = await synthesizeOverview({ stateDir: STATE_DIR, adminChatId: chatId, sdkEval, dryRun, db })
+    } finally {
+      db.close()
+    }
 
     if (args.json) {
       console.log(JSON.stringify({ ok: true, chatId, provider, dryRun, ...result }, null, 2))
       return
     }
     console.log(`整理对象: ${chatId}  ·  provider: ${provider}${dryRun ? '  ·  (dry-run)' : ''}`)
-    console.log(`发现 ${result.projectsFound} 个项目: ${result.projectNames.join(', ') || '(无)'}  ·  ${result.filesScanned} 文件  ·  prompt ${result.promptChars} 字`)
+    console.log(`工作侧: ${result.projectsFound} 个项目: ${result.projectNames.join(', ') || '(无)'}  ·  ${result.filesScanned} 文件`)
+    console.log(`生活侧: ${result.observationsFound} 观察 · ${result.milestonesFound} 里程碑 · ${result.memoryNotesFound} 记忆笔记  ·  prompt ${result.promptChars} 字`)
     if (dryRun) { console.log('(dry-run — 未调用 LLM、未写入)'); return }
     if (result.written) console.log(`已写入 ${result.written.path} (${result.written.bytesWritten}B)`)
-    else console.log('未写入(无项目记忆或 LLM 返回空)')
+    else console.log('未写入(无可整理内容或 LLM 返回空)')
   },
 })
 
