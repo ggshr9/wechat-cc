@@ -1,7 +1,7 @@
 import { createDecipheriv, createCipheriv, createHash, randomBytes } from 'node:crypto'
 import { readdirSync, rmSync, statSync, unlinkSync, writeFileSync, mkdirSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { Buffer } from 'node:buffer'
 
 export const CDN_BASE_URL = 'https://cdn.ilinkai.weixin.qq.com'
@@ -245,7 +245,7 @@ export async function buildMediaItemFromFile(
   if (mediaType === UPLOAD_MEDIA_TYPE.VIDEO) {
     return { type: 5, video_item: { media: mediaRef, video_size: uploaded.fileSizeCiphertext } }
   }
-  const fileName = filePath.split('/').pop() ?? 'file'
+  const fileName = basename(filePath) || 'file'
   return { type: 4, file_item: { media: mediaRef, file_name: fileName, len: String(uploaded.fileSize) } }
 }
 

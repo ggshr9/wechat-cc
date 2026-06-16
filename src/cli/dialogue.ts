@@ -24,7 +24,7 @@
  */
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename as pathBasename, join } from 'node:path'
 import type { Db } from '../lib/db'
 import { makeMessagesStore, type MessageRecord } from '../lib/messages-store'
 import { makeThreadsStore, type ThreadRecord, type Facet } from '../lib/threads-store'
@@ -184,7 +184,7 @@ export async function backfillFromCodexJsonl(
 
   for (const rolloutPath of rollouts) {
     // Use the file basename (without extension) as the stable session key
-    const basename = rolloutPath.split('/').pop()!.replace(/\.jsonl$/, '')
+    const basename = pathBasename(rolloutPath).replace(/\.jsonl$/, '')
     // Parse filename anchor: rollout-YYYY-MM-DDTHH-MM-SS-*.jsonl → ISO ts
     const filenameAnchor = parseRolloutFilenameTs(basename)
     const turns = readCodexJsonlAsClaudeTurns(rolloutPath)
@@ -319,7 +319,7 @@ export async function backfillKnownCodexSessions(
     if (!rolloutPath) continue // not found on disk — skip
     filesFound++
 
-    const basename = rolloutPath.split('/').pop()!.replace(/\.jsonl$/, '')
+    const basename = pathBasename(rolloutPath).replace(/\.jsonl$/, '')
     const filenameAnchor = parseRolloutFilenameTs(basename)
     const turns = readCodexJsonlAsClaudeTurns(rolloutPath)
     let idx = 0
