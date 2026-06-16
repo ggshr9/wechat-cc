@@ -396,19 +396,36 @@ async function sendHearthHelp(deps: AdminCommandsDeps, adminChatId: string): Pro
 // a second (paid) LLM run before the first replies.
 const synthesizeInFlight = new Set<string>()
 
+/**
+ * Prepare the synthesized overview for a WeChat read-back: strip the machine
+ * stamp comment synthesizeOverview prepends (`<!-- … · <iso> -->`) — which
+ * would otherwise show as raw text in plain-text WeChat — and surface its
+ * timestamp as a friendly "（整理于 …）" line instead.
+ */
+export function formatOverviewForDisplay(raw: string): string {
+  const trimmed = raw.trim()
+  const m = trimmed.match(/^<!--\s*([\s\S]*?)\s*-->\s*/)
+  if (!m) return trimmed
+  const body = trimmed.slice(m[0].length).trim()
+  const tsM = m[1]!.match(/(\d{4}-\d{2}-\d{2}T[\d:.]+Z)/)
+  const when = tsM ? `（整理于 ${new Date(tsM[1]!).toLocaleString()}）\n\n` : ''
+  return `${when}${body}`
+}
+
 async function runShowOverview(deps: AdminCommandsDeps, adminChatId: string): Promise<void> {
   if (!deps.readOverview) {
     await deps.sendMessage(adminChatId, '记忆查看暂不可用（daemon 未接线）。').catch(() => {})
     return
   }
   try {
-    const overview = (await deps.readOverview(adminChatId))?.trim()
-    if (!overview) {
+    const raw = (await deps.readOverview(adminChatId))?.trim()
+    if (!raw) {
       await deps.sendMessage(adminChatId, '我还没整理过对你的理解。说「整理记忆」我就生成一份。')
       return
     }
-    await deps.sendMessage(adminChatId, `🧠 我目前对你的理解：\n\n${overview}`)
-    deps.log('ADMIN_CMD', `show-overview chat=${adminChatId} bytes=${overview.length}`)
+    const display = formatOverviewForDisplay(raw)
+    await deps.sendMessage(adminChatId, `🧠 我目前对你的理解：\n\n${display}`)
+    deps.log('ADMIN_CMD', `show-overview chat=${adminChatId} bytes=${display.length}`)
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err)
     await deps.sendMessage(adminChatId, `读取记忆失败：${detail.slice(0, 160)}`).catch(() => {})

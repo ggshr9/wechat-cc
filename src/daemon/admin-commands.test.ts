@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, existsSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { makeAdminCommands, friendlyDelegateReason, type AdminCommandsDeps } from './admin-commands'
+import { makeAdminCommands, friendlyDelegateReason, formatOverviewForDisplay, type AdminCommandsDeps } from './admin-commands'
 import { makeSessionStateStore } from './session-state'
 import { openTestDb, type Db } from '../lib/db'
 import type { InboundMsg } from '../core/prompt-format'
@@ -367,6 +367,18 @@ describe('admin-commands', () => {
       expect(sentBody(0)).toContain('喜欢猫')
     })
 
+    it('strips the machine stamp comment from the read-back', async () => {
+      const stamped = '<!-- 由 wechat-cc 从本机 Claude 记忆整理生成 · 2026-06-15T14:58:22.979Z -->\n\n## 整体理解\n喜欢猫。'
+      const readOverview = vi.fn().mockResolvedValue(stamped)
+      const cmds = make({ readOverview: readOverview as unknown as AdminCommandsDeps['readOverview'] })
+      await cmds.handle(msg('看记忆'))
+      const body = sentBody(0)
+      expect(body).not.toContain('<!--')          // raw comment never shown
+      expect(body).not.toContain('wechat-cc 从本机')
+      expect(body).toContain('整理于')             // timestamp surfaced friendly
+      expect(body).toContain('喜欢猫')
+    })
+
     it('matches several phrasings + the /overview alias', async () => {
       const readOverview = vi.fn().mockResolvedValue('x')
       const cmds = make({ readOverview: readOverview as unknown as AdminCommandsDeps['readOverview'] })
@@ -603,5 +615,22 @@ describe('friendlyDelegateReason', () => {
   })
   it('passes through an unrecognized (already-readable) reason', () => {
     expect(friendlyDelegateReason('某个自定义说明')).toBe('某个自定义说明')
+  })
+})
+
+describe('formatOverviewForDisplay', () => {
+  it('strips the stamp comment and surfaces its timestamp', () => {
+    const out = formatOverviewForDisplay('<!-- 由 wechat-cc 整理 · 2026-06-15T14:58:22.979Z -->\n\n正文内容')
+    expect(out).not.toContain('<!--')
+    expect(out).toContain('整理于')
+    expect(out).toContain('正文内容')
+    expect(out.indexOf('整理于')).toBeLessThan(out.indexOf('正文内容'))  // timestamp leads
+  })
+  it('returns content unchanged when there is no stamp', () => {
+    expect(formatOverviewForDisplay('  纯内容，没有戳  ')).toBe('纯内容，没有戳')
+  })
+  it('drops the comment even when it lacks a parseable timestamp', () => {
+    const out = formatOverviewForDisplay('<!-- no ts here -->\n正文')
+    expect(out).toBe('正文')
   })
 })
