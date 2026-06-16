@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { registerPolling } from './polling-lifecycle'
 import { parseUpdates } from './poll-loop'
 import type { InboundCtx } from './inbound/types'
@@ -16,6 +19,31 @@ describe('registerPolling', () => {
     })
     expect(lc.name).toBe('polling')
     expect(typeof lc.reconcile).toBe('function')
+  })
+
+  it('multi-device accounts start in standby (not polled); single-device auto-poll', async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'polling-md-'))
+    mkdirSync(join(stateDir, 'accounts', 'bot-md'), { recursive: true })
+    writeFileSync(join(stateDir, 'accounts', 'bot-md', '.multidevice'), '')
+    const idle = { baseUrl: 'http://x', token: 't', syncBuf: '' }
+    const lc = registerPolling({
+      stateDir,
+      accounts: [
+        { id: 'bot-md', botId: 'bot-md', userId: 'u1', ...idle },
+        { id: 'bot-single', botId: 'bot-single', userId: 'u2', ...idle },
+      ],
+      ilink: { getUpdates: async () => { await new Promise(r => setTimeout(r, 1000)); return { updates: [] } } },
+      parse: () => [],
+      resolveUserName: () => undefined,
+      log: () => {},
+      runPipeline: async () => {},
+    })
+    try {
+      expect(lc.running()).toEqual(['bot-single'])  // md held back until takeover
+    } finally {
+      await lc.stop()
+      rmSync(stateDir, { recursive: true, force: true })
+    }
   })
 
   it('stop() is idempotent', async () => {

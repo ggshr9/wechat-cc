@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import type { Lifecycle } from '../lib/lifecycle'
@@ -43,8 +43,24 @@ export function registerPolling(deps: PollingDeps): PollingLifecycle {
   const inboxDir = join(deps.stateDir, 'inbox')
   mkdirSync(inboxDir, { recursive: true })
 
+  // Multi-device accounts (shared via `account export/import`, marked by a
+  // `.multidevice` file — see account-transfer.ts) start in STANDBY, not
+  // polling. Otherwise a reboot of an idle machine would silently steal the
+  // live session from the machine you're actually using (startup polls
+  // unconditionally → ilink hands the newest poller the session). They
+  // activate explicitly via `account takeover` (SIGUSR1 → reconcile), matching
+  // the "switch to the machine you're at" model. Single-device accounts
+  // (never shared) auto-poll as before.
+  const startupAccounts = deps.accounts.filter(
+    a => !existsSync(join(deps.stateDir, 'accounts', a.id, '.multidevice')),
+  )
+  const heldBack = deps.accounts.length - startupAccounts.length
+  if (heldBack > 0) {
+    deps.log('POLL', `${heldBack} multi-device account(s) in standby at startup — run \`account takeover\` to drive a bot from this machine`)
+  }
+
   const handle = startLongPollLoops({
-    accounts: deps.accounts,
+    accounts: startupAccounts,
     ilink: deps.ilink,
     parse: deps.parse,
     resolveUserName: deps.resolveUserName,
