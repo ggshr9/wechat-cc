@@ -173,11 +173,26 @@ export async function materializeAttachments(
     }
 
     try {
-      const buf = await downloadCdnMedia(media)
+      let buf: Buffer | undefined
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          buf = await downloadCdnMedia(media)
+          break
+        } catch (err) {
+          const msg2 = err instanceof Error ? err.message : String(err)
+          const name = err instanceof Error ? err.name : ''
+          const isRetryable = name === 'AbortError'
+            || /CDN download 5\d\d/.test(msg2)
+            || /operation was aborted/i.test(msg2)
+          if (!isRetryable || attempt === 3) throw err
+          log('RETRY', `downloadCdnMedia attempt ${attempt} failed, retrying in ${attempt}s: ${msg2}`)
+          await new Promise(r => setTimeout(r, attempt * 1000))
+        }
+      }
       const filename = filenameFor(att.kind, parsed, msg.createTimeMs || Date.now())
-      att.path = await saveToInbox(buf, filename, msg.userId, inboxDir)
+      att.path = await saveToInbox(buf!, filename, msg.userId, inboxDir)
       att.caption = undefined
-      log('MEDIA', `materialized ${att.kind} → ${att.path} (${(buf.length / 1024).toFixed(1)}KB)`)
+      log('MEDIA', `materialized ${att.kind} → ${att.path} (${(buf!.length / 1024).toFixed(1)}KB)`)
     } catch (err) {
       log('MEDIA', `download failed (kind=${att.kind}, user=${msg.userId}): ${err}`)
       // Keep path as PENDING_CDN_REF + caption intact — caller still sees the
