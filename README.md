@@ -5,8 +5,8 @@
 </p>
 
 <p align="center">
-  <img alt="version"  src="https://img.shields.io/badge/cli-v0.6.2-blue">
-  <img alt="desktop"  src="https://img.shields.io/badge/desktop-v0.6.2-blue">
+  <img alt="version"  src="https://img.shields.io/badge/cli-v0.6.3-blue">
+  <img alt="desktop"  src="https://img.shields.io/badge/desktop-v0.6.3-blue">
   <img alt="platform" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey">
   <img alt="runtime"  src="https://img.shields.io/badge/runtime-Bun-black">
   <img alt="license"  src="https://img.shields.io/badge/license-MIT-green">
@@ -870,13 +870,11 @@ the OS package manager.
 ## Versions
 
 - **CLI / daemon**: see [`package.json`](./package.json). Latest tagged release is
-  **v0.6.2** — multi-chat navigation + memory-profile overview. The `dev` branch
-  runs ahead with the one-brain-many-hands (乙) delegation system and the
-  work+life memory-synthesis feature documented above.
-  Previous milestone: [RFC 03 multi-agent](./docs/releases/2026-05-02-rfc03.md)
-  (Claude × Codex modes / stdio MCP / open provider registry).
+  **v0.6.3** — the one-brain-many-hands (乙) delegation system + work/life
+  memory synthesis (see [`docs/releases/2026-06-16-v0.6.3.md`](./docs/releases/2026-06-16-v0.6.3.md)).
+  Previous: [v0.6.2 — multi-chat navigation + memory-profile overview](./docs/releases/2026-06-04-v0.6.2.md).
 - **Desktop bundle**: latest signed release is
-  [`desktop-v0.6.2`](https://github.com/ggshr9/wechat-cc/releases/tag/desktop-v0.6.2).
+  [`desktop-v0.6.3`](https://github.com/ggshr9/wechat-cc/releases/tag/desktop-v0.6.3).
 - **Per-version release notes**: [`docs/releases/`](./docs/releases/)
 - **Architecture / design specs**: [`docs/specs/`](./docs/specs/)
 - **Roadmap**: [`docs/rfc/02-post-v1.1-roadmap.md`](./docs/rfc/02-post-v1.1-roadmap.md)
