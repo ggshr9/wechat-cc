@@ -212,6 +212,12 @@ export async function main() {
   process.on('SIGINT', () => void cliShutdown('SIGINT'))
   process.on('SIGTERM', () => void cliShutdown('SIGTERM'))
   process.on('SIGUSR1', () => { handle.pollingReconcile?.()?.catch(err => log('RECONCILE', `SIGUSR1 reconcile failed: ${err instanceof Error ? err.message : String(err)}`)) })
+  // SIGUSR2 — fire a companion push tick now (instead of waiting for the ~20min
+  // scheduler). Sent by `wechat-cc companion push`. See cli/companion-push.ts.
+  process.on('SIGUSR2', () => {
+    log('SCHED', 'SIGUSR2 — manual push tick requested')
+    handle.fireTick('push', new Date()).catch(err => log('SCHED', `SIGUSR2 push tick failed: ${err instanceof Error ? err.message : String(err)}`))
+  })
 }
 
 // Direct invocation: `bun src/daemon/main.ts` (dev mode). In compiled binaries

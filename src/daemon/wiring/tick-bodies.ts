@@ -104,14 +104,23 @@ export function buildTickBodies(deps: TickDeps): TickBodies {
       deps.log('COMPANION', `default_chat_id=${chatId} is non-admin tier (${tier}); push tick will run with reduced capabilities`)
     }
     const tierProfile = TIER_PROFILES[tier]
-    if (deps.boot.sessionManager.isInFlight({ alias: proj.alias, providerId: deps.boot.defaultProviderId, chatId })) {
-      deps.log('SCHED', `[companion] skipping push tick: user session in-flight (alias=${proj.alias} provider=${deps.boot.defaultProviderId} chat=${chatId})`)
+    // Dispatch on the chat's OWN mode provider (what its normal replies use),
+    // not the daemon default. A codex-default install whose chat is solo-claude
+    // would otherwise push via codex — a provider the chat never uses, which on
+    // the Claude-designed companion prompt hangs and delivers nothing.
+    const mode = deps.boot.coordinator.getMode(chatId)
+    const providerId =
+      mode.kind === 'solo' ? mode.provider
+      : mode.kind === 'primary_tool' ? mode.primary
+      : (mode.participants?.[0] ?? deps.boot.defaultProviderId)
+    if (deps.boot.sessionManager.isInFlight({ alias: proj.alias, providerId, chatId })) {
+      deps.log('SCHED', `[companion] skipping push tick: user session in-flight (alias=${proj.alias} provider=${providerId} chat=${chatId})`)
       return // leave the item pending — retry next tick
     }
     const handle = await deps.boot.sessionManager.acquire({
       alias: proj.alias,
       path: proj.path,
-      providerId: deps.boot.defaultProviderId,
+      providerId,
       chatId,
       tierProfile,
       permissionMode: deps.permissionMode,
