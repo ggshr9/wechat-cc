@@ -265,6 +265,76 @@ describe('startLongPollLoops', () => {
     await handle.stop()
   })
 
+  it('persists the advanced syncBuf via onSyncBuf after a batch', async () => {
+    const updates: RawUpdate[] = [
+      {
+        from_user_id: 'u1', create_time_ms: 1000, message_type: 1, message_state: 2,
+        item_list: [{ type: 1, text_item: { text: 'a' } }],
+      },
+    ]
+    const getUpdates = vi.fn()
+      .mockResolvedValueOnce({ updates, sync_buf: 'buf2' })
+      .mockImplementation(async () => { await new Promise(r => setTimeout(r, 50)); return { updates: [], sync_buf: 'buf2' } })
+
+    const persisted: Array<[string, string]> = []
+    const handle = startLongPollLoops({
+      accounts: [baseAcct],
+      onInbound: async () => {},
+      ilink: { getUpdates },
+      parse: (us, deps) => parseUpdates(us, deps),
+      resolveUserName: () => undefined,
+      onSyncBuf: (id, buf) => { persisted.push([id, buf]) },
+    })
+    await new Promise(r => setTimeout(r, 30))
+    expect(persisted).toContainEqual(['A1', 'buf2'])
+    await handle.stop()
+  })
+
+  it('persists syncBuf only after the batch is fully processed (crash-safe ordering)', async () => {
+    const updates: RawUpdate[] = [
+      {
+        from_user_id: 'u1', create_time_ms: 1000, message_type: 1, message_state: 2,
+        item_list: [{ type: 1, text_item: { text: 'a' } }],
+      },
+    ]
+    const getUpdates = vi.fn()
+      .mockResolvedValueOnce({ updates, sync_buf: 'buf2' })
+      .mockImplementation(async () => { await new Promise(r => setTimeout(r, 50)); return { updates: [], sync_buf: 'buf2' } })
+
+    const order: string[] = []
+    const handle = startLongPollLoops({
+      accounts: [baseAcct],
+      onInbound: async () => { order.push('inbound') },
+      ilink: { getUpdates },
+      parse: (us, deps) => parseUpdates(us, deps),
+      resolveUserName: () => undefined,
+      onSyncBuf: () => { order.push('persist') },
+    })
+    await new Promise(r => setTimeout(r, 30))
+    expect(order[0]).toBe('inbound')
+    expect(order.indexOf('persist')).toBeGreaterThan(order.indexOf('inbound'))
+    await handle.stop()
+  })
+
+  it('does not re-persist an unchanged syncBuf on idle polls', async () => {
+    const getUpdates = vi.fn()
+      .mockResolvedValueOnce({ updates: [], sync_buf: 'buf2' })
+      .mockImplementation(async () => { await new Promise(r => setTimeout(r, 10)); return { updates: [], sync_buf: 'buf2' } })
+
+    const persisted: string[] = []
+    const handle = startLongPollLoops({
+      accounts: [baseAcct],
+      onInbound: async () => {},
+      ilink: { getUpdates },
+      parse: () => [],
+      resolveUserName: () => undefined,
+      onSyncBuf: (_id, buf) => { persisted.push(buf) },
+    })
+    await new Promise(r => setTimeout(r, 60))
+    expect(persisted).toEqual(['buf2'])  // only the first change, not every idle poll
+    await handle.stop()
+  })
+
   it('stops cleanly when stop() is called mid-loop', async () => {
     const getUpdates = vi.fn().mockImplementation(async () =>
       new Promise(r => setTimeout(() => r({ updates: [], sync_buf: '' }), 20)),

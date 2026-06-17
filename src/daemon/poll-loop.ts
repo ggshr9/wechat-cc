@@ -204,6 +204,14 @@ export interface PollLoopOptions {
   }
   parse: (updates: RawUpdate[], deps: ParseDeps) => InboundMsg[]
   resolveUserName?: (chatId: string) => string | undefined
+  /**
+   * Persist the advanced ilink poll cursor. Called AFTER a batch's onInbound
+   * handlers have all run (so a crash mid-batch still redelivers — at-least-once
+   * within a batch), and only when the cursor actually changed (no disk churn on
+   * idle long-polls). Without this the on-disk sync_buf is frozen at first boot
+   * and every restart replays ilink's unacked backlog → duplicate fallback sends.
+   */
+  onSyncBuf?: (accountId: string, syncBuf: string) => void
   log?: (tag: string, line: string) => void
 }
 
@@ -254,7 +262,7 @@ interface LoopRecord {
  * one (for cleanup).
  */
 export function startLongPollLoops(opts: PollLoopOptions): PollLoopHandle {
-  const { onInbound, ilink, parse, log = () => {} } = opts
+  const { onInbound, ilink, parse, onSyncBuf, log = () => {} } = opts
   const resolveUserName = opts.resolveUserName ?? (() => undefined)
 
   const loops = new Map<string, LoopRecord>()
@@ -298,8 +306,12 @@ export function startLongPollLoops(opts: PollLoopOptions): PollLoopHandle {
           }
         }
 
-        if (resp.sync_buf !== undefined) {
+        // Persist AFTER the onInbound loop above, so a crash mid-batch
+        // redelivers; only on an actual change to avoid disk churn on the
+        // idle long-poll returns that echo the same cursor.
+        if (resp.sync_buf !== undefined && resp.sync_buf !== syncBuf) {
           syncBuf = resp.sync_buf
+          onSyncBuf?.(account.id, syncBuf)
         }
       } catch (err) {
         if (sig.aborted) break
