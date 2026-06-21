@@ -722,6 +722,7 @@ describe('ConversationCoordinator', () => {
       codexEvents?: AgentEvent[]
       claudeThrows?: Error
       codexThrows?: Error
+      recordTurn?: (r: import('./conversation-coordinator').TurnRecord) => void
     } = {}) {
       const store = makeMockStore()
       store.set('chat-1', { kind: 'parallel' })
@@ -784,6 +785,7 @@ describe('ConversationCoordinator', () => {
         permissionMode: 'strict',
         loadAccess: adminAccess,
         log: () => {},
+        ...(opts.recordTurn ? { recordTurn: opts.recordTurn } : {}),
       })
       return { c, acquire, sendAssistantText, dispatchCalls }
     }
@@ -896,6 +898,67 @@ describe('ConversationCoordinator', () => {
       expect(dispatchCalls[0]?.text).toBe('hello both')
       expect(dispatchCalls[1]?.text).toBe('hello both')
     })
+
+    it('emits one TurnRecord per participant in parallel mode', async () => {
+      // Observability parity with solo: /both must leave a structured record
+      // for EACH provider's turn, tagged mode=parallel, so "why did this chat
+      // stop replying" is answerable for /both too.
+      const recordTurn = vi.fn()
+      const { c } = setupParallel({
+        claudeEvents: [
+          { kind: 'text', text: 'hi' },
+          { kind: 'tool_call', server: 'wechat', tool: 'reply' },
+          { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+        ],
+        codexEvents: [
+          { kind: 'text', text: 'yo' },
+          { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+        ],
+        recordTurn,
+      })
+      await c.dispatch(inbound('chat-1', 'hi'))
+      expect(recordTurn).toHaveBeenCalledTimes(2)
+      const byProvider = Object.fromEntries(
+        recordTurn.mock.calls.map(([r]) => [r.provider, r]),
+      )
+      expect(byProvider['claude']).toMatchObject({ mode: 'parallel', outcome: 'completed', replyToolCalled: true })
+      expect(byProvider['codex']).toMatchObject({ mode: 'parallel', outcome: 'completed', replyToolCalled: false, textChunks: 1 })
+    })
+
+    it('emits a TurnRecord with outcome=timeout for a stalled participant in parallel mode', async () => {
+      const recordTurn = vi.fn()
+      const store = makeMockStore()
+      store.set('chat-p', { kind: 'parallel' })
+      const registry = createProviderRegistry()
+      registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
+      registry.register('codex', dummyProvider, { displayName: 'Codex', canResume: () => true })
+      const acquire = vi.fn(async (req: AcquireRequest) =>
+        req.providerId === 'claude'
+          ? makeHandle('claude', hangingSession([{ kind: 'text', text: 'partial…' }]))
+          : makeHandle('codex', makeFakeSession({ events: [
+              { kind: 'text', text: 'codex reply' },
+              { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+            ] }))
+      )
+      const c = createConversationCoordinator({
+        resolveProject: () => ({ alias: 'a', path: '/p' }),
+        manager: { acquire, release: async () => {} },
+        conversationStore: store,
+        registry,
+        defaultProviderId: 'claude',
+        format: (m) => m.text,
+        sendAssistantText: async () => {},
+        permissionMode: 'strict',
+        loadAccess: adminAccess,
+        log: () => {},
+        recordTurn,
+        turnTimeoutMs: 30,
+      })
+      await c.dispatch(inbound('chat-p', 'hi'))
+      const byProvider = Object.fromEntries(recordTurn.mock.calls.map(([r]) => [r.provider, r]))
+      expect(byProvider['claude']).toMatchObject({ mode: 'parallel', outcome: 'timeout' })
+      expect(byProvider['codex']).toMatchObject({ mode: 'parallel', outcome: 'completed' })
+    }, 3000)
 
     it('skips fallback sendAssistantText when both providers called reply tool', async () => {
       const { c, sendAssistantText } = setupParallel({
@@ -1060,6 +1123,7 @@ describe('ConversationCoordinator', () => {
       // Per-provider replies queue (FIFO) — each entry maps to AgentEvents.
       replies: Record<string, Array<{ assistantText: string[]; replyToolCalled?: boolean }>>
       maxRounds?: number
+      recordTurn?: (r: import('./conversation-coordinator').TurnRecord) => void
     }) {
       const store = makeMockStore()
       store.set('chat-1', { kind: 'chatroom' })
@@ -1108,6 +1172,7 @@ describe('ConversationCoordinator', () => {
         log,
         haikuEval,
         ...(opts.maxRounds !== undefined ? { chatroomMaxRounds: opts.maxRounds } : {}),
+        ...(opts.recordTurn ? { recordTurn: opts.recordTurn } : {}),
       })
       return { c, acquire, dispatchedTexts, sendAssistantText, log, haikuEval }
     }
@@ -1252,6 +1317,31 @@ describe('ConversationCoordinator', () => {
       expect(dispatchedTexts.map(d => d.providerId)).toEqual(['claude', 'codex'])
       const userReplies = sendAssistantText.mock.calls.map(([, t]) => t)
       expect(userReplies).toEqual(['[Claude] claude 答 X', '[Codex] codex 同意 X 但补充 Y'])
+    })
+
+    it('emits a TurnRecord per speaker turn in chatroom mode', async () => {
+      // Observability parity with solo/parallel: each chatroom speaker turn
+      // leaves its own record (mode=chatroom), so a multi-round /chat is
+      // traceable turn-by-turn — not a black box between user msg and replies.
+      const recordTurn = vi.fn()
+      const { c } = setupChatroom({
+        moderatorDecisions: [
+          { action: 'continue', speaker: 'claude', prompt: '先答' },
+          { action: 'continue', speaker: 'codex', prompt: '回应' },
+          { action: 'end', reasoning: 'converged' },
+        ],
+        replies: {
+          claude: [{ assistantText: ['claude 答'] }],
+          codex: [{ assistantText: ['codex 答'] }],
+        },
+        recordTurn,
+      })
+      await c.dispatch(inbound('chat-1', 'q'))
+      expect(recordTurn).toHaveBeenCalledTimes(2)
+      expect(recordTurn.mock.calls.map(([r]) => r.provider)).toEqual(['claude', 'codex'])
+      for (const [r] of recordTurn.mock.calls) {
+        expect(r).toMatchObject({ mode: 'chatroom', outcome: 'completed', chatId: 'chat-1' })
+      }
     })
 
     it('round 1 end is coerced to continue (user must hear at least one AI per msg)', async () => {

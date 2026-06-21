@@ -28,7 +28,9 @@ import type { Access } from '../lib/access'
 
 /**
  * Structured, per-turn outcome record — the AI-native observability surface.
- * Emitted once per solo dispatch via `ConversationCoordinatorDeps.recordTurn`.
+ * Emitted via `ConversationCoordinatorDeps.recordTurn`: once per solo dispatch,
+ * once per participant in `parallel` mode, and once per speaker turn (round)
+ * in `chatroom` mode — `mode` distinguishes them.
  * The daemon stores a ring of these (and/or exposes them on internal-api) so
  * a human — or an LLM diagnosing the daemon — can answer "what happened to
  * this chat's last turn" without grepping free-text logs. `outcome` is the
@@ -619,92 +621,130 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
         ? `${promptWithCoda}\n\n${contextLines.join('\n')}`
         : promptWithCoda
 
-      let result: TurnSummary
+      // Per speaker-turn observability: one TurnRecord per round, emitted in
+      // the finally so every exit path (break/continue/normal) records exactly
+      // once. suppressRecord skips the user-initiated /stop abort — that's a
+      // clean cancel, not a turn-health signal worth logging as an outcome.
+      const turnStartedAt = nowMs()
+      let roundOutcome: TurnRecord['outcome'] = 'error'
+      let roundSummary: TurnSummary | undefined
+      let roundError: string | undefined
+      let suppressRecord = false
       try {
-        const handle = await deps.manager.acquire({
-          alias: proj.alias,
-          path: proj.path,
-          providerId: speaker,
-          chatId: msg.chatId,
-          tierProfile,
-          permissionMode: deps.permissionMode,
-        })
-        // PR C2 — propagate the chatroom aborter into the speaker turn so
-        // /stop (and "new dispatch preempts prior") interrupt mid-stream
-        // rather than waiting for the current speaker turn to drain.
-        // Best effort — providers without cancel() still get aborted at
-        // the next round-entry check at the top of the loop.
-        const onAbort = () => { void handle.cancel?.() }
-        aborter.signal.addEventListener('abort', onAbort, { once: true })
-        // WHATWG: addEventListener on an already-aborted signal does NOT
-        // retroactively fire the handler. If abort landed between the
-        // `await acquire` above and this line, we'd skip the mid-stream
-        // cancel and the speaker turn would run to natural completion.
-        // Fire onAbort manually in that case.
-        if (aborter.signal.aborted) onAbort()
+        let result: TurnSummary
         try {
-          result = await collectTurn(handle.dispatch(dispatchedPrompt), { timeoutMs: deps.turnTimeoutMs })
-        } finally {
-          aborter.signal.removeEventListener('abort', onAbort)
-        }
-      } catch (err) {
-        // If we cancelled this turn ourselves, that's a clean exit — the
-        // user already saw the abort notice and any "[Display] (error)"
-        // we'd send would be noise.
-        if (aborter.signal.aborted) {
-          deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} aborted mid-stream — suppressing error reply`)
+          const handle = await deps.manager.acquire({
+            alias: proj.alias,
+            path: proj.path,
+            providerId: speaker,
+            chatId: msg.chatId,
+            tierProfile,
+            permissionMode: deps.permissionMode,
+          })
+          // PR C2 — propagate the chatroom aborter into the speaker turn so
+          // /stop (and "new dispatch preempts prior") interrupt mid-stream
+          // rather than waiting for the current speaker turn to drain.
+          // Best effort — providers without cancel() still get aborted at
+          // the next round-entry check at the top of the loop.
+          const onAbort = () => { void handle.cancel?.() }
+          aborter.signal.addEventListener('abort', onAbort, { once: true })
+          // WHATWG: addEventListener on an already-aborted signal does NOT
+          // retroactively fire the handler. If abort landed between the
+          // `await acquire` above and this line, we'd skip the mid-stream
+          // cancel and the speaker turn would run to natural completion.
+          // Fire onAbort manually in that case.
+          if (aborter.signal.aborted) onAbort()
+          try {
+            result = await collectTurn(handle.dispatch(dispatchedPrompt), { timeoutMs: deps.turnTimeoutMs })
+          } finally {
+            aborter.signal.removeEventListener('abort', onAbort)
+          }
+        } catch (err) {
+          // If we cancelled this turn ourselves, that's a clean exit — the
+          // user already saw the abort notice and any "[Display] (error)"
+          // we'd send would be noise.
+          if (aborter.signal.aborted) {
+            deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} aborted mid-stream — suppressing error reply`)
+            suppressRecord = true
+            break
+          }
+          const reason = err instanceof Error ? err.message : String(err)
+          deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} threw: ${reason}`)
+          roundError = reason
+          const dn = deps.registry.get(speaker)?.opts.displayName ?? speaker
+          await deps.sendAssistantText?.(msg.chatId, `[${dn}] (chatroom error: ${reason})`)
           break
         }
-        const reason = err instanceof Error ? err.message : String(err)
-        deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} threw: ${reason}`)
+        roundSummary = result
+
+        // Auth-fail self-heal — same shape as solo/parallel. Releasing the
+        // speaker's session means a follow-up /chat dispatch starts from a
+        // fresh subprocess. Ending the loop here is the safe call: the user
+        // already got the neutral notice from handleAuthFailed and the
+        // moderator's next pick is unreliable while credentials are stale.
+        if (result.errorCode === 'auth_failed') {
+          roundOutcome = 'auth_failed'
+          await handleAuthFailed(msg.chatId, proj.alias, speaker, result)
+          break
+        }
+
+        // Watchdog fired: the speaker stalled silently. Release its session and
+        // end the loop — the moderator's next pick is unreliable while a speaker
+        // is wedged, same call we make on auth_failed.
+        if (result.errorCode === TURN_TIMEOUT_CODE) {
+          roundOutcome = 'timeout'
+          await handleTurnTimeout(msg.chatId, proj.alias, speaker, result)
+          break
+        }
+
+        // If the speaker called the reply tool despite chatroom mode, the
+        // text already went out via internal-api with the [Display] prefix.
+        // Skip our own forwarding (would double-send) but still record
+        // their output in history so the next moderator round sees it.
+        if (result.replyToolCalled) {
+          roundOutcome = 'completed'
+          deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} replyToolCalled — skipping our forward`)
+          history.push({ role: 'speaker', speaker, text: result.assistantText.join('\n').trim() || '(reply tool used)' })
+          continue
+        }
+
+        const allText = result.assistantText.join('\n').trim()
+        if (allText.length === 0) {
+          // A clean turn that produced nothing — completed, just empty
+          // (textChunks=0 in the record carries that).
+          roundOutcome = 'completed'
+          deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} produced no assistant text — ending`)
+          break
+        }
+        roundOutcome = 'completed'
         const dn = deps.registry.get(speaker)?.opts.displayName ?? speaker
-        await deps.sendAssistantText?.(msg.chatId, `[${dn}] (chatroom error: ${reason})`)
-        break
+        // Final-round visual marker: leading 🎯 if the speaker didn't add
+        // it themselves (the moderator's prompt asks them to). Single emoji
+        // signals "this turn is the synthesis / takeaway" without the heavy
+        // "[· 终局]" framing the user found dramatic.
+        const renderedText = isFinalRound && !allText.startsWith('🎯')
+          ? `🎯 ${allText}`
+          : allText
+        await deps.sendAssistantText?.(msg.chatId, `[${dn}] ${renderedText}`)
+        history.push({ role: 'speaker', speaker, text: allText })
+      } finally {
+        if (!suppressRecord) {
+          const turnEndedAt = nowMs()
+          deps.recordTurn?.({
+            chatId: msg.chatId,
+            provider: speaker,
+            alias: proj.alias,
+            mode: 'chatroom',
+            startedAt: turnStartedAt,
+            endedAt: turnEndedAt,
+            durationMs: turnEndedAt - turnStartedAt,
+            outcome: roundOutcome,
+            replyToolCalled: roundSummary?.replyToolCalled ?? false,
+            textChunks: roundSummary?.assistantText.length ?? 0,
+            error: roundSummary?.error ?? roundError,
+          })
+        }
       }
-
-      // Auth-fail self-heal — same shape as solo/parallel. Releasing the
-      // speaker's session means a follow-up /chat dispatch starts from a
-      // fresh subprocess. Ending the loop here is the safe call: the user
-      // already got the neutral notice from handleAuthFailed and the
-      // moderator's next pick is unreliable while credentials are stale.
-      if (result.errorCode === 'auth_failed') {
-        await handleAuthFailed(msg.chatId, proj.alias, speaker, result)
-        break
-      }
-
-      // Watchdog fired: the speaker stalled silently. Release its session and
-      // end the loop — the moderator's next pick is unreliable while a speaker
-      // is wedged, same call we make on auth_failed.
-      if (result.errorCode === TURN_TIMEOUT_CODE) {
-        await handleTurnTimeout(msg.chatId, proj.alias, speaker, result)
-        break
-      }
-
-      // If the speaker called the reply tool despite chatroom mode, the
-      // text already went out via internal-api with the [Display] prefix.
-      // Skip our own forwarding (would double-send) but still record
-      // their output in history so the next moderator round sees it.
-      if (result.replyToolCalled) {
-        deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} replyToolCalled — skipping our forward`)
-        history.push({ role: 'speaker', speaker, text: result.assistantText.join('\n').trim() || '(reply tool used)' })
-        continue
-      }
-
-      const allText = result.assistantText.join('\n').trim()
-      if (allText.length === 0) {
-        deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} produced no assistant text — ending`)
-        break
-      }
-      const dn = deps.registry.get(speaker)?.opts.displayName ?? speaker
-      // Final-round visual marker: leading 🎯 if the speaker didn't add
-      // it themselves (the moderator's prompt asks them to). Single emoji
-      // signals "this turn is the synthesis / takeaway" without the heavy
-      // "[· 终局]" framing the user found dramatic.
-      const renderedText = isFinalRound && !allText.startsWith('🎯')
-        ? `🎯 ${allText}`
-        : allText
-      await deps.sendAssistantText?.(msg.chatId, `[${dn}] ${renderedText}`)
-      history.push({ role: 'speaker', speaker, text: allText })
     }
 
     // PR C1 — if the loop ended before any speaker turn responded to this
@@ -760,11 +800,40 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
       })),
     )
     const text = deps.format(msg)
+    const startedAt = nowMs()
     const settled = await Promise.allSettled(handles.map(h => collectTurn(h.dispatch(text), { timeoutMs: deps.turnTimeoutMs })))
+    // Batch end — all participants dispatched together and allSettled awaits
+    // them all, so a single endedAt is the honest wall-clock for the round.
+    const endedAt = nowMs()
 
     for (let i = 0; i < settled.length; i++) {
       const r = settled[i]!
       const providerId = participants[i]!
+
+      // Emit one TurnRecord per participant BEFORE the side-effect branches
+      // below — they each `continue`, so recording here guarantees exactly
+      // one record per provider regardless of which branch is taken.
+      const recSummary = r.status === 'fulfilled' ? r.value : undefined
+      const recOutcome: TurnRecord['outcome'] =
+        r.status === 'rejected' ? 'error'
+        : r.value.errorCode === TURN_TIMEOUT_CODE ? 'timeout'
+        : r.value.errorCode === 'auth_failed' ? 'auth_failed'
+        : r.value.error ? 'error'
+        : 'completed'
+      deps.recordTurn?.({
+        chatId: msg.chatId,
+        provider: providerId,
+        alias: proj.alias,
+        mode: 'parallel',
+        startedAt,
+        endedAt,
+        durationMs: endedAt - startedAt,
+        outcome: recOutcome,
+        replyToolCalled: recSummary?.replyToolCalled ?? false,
+        textChunks: recSummary?.assistantText.length ?? 0,
+        error: recSummary?.error ?? (r.status === 'rejected' ? (r.reason instanceof Error ? r.reason.message : String(r.reason)) : undefined),
+      })
+
       if (r.status === 'rejected') {
         deps.log('COORDINATOR_PARALLEL', `provider=${providerId} threw: ${r.reason instanceof Error ? r.reason.message : r.reason}`)
         continue
