@@ -1,7 +1,7 @@
 import type { ProviderId, SessionStore } from './session-store'
 import type { AgentEvent, AgentSession } from './agent-provider'
 import type { ProviderRegistry } from './provider-registry'
-import type { TierProfile } from './user-tier'
+import { tierNameFromProfile, type TierProfile, type UserTier } from './user-tier'
 import type { PermissionMode } from './capability-matrix'
 import { log } from '../lib/log'
 
@@ -33,6 +33,12 @@ export interface SessionManagerOptions {
    * covers every eviction path. Optional — omitted when no registry is wired.
    */
   invalidateSessionToken?: (sessionKey: string) => void
+  /**
+   * Mint a per-session internal-api token for (tier, sessionKey), wired to the
+   * token registry. Called once per real spawn; the tier is recovered from the
+   * acquire's tierProfile. Paired with `invalidateSessionToken` at release.
+   */
+  mintSessionToken?: (tier: UserTier, sessionKey: string) => string
 }
 
 /**
@@ -57,13 +63,6 @@ export interface AcquireRequest {
    * (claude → bypassPermissions, codex → danger-full-access + never).
    */
   permissionMode: PermissionMode
-  /**
-   * Per-session internal-api token (env-only), minted by the coordinator from
-   * the chat's resolved tier. Forwarded into SpawnContext so providers inject
-   * it into their MCP children. Optional — omitted when the registry isn't
-   * wired (tests / minimal embeddings).
-   */
-  sessionToken?: string
 }
 
 /**
@@ -176,6 +175,16 @@ export class SessionManager {
     }
 
     const project = { alias: req.alias, path: req.path }
+    // Mint the per-session auth token HERE — once per real spawn (cache miss),
+    // not per dispatch. The token's tier is recovered from the resolved
+    // tierProfile; its key matches release-time invalidation (provider/alias/
+    // chatId). Minting in the coordinator instead would re-mint on every cache
+    // hit (acquire ignores it), leaking one registered-but-unused token per
+    // dispatch into the registry.
+    const sessionToken = this.opts.mintSessionToken?.(
+      tierNameFromProfile(req.tierProfile),
+      `${req.providerId}/${req.alias}/${req.chatId}`,
+    )
     const session = await provider.spawn(project, {
       ...(resumeSessionId ? { resumeSessionId } : {}),
       tierProfile: req.tierProfile,
@@ -183,7 +192,7 @@ export class SessionManager {
       // Forward chatId so the Claude provider can bake it into a
       // per-session canUseTool closure (see bootstrap/index.ts).
       chatId: req.chatId,
-      ...(req.sessionToken ? { sessionToken: req.sessionToken } : {}),
+      ...(sessionToken ? { sessionToken } : {}),
     })
 
     const sessionStore = this.opts.sessionStore

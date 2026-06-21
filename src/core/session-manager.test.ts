@@ -60,20 +60,31 @@ function firstQueryArgs(): any {
 }
 
 describe('SessionManager', () => {
-  it('invalidateSessionToken fires on explicit release AND on LRU eviction (provider/alias/chatId key)', async () => {
+  it('mints the session token ONCE per spawn (not per dispatch) and forwards it; invalidates on release + LRU evict', async () => {
+    const minted: Array<{ tier: string; key: string }> = []
     const invalidated: string[] = []
-    const spawn = vi.fn(async () => makeFakeSession({ events: [{ kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 }] }))
+    const seenTokens: Array<string | undefined> = []
+    const spawn = vi.fn(async (_p: unknown, ctx: { sessionToken?: string }) => {
+      seenTokens.push(ctx.sessionToken)
+      return makeFakeSession({ events: [{ kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 }] })
+    })
     const mgr = new SessionManager({
       maxConcurrent: 1,
       idleEvictMs: 30 * 60_000,
       registry: registryWithProvider({ spawn } as unknown as AgentProvider),
+      mintSessionToken: (tier, key) => { minted.push({ tier, key }); return `tok-${minted.length}` },
       invalidateSessionToken: (k) => invalidated.push(k),
     })
-    // explicit release
-    await mgr.acquire({ alias: 'a', path: '/p', providerId: 'claude', chatId: 'chat-1', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
+    // two acquires of the SAME session (cache hit on the 2nd) → mint ONCE
+    const h1 = await mgr.acquire({ alias: 'a', path: '/p', providerId: 'claude', chatId: 'chat-1', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
+    const h2 = await mgr.acquire({ alias: 'a', path: '/p', providerId: 'claude', chatId: 'chat-1', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
+    expect(h2).toBe(h1) // cache hit
+    expect(minted).toEqual([{ tier: 'admin', key: 'claude/a/chat-1' }]) // minted ONCE, not twice
+    expect(seenTokens).toEqual(['tok-1']) // spawn ran once with the token
+    // explicit release invalidates
     await mgr.release({ alias: 'a', providerId: 'claude', chatId: 'chat-1' })
     expect(invalidated).toContain('claude/a/chat-1')
-    // LRU eviction: maxConcurrent=1, second acquire evicts the first internally
+    // LRU eviction (maxConcurrent=1) also invalidates
     await mgr.acquire({ alias: 'a', path: '/p', providerId: 'claude', chatId: 'chat-2', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
     await mgr.acquire({ alias: 'a', path: '/p', providerId: 'claude', chatId: 'chat-3', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
     expect(invalidated).toContain('claude/a/chat-2')

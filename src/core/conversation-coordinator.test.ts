@@ -515,26 +515,6 @@ describe('ConversationCoordinator', () => {
     })
   })
 
-  it('mints a session token from the resolved tier and forwards it to acquire', async () => {
-    const minted: Array<{ tier: string; key: string }> = []
-    const acquire = vi.fn(async (req: AcquireRequest) => makeHandle(req.providerId, makeFakeSession({ events: [
-      { kind: 'result', sessionId: 's', numTurns: 1, durationMs: 0 },
-    ] })))
-    const registry = createProviderRegistry()
-    registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
-    const c = createConversationCoordinator({
-      resolveProject: () => ({ alias: 'a', path: '/p' }),
-      manager: { acquire },
-      conversationStore: makeMockStore(),
-      registry, defaultProviderId: 'claude', format: () => 'x',
-      permissionMode: 'strict', loadAccess: adminAccess, log: () => {},
-      mintSessionToken: (tier, key) => { minted.push({ tier, key }); return `tok-${tier}` },
-    })
-    await c.dispatch(inbound('chat-1', 'hi'))
-    expect(minted).toEqual([{ tier: 'admin', key: 'claude/a/chat-1' }])
-    expect(acquire.mock.calls[0]![0].sessionToken).toBe('tok-admin')
-  })
-
   it('labels a primary_tool turn as mode=primary_tool (not solo) in its TurnRecord', async () => {
     // primary_tool dispatches through dispatchSolo; a literal mode:'solo' would
     // mislabel it in GET /v1/turns and misdirect "why did chat X stop replying".

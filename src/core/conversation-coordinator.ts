@@ -23,7 +23,7 @@ import type { InboundMsg } from './prompt-format'
 import { evaluateRound as evaluateModeratorRound, type ModeratorDecision, type ChatroomEntry } from './chatroom-moderator'
 import { assertSupported, UnsupportedCombinationError, type PermissionMode } from './capability-matrix'
 import { collectTurn, TURN_TIMEOUT_CODE, type TurnSummary } from './agent-provider'
-import { resolveEffectiveTier, TIER_PROFILES, type UserTier } from './user-tier'
+import { resolveEffectiveTier, TIER_PROFILES } from './user-tier'
 import type { Access } from '../lib/access'
 
 /**
@@ -105,13 +105,6 @@ export interface ConversationCoordinatorDeps {
    * ring buffer surfaced on internal-api for diagnosis/self-healing.
    */
   recordTurn?: (record: TurnRecord) => void
-  /**
-   * Mint a per-session internal-api token for a (tier, sessionKey) — wired to
-   * the internal-api token registry. The minted token is forwarded through
-   * `acquire` into the session's MCP children so route calls carry the tier.
-   * Optional — omitted in tests / minimal embeddings (no token injected).
-   */
-  mintSessionToken?: (tier: UserTier, sessionKey: string) => string
   format: (msg: InboundMsg) => string
   sendAssistantText?: (chatId: string, text: string) => Promise<void>
   /**
@@ -406,7 +399,6 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
         chatId: msg.chatId,
         tierProfile,
         permissionMode: deps.permissionMode,
-        sessionToken: deps.mintSessionToken?.(tier, `${providerId}/${proj.alias}/${msg.chatId}`),
       })
       const text = deps.format(msg)
       summary = await collectTurn(handle.dispatch(text), { timeoutMs: deps.turnTimeoutMs })
@@ -656,7 +648,6 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
             chatId: msg.chatId,
             tierProfile,
             permissionMode: deps.permissionMode,
-            sessionToken: deps.mintSessionToken?.(tier, `${speaker}/${proj.alias}/${msg.chatId}`),
           })
           // PR C2 — propagate the chatroom aborter into the speaker turn so
           // /stop (and "new dispatch preempts prior") interrupt mid-stream
@@ -814,7 +805,6 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
         chatId: msg.chatId,
         tierProfile,
         permissionMode: deps.permissionMode,
-        sessionToken: deps.mintSessionToken?.(tier, `${p}/${proj.alias}/${msg.chatId}`),
       })),
     )
     const text = deps.format(msg)
