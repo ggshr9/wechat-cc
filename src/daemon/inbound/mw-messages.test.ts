@@ -76,6 +76,24 @@ describe('mw-messages', () => {
     expect(appended[0]!['id']).not.toBe(appended[1]!['id'])
   })
 
+  it('an out-of-range createTimeMs does not throw or drop the message (falls back to receivedAtMs)', async () => {
+    // Regression: ts = new Date(createTimeMs).toISOString() threw RangeError for
+    // an out-of-range create_time_ms (untrusted poll payload), propagating out
+    // of this hot-path middleware and silently dropping the user's message.
+    const appended: Array<Record<string, unknown>> = []
+    const mw = makeMwMessages({ append: async rec => { appended.push(rec as never); return 1 }, log: () => {} })
+    const c: InboundCtx = {
+      msg: { chatId: 'c1', userId: 'u1', text: 'hi', msgType: 'text', createTimeMs: 1e16, accountId: 'a1' } as InboundCtx['msg'],
+      receivedAtMs: 1780000000500,
+      requestId: 'r1',
+    }
+    let nextRan = false
+    await expect(mw(c, async () => { nextRan = true })).resolves.toBeUndefined()
+    expect(nextRan).toBe(true)
+    expect(appended.length).toBe(1)
+    expect(appended[0]!['ts']).toBe(new Date(1780000000500).toISOString()) // fell back to receive time
+  })
+
   it('normal createTimeMs path still uses timestamp-based id', async () => {
     const appended: Array<Record<string, unknown>> = []
     const mw = makeMwMessages({ append: async rec => { appended.push(rec as never); return 1 }, log: () => {} })

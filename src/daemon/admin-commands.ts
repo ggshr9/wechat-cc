@@ -13,6 +13,7 @@ import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { NICKNAME_RE, NICKNAME_MAX_LEN } from './nickname'
+import { isoFromMs } from '../lib/iso-time'
 import type { InboundMsg } from '../core/prompt-format'
 import type { ProviderRegistry } from '../core/provider-registry'
 import type { SessionManager } from '../core/session-manager'
@@ -279,7 +280,7 @@ async function runHearthIngest(deps: AdminCommandsDeps, msg: InboundMsg, content
         message_id: `wechat-${msg.accountId}-${Date.now()}`,
         from: msg.chatId,
         text: trimmed,
-        received_at: new Date(msg.createTimeMs || Date.now()).toISOString(),
+        received_at: isoFromMs(msg.createTimeMs || Date.now(), Date.now()),
       },
       { vaultRoot: vault, agent, hearthStateDir: join(homedir(), '.hearth') },
     )

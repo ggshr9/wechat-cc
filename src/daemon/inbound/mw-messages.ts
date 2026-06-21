@@ -8,6 +8,7 @@
 import type { Middleware } from './types'
 import type { MessageRecord } from '../../lib/messages-store'
 import { inboundMessageId, inboundFallbackMessageId } from '../../lib/messages-store'
+import { isoFromMs } from '../../lib/iso-time'
 
 export interface MessagesMwDeps {
   append(rec: MessageRecord): Promise<number>
@@ -16,14 +17,17 @@ export interface MessagesMwDeps {
 
 export function makeMwMessages(deps: MessagesMwDeps): Middleware {
   return async (ctx, next) => {
-    const when = new Date(ctx.msg.createTimeMs || ctx.receivedAtMs)
     const messageId = ctx.msg.createTimeMs
       ? inboundMessageId(ctx.msg.userId, ctx.msg.createTimeMs)
       : inboundFallbackMessageId(ctx.msg.userId, ctx.msg.text)
     const rec: MessageRecord = {
       id: messageId,
       chatId: ctx.msg.chatId,
-      ts: when.toISOString(),
+      // Guard against an out-of-range create_time_ms (untrusted poll payload):
+      // a raw new Date(huge).toISOString() throws RangeError, which here — on
+      // the hot path that records every inbound — would silently drop the
+      // user's message. Fall back to the receive time.
+      ts: isoFromMs(ctx.msg.createTimeMs || ctx.receivedAtMs, ctx.receivedAtMs),
       direction: 'in',
       kind: ctx.msg.text.startsWith('/') ? 'command'
         : ctx.msg.msgType !== 'text' ? ctx.msg.msgType
