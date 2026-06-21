@@ -226,10 +226,15 @@ export interface PollLoopOptions {
 
 const RETRY_DELAY_MS = 2_000
 
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
+export function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise(resolve => {
-    const t = setTimeout(resolve, ms)
-    signal.addEventListener('abort', () => { clearTimeout(t); resolve() }, { once: true })
+    let t: ReturnType<typeof setTimeout>
+    const onAbort = () => { clearTimeout(t); resolve() }
+    // Remove the listener when the timer fires normally — `{once:true}` only
+    // auto-removes it if abort actually fires, so without this a long-lived
+    // signal (the per-account loop's) accumulates one listener per retry sleep.
+    t = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve() }, ms)
+    signal.addEventListener('abort', onAbort, { once: true })
   })
 }
 

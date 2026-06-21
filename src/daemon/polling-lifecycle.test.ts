@@ -78,6 +78,41 @@ describe('registerPolling', () => {
     }
   })
 
+  it('reconcile() is a no-op after stop() — no zombie loop starts post-shutdown', async () => {
+    // Regression: stop() sets stopped=true, but reconcile() lacked the same
+    // guard — a reconcile racing/after shutdown (SIGUSR1 takeover, queued
+    // reconcile) called addAccount on the stopped handle, spinning a poll loop
+    // nothing would ever stop (leaked sockets + multi-device session theft).
+    const stateDir = mkdtempSync(join(tmpdir(), 'polling-stopped-'))
+    const acctDir = join(stateDir, 'accounts', 'bot-x')
+    mkdirSync(acctDir, { recursive: true })
+    writeFileSync(join(acctDir, 'account.json'), JSON.stringify({ botId: 'bot-x', userId: 'u1', baseUrl: 'http://x' }))
+    writeFileSync(join(acctDir, 'token'), 'tok')
+    const mkLc = () => registerPolling({
+      stateDir,
+      accounts: [],
+      ilink: { getUpdates: async () => { await new Promise(r => setTimeout(r, 1000)); return { updates: [] } } },
+      parse: () => [],
+      resolveUserName: () => undefined,
+      log: () => {},
+      runPipeline: async () => {},
+    })
+    try {
+      // Positive control: a live lifecycle DOES pick the account up via reconcile.
+      const live = mkLc()
+      await live.reconcile()
+      expect(live.running()).toContain('bot-x')
+      await live.stop()
+      // The guard: a STOPPED lifecycle must not start it.
+      const dead = mkLc()
+      await dead.stop()
+      await dead.reconcile()
+      expect(dead.running()).toEqual([])
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true })
+    }
+  })
+
   it('stop() is idempotent', async () => {
     const lc = registerPolling({
       stateDir: '/tmp/wechat-cc',

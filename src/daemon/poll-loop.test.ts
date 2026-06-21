@@ -1,6 +1,29 @@
 import { describe, it, expect, vi } from 'vitest'
-import { parseUpdates, startLongPollLoops, type RawUpdate } from './poll-loop'
+import { getEventListeners } from 'node:events'
+import { parseUpdates, startLongPollLoops, sleep, type RawUpdate } from './poll-loop'
 import type { Account } from './ilink-glue'
+
+describe('sleep', () => {
+  it('removes its abort listener when the timer fires (no leak on a long-lived signal)', async () => {
+    // Regression: the retry-backoff sleep added a `{once:true}` abort listener
+    // per call but only auto-removed it if abort actually fired. A flapping
+    // account (repeated getUpdates failures) accumulated one un-fired listener
+    // per cycle on the loop's long-lived AbortSignal → MaxListenersExceeded +
+    // a slow closure leak. The timer-fire path must remove the listener too.
+    vi.useFakeTimers()
+    try {
+      const ac = new AbortController()
+      const p1 = sleep(100, ac.signal)
+      const p2 = sleep(100, ac.signal)
+      expect(getEventListeners(ac.signal, 'abort')).toHaveLength(2) // both armed
+      await vi.advanceTimersByTimeAsync(100)
+      await Promise.all([p1, p2])
+      expect(getEventListeners(ac.signal, 'abort')).toHaveLength(0) // removed on fire
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
 
 describe('parseUpdates', () => {
   it('normalizes a text message', () => {

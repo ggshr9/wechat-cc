@@ -106,6 +106,11 @@ export function registerPolling(deps: PollingDeps): PollingLifecycle {
       await handle.stop()
     },
     reconcile: async () => {
+      // Mirror stop()'s guard — a reconcile racing/after shutdown (SIGUSR1
+      // takeover, a queued reconcile) would otherwise addAccount() on the
+      // already-stopped handle, spinning a poll loop nothing will ever stop
+      // (leaked sockets + multi-device session theft past shutdown).
+      if (stopped) return
       const latest = await loadAllAccounts(deps.stateDir)
       const known = new Set(handle.running())
       const fresh = latest.filter(a => !known.has(a.id))
