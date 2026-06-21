@@ -23,7 +23,7 @@ import { createCodexAgentProvider } from '../../core/codex-agent-provider'
 import type { TierProfile } from '../../core/user-tier'
 import { resolveTier } from '../../core/user-tier'
 import { createProviderRegistry, type ProviderRegistry } from '../../core/provider-registry'
-import { createConversationCoordinator, type ConversationCoordinator } from '../../core/conversation-coordinator'
+import { createConversationCoordinator, type ConversationCoordinator, type TurnRecord } from '../../core/conversation-coordinator'
 import { makeConversationStore, type ConversationStore } from '../../core/conversation-store'
 import { buildSystemPrompt } from '../../core/prompt-builder'
 import type { ProviderId } from '../../core/conversation'
@@ -163,7 +163,10 @@ export interface BootstrapDeps {
   }
   loadProjects: () => { projects: Record<string, { path: string; last_active: number }>; current: string | null }
   lastActiveChatId: () => string | null
-  log: (tag: string, line: string) => void
+  /** Third `fields` arg lands in the JSONL sidecar (channel.log.jsonl) for
+   *  programmatic/AI consumers — the real daemon log impl accepts it; the
+   *  coordinator already relies on it for auth_failed + turn records. */
+  log: (tag: string, line: string, fields?: Record<string, unknown>) => void
   /**
    * Used when projects.current is unset. Prevents silent message drops on
    * fresh installs — matches v0.x UX where messages routed to the daemon's
@@ -761,6 +764,32 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
   // [FALLBACK_REPLY_FAIL] / success path logs [FALLBACK_REPLY_SENT].
   const sendAssistantText = makeSendAssistantText({ sendMessage: deps.ilink.sendMessage, log: deps.log })
 
+  // Per-turn watchdog: the daemon-level bound that guarantees a silently-
+  // stalled SDK subprocess (idle timeout, wedge, hung MCP tool) can never
+  // wedge the pipeline forever. Defaults to 10 min — generous enough for a
+  // legit long turn (memory reads, MCP tools, deep thinking) yet finite, so
+  // the coordinator always reclaims the session and the next message is
+  // served. Override via WECHAT_TURN_TIMEOUT_MS (0 disables — not advised).
+  const turnTimeoutMs = (() => {
+    const raw = process.env['WECHAT_TURN_TIMEOUT_MS']
+    if (raw == null || raw === '') return 10 * 60_000
+    const n = Number(raw)
+    return Number.isFinite(n) && n >= 0 ? n : 10 * 60_000
+  })()
+
+  // recordTurn — emit the structured TurnRecord as a fields-bearing log line.
+  // deps.log routes the third arg into channel.log.jsonl, so every turn's
+  // outcome (completed / timeout / auth_failed / error) becomes queryable
+  // there immediately — the AI-legible trace that makes "why did this chat
+  // stop replying" a query, not a log dig. (A ring buffer surfaced on
+  // internal-api can layer on top of this same sink later.)
+  const recordTurn = (record: TurnRecord): void => {
+    deps.log('TURN', `chat=${record.chatId} provider=${record.provider} outcome=${record.outcome} dur=${record.durationMs}ms reply=${record.replyToolCalled} chunks=${record.textChunks}${record.error ? ` error=${JSON.stringify(record.error.slice(0, 160))}` : ''}`, {
+      event: 'turn_record',
+      ...record,
+    })
+  }
+
   const coordinator = createConversationCoordinator({
     resolveProject: resolve,
     manager: sessionManager,
@@ -769,6 +798,8 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
     defaultProviderId,
     format: formatInbound,
     permissionMode,
+    turnTimeoutMs,
+    recordTurn,
     // sendAssistantText fallback path: same fall-through the legacy
     // routeInbound used to take when the agent didn't call a reply tool.
     // main.ts injects a real ilink.sendMessage closure; bootstrap.ts only

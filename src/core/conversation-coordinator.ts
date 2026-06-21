@@ -22,9 +22,35 @@ import type { Mode, ProviderId } from './conversation'
 import type { InboundMsg } from './prompt-format'
 import { evaluateRound as evaluateModeratorRound, type ModeratorDecision, type ChatroomEntry } from './chatroom-moderator'
 import { assertSupported, UnsupportedCombinationError, type PermissionMode } from './capability-matrix'
-import { collectTurn, type TurnSummary } from './agent-provider'
+import { collectTurn, TURN_TIMEOUT_CODE, type TurnSummary } from './agent-provider'
 import { resolveEffectiveTier, TIER_PROFILES } from './user-tier'
 import type { Access } from '../lib/access'
+
+/**
+ * Structured, per-turn outcome record — the AI-native observability surface.
+ * Emitted once per solo dispatch via `ConversationCoordinatorDeps.recordTurn`.
+ * The daemon stores a ring of these (and/or exposes them on internal-api) so
+ * a human — or an LLM diagnosing the daemon — can answer "what happened to
+ * this chat's last turn" without grepping free-text logs. `outcome` is the
+ * causal verdict; `error` carries the detail for `timeout`/`error` cases.
+ */
+export interface TurnRecord {
+  chatId: string
+  provider: ProviderId
+  alias: string
+  mode: Mode['kind']
+  /** Epoch ms when the dispatch began (clock from `deps.now`). */
+  startedAt: number
+  /** Epoch ms when the dispatch settled. */
+  endedAt: number
+  durationMs: number
+  outcome: 'completed' | 'timeout' | 'auth_failed' | 'error'
+  replyToolCalled: boolean
+  /** Count of assistant text chunks produced this turn. */
+  textChunks: number
+  /** Failure detail for `timeout` / `error` outcomes; undefined otherwise. */
+  error?: string
+}
 
 export interface ConversationCoordinatorDeps {
   resolveProject(chatId: string): { alias: string; path: string } | null
@@ -61,6 +87,22 @@ export interface ConversationCoordinatorDeps {
    * dispatch entry and used by capability-matrix to gate combinations.
    */
   permissionMode: PermissionMode
+  /**
+   * Per-turn watchdog (ms). When set, every solo turn is bounded: if the
+   * agent stream goes silent this long, the turn is abandoned, the wedged
+   * session is released (self-heal — next message gets a fresh subprocess),
+   * and the user is told to retry. Omit to disable (legacy unbounded
+   * behaviour — used by tests that don't exercise the timeout path).
+   * Bootstrap wires this from config so the daemon never wedges on a
+   * stalled SDK subprocess. See [[TURN_TIMEOUT_CODE]].
+   */
+  turnTimeoutMs?: number
+  /**
+   * Sink for the per-turn structured record (see [[TurnRecord]]). Optional —
+   * tests and minimal embeddings can omit it. Bootstrap wires it to a daemon
+   * ring buffer surfaced on internal-api for diagnosis/self-healing.
+   */
+  recordTurn?: (record: TurnRecord) => void
   format: (msg: InboundMsg) => string
   sendAssistantText?: (chatId: string, text: string) => Promise<void>
   /**
@@ -239,6 +281,28 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     authFailLastNotifyAt.set(chatId, nowMs())
     await deps.sendAssistantText?.(chatId, authFailNotice(providerId))
   }
+
+  /** On a per-turn watchdog timeout: the agent stream stalled silently.
+   *  Release the (now-poisoned) session so the NEXT message in this chat
+   *  re-acquires a fresh subprocess instead of throwing "previous dispatch
+   *  still in flight" forever — same self-heal shape as [[handleAuthFailed]].
+   *  Then tell the user to retry. Unlike auth_failed this is not throttled:
+   *  a timeout is a one-off transient, and the user needs to know their
+   *  message was dropped, not silently swallowed. */
+  async function handleTurnTimeout(chatId: string, alias: string, providerId: ProviderId, summary: TurnSummary): Promise<void> {
+    deps.log('TURN_TIMEOUT', `chat=${chatId} alias=${alias} provider=${providerId} ${summary.error ?? ''}`, {
+      event: 'turn_timeout',
+      chat_id: chatId,
+      project_alias: alias,
+      provider: providerId,
+    })
+    try {
+      await deps.manager.release?.({ alias, providerId, chatId })
+    } catch (err) {
+      deps.log('TURN_TIMEOUT', `release ${alias}/${providerId} threw: ${err instanceof Error ? err.message : err}`)
+    }
+    await deps.sendAssistantText?.(chatId, '⏱ 处理超时了，刚才那条没能回复，请稍后重发一次。')
+  }
   // v0.5.9 — chatroom is now a persistent session per chatId. History
   // accumulates across user messages until the user switches mode away
   // from chatroom (then we delete the entry). Lets the moderator see the
@@ -310,37 +374,73 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
       provider: providerId,
       tier,
     })
-    const handle = await deps.manager.acquire({
-      alias: proj.alias,
-      path: proj.path,
-      providerId,
-      chatId: msg.chatId,
-      tierProfile,
-      permissionMode: deps.permissionMode,
-    })
-    const text = deps.format(msg)
-    const summary = await collectTurn(handle.dispatch(text))
-    const assistantTexts = summary.assistantText
-    const replyToolCalled = summary.replyToolCalled
+    // One structured TurnRecord is emitted per dispatch in the finally
+    // below — exactly once, on every path (completed / timeout / auth /
+    // unexpected throw). This is the AI-legible / human-legible trace that
+    // makes "why did chat X stop replying at HH:MM" a query, not a log dig.
+    const startedAt = nowMs()
+    let outcome: TurnRecord['outcome'] = 'error'
+    let summary: TurnSummary | undefined
+    try {
+      const handle = await deps.manager.acquire({
+        alias: proj.alias,
+        path: proj.path,
+        providerId,
+        chatId: msg.chatId,
+        tierProfile,
+        permissionMode: deps.permissionMode,
+      })
+      const text = deps.format(msg)
+      summary = await collectTurn(handle.dispatch(text), { timeoutMs: deps.turnTimeoutMs })
+      const assistantTexts = summary.assistantText
+      const replyToolCalled = summary.replyToolCalled
 
-    // Structured auth-failure path: provider intercepted the "Not logged in"
-    // assistant text and re-emitted it as a coded error. Suppress fallback
-    // and send a throttled neutral notice instead — never leak provider
-    // failure text to the user.
-    if (summary.errorCode === 'auth_failed') {
-      await handleAuthFailed(msg.chatId, proj.alias, providerId, summary)
-      return
-    }
+      // Per-turn watchdog fired: the SDK stream went silent. Discard the
+      // wedged session and tell the user to retry — must come before the
+      // fallback-text path so a stalled turn never leaks a partial reply.
+      if (summary.errorCode === TURN_TIMEOUT_CODE) {
+        outcome = 'timeout'
+        await handleTurnTimeout(msg.chatId, proj.alias, providerId, summary)
+        return
+      }
 
-    // Same fallback semantics as the legacy routeInbound: only forward
-    // raw assistant text when the agent did NOT call a reply-family
-    // tool this turn. Prevents the duplicate-message footgun while
-    // protecting users from a forgetful agent that describes an image
-    // in plain text without ever calling reply.
-    if (replyToolCalled || assistantTexts.length === 0) return
-    deps.log('FALLBACK_REPLY', `chat=${msg.chatId} project=${proj.alias} provider=${providerId} chunks=${assistantTexts.length} preview=${JSON.stringify(assistantTexts[0]?.slice(0, 80) ?? '')}`)
-    for (const t of assistantTexts) {
-      await deps.sendAssistantText?.(msg.chatId, t)
+      // Structured auth-failure path: provider intercepted the "Not logged in"
+      // assistant text and re-emitted it as a coded error. Suppress fallback
+      // and send a throttled neutral notice instead — never leak provider
+      // failure text to the user.
+      if (summary.errorCode === 'auth_failed') {
+        outcome = 'auth_failed'
+        await handleAuthFailed(msg.chatId, proj.alias, providerId, summary)
+        return
+      }
+
+      outcome = summary.error ? 'error' : 'completed'
+
+      // Same fallback semantics as the legacy routeInbound: only forward
+      // raw assistant text when the agent did NOT call a reply-family
+      // tool this turn. Prevents the duplicate-message footgun while
+      // protecting users from a forgetful agent that describes an image
+      // in plain text without ever calling reply.
+      if (replyToolCalled || assistantTexts.length === 0) return
+      deps.log('FALLBACK_REPLY', `chat=${msg.chatId} project=${proj.alias} provider=${providerId} chunks=${assistantTexts.length} preview=${JSON.stringify(assistantTexts[0]?.slice(0, 80) ?? '')}`)
+      for (const t of assistantTexts) {
+        await deps.sendAssistantText?.(msg.chatId, t)
+      }
+    } finally {
+      const endedAt = nowMs()
+      deps.recordTurn?.({
+        chatId: msg.chatId,
+        provider: providerId,
+        alias: proj.alias,
+        mode: 'solo',
+        startedAt,
+        endedAt,
+        durationMs: endedAt - startedAt,
+        outcome,
+        replyToolCalled: summary?.replyToolCalled ?? false,
+        textChunks: summary?.assistantText.length ?? 0,
+        error: summary?.error,
+      })
     }
   }
 
@@ -543,7 +643,7 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
         // Fire onAbort manually in that case.
         if (aborter.signal.aborted) onAbort()
         try {
-          result = await collectTurn(handle.dispatch(dispatchedPrompt))
+          result = await collectTurn(handle.dispatch(dispatchedPrompt), { timeoutMs: deps.turnTimeoutMs })
         } finally {
           aborter.signal.removeEventListener('abort', onAbort)
         }
@@ -569,6 +669,14 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
       // moderator's next pick is unreliable while credentials are stale.
       if (result.errorCode === 'auth_failed') {
         await handleAuthFailed(msg.chatId, proj.alias, speaker, result)
+        break
+      }
+
+      // Watchdog fired: the speaker stalled silently. Release its session and
+      // end the loop — the moderator's next pick is unreliable while a speaker
+      // is wedged, same call we make on auth_failed.
+      if (result.errorCode === TURN_TIMEOUT_CODE) {
+        await handleTurnTimeout(msg.chatId, proj.alias, speaker, result)
         break
       }
 
@@ -652,13 +760,19 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
       })),
     )
     const text = deps.format(msg)
-    const settled = await Promise.allSettled(handles.map(h => collectTurn(h.dispatch(text))))
+    const settled = await Promise.allSettled(handles.map(h => collectTurn(h.dispatch(text), { timeoutMs: deps.turnTimeoutMs })))
 
     for (let i = 0; i < settled.length; i++) {
       const r = settled[i]!
       const providerId = participants[i]!
       if (r.status === 'rejected') {
         deps.log('COORDINATOR_PARALLEL', `provider=${providerId} threw: ${r.reason instanceof Error ? r.reason.message : r.reason}`)
+        continue
+      }
+      // Watchdog fired for this participant — release its wedged session and
+      // notify; the other provider's reply (handled below) still goes out.
+      if (r.value.errorCode === TURN_TIMEOUT_CODE) {
+        await handleTurnTimeout(msg.chatId, proj.alias, providerId, r.value)
         continue
       }
       // Same self-heal as solo: the failing provider's session is released

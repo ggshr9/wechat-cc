@@ -369,6 +369,21 @@ describe('claude-agent-provider', () => {
     await session.close()
   })
 
+  it('passes an AbortController into query() and aborts it on close() (clean subprocess teardown)', async () => {
+    // Problem 5 (zombie subprocesses): the best-effort interrupt()/close()
+    // calls no-op against a dead/wedged ProcessTransport, leaving the claude
+    // child running. The SDK's abortController is the documented "stop and
+    // clean up resources" path — close() must trip it so the watchdog's
+    // release→close actually tears the subprocess down.
+    const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
+    const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
+    const opts = (sdk as unknown as { __test_last_options: () => unknown }).__test_last_options() as { abortController?: AbortController }
+    expect(opts.abortController).toBeInstanceOf(AbortController)
+    expect(opts.abortController!.signal.aborted).toBe(false)
+    await session.close()
+    expect(opts.abortController!.signal.aborted).toBe(true)
+  })
+
   it('cheapEval returns concatenated assistant text (PR F)', async () => {
     const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
     const cheapPromise = provider.cheapEval?.('what is 9-1?')

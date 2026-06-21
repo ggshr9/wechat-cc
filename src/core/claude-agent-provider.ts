@@ -214,6 +214,16 @@ export function createClaudeAgentProvider(opts: ClaudeAgentProviderOptions): Age
         ;(options as Options & { resume?: string }).resume = spawnOpts.resumeSessionId
       }
 
+      // Wire an AbortController so close() can tell the SDK to stop and tear
+      // down the underlying claude subprocess. Per sdk.d.ts: "When aborted,
+      // the query will stop and clean up resources." Without it, teardown
+      // relied solely on best-effort interrupt()/close() which no-op against
+      // an already-dead/wedged ProcessTransport — leaving the child running
+      // (the TN-zombie source). The per-turn watchdog's release→close path
+      // now actually reaps the subprocess through this.
+      const aborter = options.abortController ?? new AbortController()
+      options.abortController = aborter
+
       const q = query({ prompt: sdkQueue.iterable(), options })
 
       let activeEventQueue: AsyncQueue<AgentEvent> | null = null
@@ -364,6 +374,10 @@ export function createClaudeAgentProvider(opts: ClaudeAgentProviderOptions): Age
           const qIface = q as unknown as { close?: () => unknown; interrupt?: () => unknown }
           swallowSdkLifecycleError(qIface.close?.bind(q))
           swallowSdkLifecycleError(qIface.interrupt?.bind(q))
+          // Abort last — the SDK's documented teardown. Reaps the claude
+          // subprocess even when interrupt()/close() above no-op'd against a
+          // dead transport. abort() itself never throws, but guard anyway.
+          try { aborter.abort() } catch { /* never throws */ }
           if (activeEventQueue) {
             activeEventQueue.end()
             activeEventQueue = null

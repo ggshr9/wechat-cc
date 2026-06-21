@@ -9,6 +9,31 @@ async function* events(...e: AgentEvent[]): AsyncIterable<AgentEvent> {
   for (const ev of e) yield ev
 }
 
+/**
+ * Yields the given events, then hangs forever (never emits a result and
+ * never closes) — models the Claude SDK subprocess going silent mid-turn
+ * (idle-timeout / wedge). `returned` flips true when the consumer breaks
+ * out of the loop and the generator's `return()` runs, so a test can
+ * assert the watchdog actually stopped consuming.
+ */
+function hangingEvents(emit: AgentEvent[]): { stream: AsyncIterable<AgentEvent>; returned: () => boolean } {
+  // Hand-rolled to mirror the real provider's AsyncQueue iterator: `next()`
+  // hangs once the buffered events drain (the SDK went silent), but
+  // `return()` resolves immediately and flips a flag (the queue closes). A
+  // native `async *` generator stuck on `await` can't model this — its
+  // `return()` never completes.
+  let returned = false
+  const buf = [...emit]
+  const it: AsyncIterator<AgentEvent> = {
+    next() {
+      if (buf.length > 0) return Promise.resolve({ value: buf.shift()!, done: false })
+      return new Promise<IteratorResult<AgentEvent>>(() => {}) // hang
+    },
+    return() { returned = true; return Promise.resolve({ value: undefined, done: true }) },
+  }
+  return { stream: { [Symbol.asyncIterator]: () => it }, returned: () => returned }
+}
+
 describe('isReplyToolCall', () => {
   it('matches wechat reply tools', () => {
     expect(isReplyToolCall({ kind: 'tool_call', server: 'wechat', tool: 'reply' })).toBe(true)
@@ -83,6 +108,28 @@ describe('collectTurn', () => {
   it('handles empty iterable', async () => {
     const summary = await collectTurn(events())
     expect(summary).toEqual({ assistantText: [], replyToolCalled: false, result: undefined, error: undefined })
+  })
+
+  it('returns a turn_timeout summary when the stream stalls past timeoutMs (does not hang)', async () => {
+    const { stream, returned } = hangingEvents([{ kind: 'text', text: 'partial' }])
+    const summary = await collectTurn(stream, { timeoutMs: 30 })
+    expect(summary.errorCode).toBe('turn_timeout')
+    expect(summary.error).toMatch(/timed out/i)
+    // Partial text seen before the stall is preserved for diagnostics.
+    expect(summary.assistantText).toEqual(['partial'])
+    expect(summary.result).toBeUndefined()
+    // The watchdog stopped consuming the wedged stream (generator return ran).
+    expect(returned()).toBe(true)
+  }, 2000)
+
+  it('returns normally (no timeout) when the stream completes before timeoutMs', async () => {
+    const summary = await collectTurn(events(
+      { kind: 'text', text: 'hi' },
+      { kind: 'result', sessionId: 's1', numTurns: 1, durationMs: 5 },
+    ), { timeoutMs: 1000 })
+    expect(summary.errorCode).toBeUndefined()
+    expect(summary.assistantText).toEqual(['hi'])
+    expect(summary.result).toEqual({ sessionId: 's1', numTurns: 1, durationMs: 5 })
   })
 })
 

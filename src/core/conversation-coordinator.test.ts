@@ -3,7 +3,7 @@ import { createConversationCoordinator } from './conversation-coordinator'
 import { createProviderRegistry } from './provider-registry'
 import * as capabilityMatrix from './capability-matrix'
 import { makeFakeSession } from './test-helpers'
-import type { AgentEvent, AgentProvider } from './agent-provider'
+import type { AgentEvent, AgentProvider, AgentSession } from './agent-provider'
 import type { Mode, ProviderId } from './conversation'
 import { formatInbound, type InboundMsg } from './prompt-format'
 import type { AcquireRequest } from './session-manager'
@@ -56,6 +56,30 @@ function inbound(chatId: string, text: string): InboundMsg {
   return {
     chatId, userId: chatId, text, msgType: 'text',
     createTimeMs: Date.now(), accountId: 'acct-1',
+  }
+}
+
+/**
+ * A session whose dispatch yields `emit` then hangs forever (never emits a
+ * `result`, never closes) — models the Claude SDK subprocess going silent
+ * mid-turn. `next()` hangs once the buffer drains; `return()` resolves
+ * immediately, mirroring the real provider's AsyncQueue iterator.
+ */
+function hangingSession(emit: AgentEvent[] = []): AgentSession {
+  return {
+    dispatch() {
+      const buf = [...emit]
+      const it: AsyncIterator<AgentEvent> = {
+        next() {
+          if (buf.length > 0) return Promise.resolve({ value: buf.shift()!, done: false })
+          return new Promise<IteratorResult<AgentEvent>>(() => {})
+        },
+        return() { return Promise.resolve({ value: undefined, done: true }) },
+      }
+      return { [Symbol.asyncIterator]: () => it }
+    },
+    async cancel() {},
+    async close() {},
   }
 }
 
@@ -419,6 +443,102 @@ describe('ConversationCoordinator', () => {
     expect(release).toHaveBeenCalledWith({ alias: 'a', providerId: 'claude', chatId: 'chat-1' })
   })
 
+  it('on turn timeout: returns (no hang), releases the wedged session, and sends a retry notice', async () => {
+    // The reported failure: a silently-stalled turn left the pipeline wedged
+    // forever. With a per-turn watchdog, dispatch must RETURN, discard the
+    // poisoned session (so the next message gets a fresh subprocess), and
+    // tell the user to retry.
+    const release = vi.fn(async () => {})
+    const acquire = vi.fn(async (req: AcquireRequest) =>
+      makeHandle(req.providerId, hangingSession([{ kind: 'text', text: 'partial…' }]))
+    )
+    const sendAssistantText = vi.fn(async (_chatId: string, _text: string) => {})
+    const registry = createProviderRegistry()
+    registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
+    const c = createConversationCoordinator({
+      resolveProject: () => ({ alias: 'a', path: '/p' }),
+      manager: { acquire, release },
+      conversationStore: makeMockStore(),
+      registry,
+      defaultProviderId: 'claude',
+      format: () => 'x',
+      sendAssistantText,
+      permissionMode: 'strict',
+      loadAccess: adminAccess,
+      log: () => {},
+      turnTimeoutMs: 30,
+    })
+    await c.dispatch(inbound('chat-1', 'hi'))
+    expect(release).toHaveBeenCalledTimes(1)
+    expect(release).toHaveBeenCalledWith({ alias: 'a', providerId: 'claude', chatId: 'chat-1' })
+    expect(sendAssistantText).toHaveBeenCalledTimes(1)
+    const [chatId, text] = sendAssistantText.mock.calls[0]!
+    expect(chatId).toBe('chat-1')
+    expect(text).toMatch(/超时|重发/)
+  }, 3000)
+
+  it('emits a structured TurnRecord for a completed solo turn', async () => {
+    const session = makeFakeSession({
+      events: [
+        { kind: 'text', text: 'hi there' },
+        { kind: 'tool_call', server: 'wechat', tool: 'reply' },
+        { kind: 'result', sessionId: 's1', numTurns: 1, durationMs: 0 },
+      ],
+    })
+    const acquire = vi.fn(async (req: AcquireRequest) => makeHandle(req.providerId, session))
+    const recordTurn = vi.fn()
+    const registry = createProviderRegistry()
+    registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
+    let clock = 1_000
+    const c = createConversationCoordinator({
+      resolveProject: () => ({ alias: 'a', path: '/p' }),
+      manager: { acquire },
+      conversationStore: makeMockStore(),
+      registry,
+      defaultProviderId: 'claude',
+      format: () => 'x',
+      permissionMode: 'strict',
+      loadAccess: adminAccess,
+      log: () => {},
+      recordTurn,
+      now: () => clock,
+    })
+    await c.dispatch(inbound('chat-1', 'hi'))
+    expect(recordTurn).toHaveBeenCalledTimes(1)
+    expect(recordTurn.mock.calls[0]![0]).toMatchObject({
+      chatId: 'chat-1',
+      provider: 'claude',
+      alias: 'a',
+      mode: 'solo',
+      outcome: 'completed',
+      replyToolCalled: true,
+    })
+  })
+
+  it('emits a TurnRecord with outcome=timeout when the watchdog fires', async () => {
+    const acquire = vi.fn(async (req: AcquireRequest) => makeHandle(req.providerId, hangingSession()))
+    const recordTurn = vi.fn()
+    const registry = createProviderRegistry()
+    registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
+    const c = createConversationCoordinator({
+      resolveProject: () => ({ alias: 'a', path: '/p' }),
+      manager: { acquire, release: async () => {} },
+      conversationStore: makeMockStore(),
+      registry,
+      defaultProviderId: 'claude',
+      format: () => 'x',
+      sendAssistantText: async () => {},
+      permissionMode: 'strict',
+      loadAccess: adminAccess,
+      log: () => {},
+      recordTurn,
+      turnTimeoutMs: 30,
+    })
+    await c.dispatch(inbound('chat-1', 'hi'))
+    expect(recordTurn).toHaveBeenCalledTimes(1)
+    expect(recordTurn.mock.calls[0]![0]).toMatchObject({ chatId: 'chat-1', provider: 'claude', outcome: 'timeout' })
+  }, 3000)
+
   it('on auth_failed: throttles repeated notices for the same chat', async () => {
     const session = makeFakeSession({
       events: [
@@ -721,6 +841,49 @@ describe('ConversationCoordinator', () => {
       // The raw "Not logged in / Please run /login" string did NOT leak.
       expect(sent.some(t => /Please run \/login|Not logged in/.test(t))).toBe(false)
     })
+
+    it('on turn timeout in parallel: releases ONLY the stalled provider; the other still replies', async () => {
+      // Parity with the auth_failed parallel path: a silently-stalled
+      // participant must not hang the whole /both turn (Promise.allSettled
+      // would never settle). The watchdog bounds it, releases that side,
+      // tells the user, and the healthy provider's reply still goes out.
+      const store = makeMockStore()
+      store.set('chat-p', { kind: 'parallel' })
+      const registry = createProviderRegistry()
+      registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
+      registry.register('codex', dummyProvider, { displayName: 'Codex', canResume: () => true })
+      const release = vi.fn(async () => {})
+      const acquire = vi.fn(async (req: AcquireRequest) =>
+        req.providerId === 'claude'
+          ? makeHandle('claude', hangingSession([{ kind: 'text', text: 'partial…' }]))
+          : makeHandle('codex', makeFakeSession({ events: [
+              { kind: 'text', text: 'codex reply' },
+              { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 },
+            ] }))
+      )
+      const sendAssistantText = vi.fn(async (_chatId: string, _text: string) => {})
+      const c = createConversationCoordinator({
+        resolveProject: () => ({ alias: 'a', path: '/p' }),
+        manager: { acquire, release },
+        conversationStore: store,
+        registry,
+        defaultProviderId: 'claude',
+        format: (m) => m.text,
+        sendAssistantText,
+        permissionMode: 'strict',
+        loadAccess: adminAccess,
+        log: () => {},
+        turnTimeoutMs: 30,
+      })
+      await c.dispatch(inbound('chat-p', 'hi'))
+      // Stalled provider released; healthy one untouched.
+      expect(release).toHaveBeenCalledWith({ alias: 'a', providerId: 'claude', chatId: 'chat-p' })
+      const sent = sendAssistantText.mock.calls.map(call => call[1] as string)
+      // Codex's reply still forwarded with the parallel-mode prefix.
+      expect(sent.some(t => t === '[Codex] codex reply')).toBe(true)
+      // One timeout notice for the stalled side.
+      expect(sent.some(t => /超时|重发/.test(t))).toBe(true)
+    }, 3000)
 
     it('fans out the same inbound to both providers concurrently', async () => {
       const { c, acquire, dispatchCalls } = setupParallel()
@@ -1027,6 +1190,51 @@ describe('ConversationCoordinator', () => {
       expect(sent.some(t => /Please run \/login|Not logged in/.test(t))).toBe(false)
       expect(sent.some(t => /^\[Claude\]/.test(t))).toBe(false)
     })
+
+    it('on speaker turn timeout: releases speaker session, sends notice, ends the chatroom cleanly', async () => {
+      // /chat parity with /solo and /both: a silently-stalled speaker turn
+      // must not hang the chatroom loop. The watchdog bounds it, releases
+      // the speaker's session, notifies the user, and ends the loop (the
+      // moderator's next pick is unreliable while a speaker is wedged).
+      const store = makeMockStore()
+      store.set('chat-r', { kind: 'chatroom' })
+      const registry = createProviderRegistry()
+      registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
+      registry.register('codex', dummyProvider, { displayName: 'Codex', canResume: () => true })
+      const release = vi.fn(async () => {})
+      const acquire = vi.fn(async ({ providerId }: AcquireRequest) =>
+        makeHandle(providerId, hangingSession([{ kind: 'text', text: 'partial…' }]))
+      )
+      const sendAssistantText = vi.fn(async (_chatId: string, _text: string) => {})
+      let modCalls = 0
+      const haikuEval = vi.fn(async () => {
+        modCalls++
+        return JSON.stringify({ action: 'continue', speaker: 'claude', prompt: '开场', reasoning: '' })
+      })
+      const c = createConversationCoordinator({
+        resolveProject: () => ({ alias: 'a', path: '/p' }),
+        manager: { acquire, release },
+        conversationStore: store,
+        registry,
+        defaultProviderId: 'claude',
+        format: (m) => m.text,
+        sendAssistantText,
+        permissionMode: 'strict',
+        loadAccess: adminAccess,
+        log: () => {},
+        haikuEval,
+        chatroomMaxRounds: 4,
+        turnTimeoutMs: 30,
+      })
+      await c.dispatch(inbound('chat-r', '开始讨论'))
+      // Speaker session released so the next /chat starts clean.
+      expect(release).toHaveBeenCalledWith({ alias: 'a', providerId: 'claude', chatId: 'chat-r' })
+      // Loop exited after the first (stalled) speaker turn — moderator called once.
+      expect(modCalls).toBe(1)
+      // User told their turn timed out (not left silently waiting).
+      const sent = sendAssistantText.mock.calls.map(call => call[1] as string)
+      expect(sent.some(t => /超时|重发/.test(t))).toBe(true)
+    }, 3000)
 
     it('runs a 2-round exchange when moderator continues then ends', async () => {
       const { c, dispatchedTexts, sendAssistantText } = setupChatroom({
