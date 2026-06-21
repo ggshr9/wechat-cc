@@ -561,6 +561,69 @@ server.registerTool(
   },
 )
 
+// ─── daemon self-diagnosis (admin-only, read-only) ────────────────────────────
+// These let the operator ask the bot "检查下为什么 X 不回消息了". They're
+// gated to the admin tier by the daemon's canUseTool layer (ToolKind
+// 'daemon_introspect' is denied for trusted/guest) — a non-admin invocation is
+// refused before the HTTP call. All three are strictly read-only.
+
+server.registerTool(
+  'diagnostic_turns',
+  {
+    title: 'Recent turn outcomes',
+    description: '【管理员】查询每个对话回合的结局（completed/timeout/auth_failed/error）、耗时、是否回复，用于诊断"为什么某个 chat 不回消息了"。给 chatId 看该 chat 最近的回合（倒序）；不给则看全局最近。limit 默认 50。',
+    inputSchema: {
+      chatId: z.string().optional().describe('微信 chat_id；省略则返回所有 chat 的最近回合'),
+      limit: z.number().int().min(1).max(500).optional(),
+    },
+  },
+  async ({ chatId, limit }) => {
+    try {
+      const qs = new URLSearchParams()
+      if (chatId) qs.set('chatId', chatId)
+      if (limit != null) qs.set('limit', String(limit))
+      const r = await client.request<unknown>('GET', `/v1/turns${qs.toString() ? `?${qs}` : ''}`)
+      return { content: [{ type: 'text', text: JSON.stringify(r) }] }
+    } catch (err) {
+      return passthroughErrorResult(err, 'diagnostic_turns')
+    }
+  },
+)
+
+server.registerTool(
+  'diagnostic_sessions',
+  {
+    title: 'Live agent sessions',
+    description: '【管理员】列出当前缓存的 agent 会话（alias / provider / chat_id / lastUsedAt）。lastUsedAt 很久以前说明该会话可能闲置或卡住。用于判断哪个会话需要释放/重启。',
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const r = await client.request<unknown>('GET', '/v1/sessions')
+      return { content: [{ type: 'text', text: JSON.stringify(r) }] }
+    } catch (err) {
+      return passthroughErrorResult(err, 'diagnostic_sessions')
+    }
+  },
+)
+
+server.registerTool(
+  'diagnostic_health',
+  {
+    title: 'Daemon health',
+    description: '【管理员】daemon 总体健康：pid、turn 记录存储是否就绪、当前活跃会话数、心跳是否新鲜（heartbeat_fresh=false 表示 daemon 可能卡住/没在服务）。',
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const r = await client.request<unknown>('GET', '/v1/health')
+      return { content: [{ type: 'text', text: JSON.stringify(r) }] }
+    } catch (err) {
+      return passthroughErrorResult(err, 'diagnostic_health')
+    }
+  },
+)
+
 function passthroughErrorResult(err: unknown, tool: string): { content: Array<{ type: 'text'; text: string }> } {
   // Surface transport-layer failures as `{error: "..."}` JSON in a text
   // block. Keeps the legacy "tool never throws" promise that the

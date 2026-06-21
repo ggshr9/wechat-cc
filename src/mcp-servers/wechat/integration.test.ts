@@ -84,6 +84,11 @@ describe('wechat-mcp stdio integration', () => {
     const list = await client.listTools()
     const names = list.tools.map(t => t.name)
     expect(names).toContain('ping')
+    // Admin self-diagnosis tools are registered and discoverable (tier gating
+    // happens daemon-side at call time, not at list time).
+    expect(names).toContain('diagnostic_turns')
+    expect(names).toContain('diagnostic_sessions')
+    expect(names).toContain('diagnostic_health')
   })
 
   it('ping tool round-trips the daemon_pid through the full provider → stdio → HTTP → daemon chain', async () => {
@@ -91,18 +96,19 @@ describe('wechat-mcp stdio integration', () => {
     const result = await client.callTool({ name: 'ping', arguments: {} })
     expect(result.isError).toBeFalsy()
 
-    // The ping handler returns both a text content block (JSON-encoded) and
-    // structuredContent ({ ok, daemon_pid }). Either is fine for the test.
+    // The ping handler returns the /v1/health body — {ok, daemon_pid} plus the
+    // ops fields added with the admin self-diagnosis tools. toMatchObject so
+    // the core liveness contract holds without pinning the optional ops fields.
     const sc = result.structuredContent as { ok: boolean; daemon_pid: number } | undefined
     if (sc) {
-      expect(sc).toEqual({ ok: true, daemon_pid: 7777 })
+      expect(sc).toMatchObject({ ok: true, daemon_pid: 7777 })
       return
     }
     const content = result.content as Array<{ type: string; text?: string }>
     const textBlock = content.find(b => b.type === 'text')
     expect(textBlock).toBeDefined()
     const parsed = JSON.parse(textBlock!.text!) as { ok: boolean; daemon_pid: number }
-    expect(parsed).toEqual({ ok: true, daemon_pid: 7777 })
+    expect(parsed).toMatchObject({ ok: true, daemon_pid: 7777 })
   })
 
   it('memory_write → memory_read round-trips content through stdio + HTTP + MemoryFS', async () => {

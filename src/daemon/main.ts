@@ -137,6 +137,12 @@ export async function bootDaemon(opts: BootDaemonOpts): Promise<DaemonHandle> {
       ilink: { sendReply: (c, t) => ilink.sendMessage(c, t).then(r => r as { msgId: string; error?: string }), sendFile: (c, p) => ilink.sendFile(c, p), editMessage: (c, m, t) => ilink.editMessage(c, m, t), broadcast: (t, a) => ilink.broadcast(t, a) },
       prefix: { conversationStore, providerDisplayName, permissionMode: dangerously ? 'dangerously' as const : 'strict' as const },
       turns: turnRecordStore,
+      // Live-session lister + heartbeat probe back the admin self-diagnosis
+      // tools (GET /v1/sessions, ops fields in /v1/health). listSessions is a
+      // thunk over bootRef because SessionManager is built by bootstrap below
+      // (after this registration) — returns null until then, so the route 503s.
+      listSessions: () => bootRef?.sessionManager?.list() ?? null,
+      heartbeatFresh: () => isHeartbeatFresh(HEARTBEAT_PATH),
       log: (t, l) => log(t, l),
     })
     lc.register(internalApi)

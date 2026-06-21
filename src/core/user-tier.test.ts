@@ -98,10 +98,13 @@ describe('TIER_PROFILES', () => {
     expect(TIER_PROFILES.admin.allow.has('a2a_send')).toBe(true)
   })
 
-  it('trusted relays shell_destructive and memory_delete', () => {
+  it('trusted relays shell_destructive and memory_delete; denies only admin-only tools', () => {
     expect(TIER_PROFILES.trusted.relay.has('shell_destructive')).toBe(true)
     expect(TIER_PROFILES.trusted.relay.has('memory_delete')).toBe(true)
-    expect(TIER_PROFILES.trusted.deny.size).toBe(0)
+    // trusted denies only the admin-exclusive daemon_introspect (was 0 before
+    // self-diagnosis tools existed).
+    expect(TIER_PROFILES.trusted.deny.size).toBe(1)
+    expect(TIER_PROFILES.trusted.deny.has('daemon_introspect')).toBe(true)
   })
 
   it('guest allows only reply/share_page/memory_read/observations_read', () => {
@@ -111,6 +114,16 @@ describe('TIER_PROFILES', () => {
     expect(TIER_PROFILES.guest.allow.has('observations_read')).toBe(true)
     expect(TIER_PROFILES.guest.allow.has('shell')).toBe(false)
     expect(TIER_PROFILES.guest.allow.has('fs_write')).toBe(false)
+  })
+
+  it('daemon_introspect (self-diagnosis tools) is admin-only — denied for trusted and guest', () => {
+    // The read-only daemon diagnostic tools (turns / sessions / health) let
+    // the operator ask the bot "check why X is broken". Only the admin should
+    // see daemon internals; a trusted or guest chat must be refused.
+    expect(TIER_PROFILES.admin.allow.has('daemon_introspect')).toBe(true)
+    expect(TIER_PROFILES.trusted.deny.has('daemon_introspect')).toBe(true)
+    expect(TIER_PROFILES.trusted.allow.has('daemon_introspect')).toBe(false)
+    expect(TIER_PROFILES.guest.deny.has('daemon_introspect')).toBe(true)
   })
 })
 
@@ -141,6 +154,11 @@ describe('classifyToolUse', () => {
   it('observations_write / observations_archive → observations_write', () => {
     expect(classifyToolUse('mcp__wechat__observations_write', {})).toBe('observations_write')
     expect(classifyToolUse('mcp__wechat__observations_archive', {})).toBe('observations_write')
+  })
+  it('diagnostic_turns / diagnostic_sessions / diagnostic_health → daemon_introspect', () => {
+    expect(classifyToolUse('mcp__wechat__diagnostic_turns', {})).toBe('daemon_introspect')
+    expect(classifyToolUse('mcp__wechat__diagnostic_sessions', {})).toBe('daemon_introspect')
+    expect(classifyToolUse('mcp__wechat__diagnostic_health', {})).toBe('daemon_introspect')
   })
   it('Read / Glob / Grep / LS → fs_read', () => {
     expect(classifyToolUse('Read', {})).toBe('fs_read')

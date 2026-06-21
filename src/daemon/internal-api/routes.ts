@@ -39,7 +39,19 @@ export interface MakeRoutesContext {
 
 export function makeRoutes({ deps, getDelegate, maybePrefix }: MakeRoutesContext): RouteTable {
   return {
-    'GET /v1/health': () => ({ status: 200, body: { ok: true, daemon_pid: deps.daemonPid } }),
+    'GET /v1/health': () => ({
+      status: 200,
+      body: {
+        ok: true,
+        daemon_pid: deps.daemonPid,
+        // Ops fields for the admin self-diagnosis tool: is the turn store
+        // wired, how many sessions are live, is the poll-cycle heartbeat
+        // fresh (false ⇒ the daemon may be wedged / not serving).
+        turns_store_wired: !!deps.turns,
+        sessions_live: deps.listSessions?.()?.length ?? 0,
+        heartbeat_fresh: deps.heartbeatFresh?.() ?? null,
+      },
+    }),
 
     // ── memory (RFC 03 P1.B B2) ─────────────────────────────────────────
     'POST /v1/memory/read': (_q, body) => {
@@ -620,6 +632,15 @@ export function makeRoutes({ deps, getDelegate, maybePrefix }: MakeRoutesContext
           base_url: deps.a2a.baseUrl ?? null,
         },
       }
+    },
+
+    // Live sessions for diagnosis — which (alias, provider, chat) sessions are
+    // cached and when each was last used (idle/wedged inference). 503 until
+    // bootstrap wires the lister.
+    'GET /v1/sessions': () => {
+      const sessions = deps.listSessions?.()
+      if (sessions == null) return { status: 503, body: { error: 'sessions_not_wired' } }
+      return { status: 200, body: { sessions } }
     },
 
     // Per-turn outcome feed for diagnosis. With chatId → that chat's turns

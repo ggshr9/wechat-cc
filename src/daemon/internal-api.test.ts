@@ -2360,6 +2360,51 @@ describe('internal-api request validation', () => {
       expect(body.turns.map(t => t.chatId)).toEqual(['chat-B', 'chat-A'])
     })
 
+    it('GET /v1/sessions lists live sessions when wired', async () => {
+      const sessions = [
+        { alias: 'a', path: '/p', providerId: 'claude', chatId: 'chat-1', lastUsedAt: 111 },
+        { alias: 'b', path: '/q', providerId: 'codex', chatId: 'chat-2', lastUsedAt: 222 },
+      ]
+      api = createInternalApi({ stateDir, daemonPid: 1, listSessions: () => sessions })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/sessions`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      expect(resp.status).toBe(200)
+      const body = await resp.json() as { sessions: typeof sessions }
+      expect(body.sessions).toEqual(sessions)
+    })
+
+    it('GET /v1/sessions returns 503 when the session manager is not wired', async () => {
+      api = createInternalApi({ stateDir, daemonPid: 1, listSessions: () => null })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/sessions`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      expect(resp.status).toBe(503)
+      expect(await resp.json()).toMatchObject({ error: 'sessions_not_wired' })
+    })
+
+    it('GET /v1/health reports ops fields (turns wired, live session count, heartbeat)', async () => {
+      const db = openTestDb()
+      const store = makeTurnRecordStore(db)
+      api = createInternalApi({
+        stateDir, daemonPid: 7, turns: store,
+        listSessions: () => [{ alias: 'a', path: '/p', providerId: 'claude', chatId: 'c', lastUsedAt: 1 }],
+        heartbeatFresh: () => true,
+      })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/health`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      expect(resp.status).toBe(200)
+      const body = await resp.json() as { ok: boolean; daemon_pid: number; turns_store_wired: boolean; sessions_live: number; heartbeat_fresh: boolean }
+      expect(body).toMatchObject({ ok: true, daemon_pid: 7, turns_store_wired: true, sessions_live: 1, heartbeat_fresh: true })
+    })
+
     it('GET /v1/turns returns 503 when the turns store is not wired', async () => {
       api = createInternalApi({ stateDir, daemonPid: 1 })
       const { port, tokenFilePath } = await api.start()

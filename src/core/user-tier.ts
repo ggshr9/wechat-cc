@@ -32,12 +32,13 @@ export type ToolKind =
   | 'network'
   | 'subagent'
   | 'a2a_send'
+  | 'daemon_introspect'  // admin-only read-only self-diagnosis (turns / sessions / health)
 
 const ALL_KINDS: ReadonlySet<ToolKind> = new Set([
   'reply', 'share_page', 'memory_read', 'memory_write', 'memory_delete',
   'observations_read', 'observations_write',
   'fs_read', 'fs_write', 'shell', 'shell_destructive', 'network', 'subagent',
-  'a2a_send',
+  'a2a_send', 'daemon_introspect',
 ])
 
 export interface TierProfile {
@@ -67,6 +68,14 @@ const TRUSTED_RELAY = new Set<ToolKind>(['shell_destructive', 'memory_delete', '
 
 const GUEST_ALLOW = new Set<ToolKind>(['reply', 'share_page', 'memory_read', 'observations_read'])
 
+// Admin-exclusive tools — the operator can ask the bot to inspect its own
+// daemon (turn outcomes / live sessions / health). Denied for trusted and
+// guest: daemon internals are an operator concern, and the later remediation
+// tools (release session / restart) that build on this must never be reachable
+// from a non-admin chat. guest already denies it via difference below; trusted
+// would otherwise auto-allow (it's not destructive), so deny it explicitly.
+const ADMIN_ONLY = new Set<ToolKind>(['daemon_introspect'])
+
 export const TIER_PROFILES: Record<UserTier, TierProfile> = {
   admin: {
     allow: difference(ALL_KINDS, ADMIN_RELAY),
@@ -74,9 +83,9 @@ export const TIER_PROFILES: Record<UserTier, TierProfile> = {
     deny: new Set(),
   },
   trusted: {
-    allow: difference(ALL_KINDS, TRUSTED_RELAY),
+    allow: difference(difference(ALL_KINDS, TRUSTED_RELAY), ADMIN_ONLY),
     relay: TRUSTED_RELAY,
-    deny: new Set(),
+    deny: ADMIN_ONLY,
   },
   guest: {
     allow: GUEST_ALLOW,
@@ -163,6 +172,7 @@ export function classifyToolUse(toolName: string, input: Record<string, unknown>
     if (sub === 'observations_list' || sub === 'observations_read') return 'observations_read'
     if (sub === 'observations_write' || sub === 'observations_archive') return 'observations_write'
     if (sub === 'a2a_send') return 'a2a_send'
+    if (sub === 'diagnostic_turns' || sub === 'diagnostic_sessions' || sub === 'diagnostic_health') return 'daemon_introspect'
     // Other wechat tools: classify as fs_read (safest non-reply default
     // for new wechat MCP tools — they tend to be query-like).
     return 'fs_read'

@@ -18,6 +18,11 @@ import z from 'zod'
 export const HealthResponse = z.object({
   ok: z.boolean(),
   daemon_pid: z.number(),
+  // Ops fields (added with the admin self-diagnosis tools). Optional so older
+  // consumers and the minimal-deps path still validate.
+  turns_store_wired: z.boolean().optional(),
+  sessions_live: z.number().optional(),
+  heartbeat_fresh: z.boolean().nullable().optional(),
 })
 
 // ── POST /v1/memory/read ─────────────────────────────────────────────────────

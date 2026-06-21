@@ -173,6 +173,19 @@ export interface InternalApiDeps {
    * minimal embeddings / tests, in which case the route returns 503.
    */
   turns?: import('../../core/turn-record-store').TurnRecordStore
+  /**
+   * Optional live-session lister — backs GET /v1/sessions and the
+   * sessions_live count in GET /v1/health. A thunk (not the SessionManager
+   * itself) because the manager is constructed AFTER internal-api registers;
+   * main.ts closes over the bootstrap ref. Returns null until bootstrap wired
+   * it (route then 503s).
+   */
+  listSessions?: () => readonly {
+    alias: string; path: string; providerId: string; chatId: string; lastUsedAt: number
+  }[] | null
+  /** Optional daemon-health probe — backs heartbeat_fresh in GET /v1/health.
+   *  main.ts wires it to isHeartbeatFresh(server.heartbeat). */
+  heartbeatFresh?: () => boolean
   /** Optional log hook so api activity surfaces in channel.log. */
   /**
    * Optional `fields` arg lands in channel.log.jsonl when wired (the

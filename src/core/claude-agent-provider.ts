@@ -36,6 +36,7 @@ const TOOL_KIND_TO_CLAUDE_BUILTINS: Record<ToolKind, ReadonlyArray<string>> = {
   network: ['WebFetch', 'WebSearch'],
   subagent: ['Task'],
   a2a_send: [],            // MCP-only
+  daemon_introspect: [],   // MCP-only (mcp__wechat__diagnostic_*), gated by canUseTool
 }
 
 export interface ClaudeTierSdkOpts {
