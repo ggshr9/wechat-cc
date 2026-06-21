@@ -94,6 +94,12 @@ export function createA2ARegistry(opts: A2ARegistryOpts): A2ARegistry {
     verifyBearer: (agentId, bearer) => {
       const agent = loadAll().find(a => a.id === agentId)
       if (!agent) return null
+      // Never authenticate against an empty stored key or an empty bearer:
+      // constantTimeEquals('', '') is true, so a corrupted/hand-edited config
+      // with an empty inbound_api_key + a `Bearer ` (empty) header would bypass
+      // auth. validateRecord blocks empty keys on write, but loadAll does NOT
+      // re-validate, so this is the load-bearing guard for the read path.
+      if (!agent.inbound_api_key || !bearer) return null
       // Constant-time string compare to mitigate timing side-channels on key check.
       // For 16-byte hex keys the timing leak is theoretical but cheap to defend.
       if (!constantTimeEquals(agent.inbound_api_key, bearer)) return null

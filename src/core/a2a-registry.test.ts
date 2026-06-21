@@ -59,6 +59,26 @@ describe('a2a-registry', () => {
     expect(reg.verifyBearer('missing', 'anything')).toBeNull()
   })
 
+  it('verifyBearer rejects an empty stored key — no constant-time empty-match bypass', () => {
+    // A hand-edited / corrupted agent-config.json can carry an empty
+    // inbound_api_key (loadAll does NOT re-validate). Without an explicit guard
+    // constantTimeEquals('', '') is true, so an attacker sending
+    // `Authorization: Bearer ` (empty bearer) would authenticate as that agent
+    // and could trigger notify/exec. Auth must reject an empty stored key.
+    const stateDir = makeTempStateDir()
+    writeConfig(stateDir, [rec('ghost', { inbound_api_key: '' })])
+    const reg = createA2ARegistry({ stateDir })
+    expect(reg.verifyBearer('ghost', '')).toBeNull()
+    expect(reg.verifyBearer('ghost', 'anything')).toBeNull()
+  })
+
+  it('verifyBearer rejects an empty bearer against a real key', () => {
+    const stateDir = makeTempStateDir()
+    writeConfig(stateDir, [rec('alpha')])
+    const reg = createA2ARegistry({ stateDir })
+    expect(reg.verifyBearer('alpha', '')).toBeNull()
+  })
+
   it('add() persists a new agent and rejects duplicate id', () => {
     const stateDir = makeTempStateDir()
     writeConfig(stateDir, [])
