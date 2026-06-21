@@ -141,6 +141,18 @@ describe('service-manager', () => {
     expect(plan.fileContent).toContain('<key>KeepAlive</key><true/>')
   })
 
+  it('macOS plist sets an explicit ThrottleInterval to cap KeepAlive respawn storms', () => {
+    // KeepAlive=true means launchd respawns a crashed/wedged daemon. Without
+    // a throttle, a daemon that crashes on boot (bad config, stale lock)
+    // would respawn in a tight loop. launchd's implicit floor is 10s, but
+    // pin it explicitly for parity with systemd's RestartSec and so the
+    // behaviour survives any change to launchd's default.
+    const plan = buildServicePlan({
+      platform: 'darwin', homeDir: '/Users/alice', cwd: '/Users/alice/.wechat-cc', bunPath: '/opt/homebrew/bin/bun',
+    })
+    expect(plan.fileContent).toContain('<key>ThrottleInterval</key><integer>10</integer>')
+  })
+
   it('Linux unit always includes Restart=always (crash respawn is unconditional)', () => {
     const plan = buildServicePlan({
       platform: 'linux', homeDir: '/home/alice', cwd: '/home/alice/.wechat-cc', bunPath: '/home/alice/.bun/bin/bun',

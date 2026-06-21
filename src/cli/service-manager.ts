@@ -414,9 +414,15 @@ function launchAgentPlist(opts: { bunPath: string; binaryPath?: string; cwd: str
   // KeepAlive is always true: a crashed daemon should be auto-respawned. It
   // used to be a user-facing toggle but no one wanted it off — power users
   // can edit the plist by hand if they really need crash-stays-dead semantics.
+  //
+  // ThrottleInterval caps respawn frequency: a daemon that crashes on boot
+  // (bad config, a stale lock it can't steal) would otherwise relaunch in a
+  // tight loop. 10s matches launchd's implicit floor and systemd's RestartSec,
+  // pinned explicitly so the behaviour survives a launchd default change.
   const autoLines =
     `  <key>RunAtLoad</key><${opts.runAtLoad ? 'true' : 'false'}/>\n` +
-    `  <key>KeepAlive</key><true/>`
+    `  <key>KeepAlive</key><true/>\n` +
+    `  <key>ThrottleInterval</key><integer>10</integer>`
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
