@@ -474,9 +474,12 @@ It can inspect its own per-turn outcomes (did the last turn time out? error?),
 see which agent sessions are live or wedged, and check daemon health — then
 remediate: release a wedged session (the next message starts a fresh
 subprocess), switch the pinned model, or restart the daemon, each confirmed
-back to you. These tools are **admin-only** and aren't registered at all for
-non-admin chats. Switching the model this way takes effect on the next turn —
-no daemon restart needed.
+back to you. These tools are **admin-only**, enforced two ways: they aren't
+registered for non-admin chats, *and* the daemon's internal API checks the
+caller's tier on every route — so even a shell-capable trusted/guest agent that
+reads the token file and calls the route directly gets a `403`, not access.
+(Each session carries a per-tier token; routes are default-deny.) Switching the
+model this way takes effect on the next turn — no daemon restart needed.
 
 ---
 
