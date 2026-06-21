@@ -28,6 +28,7 @@ import { basename as pathBasename, join } from 'node:path'
 import type { Db } from '../lib/db'
 import { makeMessagesStore, type MessageRecord } from '../lib/messages-store'
 import { makeThreadsStore, type ThreadRecord, type Facet } from '../lib/threads-store'
+import { isoFromMs } from '../lib/iso-time'
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -461,8 +462,12 @@ export async function dialogueThreadDetail(db: Db, id: string): Promise<ThreadDe
     // above to_ts, then filter by >= from_ts in JS.
     // To capture to_ts inclusive we need ts < (to_ts + 1ms). ISO strings are
     // lexicographically comparable, so we add 1ms to to_ts.
+    // Guard: a corrupt/garbage to_ts (unparseable → NaN) would make
+    // new Date(NaN).toISOString() throw RangeError and abort the whole
+    // thread-detail request. isoFromMs falls back to now — a safe upper bound,
+    // since all real messages are in the past.
     const toTsMs = new Date(ep.to_ts).getTime()
-    const exclusiveAfter = new Date(toTsMs + 1).toISOString()
+    const exclusiveAfter = isoFromMs(toTsMs + 1, Date.now())
     const rows = await mStore.listRange(thread.chatId, {
       limit: MAX_PER_EPISODE,
       beforeTs: exclusiveAfter,
