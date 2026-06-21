@@ -20,6 +20,7 @@ export function createYiWsClient(opts: YiWsClientOpts): YiWsClient {
   let ws: WebSocket | null = null
   let stopped = false
   let backoff = 1000
+  let retryTimer: ReturnType<typeof setTimeout> | null = null
 
   function connect(): void {
     if (stopped) return
@@ -33,7 +34,7 @@ export function createYiWsClient(opts: YiWsClientOpts): YiWsClient {
       ws = null
       if (stopped) return
       opts.log?.(`yi: disconnected from ${opts.brainUrl}, retry in ${backoff}ms`)
-      setTimeout(connect, backoff)
+      retryTimer = setTimeout(connect, backoff)
       backoff = Math.min(backoff * 2, 30_000)
     }
     ws.onerror = () => { try { ws?.close() } catch { /* noop */ } }
@@ -41,6 +42,14 @@ export function createYiWsClient(opts: YiWsClientOpts): YiWsClient {
 
   return {
     start() { stopped = false; connect() },
-    stop() { stopped = true; try { ws?.close() } catch { /* noop */ } ws = null },
+    stop() {
+      stopped = true
+      // Cancel any pending reconnect — otherwise the queued timer fires later
+      // (no-op while stopped, but it leaks, and a later start() could let it
+      // open a duplicate socket alongside the fresh one).
+      if (retryTimer) { clearTimeout(retryTimer); retryTimer = null }
+      try { ws?.close() } catch { /* noop */ }
+      ws = null
+    },
   }
 }

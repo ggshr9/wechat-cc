@@ -46,15 +46,23 @@ export function createYiHub(): YiHub {
       }
     },
     isConnected(handId) { return conns.has(handId) },
-    onMessage(_handId, raw) {
+    onMessage(handId, raw) {
       const msg = parseMessage(raw)
+      // Only the hand that OWNS a pending request may settle it. nextId is a
+      // small global monotonic counter, so without this check a buggy/malicious
+      // hand could settle (hijack) another hand's in-flight task by replaying
+      // its id. ownsPending gates both the response and error paths.
+      const ownsPending = (id: unknown): id is number =>
+        typeof id === 'number' && pending.get(id)?.handId === handId
       if (msg.kind === 'response') {
+        if (!ownsPending(msg.id)) return
         const res = msg.result as { ok?: boolean; response?: unknown; reason?: unknown }
         settle(msg.id, res && res.ok
           ? { ok: true, response: String(res.response ?? '') }
           : { ok: false, reason: String(res?.reason ?? 'unknown') })
       } else if (msg.kind === 'error') {
-        if (typeof msg.id === 'number') settle(msg.id, { ok: false, reason: msg.error.message })
+        if (!ownsPending(msg.id)) return
+        settle(msg.id, { ok: false, reason: msg.error.message })
       }
     },
     dispatchTask(handId, task, timeoutMs) {

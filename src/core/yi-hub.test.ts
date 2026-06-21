@@ -19,6 +19,21 @@ describe('yi-hub', () => {
     await expect(p).resolves.toEqual({ ok: true, response: 'the readme' })
   })
 
+  it('ignores a response whose id is not owned by the sending hand (no cross-hand hijack)', async () => {
+    const hub = createYiHub()
+    const sentA: string[] = []
+    hub.attach('handA', (raw) => { sentA.push(raw) })
+    hub.attach('handB', () => {})
+    const pA = hub.dispatchTask('handA', { peer: 'claude', prompt: 'x' }, 5000)
+    const reqA = parseMessage(sentA[0]!)
+    if (reqA.kind !== 'request') throw new Error('expected request')
+    // Hand B replies with Hand A's request id — must be ignored, not hijack pA.
+    hub.onMessage('handB', buildResponse(reqA.id, { taskId: 't', ok: true, response: 'HIJACKED' }))
+    // Hand A's own reply settles it correctly.
+    hub.onMessage('handA', buildResponse(reqA.id, { taskId: 't', ok: true, response: 'real' }))
+    await expect(pA).resolves.toEqual({ ok: true, response: 'real' })
+  })
+
   it('returns ok:false when the hand is not connected', async () => {
     const hub = createYiHub()
     await expect(hub.dispatchTask('ghost', { peer: 'claude', prompt: 'x' }, 1000))
