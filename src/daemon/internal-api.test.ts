@@ -2451,10 +2451,28 @@ describe('internal-api request validation', () => {
         body: JSON.stringify({ alias: 'a', providerId: 'claude', chatId: 'c' }),
       })
       expect(resp.status).toBe(200)
-      const body = await resp.json() as { ok: boolean; sessions: unknown[] }
+      const body = await resp.json() as { ok: boolean; released: boolean; sessions: unknown[] }
       expect(body.ok).toBe(true)
+      expect(body.released).toBe(true) // the session was actually live
       expect(released).toEqual([{ alias: 'a', providerId: 'claude', chatId: 'c' }])
       expect(body.sessions).toEqual([]) // read-back confirms it's gone
+    })
+
+    it('POST /v1/sessions/release reports released:false for a no-op (nothing matched)', async () => {
+      api = createInternalApi({
+        stateDir, daemonPid: 1,
+        releaseSession: async () => {}, // no-op
+        listSessions: () => [{ alias: 'a', path: '/p', providerId: 'claude', chatId: 'other', lastUsedAt: 1 }],
+      })
+      const { port } = await api.start()
+      const token = api.mintSessionToken('admin', 'test')
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/sessions/release`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ alias: 'a', providerId: 'claude', chatId: 'nonexistent' }),
+      })
+      expect(resp.status).toBe(200)
+      expect(await resp.json()).toMatchObject({ ok: true, released: false })
     })
 
     it('POST /v1/sessions/release 400 on missing fields, 503 when unwired', async () => {

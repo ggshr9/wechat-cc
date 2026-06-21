@@ -653,8 +653,14 @@ export function makeRoutes({ deps, getDelegate, maybePrefix }: MakeRoutesContext
       if (typeof b.alias !== 'string' || typeof b.providerId !== 'string' || typeof b.chatId !== 'string') {
         return { status: 400, body: { error: 'alias, providerId, chatId required (strings)' } }
       }
+      // Was there actually a live session to release? Compute it from the
+      // session list so the read-back is honest — a no-op release (already
+      // gone / wrong key / pre-bootstrap) reports `released:false` instead of
+      // a misleading `ok:true`, so the agent's self-heal verification is real.
+      const before = deps.listSessions?.() ?? []
+      const released = before.some(s => s.alias === b.alias && s.providerId === b.providerId && s.chatId === b.chatId)
       await deps.releaseSession({ alias: b.alias, providerId: b.providerId, chatId: b.chatId })
-      return { status: 200, body: { ok: true, sessions: deps.listSessions?.() ?? null } }
+      return { status: 200, body: { ok: true, released, sessions: deps.listSessions?.() ?? null } }
     },
 
     // Current pinned agent model (read-back companion to POST /v1/model).

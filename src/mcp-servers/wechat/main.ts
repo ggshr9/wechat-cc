@@ -681,7 +681,7 @@ server.registerTool(
   'session_release',
   {
     title: 'Release a wedged session',
-    description: '【管理员】强制释放某个卡住/闲置的 agent 会话——该 chat 的下一条消息会重开一个干净子进程。用 diagnostic_sessions 拿到 alias/providerId/chatId。返回释放后的会话列表作为核对。',
+    description: '【管理员】强制释放某个卡住/闲置的 agent 会话——该 chat 的下一条消息会重开一个干净子进程。用 diagnostic_sessions 拿到 alias/providerId/chatId。返回 { ok, released, sessions }：released=false 表示没有匹配的活跃会话（key 不对/已经没了），不是真的释放了，要据此判断。',
     inputSchema: {
       alias: z.string(),
       providerId: z.string().describe('claude / codex / cursor'),
