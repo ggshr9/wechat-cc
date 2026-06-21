@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 // zod v4: `import { z } from 'zod'` resolves to undefined under vitest's
 // bundler; use the default export instead (both forms are equivalent at
@@ -156,6 +156,49 @@ export function loadAgentConfig(stateDir: string): AgentConfig {
     }
   } catch {
     return { provider: 'claude', dangerouslySkipPermissions: true, autoStart: true, closeStopsDaemon: false }
+  }
+}
+
+/** Injection seam for {@link makeMtimeCachedConfigReader} — real impls hit
+ *  the filesystem; tests stub both to drive cache behaviour deterministically
+ *  (no reliance on millisecond-granular mtime between two writes). */
+export interface CachedConfigReaderDeps {
+  /** Modification time of the config file in ms, or `-1` if it can't be
+   *  stat'd (missing / unreadable). A stable `-1` keeps the cache warm while
+   *  the file legitimately doesn't exist yet. */
+  statMtimeMs: (path: string) => number
+  load: (stateDir: string) => AgentConfig
+}
+
+/**
+ * Build a config reader that re-parses `agent-config.json` only when its
+ * mtime changes — otherwise it returns the cached object. This is what lets
+ * an operator's `/model` switch (which rewrites the file) take effect on the
+ * next agent spawn WITHOUT a daemon restart: the daemon captured the model
+ * once at boot and baked it into a closure, so a change went unseen until
+ * restart (the reported P4). The daemon wires this into the per-spawn
+ * `sdkOptionsForProject` closure; the new model applies to the next session
+ * spawned per chat (an in-flight session keeps its model until released).
+ *
+ * The mtime check is one `stat` per spawn (cheap) instead of a full read +
+ * JSON parse; a cache hit skips both.
+ */
+export function makeMtimeCachedConfigReader(
+  stateDir: string,
+  deps?: Partial<CachedConfigReaderDeps>,
+): () => AgentConfig {
+  const statMtimeMs = deps?.statMtimeMs ?? ((p: string) => {
+    try { return statSync(p).mtimeMs } catch { return -1 }
+  })
+  const load = deps?.load ?? loadAgentConfig
+  const path = join(stateDir, CONFIG_FILE)
+  let cached: { mtimeMs: number; config: AgentConfig } | null = null
+  return () => {
+    const mtimeMs = statMtimeMs(path)
+    if (cached && cached.mtimeMs === mtimeMs) return cached.config
+    const config = load(stateDir)
+    cached = { mtimeMs, config }
+    return config
   }
 }
 

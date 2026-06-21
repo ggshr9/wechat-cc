@@ -42,7 +42,7 @@ import type { WechatProjectsDep, WechatVoiceDep, WechatCompanionDep } from '../w
 import { makeSessionStore } from '../../core/session-store'
 import type { Db } from '../../lib/db'
 import { homedir } from 'node:os'
-import { loadAgentConfig } from '../../lib/agent-config'
+import { loadAgentConfig, makeMtimeCachedConfigReader } from '../../lib/agent-config'
 import type { AgentConfig } from '../../lib/agent-config'
 import { loadAccess, setSessionInvalidator, type Access } from '../../lib/access'
 import { loadCompanionConfig, type CompanionConfig } from '../companion/config'
@@ -414,12 +414,22 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
   // configured for interactive sessions; CLI 2.1.133 mis-parsed that
   // under SDK mode and sent literal `"opus"` to the API → 404 on every
   // inbound. The codex side already pinned model from config; Claude
-  // didn't, so this closes that asymmetry. Loaded once here (outside the
-  // per-project closure) to keep startup config visible at boot time.
+  // didn't, so this closes that asymmetry. `configuredAgent` is the boot
+  // snapshot used for codex/cursor construction + startup logging.
   const configuredAgent = loadAgentConfig(deps.stateDir)
-  const claudeModel = configuredAgent.provider === 'claude' && configuredAgent.model
-    ? configuredAgent.model
-    : 'claude-opus-4-8'
+
+  // P4 fix: the Claude model is re-read per spawn via an mtime-cached reader
+  // (one stat, parse only on change) instead of being captured once. An
+  // operator's `/model` switch rewrites agent-config.json, so the next
+  // session spawned in each chat picks up the new model with NO daemon
+  // restart. (An in-flight session keeps its model until released.) Codex
+  // and Cursor still take their model at provider-construction time below,
+  // so those changes remain restart-gated — out of scope for this fix.
+  const readAgentConfig = makeMtimeCachedConfigReader(deps.stateDir)
+  const currentClaudeModel = (): string => {
+    const c = readAgentConfig()
+    return c.provider === 'claude' && c.model ? c.model : 'claude-opus-4-8'
+  }
 
   const sdkOptionsForProject = (_alias: string, path: string, tierProfile: TierProfile, chatId: string): Options => {
     const cstatus = deps.ilink.companion.status()
@@ -433,7 +443,7 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
     })
     const common: Options = {
       cwd: path,
-      model: claudeModel,
+      model: currentClaudeModel(),
       mcpServers: {
         ...(wechatStdioForClaude ? { wechat: { type: 'stdio' as const, ...wechatStdioForClaude } } : {}),
         ...(delegateStdioForClaude ? { delegate: { type: 'stdio' as const, ...delegateStdioForClaude } } : {}),
