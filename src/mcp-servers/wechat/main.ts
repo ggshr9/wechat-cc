@@ -44,6 +44,15 @@ const server = new McpServer(
   { capabilities: { tools: {} } },
 )
 
+// Admin-session flag, baked into THIS MCP child's env by the daemon at spawn
+// time (bootstrap sets WECHAT_SESSION_ADMIN=1 only for an admin-tier session).
+// The agent runs in the LLM and cannot alter this env, so gating the
+// daemon-control tools (diagnostic_* / model_* / session_release /
+// daemon_restart) on it is robust on EVERY provider — including codex, which
+// has no per-tool canUseTool callback. Non-admin sessions simply don't get the
+// tools registered, so they can't be called or even discovered.
+const SESSION_IS_ADMIN = process.env.WECHAT_SESSION_ADMIN === '1'
+
 // ──────────────────────────────────────────────────────────────────────
 // Tools
 // ──────────────────────────────────────────────────────────────────────
@@ -561,11 +570,15 @@ server.registerTool(
   },
 )
 
-// ─── daemon self-diagnosis (admin-only, read-only) ────────────────────────────
-// These let the operator ask the bot "检查下为什么 X 不回消息了". They're
-// gated to the admin tier by the daemon's canUseTool layer (ToolKind
-// 'daemon_introspect' is denied for trusted/guest) — a non-admin invocation is
-// refused before the HTTP call. All three are strictly read-only.
+// ─── daemon self-diagnosis + remediation (admin-only) ─────────────────────────
+// Registered ONLY for an admin-tier session (WECHAT_SESSION_ADMIN=1, set by the
+// daemon at spawn). This is the robust, provider-agnostic gate — for non-admin
+// sessions (including codex, which has no canUseTool) the tools don't exist.
+// The claude canUseTool layer (daemon_introspect/daemon_remediate denied for
+// trusted/guest) is a second, defence-in-depth gate on top.
+if (SESSION_IS_ADMIN) {
+
+// These let the operator ask the bot "检查下为什么 X 不回消息了". Read-only.
 
 server.registerTool(
   'diagnostic_turns',
@@ -700,6 +713,8 @@ server.registerTool(
     }
   },
 )
+
+} // end if (SESSION_IS_ADMIN)
 
 function passthroughErrorResult(err: unknown, tool: string): { content: Array<{ type: 'text'; text: string }> } {
   // Surface transport-layer failures as `{error: "..."}` JSON in a text

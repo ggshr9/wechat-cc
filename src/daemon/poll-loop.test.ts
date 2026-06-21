@@ -271,6 +271,35 @@ describe('startLongPollLoops', () => {
     expect(onPollCycle).toHaveBeenCalled()
   })
 
+  it('stamps onPollCycle after EACH inbound message (so a slow batch does not starve the heartbeat)', async () => {
+    // A batch of slow turns runs inline in the loop; without a per-message
+    // stamp the heartbeat would only refresh once the whole batch drains,
+    // long enough for the instance lock to look stale and be stolen.
+    const updates: RawUpdate[] = [
+      { from_user_id: 'u1', create_time_ms: 1000, message_type: 1, message_state: 2, item_list: [{ type: 1, text_item: { text: 'a' } }] },
+      { from_user_id: 'u1', create_time_ms: 2000, message_type: 1, message_state: 2, item_list: [{ type: 1, text_item: { text: 'b' } }] },
+    ]
+    const getUpdates = vi.fn()
+      .mockResolvedValueOnce({ updates, sync_buf: 'b1' })
+      .mockImplementation(async () => { await new Promise(r => setTimeout(r, 50)); return { updates: [], sync_buf: 'b1' } })
+    const onPollCycle = vi.fn()
+    let inbound = 0
+    const handle = startLongPollLoops({
+      accounts: [baseAcct],
+      onInbound: async () => { inbound++; await new Promise(r => setTimeout(r, 5)) },
+      ilink: { getUpdates },
+      parse: (us, deps) => parseUpdates(us, deps),
+      resolveUserName: () => undefined,
+      onPollCycle,
+    })
+    await new Promise(r => setTimeout(r, 40))
+    await handle.stop()
+    expect(inbound).toBe(2)
+    // ≥1 per-message stamp + the per-round-trip stamp → strictly more than the
+    // single round-trip count. At minimum once per delivered message.
+    expect(onPollCycle.mock.calls.length).toBeGreaterThanOrEqual(2)
+  })
+
   it('swallows getUpdates errors and retries', async () => {
     const getUpdates = vi.fn()
       .mockRejectedValueOnce(new Error('transient'))

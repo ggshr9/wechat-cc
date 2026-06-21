@@ -2,7 +2,7 @@
 if (!process.env.CLAUDE_CODE_ENTRYPOINT) { process.env.CLAUDE_CODE_ENTRYPOINT = 'sdk-ts' }
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { acquireInstanceLock, releaseInstanceLock, isHeartbeatFresh, writeHeartbeat, HEARTBEAT_FILE } from './single-instance'
+import { acquireInstanceLock, releaseInstanceLock, isHeartbeatFresh, writeHeartbeat, HEARTBEAT_FILE, HEARTBEAT_STALE_MS } from './single-instance'
 import { openDb } from '../lib/db'
 import { LifecycleSet, wireRef } from '../lib/lifecycle'
 import { log } from '../lib/log'
@@ -66,7 +66,22 @@ export async function bootDaemon(opts: BootDaemonOpts): Promise<DaemonHandle> {
   // its heartbeat go stale, so we take the lock over instead of forcing the
   // user to kill it by hand. A holder with no heartbeat file (predates this,
   // or just started) is treated as fresh, so we never steal an unproven lock.
-  const lock = acquireInstanceLock(PID_PATH, { isHealthy: () => isHeartbeatFresh(HEARTBEAT_PATH) })
+  // The stale window must exceed the longest a HEALTHY daemon can legitimately
+  // go between heartbeats. onInbound runs the full agent turn inline in the
+  // poll loop, so the worst-case gap is one max-length turn — the per-turn
+  // watchdog ends a stalled turn at turnTimeoutMs (default 10min), after which
+  // polling + heartbeat resume. If the window were shorter (the old flat 120s),
+  // a single long-but-legitimate turn would let a second daemon steal the lock
+  // → two daemons polling the same account. Floor at HEARTBEAT_STALE_MS, then
+  // ensure it clears turnTimeoutMs + a margin. (Mirrors bootstrap's parse.)
+  const turnTimeoutMs = (() => {
+    const raw = process.env['WECHAT_TURN_TIMEOUT_MS']
+    if (raw == null || raw === '') return 10 * 60_000
+    const n = Number(raw)
+    return Number.isFinite(n) && n >= 0 ? n : 10 * 60_000
+  })()
+  const heartbeatStaleMs = Math.max(HEARTBEAT_STALE_MS, turnTimeoutMs + 60_000)
+  const lock = acquireInstanceLock(PID_PATH, { isHealthy: () => isHeartbeatFresh(HEARTBEAT_PATH, heartbeatStaleMs) })
   if (!lock.ok) throw new Error(`[wechat-cc] ${lock.reason} (pid=${lock.pid})`)
   // Stamp an initial heartbeat immediately so this just-started daemon reads
   // as healthy before its first poll cycle lands (the poll loop refreshes it

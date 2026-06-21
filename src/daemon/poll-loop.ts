@@ -316,6 +316,13 @@ export function startLongPollLoops(opts: PollLoopOptions): PollLoopHandle {
             } catch (err) {
               log('ERROR', `onInbound threw: ${err}`)
             }
+            // Stamp the heartbeat after EACH message too, not just per
+            // getUpdates round-trip. onInbound runs the full agent turn inline,
+            // so a batch of slow turns would otherwise hold the loop (and the
+            // heartbeat) for sum-of-turns — long enough for the instance lock
+            // to look stale and be stolen by a second daemon. Per-message
+            // stamping bounds the gap to a single turn. Guarded; never throws.
+            try { onPollCycle?.() } catch { /* never throw into the loop */ }
           }
         }
 

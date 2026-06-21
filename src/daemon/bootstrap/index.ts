@@ -448,11 +448,23 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
       // wechat + delegate stdio MCP both loaded for regular sessions.
       delegateAvailable: !!delegateStdioForClaude,
     })
+    // Admin-only daemon-control tools (diagnostic_* / model_* / session_release
+    // / daemon_restart) are gated by the wechat MCP child registering them ONLY
+    // when WECHAT_SESSION_ADMIN=1. Bake that flag per-spawn for an admin-tier
+    // session — derived from the tier's own capability (admin allows the
+    // daemon_remediate kind; trusted/guest deny it), so it tracks the tier
+    // policy without a separate enum. Codex sessions never get this flag (the
+    // codex provider's MCP spec is fixed at construction), so daemon tools are
+    // simply unavailable there — closing the no-canUseTool gap on codex.
+    const sessionIsAdmin = tierProfile.allow.has('daemon_remediate')
+    const wechatEnv = wechatStdioForClaude
+      ? { ...wechatStdioForClaude.env, ...(sessionIsAdmin ? { WECHAT_SESSION_ADMIN: '1' } : {}) }
+      : undefined
     const common: Options = {
       cwd: path,
       model: currentClaudeModel(),
       mcpServers: {
-        ...(wechatStdioForClaude ? { wechat: { type: 'stdio' as const, ...wechatStdioForClaude } } : {}),
+        ...(wechatStdioForClaude ? { wechat: { type: 'stdio' as const, ...wechatStdioForClaude, env: wechatEnv! } } : {}),
         ...(delegateStdioForClaude ? { delegate: { type: 'stdio' as const, ...delegateStdioForClaude } } : {}),
       },
       // Using preset+append (instead of raw string) keeps MCP tools inline in

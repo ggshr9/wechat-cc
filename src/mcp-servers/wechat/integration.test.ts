@@ -58,18 +58,24 @@ describe('wechat-mcp stdio integration', () => {
     rmSync(stateDir, { recursive: true, force: true })
   })
 
-  async function bootChain(): Promise<{ client: Client }> {
+  async function bootChain(opts: { admin?: boolean } = {}): Promise<{ client: Client }> {
     const memory = makeMemoryFS({ rootDir: join(stateDir, 'memory') })
     api = createInternalApi({ stateDir, daemonPid: 7777, memory })
     const { port, tokenFilePath } = await api.start()
 
+    const baseEnv = { ...process.env as Record<string, string> }
+    // The daemon-control tools register only for an admin session; default the
+    // harness to admin so the existing round-trip tests see them, and ensure
+    // the flag is absent (not inherited) when admin is not requested.
+    delete baseEnv.WECHAT_SESSION_ADMIN
     const transport = new StdioClientTransport({
       command: RUNTIME,
       args: [WECHAT_MCP_MAIN],
       env: {
-        ...process.env as Record<string, string>,
+        ...baseEnv,
         WECHAT_INTERNAL_API: `http://127.0.0.1:${port}`,
         WECHAT_INTERNAL_TOKEN_FILE: tokenFilePath,
+        ...(opts.admin ? { WECHAT_SESSION_ADMIN: '1' } : {}),
       },
       stderr: 'pipe',
     })
@@ -79,21 +85,33 @@ describe('wechat-mcp stdio integration', () => {
     return { client: c }
   }
 
+  const DAEMON_TOOLS = [
+    'diagnostic_turns', 'diagnostic_sessions', 'diagnostic_health',
+    'session_release', 'model_get', 'model_set', 'daemon_restart',
+  ]
+
   it('lists the ping tool via tools/list', async () => {
     const { client } = await bootChain()
     const list = await client.listTools()
-    const names = list.tools.map(t => t.name)
-    expect(names).toContain('ping')
-    // Admin self-diagnosis tools are registered and discoverable (tier gating
-    // happens daemon-side at call time, not at list time).
-    expect(names).toContain('diagnostic_turns')
-    expect(names).toContain('diagnostic_sessions')
-    expect(names).toContain('diagnostic_health')
-    // Remediation tools (admin-gated daemon-side).
-    expect(names).toContain('session_release')
-    expect(names).toContain('model_get')
-    expect(names).toContain('model_set')
-    expect(names).toContain('daemon_restart')
+    expect(list.tools.map(t => t.name)).toContain('ping')
+  })
+
+  it('registers the admin daemon-control tools ONLY for an admin session (WECHAT_SESSION_ADMIN)', async () => {
+    // The robust, provider-agnostic gate: a non-admin session's MCP child does
+    // not register these tools, so they cannot be called or even discovered —
+    // closing the gap that codex (no canUseTool) would otherwise leave open.
+    const admin = await bootChain({ admin: true })
+    const adminNames = (await admin.client.listTools()).tools.map(t => t.name)
+    for (const t of DAEMON_TOOLS) expect(adminNames).toContain(t)
+    // ping (an ungated tool) is present regardless.
+    expect(adminNames).toContain('ping')
+    await admin.client.close()
+    if (api) { await api.stop(); api = null }
+
+    const nonAdmin = await bootChain() // no admin flag
+    const nonAdminNames = (await nonAdmin.client.listTools()).tools.map(t => t.name)
+    for (const t of DAEMON_TOOLS) expect(nonAdminNames).not.toContain(t)
+    expect(nonAdminNames).toContain('ping') // ungated tools still present
   })
 
   it('ping tool round-trips the daemon_pid through the full provider → stdio → HTTP → daemon chain', async () => {
