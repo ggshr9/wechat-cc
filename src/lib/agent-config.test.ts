@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { loadAgentConfig, saveAgentConfig, parseAgentConfig, A2AAgentRecord, makeMtimeCachedConfigReader, type AgentConfig } from './agent-config'
+import { loadAgentConfig, saveAgentConfig, parseAgentConfig, A2AAgentRecord, makeMtimeCachedConfigReader, activeModel, withActiveModel, type AgentConfig } from './agent-config'
 
 describe('agent-config', () => {
   it('defaults to claude with unattended=true when no config exists', () => {
@@ -333,6 +333,42 @@ describe('makeMtimeCachedConfigReader', () => {
     expect(read().model).toBe('claude-opus-4-8')
     read()
     expect(loads).toBe(1) // 'absent' == 'absent', no churn while the file stays absent
+  })
+})
+
+describe('activeModel / withActiveModel — provider-specific model field', () => {
+  const base = (provider: AgentConfig['provider']): AgentConfig => ({
+    provider, dangerouslySkipPermissions: false, autoStart: false, closeStopsDaemon: false,
+  })
+
+  it('reads `model` for claude/codex and `cursorModel` for cursor', () => {
+    expect(activeModel({ ...base('claude'), model: 'claude-opus-4-8' })).toBe('claude-opus-4-8')
+    expect(activeModel({ ...base('codex'), model: 'gpt-5.3-codex' })).toBe('gpt-5.3-codex')
+    expect(activeModel({ ...base('cursor'), cursorModel: 'composer-2', model: 'ignored' })).toBe('composer-2')
+  })
+
+  it('returns undefined when the provider\'s field is unset', () => {
+    expect(activeModel(base('claude'))).toBeUndefined()
+    // cursor reads cursorModel, so a stray `model` does not count as set
+    expect(activeModel({ ...base('cursor'), model: 'claude-opus-4-8' })).toBeUndefined()
+  })
+
+  it('writes the provider\'s field and round-trips through activeModel', () => {
+    const claude = withActiveModel(base('claude'), 'claude-opus-4-8')
+    expect(claude.model).toBe('claude-opus-4-8')
+    expect(claude.cursorModel).toBeUndefined()
+    expect(activeModel(claude)).toBe('claude-opus-4-8')
+
+    const cursor = withActiveModel(base('cursor'), 'composer-2')
+    expect(cursor.cursorModel).toBe('composer-2')
+    expect(cursor.model).toBeUndefined()
+    expect(activeModel(cursor)).toBe('composer-2')
+  })
+
+  it('does not mutate the input config', () => {
+    const cfg = base('claude')
+    withActiveModel(cfg, 'claude-opus-4-8')
+    expect(cfg.model).toBeUndefined()
   })
 })
 

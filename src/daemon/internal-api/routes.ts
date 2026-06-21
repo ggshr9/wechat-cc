@@ -11,7 +11,7 @@
 import { randomBytes } from 'node:crypto'
 import { errMsg, type InternalApiDeps, type InternalApiDelegateDep, type RouteTable } from './types'
 import { lookup } from '../../core/capability-matrix'
-import { loadAgentConfig, saveAgentConfig } from '../../lib/agent-config'
+import { loadAgentConfig, saveAgentConfig, activeModel, withActiveModel } from '../../lib/agent-config'
 import type { Mode } from '../../core/conversation'
 import { makeEventsStore } from '../events/store'
 import type {
@@ -666,10 +666,9 @@ export function makeRoutes({ deps, getDelegate, maybePrefix }: MakeRoutesContext
     // Current pinned agent model (read-back companion to POST /v1/model).
     'GET /v1/model': () => {
       const cfg = loadAgentConfig(deps.stateDir)
-      // Cursor reads `cursorModel`; claude/codex read `model`. Report the field
-      // the configured provider actually uses.
-      const model = cfg.provider === 'cursor' ? cfg.cursorModel : cfg.model
-      return { status: 200, body: { provider: cfg.provider, model: model ?? null } }
+      // Report the field the configured provider actually uses (activeModel
+      // owns the cursor-vs-claude/codex rule).
+      return { status: 200, body: { provider: cfg.provider, model: activeModel(cfg) ?? null } }
     },
 
     // Admin remediation — switch the pinned model. For claude this takes effect
@@ -699,11 +698,9 @@ export function makeRoutes({ deps, getDelegate, maybePrefix }: MakeRoutesContext
       const cfg = loadAgentConfig(deps.stateDir)
       // Write the field the configured provider reads — writing `model` for a
       // cursor daemon would be a silent no-op with a falsely-confirming read-back.
-      const updated = cfg.provider === 'cursor' ? { ...cfg, cursorModel: model } : { ...cfg, model }
-      saveAgentConfig(deps.stateDir, updated)
+      saveAgentConfig(deps.stateDir, withActiveModel(cfg, model))
       const after = loadAgentConfig(deps.stateDir)
-      const effective = after.provider === 'cursor' ? after.cursorModel : after.model
-      return { status: 200, body: { ok: true, provider: after.provider, model: effective ?? null } }
+      return { status: 200, body: { ok: true, provider: after.provider, model: activeModel(after) ?? null } }
     },
 
     // Admin remediation — graceful daemon restart. The trigger schedules the
