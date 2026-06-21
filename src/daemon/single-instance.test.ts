@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { acquireInstanceLock, releaseInstanceLock } from './single-instance'
-import { mkdtempSync, writeFileSync, existsSync } from 'node:fs'
+import { acquireInstanceLock, releaseInstanceLock, writeHeartbeat, isHeartbeatFresh } from './single-instance'
+import { mkdtempSync, writeFileSync, existsSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -29,6 +29,24 @@ describe('single-instance', () => {
     if (!r.ok) expect(r.reason).toMatch(/already running/i)
   })
 
+  it('steals lock when the live daemon holder fails the health check (wedged/half-started placeholder)', () => {
+    // The reported desktop scenario: launchd auto-starts a daemon that holds
+    // the pidfile (process alive, comm=bun) but never actually serves — so
+    // the CLI used to refuse with "already running" and the user had to kill
+    // it by hand. With an injected health probe that reports the holder is
+    // not serving, acquire treats the lock as stale and takes it over.
+    writeFileSync(pidPath, String(process.pid), 'utf8') // self → looks like our daemon
+    const r = acquireInstanceLock(pidPath, { isHealthy: () => false })
+    expect(r.ok).toBe(true)
+  })
+
+  it('still refuses when the live daemon holder passes the health check', () => {
+    writeFileSync(pidPath, String(process.pid), 'utf8')
+    const r = acquireInstanceLock(pidPath, { isHealthy: () => true })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toMatch(/already running/i)
+  })
+
   it('steals lock when pid file refers to a live but unrelated process (post-reboot PID reuse)', () => {
     // Reproduces the post-kernel-panic scenario: the pidfile points at a
     // PID that IS alive after reboot, but it belongs to some other
@@ -37,5 +55,24 @@ describe('single-instance', () => {
     writeFileSync(pidPath, '1', 'utf8')
     const r = acquireInstanceLock(pidPath)
     expect(r.ok).toBe(true)
+  })
+})
+
+describe('heartbeat (daemon health signal for the instance lock)', () => {
+  const hbPath = join(dir, 'server.heartbeat')
+  afterEach(() => { try { unlinkSync(hbPath) } catch { /* may not exist */ } })
+
+  it('is fresh immediately after a write', () => {
+    writeHeartbeat(hbPath, 1000)
+    expect(isHeartbeatFresh(hbPath, 5000, 2000)).toBe(true)
+  })
+
+  it('is stale once older than the threshold', () => {
+    writeHeartbeat(hbPath, 1000)
+    expect(isHeartbeatFresh(hbPath, 5000, 10_000)).toBe(false)
+  })
+
+  it('treats a missing heartbeat as fresh — never steal a lock we cannot prove is stale', () => {
+    expect(isHeartbeatFresh(join(dir, 'no-such.heartbeat'), 5000, 10_000)).toBe(true)
   })
 })

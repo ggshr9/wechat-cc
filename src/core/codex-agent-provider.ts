@@ -49,12 +49,18 @@ export function tierProfileToCodexSdkOpts(tp: TierProfile, permissionMode: Permi
   if (permissionMode === 'dangerously') {
     return { sandboxMode: 'danger-full-access', approvalPolicy: 'never' }
   }
-  // strict mode — heuristic on TierProfile shape. admin profile (relay
-  // may contain destructive ops; deny is empty) → workspace-write.
+  // strict mode. A profile that denies nothing AND relays nothing is the
+  // full-bypass shape → danger-full-access.
   if (tp.deny.size === 0 && tp.relay.size === 0) {
     return { sandboxMode: 'danger-full-access', approvalPolicy: 'never' }
   }
-  if (tp.deny.size === 0) {
+  // Sandbox scope keys off what the tier can actually DO, not deny-set
+  // cardinality: any tier that can write files and run shell (admin, trusted)
+  // gets workspace-write; one that can't (guest — read/reply only) gets
+  // read-only. The old `deny.size === 0` check mis-fired the moment a tier
+  // denied a tool unrelated to fs/shell scope (e.g. the admin-only
+  // daemon_introspect now in trusted.deny), collapsing trusted to read-only.
+  if (tp.allow.has('fs_write') && tp.allow.has('shell')) {
     return { sandboxMode: 'workspace-write', approvalPolicy: 'never' }
   }
   return { sandboxMode: 'read-only', approvalPolicy: 'untrusted' }

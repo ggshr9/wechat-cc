@@ -58,18 +58,24 @@ describe('wechat-mcp stdio integration', () => {
     rmSync(stateDir, { recursive: true, force: true })
   })
 
-  async function bootChain(): Promise<{ client: Client }> {
+  async function bootChain(opts: { admin?: boolean } = {}): Promise<{ client: Client }> {
     const memory = makeMemoryFS({ rootDir: join(stateDir, 'memory') })
     api = createInternalApi({ stateDir, daemonPid: 7777, memory })
     const { port, tokenFilePath } = await api.start()
 
+    const baseEnv = { ...process.env as Record<string, string> }
+    // The daemon-control tools register only for an admin session; default the
+    // harness to admin so the existing round-trip tests see them, and ensure
+    // the flag is absent (not inherited) when admin is not requested.
+    delete baseEnv.WECHAT_SESSION_ADMIN
     const transport = new StdioClientTransport({
       command: RUNTIME,
       args: [WECHAT_MCP_MAIN],
       env: {
-        ...process.env as Record<string, string>,
+        ...baseEnv,
         WECHAT_INTERNAL_API: `http://127.0.0.1:${port}`,
         WECHAT_INTERNAL_TOKEN_FILE: tokenFilePath,
+        ...(opts.admin ? { WECHAT_SESSION_ADMIN: '1' } : {}),
       },
       stderr: 'pipe',
     })
@@ -79,11 +85,33 @@ describe('wechat-mcp stdio integration', () => {
     return { client: c }
   }
 
+  const DAEMON_TOOLS = [
+    'diagnostic_turns', 'diagnostic_sessions', 'diagnostic_health',
+    'session_release', 'model_get', 'model_set', 'daemon_restart',
+  ]
+
   it('lists the ping tool via tools/list', async () => {
     const { client } = await bootChain()
     const list = await client.listTools()
-    const names = list.tools.map(t => t.name)
-    expect(names).toContain('ping')
+    expect(list.tools.map(t => t.name)).toContain('ping')
+  })
+
+  it('registers the admin daemon-control tools ONLY for an admin session (WECHAT_SESSION_ADMIN)', async () => {
+    // The robust, provider-agnostic gate: a non-admin session's MCP child does
+    // not register these tools, so they cannot be called or even discovered —
+    // closing the gap that codex (no canUseTool) would otherwise leave open.
+    const admin = await bootChain({ admin: true })
+    const adminNames = (await admin.client.listTools()).tools.map(t => t.name)
+    for (const t of DAEMON_TOOLS) expect(adminNames).toContain(t)
+    // ping (an ungated tool) is present regardless.
+    expect(adminNames).toContain('ping')
+    await admin.client.close()
+    if (api) { await api.stop(); api = null }
+
+    const nonAdmin = await bootChain() // no admin flag
+    const nonAdminNames = (await nonAdmin.client.listTools()).tools.map(t => t.name)
+    for (const t of DAEMON_TOOLS) expect(nonAdminNames).not.toContain(t)
+    expect(nonAdminNames).toContain('ping') // ungated tools still present
   })
 
   it('ping tool round-trips the daemon_pid through the full provider → stdio → HTTP → daemon chain', async () => {
@@ -91,18 +119,19 @@ describe('wechat-mcp stdio integration', () => {
     const result = await client.callTool({ name: 'ping', arguments: {} })
     expect(result.isError).toBeFalsy()
 
-    // The ping handler returns both a text content block (JSON-encoded) and
-    // structuredContent ({ ok, daemon_pid }). Either is fine for the test.
+    // The ping handler returns the /v1/health body — {ok, daemon_pid} plus the
+    // ops fields added with the admin self-diagnosis tools. toMatchObject so
+    // the core liveness contract holds without pinning the optional ops fields.
     const sc = result.structuredContent as { ok: boolean; daemon_pid: number } | undefined
     if (sc) {
-      expect(sc).toEqual({ ok: true, daemon_pid: 7777 })
+      expect(sc).toMatchObject({ ok: true, daemon_pid: 7777 })
       return
     }
     const content = result.content as Array<{ type: string; text?: string }>
     const textBlock = content.find(b => b.type === 'text')
     expect(textBlock).toBeDefined()
     const parsed = JSON.parse(textBlock!.text!) as { ok: boolean; daemon_pid: number }
-    expect(parsed).toEqual({ ok: true, daemon_pid: 7777 })
+    expect(parsed).toMatchObject({ ok: true, daemon_pid: 7777 })
   })
 
   it('memory_write → memory_read round-trips content through stdio + HTTP + MemoryFS', async () => {

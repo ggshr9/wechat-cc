@@ -83,6 +83,7 @@ export async function cmdAgentAdd(stateDir: string, url: string, opts: AgentAddO
     outbound_api_key: outboundKey,
     capabilities: card.capabilities?.map(c => c.name) ?? [],
     paused: false,
+    transport: 'push',
   })
   console.log(`added agent '${id}'`)
   console.log(`  inbound API key: ${inboundKey}`)

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { registerPolling } from './polling-lifecycle'
@@ -40,6 +40,38 @@ describe('registerPolling', () => {
     })
     try {
       expect(lc.running()).toEqual(['bot-single'])  // md held back until takeover
+    } finally {
+      await lc.stop()
+      rmSync(stateDir, { recursive: true, force: true })
+    }
+  })
+
+  it('persists the advanced ilink cursor to accounts/<id>/sync_buf', async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'polling-sb-'))
+    mkdirSync(join(stateDir, 'accounts', 'bot1'), { recursive: true })
+    let calls = 0
+    const lc = registerPolling({
+      stateDir,
+      accounts: [{ id: 'bot1', botId: 'bot1', userId: 'u1', baseUrl: 'http://x', token: 't', syncBuf: '' }],
+      ilink: {
+        getUpdates: async () => {
+          calls += 1
+          if (calls === 1) return { updates: [], sync_buf: 'cursor-42' }
+          await new Promise(r => setTimeout(r, 1000))
+          return { updates: [], sync_buf: 'cursor-42' }
+        },
+      },
+      parse: () => [],
+      resolveUserName: () => undefined,
+      log: () => {},
+      runPipeline: async () => {},
+    })
+    try {
+      // poll for the file to appear (write happens after the first batch)
+      const path = join(stateDir, 'accounts', 'bot1', 'sync_buf')
+      for (let i = 0; i < 50 && !existsSync(path); i++) await new Promise(r => setTimeout(r, 10))
+      expect(existsSync(path)).toBe(true)
+      expect(readFileSync(path, 'utf8').trim()).toBe('cursor-42')
     } finally {
       await lc.stop()
       rmSync(stateDir, { recursive: true, force: true })

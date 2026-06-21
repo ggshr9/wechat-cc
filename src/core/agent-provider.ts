@@ -214,13 +214,35 @@ export interface TurnSummary {
   errorCode?: string
 }
 
-export async function collectTurn(events: AsyncIterable<AgentEvent>): Promise<TurnSummary> {
+/** Sentinel error code stamped on a TurnSummary when the per-turn watchdog
+ *  fires (the stream went silent past `timeoutMs`). Coordinators branch on
+ *  this to discard the wedged session and self-heal — see [[handleTurnTimeout]]
+ *  in conversation-coordinator. */
+export const TURN_TIMEOUT_CODE = 'turn_timeout'
+
+export interface CollectTurnOpts {
+  /**
+   * Per-turn watchdog (ms). When set, `collectTurn` stops waiting if no
+   * event arrives within this window, calls the stream's `return()` to
+   * unwind the producer, and resolves with `errorCode: 'turn_timeout'`
+   * instead of hanging forever. Omit to drain with no bound (legacy
+   * behaviour — used by callers that already bound the turn elsewhere).
+   *
+   * The watchdog is idle-based: it resets on every event, so a turn that
+   * keeps streaming (long tool runs that emit progress) is not killed —
+   * only a genuinely silent stall is.
+   */
+  timeoutMs?: number
+}
+
+export async function collectTurn(events: AsyncIterable<AgentEvent>, opts?: CollectTurnOpts): Promise<TurnSummary> {
   const texts: string[] = []
   let replyToolCalled = false
   let result: TurnSummary['result']
   let error: string | undefined
   let errorCode: string | undefined
-  for await (const ev of events) {
+
+  const apply = (ev: AgentEvent): void => {
     if (ev.kind === 'text') {
       texts.push(ev.text)
     } else if (ev.kind === 'tool_call' && isReplyToolCall(ev)) {
@@ -231,6 +253,46 @@ export async function collectTurn(events: AsyncIterable<AgentEvent>): Promise<Tu
       error = ev.message
       if (ev.code) errorCode = ev.code
     }
+  }
+
+  const timeoutMs = opts?.timeoutMs
+  if (!timeoutMs || timeoutMs <= 0) {
+    for await (const ev of events) apply(ev)
+    return { assistantText: texts, replyToolCalled, result, error, errorCode }
+  }
+
+  // Watchdog path: race each `next()` against an idle timer that resets per
+  // event. On timeout, unwind the producer via `return()` so its generator
+  // `finally` (and any provider cleanup) runs, then surface a timeout summary.
+  const it = events[Symbol.asyncIterator]()
+  const TIMEOUT = Symbol('timeout')
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const armTimeout = (): Promise<typeof TIMEOUT> =>
+    new Promise(resolve => { timer = setTimeout(() => resolve(TIMEOUT), timeoutMs) })
+  try {
+    for (;;) {
+      const step = await Promise.race([it.next(), armTimeout()])
+      if (timer) { clearTimeout(timer); timer = undefined }
+      if (step === TIMEOUT) {
+        // Best-effort unwind — do NOT await. A genuinely wedged producer
+        // (generator stuck on an unresolved `await`) never completes its
+        // `return()`, so awaiting it would re-introduce the very hang the
+        // watchdog exists to break. The real provider's queue iterator
+        // (AsyncQueue) resolves `return()` synchronously, closing the queue.
+        void Promise.resolve(it.return?.()).catch(() => {})
+        return {
+          assistantText: texts,
+          replyToolCalled,
+          result,
+          error: `turn timed out after ${timeoutMs}ms with no activity`,
+          errorCode: TURN_TIMEOUT_CODE,
+        }
+      }
+      if (step.done) break
+      apply(step.value)
+    }
+  } finally {
+    if (timer) clearTimeout(timer)
   }
   return { assistantText: texts, replyToolCalled, result, error, errorCode }
 }

@@ -19,10 +19,32 @@ import { makeModeCommands } from '../mode-commands'
 import { makeOnboardingHandler } from '../onboarding'
 import { botName, botNameFromModeFallback } from '../bot-name'
 import { loadAgentConfig, saveAgentConfig } from '../../lib/agent-config'
+import type { A2AAgentRecord } from '../../lib/agent-config'
 import { materializeAttachments } from '../media'
 import { loadGuardConfig } from '../guard/store'
 import { makeFireMilestonesFor, makeRecordInbound, makeMaybeWriteWelcomeObservation } from './side-effects'
 import { makeMessagesStore } from '../../lib/messages-store'
+import type { YiHub, YiDispatch } from '../../core/yi-hub'
+import type { ExecResult } from '../../core/a2a-server'
+
+export interface DelegateDeps {
+  listHands: () => readonly A2AAgentRecord[]
+  hub: Pick<YiHub, 'dispatchTask' | 'isConnected'>
+  pushDelegate: (hand: A2AAgentRecord, task: YiDispatch, selfId: string, timeoutMs: number) => Promise<ExecResult>
+  selfId: string
+  timeoutMs: number
+}
+
+export function makeDelegateToHand(deps: DelegateDeps) {
+  return async (handName: string, task: string): Promise<ExecResult & { knownHands?: string[] }> => {
+    const hands = deps.listHands().filter(a => a.capabilities?.includes('exec'))
+    const hand = hands.find(a => a.id === handName || a.name === handName)
+    if (!hand) return { ok: false, reason: 'unknown_hand', knownHands: hands.map(a => a.name || a.id) }
+    const dispatch: YiDispatch = { peer: 'claude', prompt: task }
+    if (hand.transport === 'ws') return deps.hub.dispatchTask(hand.id, dispatch, deps.timeoutMs)
+    return deps.pushDelegate(hand, dispatch, deps.selfId, deps.timeoutMs)
+  }
+}
 
 export interface PipelineDepsOpts {
   stateDir: string
@@ -124,24 +146,32 @@ export function buildPipelineDeps(opts: PipelineDepsOpts, refs: PipelineDepsRefs
       catch { return null }
     },
     // Delegate a task to a registered "hand" (another machine running wechat-cc
-    // with A2A exec). Resolves the hand by id or name, then calls its /a2a/exec
-    // and returns the result (one-brain-many-hands).
+    // with A2A exec). Resolves the hand by id or name, routes ws hands through
+    // the hub and push hands via HTTP /a2a/exec (one-brain-many-hands).
     delegateToHand: async (handName, task) => {
       const a2a = boot.a2aDeps
       if (!a2a) return { ok: false as const, reason: 'A2A 未启用(agent-config 没配 a2a_listen / 没注册手)' }
-      // Only exec-capable agents are delegation targets — a notify-only agent
-      // has no /a2a/exec, so don't match it (and don't list it as a "known
-      // hand", which would mislead the discovery reply).
-      const hands = a2a.registry.list().filter(a => a.capabilities?.includes('exec'))
-      const hand = hands.find(a => a.id === handName || a.name === handName)
-      if (!hand) return { ok: false as const, reason: 'unknown_hand', knownHands: hands.map(a => a.name || a.id) }
-      const { delegateToHand: doDelegate } = await import('../../core/a2a-delegate')
-      const { createA2AClient } = await import('../../core/a2a-client')
-      execA2AClient ??= createA2AClient({ timeoutMs: Number(process.env.WECHAT_A2A_EXEC_TIMEOUT_MS) || 300_000 })
-      // The brain's id as the hand knows it (the hand registers the brain under
-      // this id + a matching key). Configurable; defaults to a stable slug.
       const selfId = process.env.WECHAT_A2A_SELF_ID || 'wechat-cc'
-      return doDelegate(execA2AClient, { hand, selfId, prompt: task })
+      const timeoutMs = Number(process.env.WECHAT_A2A_EXEC_TIMEOUT_MS) || 300_000
+      // Stub hub: when Part B hasn't wired yiHub yet, ws hands fall back to
+      // a graceful offline error rather than crashing.
+      const stubHub: Pick<YiHub, 'dispatchTask' | 'isConnected'> = {
+        dispatchTask: () => Promise.resolve({ ok: false, reason: 'ws_hub_unavailable' }),
+        isConnected: () => false,
+      }
+      const hub = (boot as { yiHub?: Pick<YiHub, 'dispatchTask' | 'isConnected'> }).yiHub ?? stubHub
+      return makeDelegateToHand({
+        listHands: () => a2a.registry.list(),
+        hub,
+        pushDelegate: async (hand, dispatch, sid, tms) => {
+          const { delegateToHand: doDelegate } = await import('../../core/a2a-delegate')
+          const { createA2AClient } = await import('../../core/a2a-client')
+          execA2AClient ??= createA2AClient({ timeoutMs: tms })
+          return doDelegate(execA2AClient, { hand, selfId: sid, prompt: dispatch.prompt })
+        },
+        selfId,
+        timeoutMs,
+      })(handName, task)
     },
   })
 

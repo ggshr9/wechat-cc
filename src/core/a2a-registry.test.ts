@@ -22,7 +22,7 @@ function rec(id: string, overrides: Partial<A2AAgentRecord> = {}): A2AAgentRecor
     id, name: id, url: `https://${id}.example.com/a2a`,
     inbound_api_key: `wc_${id}1234567890123456`.slice(0, 24),  // ensure min 16
     outbound_api_key: `out_${id}`,
-    capabilities: ['notify'], paused: false, ...overrides,
+    capabilities: ['notify'], paused: false, ...overrides, transport: overrides.transport ?? 'push',
   }
 }
 

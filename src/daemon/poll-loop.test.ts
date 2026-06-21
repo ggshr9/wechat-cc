@@ -245,6 +245,61 @@ describe('startLongPollLoops', () => {
     await handle.stop()
   })
 
+  it('calls onPollCycle after a successful getUpdates (daemon-health heartbeat hook)', async () => {
+    // The poll loop is the daemon's "am I actually serving" signal. Each
+    // successful long-poll round-trip fires onPollCycle so main.ts can stamp
+    // the heartbeat the instance lock reads — a daemon whose poll loop stalls
+    // (or never starts) lets the heartbeat go stale and becomes stealable.
+    // Resolve the first round-trip, then yield via a real timer on subsequent
+    // calls. A bare mockResolvedValue would resolve instantly every iteration,
+    // starving the macrotask queue (the loop never awaits anything real) so
+    // the 30ms timer below — and handle.stop() — could never fire → hang.
+    const getUpdates = vi.fn()
+      .mockResolvedValueOnce({ updates: [], sync_buf: '' })
+      .mockImplementation(async () => { await new Promise(r => setTimeout(r, 50)); return { updates: [], sync_buf: '' } })
+    const onPollCycle = vi.fn()
+    const handle = startLongPollLoops({
+      accounts: [baseAcct],
+      onInbound: async () => {},
+      ilink: { getUpdates },
+      parse: (us, deps) => parseUpdates(us, deps),
+      resolveUserName: () => undefined,
+      onPollCycle,
+    })
+    await new Promise(r => setTimeout(r, 30))
+    await handle.stop()
+    expect(onPollCycle).toHaveBeenCalled()
+  })
+
+  it('stamps onPollCycle after EACH inbound message (so a slow batch does not starve the heartbeat)', async () => {
+    // A batch of slow turns runs inline in the loop; without a per-message
+    // stamp the heartbeat would only refresh once the whole batch drains,
+    // long enough for the instance lock to look stale and be stolen.
+    const updates: RawUpdate[] = [
+      { from_user_id: 'u1', create_time_ms: 1000, message_type: 1, message_state: 2, item_list: [{ type: 1, text_item: { text: 'a' } }] },
+      { from_user_id: 'u1', create_time_ms: 2000, message_type: 1, message_state: 2, item_list: [{ type: 1, text_item: { text: 'b' } }] },
+    ]
+    const getUpdates = vi.fn()
+      .mockResolvedValueOnce({ updates, sync_buf: 'b1' })
+      .mockImplementation(async () => { await new Promise(r => setTimeout(r, 50)); return { updates: [], sync_buf: 'b1' } })
+    const onPollCycle = vi.fn()
+    let inbound = 0
+    const handle = startLongPollLoops({
+      accounts: [baseAcct],
+      onInbound: async () => { inbound++; await new Promise(r => setTimeout(r, 5)) },
+      ilink: { getUpdates },
+      parse: (us, deps) => parseUpdates(us, deps),
+      resolveUserName: () => undefined,
+      onPollCycle,
+    })
+    await new Promise(r => setTimeout(r, 40))
+    await handle.stop()
+    expect(inbound).toBe(2)
+    // ≥1 per-message stamp + the per-round-trip stamp → strictly more than the
+    // single round-trip count. At minimum once per delivered message.
+    expect(onPollCycle.mock.calls.length).toBeGreaterThanOrEqual(2)
+  })
+
   it('swallows getUpdates errors and retries', async () => {
     const getUpdates = vi.fn()
       .mockRejectedValueOnce(new Error('transient'))
@@ -262,6 +317,76 @@ describe('startLongPollLoops', () => {
     await new Promise(r => setTimeout(r, 50))
     expect(getUpdates).toHaveBeenCalled()
     expect(onInbound).not.toHaveBeenCalled()  // no updates
+    await handle.stop()
+  })
+
+  it('persists the advanced syncBuf via onSyncBuf after a batch', async () => {
+    const updates: RawUpdate[] = [
+      {
+        from_user_id: 'u1', create_time_ms: 1000, message_type: 1, message_state: 2,
+        item_list: [{ type: 1, text_item: { text: 'a' } }],
+      },
+    ]
+    const getUpdates = vi.fn()
+      .mockResolvedValueOnce({ updates, sync_buf: 'buf2' })
+      .mockImplementation(async () => { await new Promise(r => setTimeout(r, 50)); return { updates: [], sync_buf: 'buf2' } })
+
+    const persisted: Array<[string, string]> = []
+    const handle = startLongPollLoops({
+      accounts: [baseAcct],
+      onInbound: async () => {},
+      ilink: { getUpdates },
+      parse: (us, deps) => parseUpdates(us, deps),
+      resolveUserName: () => undefined,
+      onSyncBuf: (id, buf) => { persisted.push([id, buf]) },
+    })
+    await new Promise(r => setTimeout(r, 30))
+    expect(persisted).toContainEqual(['A1', 'buf2'])
+    await handle.stop()
+  })
+
+  it('persists syncBuf only after the batch is fully processed (crash-safe ordering)', async () => {
+    const updates: RawUpdate[] = [
+      {
+        from_user_id: 'u1', create_time_ms: 1000, message_type: 1, message_state: 2,
+        item_list: [{ type: 1, text_item: { text: 'a' } }],
+      },
+    ]
+    const getUpdates = vi.fn()
+      .mockResolvedValueOnce({ updates, sync_buf: 'buf2' })
+      .mockImplementation(async () => { await new Promise(r => setTimeout(r, 50)); return { updates: [], sync_buf: 'buf2' } })
+
+    const order: string[] = []
+    const handle = startLongPollLoops({
+      accounts: [baseAcct],
+      onInbound: async () => { order.push('inbound') },
+      ilink: { getUpdates },
+      parse: (us, deps) => parseUpdates(us, deps),
+      resolveUserName: () => undefined,
+      onSyncBuf: () => { order.push('persist') },
+    })
+    await new Promise(r => setTimeout(r, 30))
+    expect(order[0]).toBe('inbound')
+    expect(order.indexOf('persist')).toBeGreaterThan(order.indexOf('inbound'))
+    await handle.stop()
+  })
+
+  it('does not re-persist an unchanged syncBuf on idle polls', async () => {
+    const getUpdates = vi.fn()
+      .mockResolvedValueOnce({ updates: [], sync_buf: 'buf2' })
+      .mockImplementation(async () => { await new Promise(r => setTimeout(r, 10)); return { updates: [], sync_buf: 'buf2' } })
+
+    const persisted: string[] = []
+    const handle = startLongPollLoops({
+      accounts: [baseAcct],
+      onInbound: async () => {},
+      ilink: { getUpdates },
+      parse: () => [],
+      resolveUserName: () => undefined,
+      onSyncBuf: (_id, buf) => { persisted.push(buf) },
+    })
+    await new Promise(r => setTimeout(r, 60))
+    expect(persisted).toEqual(['buf2'])  // only the first change, not every idle poll
     await handle.stop()
   })
 

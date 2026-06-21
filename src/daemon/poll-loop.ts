@@ -204,6 +204,23 @@ export interface PollLoopOptions {
   }
   parse: (updates: RawUpdate[], deps: ParseDeps) => InboundMsg[]
   resolveUserName?: (chatId: string) => string | undefined
+  /**
+   * Persist the advanced ilink poll cursor. Called AFTER a batch's onInbound
+   * handlers have all run (so a crash mid-batch still redelivers — at-least-once
+   * within a batch), and only when the cursor actually changed (no disk churn on
+   * idle long-polls). Without this the on-disk sync_buf is frozen at first boot
+   * and every restart replays ilink's unacked backlog → duplicate fallback sends.
+   */
+  onSyncBuf?: (accountId: string, syncBuf: string) => void
+  /**
+   * Fired after every successful `getUpdates` round-trip (any account). This
+   * is the daemon's "I am actually serving" signal — main.ts stamps the
+   * heartbeat file the instance lock reads. A daemon whose poll loop stalls
+   * or never starts stops firing this, the heartbeat goes stale, and a fresh
+   * daemon may take over the lock instead of being refused by a dead
+   * placeholder. Best-effort; must never throw into the loop.
+   */
+  onPollCycle?: () => void
   log?: (tag: string, line: string) => void
 }
 
@@ -254,7 +271,7 @@ interface LoopRecord {
  * one (for cleanup).
  */
 export function startLongPollLoops(opts: PollLoopOptions): PollLoopHandle {
-  const { onInbound, ilink, parse, log = () => {} } = opts
+  const { onInbound, ilink, parse, onSyncBuf, onPollCycle, log = () => {} } = opts
   const resolveUserName = opts.resolveUserName ?? (() => undefined)
 
   const loops = new Map<string, LoopRecord>()
@@ -269,6 +286,10 @@ export function startLongPollLoops(opts: PollLoopOptions): PollLoopHandle {
         const resp = await ilink.getUpdates(account.id, account.baseUrl, account.token, syncBuf)
 
         if (sig.aborted) break
+
+        // Successful round-trip — stamp the daemon-health heartbeat. Guarded
+        // so a bad callback can't kill the poll loop.
+        try { onPollCycle?.() } catch { /* never throw into the loop */ }
 
         // Adapter has marked the bot session expired — self-terminate. The
         // ilink-glue wrapper has already written to SessionStateStore, so
@@ -295,11 +316,22 @@ export function startLongPollLoops(opts: PollLoopOptions): PollLoopHandle {
             } catch (err) {
               log('ERROR', `onInbound threw: ${err}`)
             }
+            // Stamp the heartbeat after EACH message too, not just per
+            // getUpdates round-trip. onInbound runs the full agent turn inline,
+            // so a batch of slow turns would otherwise hold the loop (and the
+            // heartbeat) for sum-of-turns — long enough for the instance lock
+            // to look stale and be stolen by a second daemon. Per-message
+            // stamping bounds the gap to a single turn. Guarded; never throws.
+            try { onPollCycle?.() } catch { /* never throw into the loop */ }
           }
         }
 
-        if (resp.sync_buf !== undefined) {
+        // Persist AFTER the onInbound loop above, so a crash mid-batch
+        // redelivers; only on an actual change to avoid disk churn on the
+        // idle long-poll returns that echo the same cursor.
+        if (resp.sync_buf !== undefined && resp.sync_buf !== syncBuf) {
           syncBuf = resp.sync_buf
+          onSyncBuf?.(account.id, syncBuf)
         }
       } catch (err) {
         if (sig.aborted) break

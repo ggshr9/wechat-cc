@@ -14,6 +14,8 @@ import type { StartupSweepDeps } from '../startup-sweeps'
 import { loadCompanionConfig } from '../companion/config'
 import { loadGuardConfig } from '../guard/store'
 import { parseUpdates } from '../poll-loop'
+import { writeHeartbeat, HEARTBEAT_FILE } from '../single-instance'
+import { join } from 'node:path'
 import type { TickBodies } from './tick-bodies'
 
 export interface LifecycleDepsOpts {
@@ -94,6 +96,11 @@ export function buildLifecycleDeps(opts: LifecycleDepsOpts, ticks: TickBodies): 
       parse: parseUpdates,
       resolveUserName: (cid) => ilink.resolveUserName(cid),
       log,
+      // Daemon-health heartbeat: each successful poll round-trip stamps the
+      // file the instance lock reads, so a wedged/half-started daemon (poll
+      // loop stalled or never started) lets it go stale and becomes
+      // stealable instead of holding the lock as a dead placeholder.
+      onPollCycle: () => writeHeartbeat(join(stateDir, HEARTBEAT_FILE)),
     },
     startupDeps: {
       stateDir, db, ilink, log,

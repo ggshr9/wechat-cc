@@ -11,6 +11,7 @@
 import { randomBytes } from 'node:crypto'
 import { errMsg, type InternalApiDeps, type InternalApiDelegateDep, type RouteTable } from './types'
 import { lookup } from '../../core/capability-matrix'
+import { loadAgentConfig, saveAgentConfig } from '../../lib/agent-config'
 import type { Mode } from '../../core/conversation'
 import { makeEventsStore } from '../events/store'
 import type {
@@ -39,7 +40,19 @@ export interface MakeRoutesContext {
 
 export function makeRoutes({ deps, getDelegate, maybePrefix }: MakeRoutesContext): RouteTable {
   return {
-    'GET /v1/health': () => ({ status: 200, body: { ok: true, daemon_pid: deps.daemonPid } }),
+    'GET /v1/health': () => ({
+      status: 200,
+      body: {
+        ok: true,
+        daemon_pid: deps.daemonPid,
+        // Ops fields for the admin self-diagnosis tool: is the turn store
+        // wired, how many sessions are live, is the poll-cycle heartbeat
+        // fresh (false ⇒ the daemon may be wedged / not serving).
+        turns_store_wired: !!deps.turns,
+        sessions_live: deps.listSessions?.()?.length ?? 0,
+        heartbeat_fresh: deps.heartbeatFresh?.() ?? null,
+      },
+    }),
 
     // ── memory (RFC 03 P1.B B2) ─────────────────────────────────────────
     'POST /v1/memory/read': (_q, body) => {
@@ -571,6 +584,7 @@ export function makeRoutes({ deps, getDelegate, maybePrefix }: MakeRoutesContext
           outbound_api_key,
           capabilities: [],
           paused: false,
+          transport: 'push',
         })
         return { status: 200, body: { ok: true, inbound_api_key: inboundKey } }
       } catch (err) {
@@ -619,6 +633,83 @@ export function makeRoutes({ deps, getDelegate, maybePrefix }: MakeRoutesContext
           base_url: deps.a2a.baseUrl ?? null,
         },
       }
+    },
+
+    // Live sessions for diagnosis — which (alias, provider, chat) sessions are
+    // cached and when each was last used (idle/wedged inference). 503 until
+    // bootstrap wires the lister.
+    'GET /v1/sessions': () => {
+      const sessions = deps.listSessions?.()
+      if (sessions == null) return { status: 503, body: { error: 'sessions_not_wired' } }
+      return { status: 200, body: { sessions } }
+    },
+
+    // Admin remediation — force-release a (possibly wedged) session so the
+    // next message in that chat spawns a fresh subprocess. Returns the live
+    // session list AFTER the release as a built-in verification read-back.
+    'POST /v1/sessions/release': async (_q, body) => {
+      if (!deps.releaseSession) return { status: 503, body: { error: 'release_not_wired' } }
+      const b = (body ?? {}) as { alias?: unknown; providerId?: unknown; chatId?: unknown }
+      if (typeof b.alias !== 'string' || typeof b.providerId !== 'string' || typeof b.chatId !== 'string') {
+        return { status: 400, body: { error: 'alias, providerId, chatId required (strings)' } }
+      }
+      await deps.releaseSession({ alias: b.alias, providerId: b.providerId, chatId: b.chatId })
+      return { status: 200, body: { ok: true, sessions: deps.listSessions?.() ?? null } }
+    },
+
+    // Current pinned agent model (read-back companion to POST /v1/model).
+    'GET /v1/model': () => {
+      const cfg = loadAgentConfig(deps.stateDir)
+      return { status: 200, body: { provider: cfg.provider, model: cfg.model ?? null } }
+    },
+
+    // Admin remediation — switch the pinned model. Takes effect on the next
+    // claude session spawn per chat (no restart; see the mtime-cached reader).
+    // Returns the persisted model as a verification read-back.
+    'POST /v1/model': (_q, body) => {
+      const b = (body ?? {}) as { model?: unknown }
+      if (typeof b.model !== 'string' || b.model.trim() === '') {
+        return { status: 400, body: { error: 'model required (non-empty string)' } }
+      }
+      const model = b.model.trim()
+      // Validate the shape of a real, fully-qualified model id before pinning
+      // it — a bare alias or fast-mode tag (e.g. 'opus', 'opus[1m]', 'sonnet')
+      // gets mis-resolved by the CLI and 404s EVERY turn (the 2026-05-08
+      // incident this model-pinning exists to prevent). Require only the
+      // id-charset and a version digit; that rejects aliases without
+      // hard-coding a model allowlist that would rot as new models ship.
+      if (!/^[A-Za-z0-9._-]+$/.test(model) || !/[0-9]/.test(model)) {
+        return {
+          status: 400,
+          body: { error: `invalid model id '${model}' — use a full versioned id like 'claude-opus-4-8' or 'gpt-5.3-codex', not an alias` },
+        }
+      }
+      const cfg = loadAgentConfig(deps.stateDir)
+      saveAgentConfig(deps.stateDir, { ...cfg, model })
+      const after = loadAgentConfig(deps.stateDir)
+      return { status: 200, body: { ok: true, provider: after.provider, model: after.model ?? null } }
+    },
+
+    // Admin remediation — graceful daemon restart. The trigger schedules the
+    // shutdown+exit AFTER this response flushes; launchd/systemd respawns.
+    'POST /v1/daemon/restart': () => {
+      if (!deps.requestRestart) return { status: 503, body: { error: 'restart_not_wired' } }
+      deps.requestRestart()
+      return { status: 200, body: { ok: true, restarting: true } }
+    },
+
+    // Per-turn outcome feed for diagnosis. With chatId → that chat's turns
+    // newest-first ("why did chat X stop replying"); without → the daemon's
+    // recent turns across all chats. limit defaults to 50, clamped to 500.
+    'GET /v1/turns': (q) => {
+      if (!deps.turns) return { status: 503, body: { error: 'turns_not_wired' } }
+      const chatId = q.get('chatId') ?? undefined
+      const rawLimit = Number(q.get('limit') ?? '50')
+      const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, Math.trunc(rawLimit)), 500) : 50
+      const turns = chatId
+        ? deps.turns.recentForChat(chatId, limit)
+        : deps.turns.recent(limit)
+      return { status: 200, body: { turns } }
     },
   }
 }

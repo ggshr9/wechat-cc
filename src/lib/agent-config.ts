@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 // zod v4: `import { z } from 'zod'` resolves to undefined under vitest's
 // bundler; use the default export instead (both forms are equivalent at
@@ -40,6 +40,10 @@ export interface AgentConfig {
   // dialogue page hides its unlock affordance). Set/verified via the
   // `dialogue lock set` / `dialogue unlock` CLI commands.
   dialogue_lock_hash?: string
+  // 乙 v2 — BRAIN side: listen for hand WebSocket connections on this host:port.
+  yi_hub_listen?: { host: string; port: number }
+  // 乙 v2 — HAND side: connect outbound to this brain WebSocket URL.
+  yi_brain?: { url: string; handId: string; authToken: string }
 }
 
 // ── A2A sub-schemas ──────────────────────────────────────────────────────────
@@ -52,6 +56,7 @@ export const A2AAgentRecord = z.object({
   outbound_api_key: z.string().min(1),
   capabilities: z.array(z.string()),
   paused: z.boolean().default(false),
+  transport: z.enum(['push', 'ws']).default('push'),
 })
 
 export const A2AListen = z.object({
@@ -59,8 +64,13 @@ export const A2AListen = z.object({
   port: z.number().int().min(1).max(65535),
 })
 
+export const YiHubListen = z.object({ host: z.string(), port: z.number() })
+export const YiBrain = z.object({ url: z.string(), handId: z.string(), authToken: z.string().min(16) })
+
 export type A2AAgentRecord = z.infer<typeof A2AAgentRecord>
 export type A2AListen = z.infer<typeof A2AListen>
+export type YiHubListen = z.infer<typeof YiHubListen>
+export type YiBrain = z.infer<typeof YiBrain>
 
 const AgentConfigSchema = z.object({
   provider: z.enum(['claude', 'codex', 'cursor']).default('claude'),
@@ -70,6 +80,8 @@ const AgentConfigSchema = z.object({
   autoStart: z.boolean().default(true),
   closeStopsDaemon: z.boolean().default(false),
   a2a_listen: A2AListen.optional(),
+  yi_hub_listen: YiHubListen.optional(),
+  yi_brain: YiBrain.optional(),
   a2a_agents: z.array(A2AAgentRecord).optional()
     .superRefine((arr, ctx) => {
       const ids = new Set<string>()
@@ -117,6 +129,8 @@ export function loadAgentConfig(stateDir: string): AgentConfig {
     const a2aListen = parsed.a2a_listen != null
       ? A2AListen.safeParse(parsed.a2a_listen).data
       : undefined
+    const yiHubListen = parsed.yi_hub_listen != null ? YiHubListen.safeParse(parsed.yi_hub_listen).data : undefined
+    const yiBrain = parsed.yi_brain != null ? YiBrain.safeParse(parsed.yi_brain).data : undefined
     const a2aAgentsRaw = Array.isArray(parsed.a2a_agents) ? parsed.a2a_agents : undefined
     const a2aAgents = a2aAgentsRaw != null
       ? a2aAgentsRaw.flatMap(r => {
@@ -133,6 +147,8 @@ export function loadAgentConfig(stateDir: string): AgentConfig {
       autoStart,
       closeStopsDaemon,
       ...(a2aListen ? { a2a_listen: a2aListen } : {}),
+      ...(yiHubListen ? { yi_hub_listen: yiHubListen } : {}),
+      ...(yiBrain ? { yi_brain: yiBrain } : {}),
       ...(a2aAgents && a2aAgents.length > 0 ? { a2a_agents: a2aAgents } : {}),
       ...(parsed.bot_name === null ? { bot_name: null } : {}),
       ...(typeof parsed.bot_name === 'string' ? { bot_name: parsed.bot_name } : {}),
@@ -140,6 +156,49 @@ export function loadAgentConfig(stateDir: string): AgentConfig {
     }
   } catch {
     return { provider: 'claude', dangerouslySkipPermissions: true, autoStart: true, closeStopsDaemon: false }
+  }
+}
+
+/** Injection seam for {@link makeMtimeCachedConfigReader} — real impls hit
+ *  the filesystem; tests stub both to drive cache behaviour deterministically
+ *  (no reliance on millisecond-granular mtime between two writes). */
+export interface CachedConfigReaderDeps {
+  /** Modification time of the config file in ms, or `-1` if it can't be
+   *  stat'd (missing / unreadable). A stable `-1` keeps the cache warm while
+   *  the file legitimately doesn't exist yet. */
+  statMtimeMs: (path: string) => number
+  load: (stateDir: string) => AgentConfig
+}
+
+/**
+ * Build a config reader that re-parses `agent-config.json` only when its
+ * mtime changes — otherwise it returns the cached object. This is what lets
+ * an operator's `/model` switch (which rewrites the file) take effect on the
+ * next agent spawn WITHOUT a daemon restart: the daemon captured the model
+ * once at boot and baked it into a closure, so a change went unseen until
+ * restart (the reported P4). The daemon wires this into the per-spawn
+ * `sdkOptionsForProject` closure; the new model applies to the next session
+ * spawned per chat (an in-flight session keeps its model until released).
+ *
+ * The mtime check is one `stat` per spawn (cheap) instead of a full read +
+ * JSON parse; a cache hit skips both.
+ */
+export function makeMtimeCachedConfigReader(
+  stateDir: string,
+  deps?: Partial<CachedConfigReaderDeps>,
+): () => AgentConfig {
+  const statMtimeMs = deps?.statMtimeMs ?? ((p: string) => {
+    try { return statSync(p).mtimeMs } catch { return -1 }
+  })
+  const load = deps?.load ?? loadAgentConfig
+  const path = join(stateDir, CONFIG_FILE)
+  let cached: { mtimeMs: number; config: AgentConfig } | null = null
+  return () => {
+    const mtimeMs = statMtimeMs(path)
+    if (cached && cached.mtimeMs === mtimeMs) return cached.config
+    const config = load(stateDir)
+    cached = { mtimeMs, config }
+    return config
   }
 }
 

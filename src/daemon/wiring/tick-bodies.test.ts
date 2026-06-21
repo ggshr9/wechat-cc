@@ -51,6 +51,11 @@ function setupDeps(opts: {
   /** Optional agenda.md content written to memory/<chatId>/agenda.md so the
    * agenda gate passes. Without this the tick returns early (no due items). */
   agendaMd?: string
+  /** Daemon-wide default provider (agent-config.provider). Defaults to claude. */
+  defaultProviderId?: string
+  /** The chat's persisted Mode, returned by coordinator.getMode. Defaults to
+   * solo on defaultProviderId — i.e. the chat answers under the daemon default. */
+  mode?: { kind: 'solo'; provider: string } | { kind: 'primary_tool'; primary: string } | { kind: 'parallel'; participants?: string[] } | { kind: 'chatroom'; participants?: string[] }
 }): Setup {
   const stateDir = makeStateDir({
     enabled: true,
@@ -73,6 +78,9 @@ function setupDeps(opts: {
     dispatch, close: async () => {},
   }))
   const isInFlight = vi.fn(() => opts.inFlight)
+  const defaultProviderId = opts.defaultProviderId ?? 'claude'
+  const mode = opts.mode ?? { kind: 'solo' as const, provider: defaultProviderId }
+  const getMode = vi.fn(() => mode)
   const defaultAccess: Access = {
     dmPolicy: 'allowlist',
     allowFrom: opts.defaultChatId ? [opts.defaultChatId] : [],
@@ -87,7 +95,8 @@ function setupDeps(opts: {
     } as never,
     boot: {
       sessionManager: { acquire, isInFlight } as never,
-      defaultProviderId: 'claude' as never,
+      defaultProviderId: defaultProviderId as never,
+      coordinator: { getMode } as never,
       // Default: no provider has cheapEval. Introspect-specific tests
       // override via deps.boot.registry directly.
       registry: { getCheapEval: () => null } as never,
@@ -135,6 +144,39 @@ describe('buildTickBodies / pushTick — companion isolation (PR D)', () => {
     expect(s.isInFlight).toHaveBeenCalledWith({ alias: '_default', providerId: 'claude', chatId: 'chat-1' })
     expect(s.acquire).toHaveBeenCalledOnce()
     expect(s.dispatch).toHaveBeenCalledOnce()
+  })
+
+  it('dispatches on the chat\'s own mode provider, not the daemon default', async () => {
+    // Daemon default is codex, but THIS chat is solo-claude (user runs /cc).
+    // The proactive push must follow the chat's mode, else it dispatches to a
+    // provider the chat never uses (the real bug: codex hung, nothing delivered).
+    const s = setupDeps({
+      defaultChatId: 'chat-1',
+      inFlight: false,
+      agendaMd: '- [ ] due:2026-05-13 check in on project',
+      defaultProviderId: 'codex',
+      mode: { kind: 'solo', provider: 'claude' },
+    })
+    cleanup.push(s.stateDir)
+    const { pushTick } = buildTickBodies(s.deps)
+    await pushTick({ nowIso: '2026-05-13T10:00:00.000Z' })
+    expect(s.isInFlight).toHaveBeenCalledWith({ alias: '_default', providerId: 'claude', chatId: 'chat-1' })
+    expect(s.acquire).toHaveBeenCalledOnce()
+    expect(s.acquire.mock.calls[0]![0]).toMatchObject({ providerId: 'claude' })
+  })
+
+  it('primary_tool chat dispatches on its primary provider', async () => {
+    const s = setupDeps({
+      defaultChatId: 'chat-1',
+      inFlight: false,
+      agendaMd: '- [ ] due:2026-05-13 check in on project',
+      defaultProviderId: 'codex',
+      mode: { kind: 'primary_tool', primary: 'claude' },
+    })
+    cleanup.push(s.stateDir)
+    const { pushTick } = buildTickBodies(s.deps)
+    await pushTick({ nowIso: '2026-05-13T10:00:00.000Z' })
+    expect(s.acquire.mock.calls[0]![0]).toMatchObject({ providerId: 'claude' })
   })
 
   it('skips before checking in-flight when default_chat_id is unset', async () => {

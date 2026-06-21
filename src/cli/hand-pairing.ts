@@ -42,6 +42,7 @@ export function addHand(stateDir: string, opts: { id: string; url: string; name?
     inbound_api_key: randomBytes(16).toString('hex'),   // hand → brain (unused for exec; schema needs ≥16)
     capabilities: ['exec'],
     paused: false,
+    transport: 'push',
   })
 }
 
@@ -155,5 +156,6 @@ export function acceptBrain(stateDir: string, opts: { brainId: string; token: st
     outbound_api_key: 'unused',                         // hand → brain (unused for exec; schema needs ≥1)
     capabilities: [],
     paused: false,
+    transport: 'push',
   })
 }

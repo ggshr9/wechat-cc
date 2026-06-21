@@ -4,7 +4,7 @@ import type { A2AAgentRecord } from '../lib/agent-config'
 import { delegateToHand, handExecUrl } from './a2a-delegate'
 
 function hand(url: string): A2AAgentRecord {
-  return { id: 'home', name: 'home', url, inbound_api_key: 'in_home_key_16chars', outbound_api_key: 'out_home_key', capabilities: ['exec'], paused: false }
+  return { id: 'home', name: 'home', url, inbound_api_key: 'in_home_key_16chars', outbound_api_key: 'out_home_key', capabilities: ['exec'], paused: false, transport: 'push' }
 }
 
 function fakeClient(send: (req: SendRequest) => Promise<SendResult>): A2AClient {

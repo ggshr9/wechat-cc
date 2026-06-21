@@ -55,6 +55,7 @@ function agentRec(id: string, overrides: Partial<A2AAgentRecord> = {}): A2AAgent
     capabilities: ['notify'],
     paused: false,
     ...overrides,
+    transport: overrides.transport ?? 'push',
   }
 }
 

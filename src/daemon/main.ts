@@ -2,7 +2,7 @@
 if (!process.env.CLAUDE_CODE_ENTRYPOINT) { process.env.CLAUDE_CODE_ENTRYPOINT = 'sdk-ts' }
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { acquireInstanceLock, releaseInstanceLock } from './single-instance'
+import { acquireInstanceLock, releaseInstanceLock, isHeartbeatFresh, writeHeartbeat, HEARTBEAT_FILE, HEARTBEAT_STALE_MS } from './single-instance'
 import { openDb } from '../lib/db'
 import { LifecycleSet, wireRef } from '../lib/lifecycle'
 import { log } from '../lib/log'
@@ -11,6 +11,7 @@ import { loadAccess, AccessConfigCorruptError } from '../lib/access'
 import { buildBootstrap } from './bootstrap'
 import { makeMemoryFS } from './memory/fs-api'
 import { makeConversationStore } from '../core/conversation-store'
+import { makeTurnRecordStore } from '../core/turn-record-store'
 import { providerDisplayName } from './provider-display-names'
 import { loadAllAccounts, makeIlinkAdapter } from './ilink-glue'
 import { registerInternalApi } from './internal-api/lifecycle'
@@ -58,8 +59,34 @@ export interface DaemonHandle {
 export async function bootDaemon(opts: BootDaemonOpts): Promise<DaemonHandle> {
   const { stateDir, dangerously } = opts
   const PID_PATH = join(stateDir, 'server.pid')
-  const lock = acquireInstanceLock(PID_PATH)
+  const HEARTBEAT_PATH = join(stateDir, HEARTBEAT_FILE)
+  // Health-aware lock: refuse only if the existing holder is alive AND its
+  // heartbeat is fresh (it's actually serving). A wedged/half-started daemon
+  // — the desktop-launchd "holds the pidfile but never replies" case — lets
+  // its heartbeat go stale, so we take the lock over instead of forcing the
+  // user to kill it by hand. A holder with no heartbeat file (predates this,
+  // or just started) is treated as fresh, so we never steal an unproven lock.
+  // The stale window must exceed the longest a HEALTHY daemon can legitimately
+  // go between heartbeats. onInbound runs the full agent turn inline in the
+  // poll loop, so the worst-case gap is one max-length turn — the per-turn
+  // watchdog ends a stalled turn at turnTimeoutMs (default 10min), after which
+  // polling + heartbeat resume. If the window were shorter (the old flat 120s),
+  // a single long-but-legitimate turn would let a second daemon steal the lock
+  // → two daemons polling the same account. Floor at HEARTBEAT_STALE_MS, then
+  // ensure it clears turnTimeoutMs + a margin. (Mirrors bootstrap's parse.)
+  const turnTimeoutMs = (() => {
+    const raw = process.env['WECHAT_TURN_TIMEOUT_MS']
+    if (raw == null || raw === '') return 10 * 60_000
+    const n = Number(raw)
+    return Number.isFinite(n) && n >= 0 ? n : 10 * 60_000
+  })()
+  const heartbeatStaleMs = Math.max(HEARTBEAT_STALE_MS, turnTimeoutMs + 60_000)
+  const lock = acquireInstanceLock(PID_PATH, { isHealthy: () => isHeartbeatFresh(HEARTBEAT_PATH, heartbeatStaleMs) })
   if (!lock.ok) throw new Error(`[wechat-cc] ${lock.reason} (pid=${lock.pid})`)
+  // Stamp an initial heartbeat immediately so this just-started daemon reads
+  // as healthy before its first poll cycle lands (the poll loop refreshes it
+  // on every round-trip thereafter — see lifecycle-deps onPollCycle).
+  writeHeartbeat(HEARTBEAT_PATH)
   // v0.5.6: collapse duplicate ilink bot bindings to one per wechat userId
   // BEFORE loading accounts. ilink only allows one active bot per user — when
   // the user re-scans, the old bot's session is invalidated server-side. The
@@ -82,6 +109,11 @@ export async function bootDaemon(opts: BootDaemonOpts): Promise<DaemonHandle> {
   const accounts = await loadAllAccounts(stateDir)
   if (accounts.length === 0) { releaseInstanceLock(PID_PATH); throw new Error('[wechat-cc] no accounts bound. Run `wechat-cc setup` first.') }
   const db = openDb({ path: join(stateDir, 'wechat-cc.db') })
+  // Per-turn observability store — written by the coordinator's recordTurn
+  // (via bootstrap onTurnRecord) and read by internal-api GET /v1/turns.
+  // Created here so both the internal-api registration and bootstrap below
+  // share the one instance.
+  const turnRecordStore = makeTurnRecordStore(db)
   // ConversationStore must be constructed BEFORE the ilink adapter —
   // PR5 Task 21 routes the adapter's setUserName/resolveUserName through
   // it, replacing the deprecated user_names.json store. Both legacy
@@ -119,15 +151,32 @@ export async function bootDaemon(opts: BootDaemonOpts): Promise<DaemonHandle> {
       companion: { enable: () => ilink.companion.enable(), disable: () => ilink.companion.disable(), status: () => ilink.companion.status(), snooze: (m) => ilink.companion.snooze(m) },
       ilink: { sendReply: (c, t) => ilink.sendMessage(c, t).then(r => r as { msgId: string; error?: string }), sendFile: (c, p) => ilink.sendFile(c, p), editMessage: (c, m, t) => ilink.editMessage(c, m, t), broadcast: (t, a) => ilink.broadcast(t, a) },
       prefix: { conversationStore, providerDisplayName, permissionMode: dangerously ? 'dangerously' as const : 'strict' as const },
+      turns: turnRecordStore,
+      // Live-session lister + heartbeat probe back the admin self-diagnosis
+      // tools (GET /v1/sessions, ops fields in /v1/health). listSessions is a
+      // thunk over bootRef because SessionManager is built by bootstrap below
+      // (after this registration) — returns null until then, so the route 503s.
+      listSessions: () => bootRef?.sessionManager?.list() ?? null,
+      heartbeatFresh: () => isHeartbeatFresh(HEARTBEAT_PATH),
+      // Admin remediation hooks (POST /v1/sessions/release, /v1/daemon/restart).
+      releaseSession: (k) => bootRef?.sessionManager?.release(k) ?? Promise.resolve(),
+      // Restart: let the HTTP response flush, then graceful shutdown + exit so
+      // launchd/systemd KeepAlive respawns a fresh daemon (ThrottleInterval
+      // caps the respawn rate). exit(0) is fine — KeepAlive respawns regardless.
+      requestRestart: () => {
+        log('DAEMON', 'restart requested via internal-api — shutting down for KeepAlive respawn')
+        setTimeout(() => { void shutdown().finally(() => process.exit(0)) }, 500)
+      },
       log: (t, l) => log(t, l),
     })
     lc.register(internalApi)
     // 2. bootstrap composes provider registry / session manager / coordinator
     const boot = await buildBootstrap({
       stateDir, db, ilink, loadProjects: ilink.loadProjects,
-      lastActiveChatId: ilink.lastActiveChatId, log: (t, l) => log(t, l),
+      lastActiveChatId: ilink.lastActiveChatId, log: (t, l, f) => log(t, l, f),
       fallbackProject: () => ({ alias: '_default', path: process.cwd() }),
       dangerouslySkipPermissions: dangerously, conversationStore,
+      onTurnRecord: (r) => turnRecordStore.append(r),
       internalApi: { baseUrl: internalApi.baseUrl, tokenFilePath: internalApi.tokenFilePath },
     })
     bootRef = boot
@@ -212,6 +261,12 @@ export async function main() {
   process.on('SIGINT', () => void cliShutdown('SIGINT'))
   process.on('SIGTERM', () => void cliShutdown('SIGTERM'))
   process.on('SIGUSR1', () => { handle.pollingReconcile?.()?.catch(err => log('RECONCILE', `SIGUSR1 reconcile failed: ${err instanceof Error ? err.message : String(err)}`)) })
+  // SIGUSR2 — fire a companion push tick now (instead of waiting for the ~20min
+  // scheduler). Sent by `wechat-cc companion push`. See cli/companion-push.ts.
+  process.on('SIGUSR2', () => {
+    log('SCHED', 'SIGUSR2 — manual push tick requested')
+    handle.fireTick('push', new Date()).catch(err => log('SCHED', `SIGUSR2 push tick failed: ${err instanceof Error ? err.message : String(err)}`))
+  })
 }
 
 // Direct invocation: `bun src/daemon/main.ts` (dev mode). In compiled binaries

@@ -1281,6 +1281,33 @@ const accountCmd = defineCommand({
   subCommands: { remove: accountRemoveCmd, export: accountExportCmd, import: accountImportCmd, takeover: accountTakeoverCmd },
 })
 
+const companionPushCmd = defineCommand({
+  meta: { name: 'push', description: 'Fire a companion push tick NOW (instead of waiting for the ~20min scheduler) — nudges any due agenda follow-up' },
+  args: { json: { type: 'boolean', description: 'JSON envelope' } },
+  async run({ args }) {
+    const { requestPushTick } = await import('./src/cli/companion-push.ts')
+    const { existsSync, readFileSync } = await import('node:fs')
+    try {
+      const { pid } = requestPushTick({
+        readPid: (p) => (existsSync(p) ? readFileSync(p, 'utf8') : null),
+        kill: (pidNum, sig) => process.kill(pidNum, sig),
+      }, STATE_DIR)
+      if (args.json) { console.log(JSON.stringify({ ok: true, pid })); return }
+      console.log(`已通知本机 daemon (pid ${pid}) 立刻跑一次 push tick —— 若有到点的 agenda 跟进会主动发。`)
+      console.log('查看结果：wechat-cc logs（或 tail channel.log 看 SCHED / COMPANION）。')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (args.json) { console.log(JSON.stringify({ ok: false, error: msg })); return }
+      console.error(`companion push failed: ${msg}`); process.exit(1)
+    }
+  },
+})
+
+const companionCmd = defineCommand({
+  meta: { name: 'companion', description: 'Companion (proactive contact) controls' },
+  subCommands: { push: companionPushCmd },
+})
+
 const daemonKillCmd = defineCommand({
   meta: { name: 'kill', description: 'Force-kill a daemon process by pid (verifies cmdline; SIGTERM 1.5s grace then SIGKILL)' },
   args: {
@@ -2513,6 +2540,7 @@ const SUBCOMMANDS = {
   // PR4 batch 3b — memory / account / daemon / demo namespaces.
   memory: memoryCmd,
   account: accountCmd,
+  companion: companionCmd,
   daemon: daemonCmd,
   demo: demoCmd,
   // PR4 batch 3c — heavy entry points. Completes the migration; legacy

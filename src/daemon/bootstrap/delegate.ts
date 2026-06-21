@@ -44,7 +44,7 @@ export function buildDelegateDispatch(deps: DelegateBuildDeps): DelegateDispatch
   // for the 2026-05-08 incident write-up.
   const claudeModel = configuredAgent.provider === 'claude' && configuredAgent.model
     ? configuredAgent.model
-    : 'claude-opus-4-7'
+    : 'claude-opus-4-8'
 
   const delegateClaude = createClaudeAgentProvider({
     sdkOptionsForProject: (_alias: string, path: string, _tierProfile: TierProfile, _chatId: string): Options => {

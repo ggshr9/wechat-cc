@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import type { Lifecycle } from '../lib/lifecycle'
@@ -20,6 +20,9 @@ export interface PollingDeps {
   resolveUserName(chatId: string): string | undefined
   log: (tag: string, line: string) => void
   runPipeline: PipelineRun
+  /** Fired after each successful poll round-trip — main.ts stamps the
+   *  daemon-health heartbeat the instance lock reads. See poll-loop.ts. */
+  onPollCycle?: () => void
 }
 
 export interface PollingLifecycle extends Lifecycle {
@@ -65,6 +68,24 @@ export function registerPolling(deps: PollingDeps): PollingLifecycle {
     parse: deps.parse,
     resolveUserName: deps.resolveUserName,
     log: deps.log,
+    ...(deps.onPollCycle ? { onPollCycle: deps.onPollCycle } : {}),
+    // Persist the advanced ilink poll cursor so a daemon restart resumes from
+    // where it left off instead of replaying ilink's unacked backlog (each
+    // replay re-runs the agent + re-sends a fallback that ilink rejects with
+    // errcode=-2). The poll loop only fires this on an actual cursor change.
+    // Atomic write (tmp + rename) so a crash can't leave a truncated cursor.
+    onSyncBuf: (accountId, syncBuf) => {
+      try {
+        const acctDir = join(deps.stateDir, 'accounts', accountId)
+        if (!existsSync(acctDir)) return
+        const dest = join(acctDir, 'sync_buf')
+        const tmp = `${dest}.tmp`
+        writeFileSync(tmp, syncBuf, { mode: 0o600 })
+        renameSync(tmp, dest)
+      } catch (err) {
+        deps.log('POLL', `sync_buf persist failed for ${accountId}: ${err instanceof Error ? err.message : err}`)
+      }
+    },
     onInbound: async (msg) => {
       // CSPRNG-backed 8-char hex; Math.random().toString(16).slice(2,10) can
       // return shorter strings for round-binary outputs (0.5 → "0.8" → "8").

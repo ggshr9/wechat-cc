@@ -4,18 +4,80 @@ import { spawnSync } from 'node:child_process'
 
 export type LockResult = { ok: true } | { ok: false; reason: string; pid: number }
 
-export function acquireInstanceLock(pidPath: string): LockResult {
+export interface AcquireOpts {
+  /**
+   * Liveness→health upgrade. `isOurDaemon(pid)` only proves a process that
+   * LOOKS like our daemon is alive — not that it's actually serving. A
+   * wedged or half-started daemon (e.g. a desktop/launchd instance that
+   * never bound an account) holds the pidfile while doing nothing, which
+   * made the CLI refuse to start with "another daemon already running".
+   *
+   * When supplied, this probe is consulted for an alive-and-ours holder: if
+   * it returns `false`, the lock is treated as STALE and taken over. Omit
+   * for the legacy behaviour (any alive-and-ours holder refuses). The daemon
+   * wires this to a heartbeat-freshness check (see main.ts); tests inject
+   * a stub.
+   */
+  isHealthy?: (pid: number) => boolean
+}
+
+export function acquireInstanceLock(pidPath: string, opts?: AcquireOpts): LockResult {
   if (existsSync(pidPath)) {
     try {
       const raw = readFileSync(pidPath, 'utf8').trim()
       const pid = Number(raw)
       if (Number.isFinite(pid) && pid > 0 && isOurDaemon(pid)) {
-        return { ok: false, reason: 'another daemon already running', pid }
+        // Alive and looks like our daemon. Refuse — UNLESS a health probe
+        // says the holder isn't actually serving, in which case fall through
+        // and steal the stale lock rather than wedge the user behind a dead
+        // placeholder.
+        if (!opts?.isHealthy || opts.isHealthy(pid)) {
+          return { ok: false, reason: 'another daemon already running', pid }
+        }
       }
     } catch {}
   }
   writeFileSync(pidPath, String(process.pid), 'utf8')
   return { ok: true }
+}
+
+/**
+ * How long a heartbeat may go un-refreshed before the holder is considered
+ * wedged. Must comfortably exceed the ilink long-poll round-trip + retry
+ * backoff (a healthy daemon writes the heartbeat once per poll cycle), so a
+ * legitimately slow poll never trips a false steal. 120s ≈ 2–4× a normal
+ * long-poll window.
+ */
+export const HEARTBEAT_STALE_MS = 120_000
+
+/** Heartbeat filename under stateDir. Shared by the producer (poll-cycle
+ *  writer, wired in lifecycle-deps) and consumer (instance-lock health
+ *  check, in main.ts) so both agree on the path. */
+export const HEARTBEAT_FILE = 'server.heartbeat'
+
+/** Stamp the heartbeat file with `now`. Called once per successful poll
+ *  cycle (the "I am actually serving" signal) and once at startup. Best
+ *  effort — a write failure must never crash the daemon. */
+export function writeHeartbeat(heartbeatPath: string, now: number = Date.now()): void {
+  try { writeFileSync(heartbeatPath, String(now), 'utf8') } catch { /* best-effort */ }
+}
+
+/**
+ * True if the heartbeat was refreshed within `staleMs`. A missing,
+ * unreadable, or non-numeric heartbeat returns `true` (FRESH) on purpose:
+ * absence is not proof of a wedge (the holder may predate heartbeats or have
+ * just started and not written one yet), and stealing on unproven staleness
+ * would risk two live daemons. Only a heartbeat that EXISTS and is older than
+ * the window counts as a wedged holder.
+ */
+export function isHeartbeatFresh(heartbeatPath: string, staleMs: number = HEARTBEAT_STALE_MS, now: number = Date.now()): boolean {
+  try {
+    const ts = Number(readFileSync(heartbeatPath, 'utf8').trim())
+    if (!Number.isFinite(ts)) return true
+    return now - ts < staleMs
+  } catch {
+    return true
+  }
 }
 
 export function releaseInstanceLock(pidPath: string): void {

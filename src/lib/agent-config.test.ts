@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { loadAgentConfig, saveAgentConfig, parseAgentConfig } from './agent-config'
+import { loadAgentConfig, saveAgentConfig, parseAgentConfig, A2AAgentRecord, makeMtimeCachedConfigReader, type AgentConfig } from './agent-config'
 
 describe('agent-config', () => {
   it('defaults to claude with unattended=true when no config exists', () => {
@@ -263,5 +263,81 @@ describe('loadAgentConfig — cursor provider', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('loadAgentConfig preserves yi v2 fields', () => {
+  it('round-trips yi_hub_listen and yi_brain through save+load', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'yi-cfg-'))
+    try {
+      saveAgentConfig(dir, {
+        provider: 'claude', dangerouslySkipPermissions: true, autoStart: true, closeStopsDaemon: false,
+        yi_hub_listen: { host: '100.1.2.3', port: 8718 },
+        yi_brain: { url: 'ws://brain/yi', handId: 'home', authToken: 'k'.repeat(16) },
+      })
+      const loaded = loadAgentConfig(dir)
+      expect(loaded.yi_hub_listen).toEqual({ host: '100.1.2.3', port: 8718 })
+      expect(loaded.yi_brain).toEqual({ url: 'ws://brain/yi', handId: 'home', authToken: 'k'.repeat(16) })
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+
+describe('makeMtimeCachedConfigReader', () => {
+  const claudeCfg = (model: string): AgentConfig => ({
+    provider: 'claude', model, dangerouslySkipPermissions: true, autoStart: true, closeStopsDaemon: false,
+  })
+
+  it('reads the live config from disk on first call', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cfg-cache-'))
+    try {
+      saveAgentConfig(dir, claudeCfg('claude-sonnet-4-6'))
+      const read = makeMtimeCachedConfigReader(dir)
+      expect(read().model).toBe('claude-sonnet-4-6')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('re-reads after the file mtime changes (picks up a /model switch without restart)', () => {
+    let mtime = 1
+    const configs = [claudeCfg('claude-opus-4-8'), claudeCfg('claude-sonnet-4-6')]
+    let i = 0
+    const load = (): AgentConfig => configs[Math.min(i++, configs.length - 1)]!
+    const read = makeMtimeCachedConfigReader('/state', { statMtimeMs: () => mtime, load })
+    expect(read().model).toBe('claude-opus-4-8')
+    mtime = 2 // operator ran /model -> agent-config.json rewritten
+    expect(read().model).toBe('claude-sonnet-4-6')
+  })
+
+  it('serves the cached config without re-loading while mtime is unchanged', () => {
+    let loads = 0
+    const load = (): AgentConfig => { loads++; return claudeCfg('claude-opus-4-8') }
+    const read = makeMtimeCachedConfigReader('/state', { statMtimeMs: () => 7, load })
+    read(); read(); read()
+    expect(loads).toBe(1)
+  })
+
+  it('treats a missing file (stat throws -> -1) as a stable cache key', () => {
+    let loads = 0
+    const load = (): AgentConfig => { loads++; return claudeCfg('claude-opus-4-8') }
+    const read = makeMtimeCachedConfigReader('/state', { statMtimeMs: () => -1, load })
+    expect(read().model).toBe('claude-opus-4-8')
+    read()
+    expect(loads).toBe(1) // -1 == -1, no churn while the file stays absent
+  })
+})
+
+describe('A2AAgentRecord.transport', () => {
+  it('defaults transport to "push" when absent', () => {
+    const rec = A2AAgentRecord.parse({
+      id: 'home', name: 'home', url: 'http://h/a2a',
+      inbound_api_key: 'k'.repeat(16), outbound_api_key: 'o', capabilities: ['exec'],
+    })
+    expect(rec.transport).toBe('push')
+  })
+  it('accepts transport "ws"', () => {
+    const rec = A2AAgentRecord.parse({
+      id: 'home', name: 'home', url: 'http://h/a2a',
+      inbound_api_key: 'k'.repeat(16), outbound_api_key: 'o', capabilities: ['exec'], transport: 'ws',
+    })
+    expect(rec.transport).toBe('ws')
   })
 })

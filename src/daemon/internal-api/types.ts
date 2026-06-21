@@ -168,6 +168,36 @@ export interface InternalApiDeps {
     /** Base URL of the a2a listener, e.g. "http://0.0.0.0:9000". Null when disabled. */
     baseUrl: string | null
   }
+  /**
+   * Optional per-turn outcome store — backs GET /v1/turns. Undefined in
+   * minimal embeddings / tests, in which case the route returns 503.
+   */
+  turns?: import('../../core/turn-record-store').TurnRecordStore
+  /**
+   * Optional live-session lister — backs GET /v1/sessions and the
+   * sessions_live count in GET /v1/health. A thunk (not the SessionManager
+   * itself) because the manager is constructed AFTER internal-api registers;
+   * main.ts closes over the bootstrap ref. Returns null until bootstrap wired
+   * it (route then 503s).
+   */
+  listSessions?: () => readonly {
+    alias: string; path: string; providerId: string; chatId: string; lastUsedAt: number
+  }[] | null
+  /** Optional daemon-health probe — backs heartbeat_fresh in GET /v1/health.
+   *  main.ts wires it to isHeartbeatFresh(server.heartbeat). */
+  heartbeatFresh?: () => boolean
+  /**
+   * Optional session releaser — backs POST /v1/sessions/release (admin
+   * remediation: force-release a wedged session so the next message spawns a
+   * fresh subprocess). A thunk over bootRef.sessionManager. 503 when unwired.
+   */
+  releaseSession?: (k: { alias: string; providerId: string; chatId: string }) => Promise<void>
+  /**
+   * Optional restart trigger — backs POST /v1/daemon/restart. main.ts schedules
+   * a graceful shutdown + process.exit shortly after (so the HTTP response
+   * flushes first); launchd/systemd KeepAlive respawns. 503 when unwired.
+   */
+  requestRestart?: () => void
   /** Optional log hook so api activity surfaces in channel.log. */
   /**
    * Optional `fields` arg lands in channel.log.jsonl when wired (the

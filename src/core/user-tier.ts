@@ -32,12 +32,14 @@ export type ToolKind =
   | 'network'
   | 'subagent'
   | 'a2a_send'
+  | 'daemon_introspect'  // admin-only read-only self-diagnosis (turns / sessions / health / model_get)
+  | 'daemon_remediate'   // admin-only mutating self-heal (session_release / model_set / daemon_restart)
 
 const ALL_KINDS: ReadonlySet<ToolKind> = new Set([
   'reply', 'share_page', 'memory_read', 'memory_write', 'memory_delete',
   'observations_read', 'observations_write',
   'fs_read', 'fs_write', 'shell', 'shell_destructive', 'network', 'subagent',
-  'a2a_send',
+  'a2a_send', 'daemon_introspect', 'daemon_remediate',
 ])
 
 export interface TierProfile {
@@ -61,11 +63,24 @@ function difference(a: ReadonlySet<ToolKind>, b: ReadonlySet<ToolKind>): Set<Too
 // resolveAdminChatId), giving a "are you sure?" gate without
 // inconveniencing day-to-day use. Operators who want zero prompts
 // launch with `--dangerously`.
-const ADMIN_RELAY = new Set<ToolKind>(['shell_destructive', 'memory_delete'])
+// daemon_remediate (session_release / model_set / daemon_restart) relays for
+// admin too: these are destructive daemon ops, and a relay gives an "are you
+// sure?" confirmation to the admin chat — defence against prompt-injection in
+// an admin's own conversation steering the agent into a restart. Matches the
+// tools' own "建议先确认" guidance. Operators wanting zero prompts use --dangerously.
+const ADMIN_RELAY = new Set<ToolKind>(['shell_destructive', 'memory_delete', 'daemon_remediate'])
 
 const TRUSTED_RELAY = new Set<ToolKind>(['shell_destructive', 'memory_delete', 'a2a_send'])
 
 const GUEST_ALLOW = new Set<ToolKind>(['reply', 'share_page', 'memory_read', 'observations_read'])
+
+// Admin-exclusive tools — the operator can ask the bot to inspect its own
+// daemon (turn outcomes / live sessions / health). Denied for trusted and
+// guest: daemon internals are an operator concern, and the later remediation
+// tools (release session / restart) that build on this must never be reachable
+// from a non-admin chat. guest already denies it via difference below; trusted
+// would otherwise auto-allow (it's not destructive), so deny it explicitly.
+const ADMIN_ONLY = new Set<ToolKind>(['daemon_introspect', 'daemon_remediate'])
 
 export const TIER_PROFILES: Record<UserTier, TierProfile> = {
   admin: {
@@ -74,9 +89,9 @@ export const TIER_PROFILES: Record<UserTier, TierProfile> = {
     deny: new Set(),
   },
   trusted: {
-    allow: difference(ALL_KINDS, TRUSTED_RELAY),
+    allow: difference(difference(ALL_KINDS, TRUSTED_RELAY), ADMIN_ONLY),
     relay: TRUSTED_RELAY,
-    deny: new Set(),
+    deny: ADMIN_ONLY,
   },
   guest: {
     allow: GUEST_ALLOW,
@@ -163,6 +178,12 @@ export function classifyToolUse(toolName: string, input: Record<string, unknown>
     if (sub === 'observations_list' || sub === 'observations_read') return 'observations_read'
     if (sub === 'observations_write' || sub === 'observations_archive') return 'observations_write'
     if (sub === 'a2a_send') return 'a2a_send'
+    // Daemon-control family — classified by PREFIX (not exact name) so a future
+    // rename or sibling tool (e.g. diagnostic_foo, daemon_bar, session_baz)
+    // fails CLOSED into an admin-only kind instead of dropping to the
+    // permissive fs_read default below. Read-only vs mutating split by name.
+    if (sub.startsWith('diagnostic_') || sub === 'model_get') return 'daemon_introspect'
+    if (sub.startsWith('daemon_') || sub.startsWith('session_') || sub === 'model_set') return 'daemon_remediate'
     // Other wechat tools: classify as fs_read (safest non-reply default
     // for new wechat MCP tools — they tend to be query-like).
     return 'fs_read'

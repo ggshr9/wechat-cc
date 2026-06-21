@@ -6,6 +6,9 @@ import { createInternalApi, type InternalApi } from './internal-api'
 import { makeMemoryFS } from './memory/fs-api'
 import { makeEventsStore } from './events/store'
 import { openTestDb } from '../lib/db'
+import { makeTurnRecordStore } from '../core/turn-record-store'
+import type { TurnRecord } from '../core/conversation-coordinator'
+import { loadAgentConfig, saveAgentConfig } from '../lib/agent-config'
 import type { A2ARegistry } from '../core/a2a-registry'
 import type { A2AClient, SendResult, AgentCard } from '../core/a2a-client'
 import type { A2AEventsStore, EventRow, AppendInput } from '../core/a2a-events-store'
@@ -1724,11 +1727,12 @@ describe('internal-api request validation', () => {
           inbound_api_key: 'unused-inbound',
           capabilities: [] as string[],
           paused: a.paused ?? false,
+          transport: 'push' as const,
         })),
         get: (id) => {
           const a = agentsList.find(x => x.id === id)
           if (!a) return null
-          return { id: a.id, name: a.id, url: a.url, outbound_api_key: a.outbound_api_key, inbound_api_key: 'unused-inbound', capabilities: [] as string[], paused: a.paused ?? false }
+          return { id: a.id, name: a.id, url: a.url, outbound_api_key: a.outbound_api_key, inbound_api_key: 'unused-inbound', capabilities: [] as string[], paused: a.paused ?? false, transport: 'push' as const }
         },
         verifyBearer: () => null,
         add: () => { /* send tests don't exercise add */ },
@@ -1736,7 +1740,7 @@ describe('internal-api request validation', () => {
         setPaused: () => {},
         update: (id, _patch) => ({
           id, name: id, url: '', inbound_api_key: 'unused-inbound', outbound_api_key: '',
-          capabilities: [] as string[], paused: false,
+          capabilities: [] as string[], paused: false, transport: 'push' as const,
         }),
       }
 
@@ -1943,11 +1947,11 @@ describe('internal-api request validation', () => {
       serverEnabled?: boolean
       baseUrl?: string | null
     } = {}) {
-      type AgentEntry = { id: string; name: string; url: string; outbound_api_key: string; inbound_api_key: string; capabilities: string[]; paused: boolean }
+      type AgentEntry = { id: string; name: string; url: string; outbound_api_key: string; inbound_api_key: string; capabilities: string[]; paused: boolean; transport: 'push' | 'ws' }
       const agentsList: AgentEntry[] = (opts.agents ?? []).map(a => ({
         id: a.id, name: a.name ?? a.id, url: a.url,
         outbound_api_key: a.outbound_api_key, inbound_api_key: 'unused-inbound',
-        capabilities: [], paused: a.paused ?? false,
+        capabilities: [], paused: a.paused ?? false, transport: 'push',
       }))
       const eventRows: EventRow[] = []
 
@@ -1963,6 +1967,7 @@ describe('internal-api request validation', () => {
             inbound_api_key: rec.inbound_api_key,
             capabilities: rec.capabilities ?? [],
             paused: rec.paused ?? false,
+            transport: rec.transport ?? 'push',
           })
         },
         remove: (id) => {
@@ -1982,7 +1987,7 @@ describe('internal-api request validation', () => {
           if (patch.url !== undefined) a.url = patch.url
           if (patch.inbound_api_key !== undefined) a.inbound_api_key = patch.inbound_api_key
           if (patch.outbound_api_key !== undefined) a.outbound_api_key = patch.outbound_api_key
-          return { ...a }
+          return a
         },
       }
 
@@ -2309,6 +2314,202 @@ describe('internal-api request validation', () => {
       const body = await resp.json() as { enabled: boolean; base_url: string | null }
       expect(body.enabled).toBe(false)
       expect(body.base_url).toBeNull()
+    })
+
+    it('GET /v1/turns?chatId returns that chat\'s turns newest-first', async () => {
+      const db = openTestDb()
+      const store = makeTurnRecordStore(db)
+      const base: TurnRecord = {
+        chatId: 'chat-1', provider: 'claude', alias: 'a', mode: 'solo',
+        startedAt: 0, endedAt: 0, durationMs: 0, outcome: 'completed',
+        replyToolCalled: true, textChunks: 1,
+      }
+      store.append({ ...base, endedAt: 100 })
+      store.append({ ...base, endedAt: 300, outcome: 'timeout', error: 'stalled' })
+      store.append({ ...base, chatId: 'chat-2', endedAt: 200 }) // other chat — excluded
+      api = createInternalApi({ stateDir, daemonPid: 1, turns: store })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/turns?chatId=chat-1&limit=10`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      expect(resp.status).toBe(200)
+      const body = await resp.json() as { turns: Array<TurnRecord & { id: string }> }
+      expect(body.turns.map(t => t.endedAt)).toEqual([300, 100])
+      expect(body.turns.every(t => t.chatId === 'chat-1')).toBe(true)
+      expect(body.turns[0]).toMatchObject({ outcome: 'timeout', error: 'stalled', replyToolCalled: true })
+    })
+
+    it('GET /v1/turns without chatId returns recent turns across all chats', async () => {
+      const db = openTestDb()
+      const store = makeTurnRecordStore(db)
+      const base: TurnRecord = {
+        chatId: 'x', provider: 'codex', alias: 'a', mode: 'parallel',
+        startedAt: 0, endedAt: 0, durationMs: 0, outcome: 'completed',
+        replyToolCalled: false, textChunks: 0,
+      }
+      store.append({ ...base, chatId: 'chat-A', endedAt: 100 })
+      store.append({ ...base, chatId: 'chat-B', endedAt: 300 })
+      api = createInternalApi({ stateDir, daemonPid: 1, turns: store })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/turns`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      expect(resp.status).toBe(200)
+      const body = await resp.json() as { turns: Array<{ chatId: string }> }
+      expect(body.turns.map(t => t.chatId)).toEqual(['chat-B', 'chat-A'])
+    })
+
+    it('GET /v1/sessions lists live sessions when wired', async () => {
+      const sessions = [
+        { alias: 'a', path: '/p', providerId: 'claude', chatId: 'chat-1', lastUsedAt: 111 },
+        { alias: 'b', path: '/q', providerId: 'codex', chatId: 'chat-2', lastUsedAt: 222 },
+      ]
+      api = createInternalApi({ stateDir, daemonPid: 1, listSessions: () => sessions })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/sessions`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      expect(resp.status).toBe(200)
+      const body = await resp.json() as { sessions: typeof sessions }
+      expect(body.sessions).toEqual(sessions)
+    })
+
+    it('GET /v1/sessions returns 503 when the session manager is not wired', async () => {
+      api = createInternalApi({ stateDir, daemonPid: 1, listSessions: () => null })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/sessions`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      expect(resp.status).toBe(503)
+      expect(await resp.json()).toMatchObject({ error: 'sessions_not_wired' })
+    })
+
+    it('GET /v1/health reports ops fields (turns wired, live session count, heartbeat)', async () => {
+      const db = openTestDb()
+      const store = makeTurnRecordStore(db)
+      api = createInternalApi({
+        stateDir, daemonPid: 7, turns: store,
+        listSessions: () => [{ alias: 'a', path: '/p', providerId: 'claude', chatId: 'c', lastUsedAt: 1 }],
+        heartbeatFresh: () => true,
+      })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/health`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      expect(resp.status).toBe(200)
+      const body = await resp.json() as { ok: boolean; daemon_pid: number; turns_store_wired: boolean; sessions_live: number; heartbeat_fresh: boolean }
+      expect(body).toMatchObject({ ok: true, daemon_pid: 7, turns_store_wired: true, sessions_live: 1, heartbeat_fresh: true })
+    })
+
+    it('POST /v1/sessions/release calls the releaser and returns the post-release session list', async () => {
+      const released: Array<{ alias: string; providerId: string; chatId: string }> = []
+      let live = [{ alias: 'a', path: '/p', providerId: 'claude', chatId: 'c', lastUsedAt: 1 }]
+      api = createInternalApi({
+        stateDir, daemonPid: 1,
+        releaseSession: async (k) => { released.push(k); live = [] },
+        listSessions: () => live,
+      })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/sessions/release`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ alias: 'a', providerId: 'claude', chatId: 'c' }),
+      })
+      expect(resp.status).toBe(200)
+      const body = await resp.json() as { ok: boolean; sessions: unknown[] }
+      expect(body.ok).toBe(true)
+      expect(released).toEqual([{ alias: 'a', providerId: 'claude', chatId: 'c' }])
+      expect(body.sessions).toEqual([]) // read-back confirms it's gone
+    })
+
+    it('POST /v1/sessions/release 400 on missing fields, 503 when unwired', async () => {
+      api = createInternalApi({ stateDir, daemonPid: 1 })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const r503 = await fetch(`http://127.0.0.1:${port}/v1/sessions/release`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ alias: 'a', providerId: 'claude', chatId: 'c' }),
+      })
+      expect(r503.status).toBe(503)
+
+      const api2 = createInternalApi({ stateDir, daemonPid: 1, releaseSession: async () => {} })
+      try {
+        const s2 = await api2.start()
+        const t2 = readFileSync(s2.tokenFilePath, 'utf8').trim()
+        const r400 = await fetch(`http://127.0.0.1:${s2.port}/v1/sessions/release`, {
+          method: 'POST', headers: { Authorization: `Bearer ${t2}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ alias: 'a' }),
+        })
+        expect(r400.status).toBe(400)
+      } finally { await api2.stop() }
+    })
+
+    it('GET /v1/model reads and POST /v1/model persists the pinned model (read-back)', async () => {
+      saveAgentConfig(stateDir, { provider: 'claude', model: 'claude-opus-4-8', dangerouslySkipPermissions: true, autoStart: true, closeStopsDaemon: false })
+      api = createInternalApi({ stateDir, daemonPid: 1 })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const got = await (await fetch(`http://127.0.0.1:${port}/v1/model`, { headers: { Authorization: `Bearer ${token}` } })).json() as { model: string }
+      expect(got.model).toBe('claude-opus-4-8')
+      const set = await fetch(`http://127.0.0.1:${port}/v1/model`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'claude-sonnet-4-6' }),
+      })
+      expect(set.status).toBe(200)
+      expect((await set.json() as { model: string }).model).toBe('claude-sonnet-4-6')
+      // persisted on disk
+      expect(loadAgentConfig(stateDir).model).toBe('claude-sonnet-4-6')
+
+      // Bare aliases / fast-mode tags are rejected (the 404-every-turn footgun)
+      // and must NOT overwrite the good pinned model.
+      for (const bad of ['opus', 'opus[1m]', 'sonnet', 'claude opus']) {
+        const r = await fetch(`http://127.0.0.1:${port}/v1/model`, {
+          method: 'POST', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ model: bad }),
+        })
+        expect(r.status).toBe(400)
+      }
+      expect(loadAgentConfig(stateDir).model).toBe('claude-sonnet-4-6') // unchanged
+    })
+
+    it('POST /v1/daemon/restart triggers the restart hook; 503 when unwired', async () => {
+      let restarts = 0
+      api = createInternalApi({ stateDir, daemonPid: 1, requestRestart: () => { restarts++ } })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/daemon/restart`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: '{}',
+      })
+      expect(resp.status).toBe(200)
+      expect(await resp.json()).toMatchObject({ ok: true, restarting: true })
+      expect(restarts).toBe(1)
+
+      const api2 = createInternalApi({ stateDir, daemonPid: 1 })
+      try {
+        const s2 = await api2.start()
+        const t2 = readFileSync(s2.tokenFilePath, 'utf8').trim()
+        const r503 = await fetch(`http://127.0.0.1:${s2.port}/v1/daemon/restart`, {
+          method: 'POST', headers: { Authorization: `Bearer ${t2}`, 'content-type': 'application/json' }, body: '{}',
+        })
+        expect(r503.status).toBe(503)
+      } finally { await api2.stop() }
+    })
+
+    it('GET /v1/turns returns 503 when the turns store is not wired', async () => {
+      api = createInternalApi({ stateDir, daemonPid: 1 })
+      const { port, tokenFilePath } = await api.start()
+      const token = readFileSync(tokenFilePath, 'utf8').trim()
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/turns`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      expect(resp.status).toBe(503)
+      expect(await resp.json()).toMatchObject({ error: 'turns_not_wired' })
     })
 
     it('All A2A routes return 503 when deps.a2a is undefined', async () => {

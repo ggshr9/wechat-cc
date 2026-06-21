@@ -23,7 +23,7 @@ import { createCodexAgentProvider } from '../../core/codex-agent-provider'
 import type { TierProfile } from '../../core/user-tier'
 import { resolveTier } from '../../core/user-tier'
 import { createProviderRegistry, type ProviderRegistry } from '../../core/provider-registry'
-import { createConversationCoordinator, type ConversationCoordinator } from '../../core/conversation-coordinator'
+import { createConversationCoordinator, type ConversationCoordinator, type TurnRecord } from '../../core/conversation-coordinator'
 import { makeConversationStore, type ConversationStore } from '../../core/conversation-store'
 import { buildSystemPrompt } from '../../core/prompt-builder'
 import type { ProviderId } from '../../core/conversation'
@@ -42,7 +42,7 @@ import type { WechatProjectsDep, WechatVoiceDep, WechatCompanionDep } from '../w
 import { makeSessionStore } from '../../core/session-store'
 import type { Db } from '../../lib/db'
 import { homedir } from 'node:os'
-import { loadAgentConfig } from '../../lib/agent-config'
+import { loadAgentConfig, makeMtimeCachedConfigReader } from '../../lib/agent-config'
 import type { AgentConfig } from '../../lib/agent-config'
 import { loadAccess, setSessionInvalidator, type Access } from '../../lib/access'
 import { loadCompanionConfig, type CompanionConfig } from '../companion/config'
@@ -59,6 +59,8 @@ import { createA2AClient } from '../../core/a2a-client'
 import { createA2AServer, type NotifyEvent } from '../../core/a2a-server'
 import { verifyAndConsumeInvite } from '../../cli/a2a-pairing'
 import { makeA2AEventsStore, type AppendInput } from '../../core/a2a-events-store'
+import { createYiHub, type YiHub } from '../../core/yi-hub'
+import { createYiWsServer } from '../yi-ws-server'
 // JSON import — version field is read at module init. resolveJsonModule is
 // on in tsconfig, and `with { type: 'json' }` is the spec'd syntax.
 import codexCliPkg from '@openai/codex/package.json' with { type: 'json' }
@@ -161,7 +163,17 @@ export interface BootstrapDeps {
   }
   loadProjects: () => { projects: Record<string, { path: string; last_active: number }>; current: string | null }
   lastActiveChatId: () => string | null
-  log: (tag: string, line: string) => void
+  /** Third `fields` arg lands in the JSONL sidecar (channel.log.jsonl) for
+   *  programmatic/AI consumers — the real daemon log impl accepts it; the
+   *  coordinator already relies on it for auth_failed + turn records. */
+  log: (tag: string, line: string, fields?: Record<string, unknown>) => void
+  /**
+   * Optional persistence sink for the coordinator's per-turn TurnRecord.
+   * main.ts wires this to the SQLite turn_records store so internal-api's
+   * GET /v1/turns can serve them and they survive a daemon restart. Omitted
+   * in tests / minimal embeddings — the JSONL log line still happens.
+   */
+  onTurnRecord?: (record: TurnRecord) => void
   /**
    * Used when projects.current is unset. Prevents silent message drops on
    * fresh installs — matches v0.x UX where messages routed to the daemon's
@@ -236,6 +248,11 @@ export interface Bootstrap {
    * main.ts calls a2aServer?.stop() in shutdown.
    */
   a2aServer: import('../../core/a2a-server').A2AServer | null
+  /**
+   * 乙 v2 BRAIN hub — present only when yi_hub_listen is configured.
+   * pipeline-deps reads this to route ws-transport hands via the hub.
+   */
+  yiHub?: YiHub
   /**
    * Loaded agent config — the same in-memory reference used by wiring closures.
    * Mutations (e.g. setBotName) are visible to all closures that hold this ref.
@@ -404,12 +421,22 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
   // configured for interactive sessions; CLI 2.1.133 mis-parsed that
   // under SDK mode and sent literal `"opus"` to the API → 404 on every
   // inbound. The codex side already pinned model from config; Claude
-  // didn't, so this closes that asymmetry. Loaded once here (outside the
-  // per-project closure) to keep startup config visible at boot time.
+  // didn't, so this closes that asymmetry. `configuredAgent` is the boot
+  // snapshot used for codex/cursor construction + startup logging.
   const configuredAgent = loadAgentConfig(deps.stateDir)
-  const claudeModel = configuredAgent.provider === 'claude' && configuredAgent.model
-    ? configuredAgent.model
-    : 'claude-opus-4-7'
+
+  // P4 fix: the Claude model is re-read per spawn via an mtime-cached reader
+  // (one stat, parse only on change) instead of being captured once. An
+  // operator's `/model` switch rewrites agent-config.json, so the next
+  // session spawned in each chat picks up the new model with NO daemon
+  // restart. (An in-flight session keeps its model until released.) Codex
+  // and Cursor still take their model at provider-construction time below,
+  // so those changes remain restart-gated — out of scope for this fix.
+  const readAgentConfig = makeMtimeCachedConfigReader(deps.stateDir)
+  const currentClaudeModel = (): string => {
+    const c = readAgentConfig()
+    return c.provider === 'claude' && c.model ? c.model : 'claude-opus-4-8'
+  }
 
   const sdkOptionsForProject = (_alias: string, path: string, tierProfile: TierProfile, chatId: string): Options => {
     const cstatus = deps.ilink.companion.status()
@@ -421,11 +448,24 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
       // wechat + delegate stdio MCP both loaded for regular sessions.
       delegateAvailable: !!delegateStdioForClaude,
     })
+    // Admin-only daemon-control tools (diagnostic_* / model_* / session_release
+    // / daemon_restart) are gated by the wechat MCP child registering them ONLY
+    // when WECHAT_SESSION_ADMIN=1. Bake that flag per-spawn for an admin-tier
+    // session — keyed on the read-only daemon_introspect kind, which only admin
+    // ALLOWS (trusted/guest deny it). NB daemon_remediate is in admin's RELAY
+    // set, not allow, so it can't be used as the admin signal. Codex sessions
+    // never get this flag (the codex provider's MCP spec is fixed at
+    // construction), so daemon tools are simply unavailable there — closing the
+    // no-canUseTool gap on codex.
+    const sessionIsAdmin = tierProfile.allow.has('daemon_introspect')
+    const wechatEnv = wechatStdioForClaude
+      ? { ...wechatStdioForClaude.env, ...(sessionIsAdmin ? { WECHAT_SESSION_ADMIN: '1' } : {}) }
+      : undefined
     const common: Options = {
       cwd: path,
-      model: claudeModel,
+      model: currentClaudeModel(),
       mcpServers: {
-        ...(wechatStdioForClaude ? { wechat: { type: 'stdio' as const, ...wechatStdioForClaude } } : {}),
+        ...(wechatStdioForClaude ? { wechat: { type: 'stdio' as const, ...wechatStdioForClaude, env: wechatEnv! } } : {}),
         ...(delegateStdioForClaude ? { delegate: { type: 'stdio' as const, ...delegateStdioForClaude } } : {}),
       },
       // Using preset+append (instead of raw string) keeps MCP tools inline in
@@ -754,6 +794,37 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
   // [FALLBACK_REPLY_FAIL] / success path logs [FALLBACK_REPLY_SENT].
   const sendAssistantText = makeSendAssistantText({ sendMessage: deps.ilink.sendMessage, log: deps.log })
 
+  // Per-turn watchdog: the daemon-level bound that guarantees a silently-
+  // stalled SDK subprocess (idle timeout, wedge, hung MCP tool) can never
+  // wedge the pipeline forever. Defaults to 10 min — generous enough for a
+  // legit long turn (memory reads, MCP tools, deep thinking) yet finite, so
+  // the coordinator always reclaims the session and the next message is
+  // served. Override via WECHAT_TURN_TIMEOUT_MS (0 disables — not advised).
+  const turnTimeoutMs = (() => {
+    const raw = process.env['WECHAT_TURN_TIMEOUT_MS']
+    if (raw == null || raw === '') return 10 * 60_000
+    const n = Number(raw)
+    return Number.isFinite(n) && n >= 0 ? n : 10 * 60_000
+  })()
+
+  // recordTurn — emit the structured TurnRecord as a fields-bearing log line
+  // AND persist it via the optional onTurnRecord sink. deps.log routes the
+  // third arg into channel.log.jsonl, so every turn's outcome (completed /
+  // timeout / auth_failed / error) is greppable there; onTurnRecord (wired in
+  // main.ts to the SQLite turn_records store) makes it *queryable* on
+  // internal-api and survives the restart a hang/crash triggers — the
+  // AI-legible answer to "why did this chat stop replying", post-mortem-safe.
+  const recordTurn = (record: TurnRecord): void => {
+    deps.log('TURN', `chat=${record.chatId} provider=${record.provider} outcome=${record.outcome} dur=${record.durationMs}ms reply=${record.replyToolCalled} chunks=${record.textChunks}${record.error ? ` error=${JSON.stringify(record.error.slice(0, 160))}` : ''}`, {
+      event: 'turn_record',
+      ...record,
+    })
+    // Persistence is best-effort: a store write must never break dispatch.
+    try { deps.onTurnRecord?.(record) } catch (err) {
+      deps.log('TURN', `onTurnRecord sink threw: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
   const coordinator = createConversationCoordinator({
     resolveProject: resolve,
     manager: sessionManager,
@@ -762,6 +833,8 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
     defaultProviderId,
     format: formatInbound,
     permissionMode,
+    turnTimeoutMs,
+    recordTurn,
     // sendAssistantText fallback path: same fall-through the legacy
     // routeInbound used to take when the agent didn't call a reply tool.
     // main.ts injects a real ilink.sendMessage closure; bootstrap.ts only
@@ -879,6 +952,7 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
             outbound_api_key: 'unused',      // hand → brain unused for exec; schema needs ≥1
             capabilities: [],
             paused: false,
+            transport: 'push',
           })
         }
         a2aEventsStore.append({
@@ -936,6 +1010,38 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
     baseUrl: a2aServer ? a2aServer.baseUrl() : null,
   }
 
+  // ── 乙 v2 wiring (guarded — no-op when config absent) ────────────────────
+  // BRAIN side: start a WebSocket rendezvous that hands connect to.
+  let yiHub: YiHub | undefined
+  if ((configuredAgent as { yi_hub_listen?: { host: string; port: number } }).yi_hub_listen) {
+    const cfg = (configuredAgent as { yi_hub_listen: { host: string; port: number } }).yi_hub_listen
+    yiHub = createYiHub()
+    const yiServer = createYiWsServer({
+      host: cfg.host,
+      port: cfg.port,
+      hub: yiHub,
+      verify: (id, tok) => !!a2aRegistry.verifyBearer(id, tok),
+    })
+    await yiServer.start()
+    deps.log('YI', `hub listening on ws://${cfg.host}:${yiServer.port()}`)
+  }
+
+  // HAND side: connect outbound to a brain's rendezvous.
+  if ((configuredAgent as { yi_brain?: { url: string; handId: string; authToken: string } }).yi_brain) {
+    const cfg = (configuredAgent as { yi_brain: { url: string; handId: string; authToken: string } }).yi_brain
+    const { createYiWsClient } = await import('../yi-ws-client')
+    const yiClient = createYiWsClient({
+      brainUrl: cfg.url,
+      handId: cfg.handId,
+      authToken: cfg.authToken,
+      capabilities: ['exec'],
+      onExec: (t) => dispatchDelegate(t.peer, t.prompt, t.cwd),
+      log: (m) => deps.log('YI', m),
+    })
+    yiClient.start()
+    deps.log('YI', `hand connecting to brain at ${cfg.url}`)
+  }
+
   return {
     sessionManager,
     sessionStore,
@@ -954,6 +1060,7 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
     dispatchDelegate,
     a2aDeps,
     a2aServer,
+    yiHub,
     agentConfig: configuredAgent,
   }
 }
