@@ -181,19 +181,26 @@ export class SessionManager {
     // chatId). Minting in the coordinator instead would re-mint on every cache
     // hit (acquire ignores it), leaking one registered-but-unused token per
     // dispatch into the registry.
-    const sessionToken = this.opts.mintSessionToken?.(
-      tierNameFromProfile(req.tierProfile),
-      `${req.providerId}/${req.alias}/${req.chatId}`,
-    )
-    const session = await provider.spawn(project, {
-      ...(resumeSessionId ? { resumeSessionId } : {}),
-      tierProfile: req.tierProfile,
-      permissionMode: req.permissionMode,
-      // Forward chatId so the Claude provider can bake it into a
-      // per-session canUseTool closure (see bootstrap/index.ts).
-      chatId: req.chatId,
-      ...(sessionToken ? { sessionToken } : {}),
-    })
+    const tokenKey = `${req.providerId}/${req.alias}/${req.chatId}`
+    const sessionToken = this.opts.mintSessionToken?.(tierNameFromProfile(req.tierProfile), tokenKey)
+    let session: AgentSession
+    try {
+      session = await provider.spawn(project, {
+        ...(resumeSessionId ? { resumeSessionId } : {}),
+        tierProfile: req.tierProfile,
+        permissionMode: req.permissionMode,
+        // Forward chatId so the Claude provider can bake it into a
+        // per-session canUseTool closure (see bootstrap/index.ts).
+        chatId: req.chatId,
+        ...(sessionToken ? { sessionToken } : {}),
+      })
+    } catch (err) {
+      // spawn failed → the session is never cached, so release() never runs
+      // and the just-minted token would leak in the registry forever. Revoke
+      // it on the error path before propagating.
+      this.opts.invalidateSessionToken?.(tokenKey)
+      throw err
+    }
 
     const sessionStore = this.opts.sessionStore
     const k = sessionKey({ alias: req.alias, providerId: req.providerId, chatId: req.chatId })

@@ -90,6 +90,23 @@ describe('SessionManager', () => {
     expect(invalidated).toContain('claude/a/chat-2')
   })
 
+  it('revokes the minted token when provider.spawn throws (no registry leak on the error path)', async () => {
+    const minted: string[] = []
+    const invalidated: string[] = []
+    const spawn = vi.fn(async () => { throw new Error('spawn boom') })
+    const mgr = new SessionManager({
+      maxConcurrent: 4,
+      idleEvictMs: 30 * 60_000,
+      registry: registryWithProvider({ spawn } as unknown as AgentProvider),
+      mintSessionToken: (_t, key) => { minted.push(key); return 'tok' },
+      invalidateSessionToken: (key) => invalidated.push(key),
+    })
+    await expect(mgr.acquire({ alias: 'a', path: '/p', providerId: 'claude', chatId: 'chat-1', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' }))
+      .rejects.toThrow('spawn boom')
+    expect(minted).toEqual(['claude/a/chat-1'])      // it was minted
+    expect(invalidated).toEqual(['claude/a/chat-1']) // ...and revoked on failure
+  })
+
   it('uses an injected agent provider to spawn and dispatch project sessions', async () => {
     const dispatched: string[] = []
     const close = vi.fn()
