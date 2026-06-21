@@ -797,7 +797,12 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     const tier = resolveEffectiveTier(msg.chatId, deps.loadAccess(), deps.permissionMode)
     const tierProfile = TIER_PROFILES[tier]
     deps.log('COORDINATOR', `parallel chat=${msg.chatId} → project=${proj.alias} providers=${participants.join(',')} tier=${tier}`)
-    const handles = await Promise.all(
+    // allSettled the ACQUIRE phase too (not just dispatch): a single provider's
+    // acquire rejection (spawn failure / pool exhausted) must NOT drop the other
+    // provider's reply. A failed acquire is propagated into the same per-
+    // participant settled shape below (as a rejected turn → recorded as an error
+    // TurnRecord), keeping index alignment with `participants`.
+    const acquired = await Promise.allSettled(
       participants.map(p => deps.manager.acquire({
         alias: proj.alias,
         path: proj.path,
@@ -809,7 +814,11 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     )
     const text = deps.format(msg)
     const startedAt = nowMs()
-    const settled = await Promise.allSettled(handles.map(h => collectTurn(h.dispatch(text), { timeoutMs: deps.turnTimeoutMs })))
+    const settled = await Promise.allSettled(acquired.map(a =>
+      a.status === 'fulfilled'
+        ? collectTurn(a.value.dispatch(text), { timeoutMs: deps.turnTimeoutMs })
+        : Promise.reject(a.reason),
+    ))
     // Batch end — all participants dispatched together and allSettled awaits
     // them all, so a single endedAt is the honest wall-clock for the round.
     const endedAt = nowMs()
