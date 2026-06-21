@@ -135,3 +135,24 @@ describe('InternalApiError', () => {
     expect(err.message).toBe('boom')
   })
 })
+
+describe('client prefers the per-session token env', () => {
+  it('uses WECHAT_SESSION_TOKEN env over the token file when present', async () => {
+    process.env.WECHAT_SESSION_TOKEN = 'sess-tok'
+    try {
+      const seen: string[] = []
+      const client = createInternalApiClient({
+        baseUrl: 'http://x',
+        tokenFilePath: '/no/such/file',
+        fetchImpl: (async (_u: unknown, init: { headers: Record<string, string> }) => {
+          seen.push(init.headers.Authorization)
+          return new Response('{}', { headers: { 'content-type': 'application/json' } })
+        }) as unknown as typeof fetch,
+      })
+      await client.request('GET', '/v1/health')
+      expect(seen[0]).toBe('Bearer sess-tok')
+    } finally {
+      delete process.env.WECHAT_SESSION_TOKEN
+    }
+  })
+})
