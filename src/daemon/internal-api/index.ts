@@ -24,7 +24,10 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
+import { makeTokenRegistry, type TokenInfo } from './token-registry'
+import { minTierFor, tierMeets } from './route-tiers'
+import type { UserTier } from '../../core/user-tier'
 import type { AddressInfo } from 'node:net'
 import {
   errMsg,
@@ -47,6 +50,7 @@ const TOKEN_FILE = 'internal-token'
 
 export function createInternalApi(deps: InternalApiDeps): InternalApi {
   const tokenPath = join(deps.stateDir, TOKEN_FILE)
+  const registry = makeTokenRegistry()
   let server: Server | null = null
   let boundPort: number | null = null
   let token: Buffer | null = null
@@ -57,19 +61,13 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
   // (deps is passed by reference to makeRoutes which closes over it, so mutations
   // are visible at request time without any additional indirection.)
 
-  function authOk(req: IncomingMessage): boolean {
-    if (!token) return false
-    const header = req.headers.authorization ?? ''
-    const m = /^Bearer\s+([0-9a-f]+)$/i.exec(header)
-    if (!m) return false
-    let provided: Buffer
-    try {
-      provided = Buffer.from(m[1]!, 'hex')
-    } catch {
-      return false
-    }
-    if (provided.length !== token.length) return false
-    return timingSafeEqual(provided, token)
+  // Resolve the presented bearer to its { tier, origin } via the registry, or
+  // null when unknown. Replaces the old single-token authOk so the route layer
+  // can enforce the caller's tier (see token-registry.ts / route-tiers.ts).
+  function authResolve(req: IncomingMessage): TokenInfo | null {
+    const m = /^Bearer\s+([0-9a-f]+)$/i.exec(req.headers.authorization ?? '')
+    if (!m) return null
+    return registry.resolve(m[1]!.toLowerCase())
   }
 
   function send(res: ServerResponse, status: number, body: unknown, origin?: string): void {
@@ -122,7 +120,8 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
       return
     }
 
-    if (!authOk(req)) {
+    const caller = authResolve(req)
+    if (!caller) {
       deps.log?.('INTERNAL_API', `401 ${req.method} ${req.url}`, {
         event: 'auth_rejected',
         method: req.method,
@@ -134,10 +133,21 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
     const method = req.method ?? 'GET'
     const rawUrl = req.url ?? '/'
     const url = new URL(rawUrl, 'http://internal')
-    const route = ROUTES[`${method} ${url.pathname}`]
+    const routeKey = `${method} ${url.pathname}`
+    const route = ROUTES[routeKey]
 
     if (!route) {
       return send(res, 404, { error: 'not_found', method, url: rawUrl }, origin)
+    }
+
+    // Tier gate: the caller's tier (from its token) must meet the route's
+    // declared minimum. Unlisted routes default to admin (fail-closed).
+    const need = minTierFor(routeKey)
+    if (!tierMeets(caller.tier, need)) {
+      deps.log?.('INTERNAL_API', `403 ${routeKey} caller=${caller.tier} need=${need}`, {
+        event: 'tier_denied', path: routeKey, caller: caller.tier, required: need,
+      })
+      return send(res, 403, { error: 'forbidden', required: need }, origin)
     }
 
     let body: unknown = null
@@ -149,7 +159,7 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
       }
     }
 
-    const key = `${method} ${url.pathname}`
+    const key = routeKey
     const reqSchema = REQUEST_SCHEMAS[key]
     if (reqSchema) {
       const input = method === 'POST'
@@ -189,6 +199,9 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
       mkdirSync(dirname(tokenPath), { recursive: true, mode: 0o700 })
       const tokenHex = randomBytes(32).toString('hex')
       token = Buffer.from(tokenHex, 'hex')
+      // Register the daemon-wide file token as `trusted` — it's shell-readable,
+      // so it can't grant more than the least-trusted process that reads it.
+      registry.registerFileToken(tokenHex)
       // Write atomically — token consumers may already be reading on rotate.
       const tmp = `${tokenPath}.tmp-${process.pid}-${Date.now()}`
       writeFileSync(tmp, tokenHex + '\n', { mode: 0o600 })
@@ -250,6 +263,12 @@ export function createInternalApi(deps: InternalApiDeps): InternalApi {
 
     setA2A(a2a) {
       deps.a2a = a2a
+    },
+    mintSessionToken(tier: UserTier, sessionKey: string) {
+      return registry.mint(tier, sessionKey)
+    },
+    invalidateSession(sessionKey: string) {
+      registry.invalidateSession(sessionKey)
     },
   }
 }

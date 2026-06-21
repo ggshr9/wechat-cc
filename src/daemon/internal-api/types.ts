@@ -233,6 +233,12 @@ export interface InternalApi {
    * is called (when a2a_listen is configured).
    */
   setA2A(a2a: NonNullable<InternalApiDeps['a2a']>): void
+  /** Mint an env-only per-session token granting `tier`, keyed by `sessionKey`
+   *  (`provider/alias/chatId`). The daemon injects it into that session's MCP
+   *  children; the route layer resolves the tier from it. */
+  mintSessionToken(tier: import('../../core/user-tier').UserTier, sessionKey: string): string
+  /** Revoke every token minted for a session (called on release/evict/close). */
+  invalidateSession(sessionKey: string): void
 }
 
 /**
