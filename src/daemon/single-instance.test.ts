@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { acquireInstanceLock, releaseInstanceLock, writeHeartbeat, isHeartbeatFresh } from './single-instance'
-import { mkdtempSync, writeFileSync, existsSync, unlinkSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -45,6 +45,26 @@ describe('single-instance', () => {
     const r = acquireInstanceLock(pidPath, { isHealthy: () => true })
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.reason).toMatch(/already running/i)
+  })
+
+  it('writes our own pid into the file after stealing a dead holder', () => {
+    // The atomic-claim refactor (exclusive `wx` create for a fresh start, then
+    // inspect+steal on EEXIST) must still leave OUR pid in the file when it
+    // steals a dead holder — otherwise releaseInstanceLock would never clean up.
+    writeFileSync(pidPath, '999999999', 'utf8')
+    const r = acquireInstanceLock(pidPath)
+    expect(r.ok).toBe(true)
+    expect(readFileSync(pidPath, 'utf8').trim()).toBe(String(process.pid))
+  })
+
+  it('does not overwrite a healthy holder\'s pid when it refuses', () => {
+    // Exclusive-create + refuse-before-write: a refused acquire must leave the
+    // holder's pidfile untouched (no clobber of the live daemon's identity).
+    writeFileSync(pidPath, String(process.pid), 'utf8')
+    const before = readFileSync(pidPath, 'utf8')
+    const r = acquireInstanceLock(pidPath, { isHealthy: () => true })
+    expect(r.ok).toBe(false)
+    expect(readFileSync(pidPath, 'utf8')).toBe(before)
   })
 
   it('steals lock when pid file refers to a live but unrelated process (post-reboot PID reuse)', () => {

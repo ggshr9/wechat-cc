@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, unlinkSync } from 'node:fs'
 import { platform } from 'node:os'
 import { spawnSync } from 'node:child_process'
 
@@ -22,21 +22,35 @@ export interface AcquireOpts {
 }
 
 export function acquireInstanceLock(pidPath: string, opts?: AcquireOpts): LockResult {
-  if (existsSync(pidPath)) {
-    try {
-      const raw = readFileSync(pidPath, 'utf8').trim()
-      const pid = Number(raw)
-      if (Number.isFinite(pid) && pid > 0 && isOurDaemon(pid)) {
-        // Alive and looks like our daemon. Refuse — UNLESS a health probe
-        // says the holder isn't actually serving, in which case fall through
-        // and steal the stale lock rather than wedge the user behind a dead
-        // placeholder.
-        if (!opts?.isHealthy || opts.isHealthy(pid)) {
-          return { ok: false, reason: 'another daemon already running', pid }
-        }
-      }
-    } catch {}
+  // Atomic claim for the common case (no pidfile yet): an exclusive create
+  // (`wx` → O_EXCL) lets exactly ONE process win across a concurrent start
+  // (e.g. launchd auto-start racing a manual CLI). The old check-then-write
+  // was a non-atomic test-and-set: both starters could pass the existsSync
+  // gate and both writeFileSync, yielding two live daemons double-processing
+  // every inbound. O_EXCL closes that race at the OS level.
+  try {
+    writeFileSync(pidPath, String(process.pid), { encoding: 'utf8', flag: 'wx' })
+    return { ok: true }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
   }
+  // A pidfile already exists — inspect the holder.
+  try {
+    const pid = Number(readFileSync(pidPath, 'utf8').trim())
+    if (Number.isFinite(pid) && pid > 0 && isOurDaemon(pid)) {
+      // Alive and looks like our daemon. Refuse — UNLESS a health probe says
+      // the holder isn't actually serving, in which case fall through and
+      // steal the stale lock rather than wedge the user behind a dead
+      // placeholder.
+      if (!opts?.isHealthy || opts.isHealthy(pid)) {
+        return { ok: false, reason: 'another daemon already running', pid }
+      }
+    }
+  } catch {}
+  // Holder is absent/dead/unrelated(PID-reuse)/unhealthy → steal it. The
+  // overwrite is non-exclusive (the file exists): concurrent stealers each
+  // write their own pid and converge; the loser detects the foreign pid at
+  // releaseInstanceLock and won't unlink it.
   writeFileSync(pidPath, String(process.pid), 'utf8')
   return { ok: true }
 }
