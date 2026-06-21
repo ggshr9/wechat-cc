@@ -15,7 +15,7 @@
  * See docs/superpowers/specs/2026-05-23-cursor-sdk-provider-design.md.
  */
 import type { AgentEvent, AgentProject, AgentProvider, AgentSession, PermissionMode, ProviderCapabilities } from './agent-provider'
-import type { TierProfile } from './user-tier'
+import { tierNameFromProfile, type TierProfile } from './user-tier'
 import { log } from '../lib/log'
 
 /**
@@ -246,10 +246,19 @@ export function createCursorAgentProvider(opts: CursorAgentProviderOptions): Age
   return {
     async spawn(project: AgentProject, spawnOpts) {
       const tierOpts = tierProfileToCursorSdkOpts(spawnOpts.tierProfile, spawnOpts.permissionMode)
+      // Per-session internal-api auth — merge the env-only token + tier into
+      // each stdio MCP child's env (provider-agnostic seam; same as claude/codex).
+      const sessionEnv: Record<string, string> = {
+        ...(spawnOpts.sessionToken ? { WECHAT_SESSION_TOKEN: spawnOpts.sessionToken } : {}),
+        WECHAT_SESSION_TIER: tierNameFromProfile(spawnOpts.tierProfile),
+      }
+      const mcpWithEnv = opts.mcpServers
+        ? Object.fromEntries(Object.entries(opts.mcpServers).map(([name, srv]) => [name, { ...srv, env: { ...(srv.env ?? {}), ...sessionEnv } }]))
+        : undefined
       const createOptions: Record<string, unknown> = {
         apiKey: opts.apiKey,
         ...(opts.model ? { model: { id: opts.model } } : {}),
-        ...(opts.mcpServers ? { mcpServers: opts.mcpServers } : {}),
+        ...(mcpWithEnv ? { mcpServers: mcpWithEnv } : {}),
         local: {
           cwd: project.path,
           sandboxOptions: tierOpts.sandboxOptions,
