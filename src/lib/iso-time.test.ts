@@ -1,5 +1,19 @@
 import { describe, it, expect } from 'vitest'
-import { isoFromMs } from './iso-time'
+import { isoFromMs, isValidIso } from './iso-time'
+
+describe('isValidIso', () => {
+  it('accepts real ISO timestamps', () => {
+    expect(isValidIso('2026-06-01T00:00:00.000Z')).toBe(true)
+    expect(isValidIso('2026-06-01T08:00:00+08:00')).toBe(true)
+    expect(isValidIso('2026-06-01')).toBe(true)
+  })
+  it('rejects garbage / unparseable / out-of-range strings', () => {
+    expect(isValidIso('not-a-date')).toBe(false)
+    expect(isValidIso('banana')).toBe(false)
+    expect(isValidIso('')).toBe(false)
+    expect(isValidIso('99999-99-99T99:99:99Z')).toBe(false)
+  })
+})
 
 describe('isoFromMs', () => {
   it('returns the ISO string for a normal epoch-ms value', () => {

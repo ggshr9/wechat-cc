@@ -97,4 +97,16 @@ describe('codexLineToClaudeTurn', () => {
     expect(r).not.toBeNull()
     expect(r?.ts).toBeUndefined()
   })
+
+  it('ignores a garbage (non-date) envelope timestamp — keeps the turn, ts undefined', () => {
+    // A garbage ts stored verbatim would corrupt the messages-store ordering;
+    // invalid → undefined so the backfill falls back to the filename anchor.
+    const r = codexLineToClaudeTurn({
+      timestamp: 'not-a-date',
+      type: 'response_item',
+      payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] },
+    })
+    expect(r).not.toBeNull()
+    expect(r?.ts).toBeUndefined()
+  })
 })

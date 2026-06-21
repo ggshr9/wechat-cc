@@ -28,7 +28,7 @@ import { basename as pathBasename, join } from 'node:path'
 import type { Db } from '../lib/db'
 import { makeMessagesStore, type MessageRecord } from '../lib/messages-store'
 import { makeThreadsStore, type ThreadRecord, type Facet } from '../lib/threads-store'
-import { isoFromMs } from '../lib/iso-time'
+import { isoFromMs, isValidIso } from '../lib/iso-time'
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -48,7 +48,10 @@ export interface SimpleTurn {
 function parseClaudeJsonlLine(line: string): SimpleTurn | null {
   try {
     const o = JSON.parse(line) as Record<string, unknown>
-    const ts = typeof o.timestamp === 'string' ? o.timestamp : null
+    // Require a real date — a garbage timestamp string would corrupt the
+    // lexicographic ordering the messages store relies on. Invalid → skip
+    // (same as a missing timestamp; the claude path has no anchor fallback).
+    const ts = typeof o.timestamp === 'string' && isValidIso(o.timestamp) ? o.timestamp : null
     if (!ts) return null
     if (o.type === 'user') {
       const m = o.message as { content?: unknown } | undefined

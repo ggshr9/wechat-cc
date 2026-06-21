@@ -14,3 +14,13 @@ export function isoFromMs(ms: number, fallbackMs: number): string {
   const f = new Date(fallbackMs)
   return (Number.isFinite(f.getTime()) ? f : new Date()).toISOString()
 }
+
+/**
+ * True if `s` parses to a real, in-range date. Used to validate timestamp
+ * STRINGS read from external files (claude/codex history jsonl) before they're
+ * stored as a message `ts` — a garbage value (e.g. "not-a-date") would
+ * otherwise corrupt the lexicographic ordering the messages store relies on.
+ */
+export function isValidIso(s: string): boolean {
+  return Number.isFinite(new Date(s).getTime())
+}

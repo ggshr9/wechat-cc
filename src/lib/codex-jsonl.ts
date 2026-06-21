@@ -23,6 +23,7 @@
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { isValidIso } from './iso-time'
 
 export interface ClaudeShapeTurn {
   type: 'user' | 'assistant'
@@ -100,8 +101,11 @@ export function codexLineToClaudeTurn(line: unknown): ClaudeShapeTurn | null {
   }
   if (texts.length === 0) return null
 
-  // Thread through the envelope-level timestamp when present.
-  const ts = typeof obj.timestamp === 'string' ? obj.timestamp : undefined
+  // Thread through the envelope-level timestamp when present AND a real date —
+  // a garbage string would be stored verbatim as the message ts and corrupt
+  // ordering. Invalid → undefined, so the backfill falls back to the filename
+  // anchor instead.
+  const ts = typeof obj.timestamp === 'string' && isValidIso(obj.timestamp) ? obj.timestamp : undefined
 
   return {
     type: payload.role,
