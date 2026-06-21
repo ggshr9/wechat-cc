@@ -468,6 +468,16 @@ into one overview it reads to understand you. Say `看记忆` / `你对我的理
 terminal: `wechat-cc memory synthesize` regenerates it and `wechat-cc memory
 status` shows its freshness + how much source memory is available to fold in.
 
+**Self-diagnosis & self-healing (admin).** When something seems off, just ask
+the bot — "你怎么不回消息了，检查下" / "why did this chat stop replying, fix it".
+It can inspect its own per-turn outcomes (did the last turn time out? error?),
+see which agent sessions are live or wedged, and check daemon health — then
+remediate: release a wedged session (the next message starts a fresh
+subprocess), switch the pinned model, or restart the daemon, each confirmed
+back to you. These tools are **admin-only** and aren't registered at all for
+non-admin chats. Switching the model this way takes effect on the next turn —
+no daemon restart needed.
+
 ---
 
 ## Updating
@@ -540,10 +550,13 @@ Users who scan the QR during `wechat-cc setup` are automatically allowed.
 
 Each chatId in `access.json` falls into one of three tiers:
 
-- `admins`: full access — the bot runs every tool unconditionally.
+- `admins`: full access — the bot runs every tool unconditionally. Admins also
+  get the daemon self-diagnosis / self-healing tools (inspect turns & sessions,
+  release a wedged session, switch model, restart the daemon); the mutating
+  ones ask for an "are you sure?" confirmation first.
 - `trusted`: full access EXCEPT destructive operations (rm, git reset --hard,
-  git push --force, memory_delete). Destructive ops prompt the admin chat for
-  approval.
+  git push --force, memory_delete) and the admin-only daemon-control tools.
+  Destructive ops prompt the admin chat for approval.
 - everyone else in `allowFrom`: guest tier — can chat, read their own memory,
   and that's it. Bash/Edit/Write/Task/WebFetch/WebSearch are denied outright.
 
