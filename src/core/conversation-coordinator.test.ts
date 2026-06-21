@@ -515,6 +515,37 @@ describe('ConversationCoordinator', () => {
     })
   })
 
+  it('labels a primary_tool turn as mode=primary_tool (not solo) in its TurnRecord', async () => {
+    // primary_tool dispatches through dispatchSolo; a literal mode:'solo' would
+    // mislabel it in GET /v1/turns and misdirect "why did chat X stop replying".
+    const session = makeFakeSession({ events: [
+      { kind: 'tool_call', server: 'wechat', tool: 'reply' },
+      { kind: 'result', sessionId: 's1', numTurns: 1, durationMs: 0 },
+    ] })
+    const acquire = vi.fn(async (req: AcquireRequest) => makeHandle(req.providerId, session))
+    const recordTurn = vi.fn()
+    const registry = createProviderRegistry()
+    registry.register('claude', dummyProvider, { displayName: 'Claude', canResume: () => true })
+    registry.register('codex', dummyProvider, { displayName: 'Codex', canResume: () => true })
+    const store = makeMockStore()
+    store.set('chat-pt', { kind: 'primary_tool', primary: 'claude' })
+    const c = createConversationCoordinator({
+      resolveProject: () => ({ alias: 'a', path: '/p' }),
+      manager: { acquire },
+      conversationStore: store,
+      registry,
+      defaultProviderId: 'claude',
+      format: () => 'x',
+      permissionMode: 'strict',
+      loadAccess: adminAccess,
+      log: () => {},
+      recordTurn,
+    })
+    await c.dispatch(inbound('chat-pt', 'hi'))
+    expect(recordTurn).toHaveBeenCalledTimes(1)
+    expect(recordTurn.mock.calls[0]![0]).toMatchObject({ chatId: 'chat-pt', mode: 'primary_tool', outcome: 'completed' })
+  })
+
   it('emits a TurnRecord with outcome=timeout when the watchdog fires', async () => {
     const acquire = vi.fn(async (req: AcquireRequest) => makeHandle(req.providerId, hangingSession()))
     const recordTurn = vi.fn()

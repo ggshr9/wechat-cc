@@ -671,8 +671,21 @@ export function makeRoutes({ deps, getDelegate, maybePrefix }: MakeRoutesContext
       if (typeof b.model !== 'string' || b.model.trim() === '') {
         return { status: 400, body: { error: 'model required (non-empty string)' } }
       }
+      const model = b.model.trim()
+      // Validate the shape of a real, fully-qualified model id before pinning
+      // it — a bare alias or fast-mode tag (e.g. 'opus', 'opus[1m]', 'sonnet')
+      // gets mis-resolved by the CLI and 404s EVERY turn (the 2026-05-08
+      // incident this model-pinning exists to prevent). Require only the
+      // id-charset and a version digit; that rejects aliases without
+      // hard-coding a model allowlist that would rot as new models ship.
+      if (!/^[A-Za-z0-9._-]+$/.test(model) || !/[0-9]/.test(model)) {
+        return {
+          status: 400,
+          body: { error: `invalid model id '${model}' — use a full versioned id like 'claude-opus-4-8' or 'gpt-5.3-codex', not an alias` },
+        }
+      }
       const cfg = loadAgentConfig(deps.stateDir)
-      saveAgentConfig(deps.stateDir, { ...cfg, model: b.model })
+      saveAgentConfig(deps.stateDir, { ...cfg, model })
       const after = loadAgentConfig(deps.stateDir)
       return { status: 200, body: { ok: true, provider: after.provider, model: after.model ?? null } }
     },

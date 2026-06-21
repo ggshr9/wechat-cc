@@ -63,7 +63,12 @@ function difference(a: ReadonlySet<ToolKind>, b: ReadonlySet<ToolKind>): Set<Too
 // resolveAdminChatId), giving a "are you sure?" gate without
 // inconveniencing day-to-day use. Operators who want zero prompts
 // launch with `--dangerously`.
-const ADMIN_RELAY = new Set<ToolKind>(['shell_destructive', 'memory_delete'])
+// daemon_remediate (session_release / model_set / daemon_restart) relays for
+// admin too: these are destructive daemon ops, and a relay gives an "are you
+// sure?" confirmation to the admin chat — defence against prompt-injection in
+// an admin's own conversation steering the agent into a restart. Matches the
+// tools' own "建议先确认" guidance. Operators wanting zero prompts use --dangerously.
+const ADMIN_RELAY = new Set<ToolKind>(['shell_destructive', 'memory_delete', 'daemon_remediate'])
 
 const TRUSTED_RELAY = new Set<ToolKind>(['shell_destructive', 'memory_delete', 'a2a_send'])
 
@@ -173,8 +178,12 @@ export function classifyToolUse(toolName: string, input: Record<string, unknown>
     if (sub === 'observations_list' || sub === 'observations_read') return 'observations_read'
     if (sub === 'observations_write' || sub === 'observations_archive') return 'observations_write'
     if (sub === 'a2a_send') return 'a2a_send'
-    if (sub === 'diagnostic_turns' || sub === 'diagnostic_sessions' || sub === 'diagnostic_health' || sub === 'model_get') return 'daemon_introspect'
-    if (sub === 'session_release' || sub === 'model_set' || sub === 'daemon_restart') return 'daemon_remediate'
+    // Daemon-control family — classified by PREFIX (not exact name) so a future
+    // rename or sibling tool (e.g. diagnostic_foo, daemon_bar, session_baz)
+    // fails CLOSED into an admin-only kind instead of dropping to the
+    // permissive fs_read default below. Read-only vs mutating split by name.
+    if (sub.startsWith('diagnostic_') || sub === 'model_get') return 'daemon_introspect'
+    if (sub.startsWith('daemon_') || sub.startsWith('session_') || sub === 'model_set') return 'daemon_remediate'
     // Other wechat tools: classify as fs_read (safest non-reply default
     // for new wechat MCP tools — they tend to be query-like).
     return 'fs_read'

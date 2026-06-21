@@ -90,7 +90,9 @@ describe('TIER_PROFILES', () => {
     // with `--dangerously`.
     expect(TIER_PROFILES.admin.relay.has('shell_destructive')).toBe(true)
     expect(TIER_PROFILES.admin.relay.has('memory_delete')).toBe(true)
-    expect(TIER_PROFILES.admin.relay.size).toBe(2)
+    // daemon_remediate also relays for admin (destructive daemon ops → confirm).
+    expect(TIER_PROFILES.admin.relay.has('daemon_remediate')).toBe(true)
+    expect(TIER_PROFILES.admin.relay.size).toBe(3)
     expect(TIER_PROFILES.admin.deny.size).toBe(0)
     // Non-destructive ops stay auto-allowed.
     expect(TIER_PROFILES.admin.allow.has('shell')).toBe(true)
@@ -127,10 +129,12 @@ describe('TIER_PROFILES', () => {
     expect(TIER_PROFILES.guest.deny.has('daemon_introspect')).toBe(true)
   })
 
-  it('daemon_remediate (release/restart/model-set) is admin-only — denied for trusted and guest', () => {
+  it('daemon_remediate (release/restart/model-set) is admin-only and relays even for admin', () => {
     // Remediation actions can release sessions, switch model, restart the
-    // daemon — strictly operator-only. Same gating as daemon_introspect.
-    expect(TIER_PROFILES.admin.allow.has('daemon_remediate')).toBe(true)
+    // daemon — strictly operator-only, and even admin gets an "are you sure?"
+    // relay (it's a destructive op). Denied outright for trusted and guest.
+    expect(TIER_PROFILES.admin.relay.has('daemon_remediate')).toBe(true)
+    expect(TIER_PROFILES.admin.allow.has('daemon_remediate')).toBe(false)
     expect(TIER_PROFILES.trusted.deny.has('daemon_remediate')).toBe(true)
     expect(TIER_PROFILES.trusted.allow.has('daemon_remediate')).toBe(false)
     expect(TIER_PROFILES.guest.deny.has('daemon_remediate')).toBe(true)
@@ -175,6 +179,15 @@ describe('classifyToolUse', () => {
     expect(classifyToolUse('mcp__wechat__session_release', {})).toBe('daemon_remediate')
     expect(classifyToolUse('mcp__wechat__model_set', {})).toBe('daemon_remediate')
     expect(classifyToolUse('mcp__wechat__daemon_restart', {})).toBe('daemon_remediate')
+  })
+  it('an unrecognized daemon-family wechat tool fails CLOSED into an admin-only kind', () => {
+    // Name drift / new sibling tools must not silently drop to fs_read (which
+    // trusted allows). Prefix classification keeps the family admin-only.
+    expect(classifyToolUse('mcp__wechat__diagnostic_new_thing', {})).toBe('daemon_introspect')
+    expect(classifyToolUse('mcp__wechat__daemon_shutdown', {})).toBe('daemon_remediate')
+    expect(classifyToolUse('mcp__wechat__session_evict', {})).toBe('daemon_remediate')
+    // A non-daemon unknown wechat tool still uses the permissive query default.
+    expect(classifyToolUse('mcp__wechat__some_query_tool', {})).toBe('fs_read')
   })
   it('Read / Glob / Grep / LS → fs_read', () => {
     expect(classifyToolUse('Read', {})).toBe('fs_read')

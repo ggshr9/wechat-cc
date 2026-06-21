@@ -2465,6 +2465,17 @@ describe('internal-api request validation', () => {
       expect((await set.json() as { model: string }).model).toBe('claude-sonnet-4-6')
       // persisted on disk
       expect(loadAgentConfig(stateDir).model).toBe('claude-sonnet-4-6')
+
+      // Bare aliases / fast-mode tags are rejected (the 404-every-turn footgun)
+      // and must NOT overwrite the good pinned model.
+      for (const bad of ['opus', 'opus[1m]', 'sonnet', 'claude opus']) {
+        const r = await fetch(`http://127.0.0.1:${port}/v1/model`, {
+          method: 'POST', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ model: bad }),
+        })
+        expect(r.status).toBe(400)
+      }
+      expect(loadAgentConfig(stateDir).model).toBe('claude-sonnet-4-6') // unchanged
     })
 
     it('POST /v1/daemon/restart triggers the restart hook; 503 when unwired', async () => {

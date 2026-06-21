@@ -366,6 +366,11 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     msg: InboundMsg,
     proj: { alias: string; path: string },
     providerId: ProviderId,
+    // The mode this dispatch is serving, for the TurnRecord. dispatchSolo is
+    // the single-provider dispatch path for solo AND primary_tool AND a
+    // parallel/chatroom that degraded to one participant — recording a literal
+    // 'solo' would mislabel those in GET /v1/turns and misdirect diagnosis.
+    recordMode: TurnRecord['mode'] = 'solo',
   ): Promise<void> {
     const tier = resolveEffectiveTier(msg.chatId, deps.loadAccess(), deps.permissionMode)
     const tierProfile = TIER_PROFILES[tier]
@@ -434,7 +439,7 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
         chatId: msg.chatId,
         provider: providerId,
         alias: proj.alias,
-        mode: 'solo',
+        mode: recordMode,
         startedAt,
         endedAt,
         durationMs: endedAt - startedAt,
@@ -904,11 +909,11 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
         participants = resolveParticipants(mode, msg.chatId)
         if (participants.length === 0) {
           deps.log('COORDINATOR', `chat=${msg.chatId} ${mode.kind} resolved to empty participants; falling back to solo+${deps.defaultProviderId}`)
-          return dispatchSolo(msg, proj, deps.defaultProviderId)
+          return dispatchSolo(msg, proj, deps.defaultProviderId, mode.kind)
         }
         if (participants.length === 1) {
           deps.log('COORDINATOR', `chat=${msg.chatId} ${mode.kind} resolved to single participant ${participants[0]}; degrading to solo`)
-          return dispatchSolo(msg, proj, participants[0]!)
+          return dispatchSolo(msg, proj, participants[0]!, mode.kind)
         }
       }
 
@@ -956,9 +961,9 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
           // a tool) and how the agent uses delegate_<peer>.
           if (!deps.registry.has(mode.primary)) {
             deps.log('COORDINATOR', `chat=${msg.chatId} primary_tool primary '${mode.primary}' not registered; falling back to solo+${deps.defaultProviderId}`)
-            return dispatchSolo(msg, proj, deps.defaultProviderId)
+            return dispatchSolo(msg, proj, deps.defaultProviderId, 'primary_tool')
           }
-          return dispatchSolo(msg, proj, mode.primary)
+          return dispatchSolo(msg, proj, mode.primary, 'primary_tool')
         }
         case 'chatroom': {
           return dispatchChatroom(msg, proj, participants!)
