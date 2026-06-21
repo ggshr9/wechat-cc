@@ -572,7 +572,7 @@ server.registerTool(
 )
 
 // ─── daemon self-diagnosis + remediation (admin-only) ─────────────────────────
-// Registered ONLY for an admin-tier session (WECHAT_SESSION_ADMIN=1, set by the
+// Registered ONLY for an admin-tier session (WECHAT_SESSION_TIER=admin, set by the
 // daemon at spawn). This is the robust, provider-agnostic gate — for non-admin
 // sessions (including codex, which has no canUseTool) the tools don't exist.
 // The claude canUseTool layer (daemon_introspect/daemon_remediate denied for

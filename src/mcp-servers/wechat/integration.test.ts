@@ -99,7 +99,7 @@ describe('wechat-mcp stdio integration', () => {
     expect(list.tools.map(t => t.name)).toContain('ping')
   })
 
-  it('registers the admin daemon-control tools ONLY for an admin session (WECHAT_SESSION_ADMIN)', async () => {
+  it('registers the admin daemon-control tools ONLY for an admin session (WECHAT_SESSION_TIER)', async () => {
     // The robust, provider-agnostic gate: a non-admin session's MCP child does
     // not register these tools, so they cannot be called or even discovered —
     // closing the gap that codex (no canUseTool) would otherwise leave open.
