@@ -698,9 +698,11 @@ export function makeRoutes({ deps, getDelegate, maybePrefix }: MakeRoutesContext
       const cfg = loadAgentConfig(deps.stateDir)
       // Write the field the configured provider reads — writing `model` for a
       // cursor daemon would be a silent no-op with a falsely-confirming read-back.
-      saveAgentConfig(deps.stateDir, withActiveModel(cfg, model))
-      const after = loadAgentConfig(deps.stateDir)
-      return { status: 200, body: { ok: true, provider: after.provider, model: activeModel(after) ?? null } }
+      const updated = withActiveModel(cfg, model)
+      saveAgentConfig(deps.stateDir, updated)
+      // Read back from the just-persisted value (saveAgentConfig throws on write
+      // failure, so reaching here means it landed) — no second disk round-trip.
+      return { status: 200, body: { ok: true, provider: updated.provider, model: activeModel(updated) ?? null } }
     },
 
     // Admin remediation — graceful daemon restart. The trigger schedules the

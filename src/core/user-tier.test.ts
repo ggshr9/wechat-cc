@@ -144,10 +144,16 @@ describe('TIER_PROFILES', () => {
 import { tierNameFromProfile } from './user-tier'
 
 describe('tierNameFromProfile', () => {
-  it('recovers admin / trusted / guest from the resolved profile', () => {
-    expect(tierNameFromProfile(TIER_PROFILES.admin)).toBe('admin')
-    expect(tierNameFromProfile(TIER_PROFILES.trusted)).toBe('trusted')
-    expect(tierNameFromProfile(TIER_PROFILES.guest)).toBe('guest')
+  // Round-trip invariant over EVERY tier: tierNameFromProfile is a reverse
+  // derivation (it capability-sniffs the profile to recover the name), and that
+  // name becomes the minted token's authority + the wechat child's
+  // WECHAT_SESSION_TIER admin gate. Looping over Object.keys means a future 4th
+  // tier whose profile breaks the inference (e.g. a non-admin tier that allows
+  // daemon_introspect) is caught here automatically, not silently mislabeled.
+  it('round-trips every TIER_PROFILES entry back to its own name', () => {
+    for (const name of Object.keys(TIER_PROFILES) as Array<keyof typeof TIER_PROFILES>) {
+      expect(tierNameFromProfile(TIER_PROFILES[name]), `tier '${name}' must reverse-derive to itself`).toBe(name)
+    }
   })
 })
 
