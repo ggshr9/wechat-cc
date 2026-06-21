@@ -111,6 +111,24 @@ export interface SpawnContext {
 }
 
 /**
+ * Merge `extra` env into EVERY stdio MCP child's `env`, returning a fresh map
+ * (inputs untouched). The per-spawn seam that carries a session's
+ * `WECHAT_SESSION_TOKEN`/`_TIER` into MCP children — codex's and cursor's MCP
+ * specs are fixed at provider construction, so each provider applies this at
+ * spawn. Generic over the server shape so both providers' spec types flow
+ * through; child env wins over `extra` only where keys don't collide (extra is
+ * spread last, so the injected auth env takes precedence by design).
+ */
+export function mergeEnvIntoMcpServers<T extends { env?: Record<string, string> }>(
+  servers: Record<string, T>,
+  extra: Record<string, string>,
+): Record<string, T> {
+  return Object.fromEntries(
+    Object.entries(servers).map(([name, srv]) => [name, { ...srv, env: { ...(srv.env ?? {}), ...extra } }]),
+  ) as Record<string, T>
+}
+
+/**
  * SDK-level sandbox granularity. Codex maps these directly; Cursor only
  * supports a coarse subset; Claude has none (relies on per-tool callback).
  * Used by capability-matrix derivation to decide what tier→sandbox

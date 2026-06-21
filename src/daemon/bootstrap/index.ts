@@ -21,7 +21,7 @@ import { SessionManager } from '../../core/session-manager'
 import { createClaudeAgentProvider, tierProfileToClaudeSdkOpts } from '../../core/claude-agent-provider'
 import { createCodexAgentProvider } from '../../core/codex-agent-provider'
 import type { TierProfile } from '../../core/user-tier'
-import { resolveTier, tierNameFromProfile } from '../../core/user-tier'
+import { resolveTier, sessionAuthEnv } from '../../core/user-tier'
 import { createProviderRegistry, type ProviderRegistry } from '../../core/provider-registry'
 import { createConversationCoordinator, type ConversationCoordinator, type TurnRecord } from '../../core/conversation-coordinator'
 import { makeConversationStore, type ConversationStore } from '../../core/conversation-store'
@@ -459,10 +459,7 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
     // === 'admin'). The route layer enforces the token's tier server-side
     // (route-tiers.ts), so this closes the cross-provider gap too — codex
     // gets the same env via its own per-spawn merge.
-    const sessionEnv: Record<string, string> = {
-      ...(sessionToken ? { WECHAT_SESSION_TOKEN: sessionToken } : {}),
-      WECHAT_SESSION_TIER: tierNameFromProfile(tierProfile),
-    }
+    const sessionEnv = sessionAuthEnv(tierProfile, sessionToken)
     const wechatEnv = wechatStdioForClaude ? { ...wechatStdioForClaude.env, ...sessionEnv } : undefined
     const delegateEnv = delegateStdioForClaude ? { ...delegateStdioForClaude.env, ...sessionEnv } : undefined
     const common: Options = {

@@ -1,8 +1,8 @@
 import { Codex, type Thread, type ThreadEvent, type ThreadItem } from '@openai/codex-sdk'
 import { tmpdir } from 'node:os'
-import type { AgentEvent, AgentProject, AgentProvider, AgentSession, PermissionMode, ProviderCapabilities, SpawnContext } from './agent-provider'
+import { mergeEnvIntoMcpServers, type AgentEvent, type AgentProject, type AgentProvider, type AgentSession, type PermissionMode, type ProviderCapabilities, type SpawnContext } from './agent-provider'
 import { resolveCodexCheapModel } from './codex-cheap-model'
-import { tierNameFromProfile, type TierProfile } from './user-tier'
+import { sessionAuthEnv, type TierProfile } from './user-tier'
 import { log } from '../lib/log'
 
 /**
@@ -206,14 +206,11 @@ export function createCodexAgentProvider(opts: CodexAgentProviderOptions = {}): 
         // MCP child's env at spawn — codex's MCP spec is fixed at construction,
         // so this per-spawn merge is how a codex session carries its tier (the
         // provider-agnostic seam; same env the claude side bakes in bootstrap).
-        const sessionEnv: Record<string, string> = {
-          ...(spawnOpts.sessionToken ? { WECHAT_SESSION_TOKEN: spawnOpts.sessionToken } : {}),
-          WECHAT_SESSION_TIER: tierNameFromProfile(spawnOpts.tierProfile),
-        }
-        const withEnv = Object.fromEntries(Object.entries(opts.mcpServers).map(([name, srv]) => {
-          const s = srv as { env?: Record<string, string> }
-          return [name, { ...s, env: { ...(s.env ?? {}), ...sessionEnv } }]
-        }))
+        const sessionEnv = sessionAuthEnv(spawnOpts.tierProfile, spawnOpts.sessionToken)
+        const withEnv = mergeEnvIntoMcpServers(
+          opts.mcpServers as Record<string, { env?: Record<string, string> }>,
+          sessionEnv,
+        )
         // Cast through `unknown` because CodexConfigValue forbids undefined
         // and our optional fields (args?, env?) carry that variance through
         // the index signature even when always populated. SDK serialiser

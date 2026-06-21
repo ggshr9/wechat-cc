@@ -115,6 +115,21 @@ export function tierNameFromProfile(tp: TierProfile): UserTier {
 }
 
 /**
+ * The per-session env every provider bakes into its stdio MCP children:
+ * `WECHAT_SESSION_TOKEN` (the env-only secret the children send as their
+ * bearer; omitted when no token was minted) + `WECHAT_SESSION_TIER` (the
+ * non-secret tier the wechat child gates admin-tool registration on). Built in
+ * one place so the two var names and the token-presence guard don't drift
+ * across the claude/codex/cursor spawn seams.
+ */
+export function sessionAuthEnv(tp: TierProfile, sessionToken?: string): Record<string, string> {
+  return {
+    ...(sessionToken ? { WECHAT_SESSION_TOKEN: sessionToken } : {}),
+    WECHAT_SESSION_TIER: tierNameFromProfile(tp),
+  }
+}
+
+/**
  * Resolve a chatId's tier from access.json snapshot. Admin > trusted > guest.
  * A chatId not in any list still maps to guest — the assumption is the
  * upstream allowlist gate has already rejected outright-blocked users.
