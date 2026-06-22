@@ -78,17 +78,29 @@ interface ThreadRow {
   last_active: string
 }
 
+/** Parse a JSON-array column defensively. A corrupt value (truncated write /
+ *  manual DB edit) must NOT throw — that would break the whole query, not just
+ *  the bad row. Non-JSON or non-array → []. Mirrors conversation-store's guard. */
+function safeJsonArray<T>(json: string): T[] {
+  try {
+    const v = JSON.parse(json)
+    return Array.isArray(v) ? (v as T[]) : []
+  } catch {
+    return []
+  }
+}
+
 function rowToRecord(r: ThreadRow): ThreadRecord {
   return {
     id: r.id,
     chatId: r.chat_id,
     title: r.title,
     summary: r.summary,
-    facets: JSON.parse(r.facets) as Facet[],
-    tags: JSON.parse(r.tags) as string[],
+    facets: safeJsonArray<Facet>(r.facets),
+    tags: safeJsonArray<string>(r.tags),
     private: r.private !== 0,
     status: r.status as ThreadStatus,
-    episodes: JSON.parse(r.episodes) as Episode[],
+    episodes: safeJsonArray<Episode>(r.episodes),
     createdTs: r.created_ts,
     lastActive: r.last_active,
   }

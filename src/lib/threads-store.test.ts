@@ -11,6 +11,23 @@ describe('threads store', () => {
     expect(all[0]).toMatchObject({ title: 'compass 排产', facets: ['task'], tags: ['compass'], status: 'active' })
   })
 
+  it('a corrupt JSON column does not crash the query — defaults to empty', async () => {
+    // Regression: rowToRecord JSON.parse'd facets/tags/episodes unguarded, so a
+    // single corrupt row (truncated write / manual edit) threw and broke the
+    // ENTIRE thread list (not just that row). conversation-store guards its
+    // analogous parse; threads-store must too.
+    const db = openTestDb()
+    const s = makeThreadsStore(db)
+    await s.create({ chatId: 'c1', title: 't', summary: '', facets: ['task'], tags: ['x'], private: false, episodes: [{ from_ts: 'a', to_ts: 'b' }] })
+    db.exec(`UPDATE threads SET facets = 'not-json{', tags = '[broken', episodes = 'xxx' WHERE chat_id = 'c1'`)
+    const all = await s.list('c1')
+    expect(all.length).toBe(1)        // row still returned, query did not throw
+    expect(all[0]!.facets).toEqual([])
+    expect(all[0]!.tags).toEqual([])
+    expect(all[0]!.episodes).toEqual([])
+    expect(all[0]!.title).toBe('t')   // intact fields preserved
+  })
+
   it('update merges fields and bumps last_active', async () => {
     const s = makeThreadsStore(openTestDb())
     const id = await s.create({ chatId: 'c1', title: 't', summary: '', facets: ['life'], tags: [], private: true, episodes: [] })
