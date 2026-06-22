@@ -9,6 +9,7 @@ import { buildDetectorContext } from './milestones/build-context'
 import { detectMilestones } from './milestones/detector'
 import { makeMilestonesStore } from './milestones/store'
 import { makeEventsStore } from './events/store'
+import { runLocalImportIfEnabled } from './local-import'
 
 export interface StartupSweepDeps {
   stateDir: string
@@ -32,6 +33,10 @@ export function runStartupSweeps(deps: StartupSweepDeps): void {
   void runInboxCleanup(deps)
   void runStartupNotify(deps)
   void runIntrospectCatchUp(deps)
+  // Opt-in local claude/codex history import (zero-LLM; no-op unless the
+  // operator enabled companion.import_local_history). Independent of the
+  // companion-enabled gate so the 对话 archive populates on every boot.
+  void runLocalImportIfEnabled(deps.stateDir, deps.db, deps.log)
 }
 
 async function runMilestoneSweep(deps: StartupSweepDeps): Promise<void> {

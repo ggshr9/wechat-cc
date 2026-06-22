@@ -22,6 +22,9 @@ import { parseAgenda, selectDue, markResolved } from '../companion/agenda'
 import { makeMessagesStore } from '../../lib/messages-store'
 import { makeThreadsStore } from '../../lib/threads-store'
 import { runThreadsExtraction } from '../threads/extractor'
+import { runLocalImportIfEnabled } from '../local-import'
+import { synthesizeOverview } from '../../cli/memory-synthesis'
+import { makeLifeStoresReader } from '../life-stores'
 
 function errMsg(err: unknown): string { return err instanceof Error ? err.message : String(err) }
 
@@ -144,6 +147,12 @@ export function buildTickBodies(deps: TickDeps): TickBodies {
     // _opts.nowIso ignored for MVP — observations/memory internal timestamps
     // stay wall-clock. Keeping the symmetric signature avoids churn when
     // introspect virtual time is added later.
+    // Opt-in local-history import (zero-LLM). Runs FIRST, before the
+    // chatId/sdkEval gates below, since it needs neither — the 对话 archive
+    // should populate even on a misconfigured / cheap-eval-less install.
+    // No-op unless companion.import_local_history is on.
+    await runLocalImportIfEnabled(deps.stateDir, deps.db, deps.log)
+
     const chatId = resolveIntrospectChatId(deps.stateDir)
     if (!chatId) { deps.log('INTROSPECT', 'skip tick — no default_chat_id'); return }
     // PR F — resolve cheap eval via the registry. Picks the cheapest
@@ -211,6 +220,18 @@ export function buildTickBodies(deps: TickDeps): TickBodies {
         })
       } catch (err) {
         deps.log('THREADS', `extraction failed for chat ${extractChatId}: ${err instanceof Error ? err.message : err}`)
+      }
+    }
+
+    // Opt-in 24h overview refresh — the one LLM cost of the auto-memory feature
+    // (1 cheap-eval call/day). Reuses the resolved chatId (admin) + sdkEval.
+    // No-op unless companion.import_local_history is on.
+    if (loadCompanionConfig(deps.stateDir).import_local_history) {
+      try {
+        await synthesizeOverview({ stateDir: deps.stateDir, adminChatId: chatId, sdkEval, lifeStores: makeLifeStoresReader(deps.db, deps.stateDir) })
+        deps.log('SYNTHESIZE', `overview refreshed for ${chatId} (24h auto)`)
+      } catch (err) {
+        deps.log('SYNTHESIZE', `auto refresh failed: ${err instanceof Error ? err.message : err}`)
       }
     }
   }

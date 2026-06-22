@@ -26,6 +26,13 @@ export interface CompanionConfig {
    * maybeStartupIntrospect for the catch-up logic.
    */
   last_introspect_at: string | null
+  /**
+   * Opt-in: auto-import the operator's LOCAL claude/codex history (zero-LLM
+   * file scan) at startup + on the 24h introspect tick, and refresh the "懂你"
+   * overview once/day. Default OFF — importing all of someone's local coding
+   * history into the bot is privacy-sensitive, so it's an explicit choice.
+   */
+  import_local_history: boolean
 }
 
 export function defaultCompanionConfig(): CompanionConfig {
@@ -35,6 +42,7 @@ export function defaultCompanionConfig(): CompanionConfig {
     default_chat_id: null,
     snooze_until: null,
     last_introspect_at: null,
+    import_local_history: false,
   }
 }
 
@@ -55,6 +63,7 @@ export function loadCompanionConfig(stateDir: string): CompanionConfig {
       default_chat_id: typeof parsed.default_chat_id === 'string' ? parsed.default_chat_id : null,
       snooze_until: typeof parsed.snooze_until === 'string' ? parsed.snooze_until : null,
       last_introspect_at: typeof parsed.last_introspect_at === 'string' ? parsed.last_introspect_at : null,
+      import_local_history: typeof parsed.import_local_history === 'boolean' ? parsed.import_local_history : d.import_local_history,
     }
     // Legacy triggers/per_project_persona/triggers fields (if any) are
     // silently dropped on next save — migration path for v1.1 installs.

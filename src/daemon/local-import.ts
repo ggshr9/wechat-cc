@@ -14,13 +14,38 @@
  * to files touched since — the first run imports everything, later runs only
  * re-parse new / appended sessions. INSERT OR IGNORE makes any overlap a no-op.
  */
-import { readdirSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Db } from '../lib/db'
 import { backfillFromClaudeJsonl, backfillFromCodexJsonl } from '../cli/dialogue'
+import { loadCompanionConfig } from './companion/config'
 
 export const LOCAL_CLAUDE_CHAT = 'local:claude'
 export const LOCAL_CODEX_CHAT = 'local:codex'
+
+/** Production history roots (overridable in deps for tests). */
+export function defaultLocalRoots(): { claudeProjectsRoot: string; codexRoot: string } {
+  return {
+    claudeProjectsRoot: join(homedir(), '.claude', 'projects'),
+    codexRoot: join(homedir(), '.codex', 'sessions'),
+  }
+}
+
+/** File-backed incremental watermark (a single ms value) under stateDir. */
+export function makeFileWatermark(path: string): { get: () => number | null; set: (ms: number) => void } {
+  return {
+    get() {
+      try {
+        const n = Number((JSON.parse(readFileSync(path, 'utf8')) as { watermark?: unknown }).watermark)
+        return Number.isFinite(n) ? n : null
+      } catch { return null }
+    },
+    set(ms) {
+      try { writeFileSync(path, JSON.stringify({ watermark: ms }), { mode: 0o600 }) } catch { /* best-effort */ }
+    },
+  }
+}
 
 export interface LocalImportDeps {
   db: Db
@@ -72,4 +97,25 @@ export async function importLocalHistory(deps: LocalImportDeps): Promise<LocalIm
   deps.setWatermark(startedAt)
   deps.log?.('LOCAL_IMPORT', `claude=${claude.inserted}/${claude.scanned} codex=${codex.inserted}/${codex.scanned} since=${since ?? 'all'}`)
   return { claude, codex }
+}
+
+/**
+ * Production wiring: run the local-history import iff the operator opted in
+ * (companion config `import_local_history`). Used by the startup sweep and the
+ * 24h introspect tick. Default-off → a no-op in tests/e2e (no real-home scan).
+ * Errors are logged, never thrown.
+ */
+export async function runLocalImportIfEnabled(
+  stateDir: string,
+  db: Db,
+  log?: (tag: string, line: string) => void,
+): Promise<void> {
+  if (!loadCompanionConfig(stateDir).import_local_history) return
+  const roots = defaultLocalRoots()
+  const wm = makeFileWatermark(join(stateDir, 'local-import-watermark.json'))
+  try {
+    await importLocalHistory({ db, ...roots, getWatermark: wm.get, setWatermark: wm.set, now: () => Date.now(), log })
+  } catch (err) {
+    log?.('LOCAL_IMPORT', `failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
 }
