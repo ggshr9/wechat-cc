@@ -74,6 +74,11 @@ export function verifyAndConsumeInvite(stateDir: string, secret: string, nowMs: 
     return false
   }
   const ok = typeof pending.secret === 'string'
+    // Never authenticate an empty stored or presented secret —
+    // constantTimeEquals('', '') is true, so a corrupt/hand-edited pending file
+    // with an empty secret + an empty presented secret would otherwise pass.
+    && pending.secret.length > 0
+    && secret.length > 0
     && typeof pending.expiresMs === 'number'
     && constantTimeEquals(pending.secret, secret)
     && nowMs <= pending.expiresMs

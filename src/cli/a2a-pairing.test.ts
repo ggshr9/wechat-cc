@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { INVITE_TTL_MS, clearInvite, decodeInvite, mintInvite, verifyAndConsumeInvite } from './a2a-pairing'
@@ -30,6 +30,13 @@ describe('verifyAndConsumeInvite', () => {
     expect(verifyAndConsumeInvite(stateDir, secret, NOW)).toBe(true)
     // second use fails — consumed
     expect(verifyAndConsumeInvite(stateDir, secret, NOW)).toBe(false)
+  })
+
+  it('rejects an empty stored secret — no constant-time empty-match bypass', () => {
+    // A corrupt / hand-edited pending file with an empty secret must NOT
+    // authenticate an empty presented secret: constantTimeEquals('','') is true.
+    writeFileSync(join(stateDir, 'a2a-pair-pending.json'), JSON.stringify({ secret: '', expiresMs: NOW + INVITE_TTL_MS }))
+    expect(verifyAndConsumeInvite(stateDir, '', NOW)).toBe(false)
   })
 
   it('rejects a wrong secret WITHOUT burning the invite', () => {
