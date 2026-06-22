@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openTestDb } from '../lib/db'
 import { makeMessagesStore } from '../lib/messages-store'
-import { importLocalHistory, LOCAL_CLAUDE_CHAT, LOCAL_CODEX_CHAT } from './local-import'
+import { importLocalHistory, runLocalImportIfEnabled, LOCAL_CLAUDE_CHAT, LOCAL_CODEX_CHAT } from './local-import'
+import { saveCompanionConfig, defaultCompanionConfig } from './companion/config'
 
 function writeClaudeSession(root: string, project: string, sessionId: string, turns: object[]): void {
   const dir = join(root, project)
@@ -93,5 +94,50 @@ describe('importLocalHistory', () => {
     })
     expect(result).toEqual({ claude: { scanned: 0, inserted: 0 }, codex: { scanned: 0, inserted: 0 } })
     expect(wm).toBe(1_700_000_000_000)
+  })
+})
+
+describe('runLocalImportIfEnabled (opt-in wiring)', () => {
+  it('is a no-op when import_local_history is off (default)', async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'li-state-off-'))
+    const claudeRoot = mkdtempSync(join(tmpdir(), 'li-claude-off-'))
+    const codexRoot = mkdtempSync(join(tmpdir(), 'li-codex-off-'))
+    try {
+      writeClaudeSession(claudeRoot, 'proj-a', 'sess1', CLAUDE_TURNS)
+      const db = openTestDb()
+      // No companion config written → default import_local_history === false.
+      await runLocalImportIfEnabled(stateDir, db, undefined, { claudeProjectsRoot: claudeRoot, codexRoot })
+      const store = makeMessagesStore(db)
+      expect((await store.listRange(LOCAL_CLAUDE_CHAT, { limit: 10 })).length).toBe(0)
+    } finally {
+      for (const d of [stateDir, claudeRoot, codexRoot]) rmSync(d, { recursive: true, force: true })
+    }
+  })
+
+  it('imports when enabled, and coalesces concurrent runs into a single scan', async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'li-state-on-'))
+    const claudeRoot = mkdtempSync(join(tmpdir(), 'li-claude-on-'))
+    const codexRoot = mkdtempSync(join(tmpdir(), 'li-codex-on-'))
+    try {
+      await saveCompanionConfig(stateDir, { ...defaultCompanionConfig(), import_local_history: true })
+      writeClaudeSession(claudeRoot, 'proj-a', 'sess1', CLAUDE_TURNS)
+      writeCodexRollout(codexRoot, '2026', '06', '01', 'rollout-2026-06-01T00-00-00-abc.jsonl', CODEX_LINES)
+      const db = openTestDb()
+      const runLines: string[] = []
+      const log = (tag: string, line: string) => { if (tag === 'LOCAL_IMPORT') runLines.push(line) }
+      const roots = { claudeProjectsRoot: claudeRoot, codexRoot }
+      // Two concurrent calls (the startup sweep + the catch-up tick race) must
+      // coalesce: importLocalHistory logs exactly once per run, so one line.
+      await Promise.all([
+        runLocalImportIfEnabled(stateDir, db, log, roots),
+        runLocalImportIfEnabled(stateDir, db, log, roots),
+      ])
+      expect(runLines.length).toBe(1) // coalesced — not a double scan
+      const store = makeMessagesStore(db)
+      const claudeMsgs = await store.listRange(LOCAL_CLAUDE_CHAT, { limit: 50 })
+      expect(claudeMsgs.some(m => m.text === 'hi from claude')).toBe(true)
+    } finally {
+      for (const d of [stateDir, claudeRoot, codexRoot]) rmSync(d, { recursive: true, force: true })
+    }
   })
 })

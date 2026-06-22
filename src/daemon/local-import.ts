@@ -99,23 +99,33 @@ export async function importLocalHistory(deps: LocalImportDeps): Promise<LocalIm
   return { claude, codex }
 }
 
+// Coalesce concurrent runs. At startup the standalone import sweep and the
+// introspect catch-up tick BOTH call this; without a guard they'd race into a
+// double full-scan (idempotent, but wasteful). A second concurrent caller
+// awaits the first's promise instead of starting its own.
+let _importInFlight: Promise<void> | null = null
+
 /**
  * Production wiring: run the local-history import iff the operator opted in
  * (companion config `import_local_history`). Used by the startup sweep and the
  * 24h introspect tick. Default-off → a no-op in tests/e2e (no real-home scan).
- * Errors are logged, never thrown.
+ * Errors are logged, never thrown. `roots` is overridable for tests.
  */
 export async function runLocalImportIfEnabled(
   stateDir: string,
   db: Db,
   log?: (tag: string, line: string) => void,
+  roots: { claudeProjectsRoot: string; codexRoot: string } = defaultLocalRoots(),
 ): Promise<void> {
   if (!loadCompanionConfig(stateDir).import_local_history) return
-  const roots = defaultLocalRoots()
-  const wm = makeFileWatermark(join(stateDir, 'local-import-watermark.json'))
-  try {
-    await importLocalHistory({ db, ...roots, getWatermark: wm.get, setWatermark: wm.set, now: () => Date.now(), log })
-  } catch (err) {
-    log?.('LOCAL_IMPORT', `failed: ${err instanceof Error ? err.message : String(err)}`)
-  }
+  if (_importInFlight) return _importInFlight
+  _importInFlight = (async () => {
+    const wm = makeFileWatermark(join(stateDir, 'local-import-watermark.json'))
+    try {
+      await importLocalHistory({ db, ...roots, getWatermark: wm.get, setWatermark: wm.set, now: () => Date.now(), log })
+    } catch (err) {
+      log?.('LOCAL_IMPORT', `failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  })()
+  try { await _importInFlight } finally { _importInFlight = null }
 }
