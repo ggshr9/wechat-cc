@@ -309,6 +309,7 @@ describe('CompanionStatusResponse', () => {
       timezone: 'Asia/Shanghai',
       default_chat_id: null,
       snooze_until: null,
+      import_local_history: false,
     }).success).toBe(true)
   })
   it('accepts enabled=true with snooze', () => {
@@ -317,6 +318,7 @@ describe('CompanionStatusResponse', () => {
       timezone: 'Asia/Shanghai',
       default_chat_id: 'abc123',
       snooze_until: '2026-05-07T12:00:00Z',
+      import_local_history: true,
     }).success).toBe(true)
   })
 })

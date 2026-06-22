@@ -77,6 +77,8 @@ export interface WechatCompanionDep {
     timezone: string
     default_chat_id: string | null
     snooze_until: string | null
+    /** Whether auto-import of local claude/codex history is opted in. */
+    import_local_history: boolean
   }
   snooze(minutes: number): Promise<{ ok: true; until: string }>
 }

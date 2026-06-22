@@ -333,6 +333,8 @@ describe('makeIlinkAdapter (composed)', () => {
     expect(typeof s.timezone).toBe('string')
     expect('snooze_until' in s).toBe(true)
     expect('default_chat_id' in s).toBe(true)
+    // Auto-import opt-in flag is observable here (default off after enable).
+    expect(s.import_local_history).toBe(false)
     // v2 dropped: per_project_persona, personas_available, triggers, pushes_*
     expect('triggers' in s).toBe(false)
     expect('personas_available' in s).toBe(false)

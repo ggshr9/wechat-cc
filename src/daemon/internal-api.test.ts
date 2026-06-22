@@ -887,6 +887,7 @@ describe('internal-api', () => {
         timezone: string
         default_chat_id: string | null
         snooze_until: string | null
+        import_local_history: boolean
       }
       snooze: (minutes: number) => Promise<{ ok: true; until: string }>
     }
@@ -902,7 +903,7 @@ describe('internal-api', () => {
       const { port, token } = await startWithCompanion({
         enable: async () => ({ ok: true, state_dir: '/x', welcome_message: 'w', cost_estimate_note: 'c' }),
         disable: async () => ({ ok: true, enabled: false }),
-        status: () => ({ enabled: true, timezone: 'Asia/Shanghai', default_chat_id: 'c1', snooze_until: null }),
+        status: () => ({ enabled: true, timezone: 'Asia/Shanghai', default_chat_id: 'c1', snooze_until: null, import_local_history: false }),
         snooze: async () => ({ ok: true, until: '2026-04-22T00:00:00Z' }),
       })
       const resp = await fetch(`http://127.0.0.1:${port}/v1/companion/status`, {
@@ -910,7 +911,7 @@ describe('internal-api', () => {
       })
       expect(resp.status).toBe(200)
       expect(await resp.json()).toEqual({
-        enabled: true, timezone: 'Asia/Shanghai', default_chat_id: 'c1', snooze_until: null,
+        enabled: true, timezone: 'Asia/Shanghai', default_chat_id: 'c1', snooze_until: null, import_local_history: false,
       })
     })
 
@@ -923,7 +924,7 @@ describe('internal-api', () => {
       }))
       const { port, token } = await startWithCompanion({
         enable, disable: async () => ({ ok: true, enabled: false }),
-        status: () => ({ enabled: false, timezone: 'UTC', default_chat_id: null, snooze_until: null }),
+        status: () => ({ enabled: false, timezone: 'UTC', default_chat_id: null, snooze_until: null, import_local_history: false }),
         snooze: async () => ({ ok: true, until: '' }),
       })
       const resp = await fetch(`http://127.0.0.1:${port}/v1/companion/enable`, {
@@ -942,7 +943,7 @@ describe('internal-api', () => {
       const { port, token } = await startWithCompanion({
         enable: async () => ({ ok: true, already_configured: true }),
         disable: async () => ({ ok: true, enabled: false }),
-        status: () => ({ enabled: true, timezone: 'UTC', default_chat_id: null, snooze_until: null }),
+        status: () => ({ enabled: true, timezone: 'UTC', default_chat_id: null, snooze_until: null, import_local_history: false }),
         snooze: async () => ({ ok: true, until: '' }),
       })
       const resp = await fetch(`http://127.0.0.1:${port}/v1/companion/enable`, {
@@ -958,7 +959,7 @@ describe('internal-api', () => {
       const { port, token } = await startWithCompanion({
         enable: async () => ({ ok: true, state_dir: '', welcome_message: '', cost_estimate_note: '' }),
         disable,
-        status: () => ({ enabled: true, timezone: 'UTC', default_chat_id: null, snooze_until: null }),
+        status: () => ({ enabled: true, timezone: 'UTC', default_chat_id: null, snooze_until: null, import_local_history: false }),
         snooze: async () => ({ ok: true, until: '' }),
       })
       const resp = await fetch(`http://127.0.0.1:${port}/v1/companion/disable`, {
@@ -979,7 +980,7 @@ describe('internal-api', () => {
       const { port, token } = await startWithCompanion({
         enable: async () => ({ ok: true, state_dir: '', welcome_message: '', cost_estimate_note: '' }),
         disable: async () => ({ ok: true, enabled: false }),
-        status: () => ({ enabled: true, timezone: 'UTC', default_chat_id: null, snooze_until: null }),
+        status: () => ({ enabled: true, timezone: 'UTC', default_chat_id: null, snooze_until: null, import_local_history: false }),
         snooze,
       })
       const resp = await fetch(`http://127.0.0.1:${port}/v1/companion/snooze`, {
@@ -998,7 +999,7 @@ describe('internal-api', () => {
       const { port, token } = await startWithCompanion({
         enable: async () => ({ ok: true, state_dir: '', welcome_message: '', cost_estimate_note: '' }),
         disable: async () => ({ ok: true, enabled: false }),
-        status: () => ({ enabled: true, timezone: 'UTC', default_chat_id: null, snooze_until: null }),
+        status: () => ({ enabled: true, timezone: 'UTC', default_chat_id: null, snooze_until: null, import_local_history: false }),
         snooze: async () => ({ ok: true, until: '' }),
       })
       const cases = [
@@ -1024,7 +1025,7 @@ describe('internal-api', () => {
       const { port, token } = await startWithCompanion({
         enable: async () => { throw new Error('config write failed') },
         disable: async () => ({ ok: true, enabled: false }),
-        status: () => ({ enabled: false, timezone: 'UTC', default_chat_id: null, snooze_until: null }),
+        status: () => ({ enabled: false, timezone: 'UTC', default_chat_id: null, snooze_until: null, import_local_history: false }),
         snooze: async () => ({ ok: true, until: '' }),
       })
       const resp = await fetch(`http://127.0.0.1:${port}/v1/companion/enable`, {

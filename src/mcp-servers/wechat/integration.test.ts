@@ -518,6 +518,7 @@ describe('wechat-mcp stdio integration', () => {
         enabled, timezone: 'Asia/Shanghai',
         default_chat_id: enabled ? 'c1' : null,
         snooze_until: snoozeUntil,
+        import_local_history: false,
       }),
       snooze: async (minutes: number) => {
         snoozeUntil = new Date(Date.parse('2026-04-22T00:00:00Z') + minutes * 60_000).toISOString()

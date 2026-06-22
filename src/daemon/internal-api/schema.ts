@@ -202,6 +202,7 @@ export const CompanionStatusResponse = z.object({
   timezone: z.string(),
   default_chat_id: z.string().nullable(),
   snooze_until: z.string().nullable(),
+  import_local_history: z.boolean(),
 })
 
 // ── POST /v1/companion/enable ────────────────────────────────────────────────

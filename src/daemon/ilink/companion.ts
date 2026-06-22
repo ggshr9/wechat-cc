@@ -58,6 +58,7 @@ export function makeCompanion(ctx: IlinkContext): WechatCompanionDep {
         timezone: cfg.timezone,
         default_chat_id: cfg.default_chat_id,
         snooze_until: cfg.snooze_until,
+        import_local_history: cfg.import_local_history,
       }
     },
 
