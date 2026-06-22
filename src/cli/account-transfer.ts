@@ -90,6 +90,13 @@ export function decryptBundle(blob: Buffer, passphrase: string): AccountBundle {
   if (blob.subarray(0, MAGIC.length).toString('utf8') !== MAGIC) {
     throw new Error('not a wechat-cc account bundle')
   }
+  // Must hold at least the fixed header (MAGIC + salt + iv + tag) before any
+  // ciphertext. Without this, a truncated bundle hands a wrong-length IV/tag to
+  // createDecipheriv/setAuthTag (which run outside the try below) and throws a
+  // raw crypto error instead of the contracted "corrupt file" message.
+  if (blob.length < MAGIC.length + SALT_LEN + IV_LEN + TAG_LEN) {
+    throw new Error('decrypt failed — wrong passphrase or corrupt file')
+  }
   let off = MAGIC.length
   const salt = blob.subarray(off, (off += SALT_LEN))
   const iv = blob.subarray(off, (off += IV_LEN))

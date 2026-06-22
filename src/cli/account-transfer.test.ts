@@ -100,6 +100,14 @@ describe('encryption guards', () => {
   it('rejects a non-bundle blob', () => {
     expect(() => decryptBundle(Buffer.from('not a bundle at all'), 'pw')).toThrow(/not a wechat-cc account bundle/)
   })
+  it('rejects a truncated bundle with the friendly error (not a raw crypto error)', () => {
+    seedAccount(src, 'a-im-bot')
+    const blob = exportAccount(src, 'a-im-bot', 'pw')
+    // MAGIC intact but the body is cut, so the IV/tag slices are too short.
+    // Must surface the contracted "corrupt file" error, NOT a raw crypto
+    // "Invalid initialization vector / authentication tag length".
+    expect(() => decryptBundle(blob.subarray(0, 30), 'pw')).toThrow(/wrong passphrase or corrupt/)
+  })
   it('token never appears in plaintext in the bundle', () => {
     seedAccount(src, 'a-im-bot', { token: 'SUPER-SECRET-TOKEN' })
     const blob = exportAccount(src, 'a-im-bot', 'pw')
