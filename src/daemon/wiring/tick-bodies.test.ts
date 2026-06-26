@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildTickBodies, buildPushTickText, type TickDeps } from './tick-bodies'
@@ -291,6 +291,97 @@ describe('buildTickBodies / pushTick — companion default_chat_id + tier (Task 
     const req = s.acquire.mock.calls[0]?.[0] as { chatId: string; tierProfile: unknown }
     expect(req.tierProfile).toBe(TIER_PROFILES.trusted)
     expect(s.logs.some(l => l.startsWith('COMPANION|') && l.includes('trusted'))).toBe(true)
+  })
+})
+
+describe('buildTickBodies / pushTick — at-most-once dedup on sleep/wake', () => {
+  let cleanup: string[]
+  beforeEach(() => { cleanup = [] })
+  afterEach(() => {
+    for (const d of cleanup) {
+      try { rmSync(d, { recursive: true, force: true }) } catch { /* best effort */ }
+    }
+  })
+
+  const agendaPath = (stateDir: string, chatId: string) =>
+    join(stateDir, 'memory', chatId, 'agenda.md')
+
+  // A dispatch that throws partway, simulating the machine sleeping mid-turn
+  // (the proactive message already went out, then the turn errors on wake) —
+  // or the daemon being restarted before the post-dispatch mark could land.
+  const throwingDispatch = () => ({
+    async *[Symbol.asyncIterator]() { throw new Error('stream idle timeout (slept mid-turn)') },
+  })
+
+  it('does not re-push a due intention whose first dispatch was interrupted', async () => {
+    const s = setupDeps({
+      defaultChatId: 'chat-1',
+      inFlight: false,
+      agendaMd: '- [ ] due:2026-05-13 ping me about the gym',
+    })
+    cleanup.push(s.stateDir)
+    s.dispatch.mockImplementationOnce(throwingDispatch)
+    const { pushTick } = buildTickBodies(s.deps)
+
+    await pushTick({ nowIso: '2026-05-13T10:00:00.000Z' }) // push goes out, then turn errors
+    await pushTick({ nowIso: '2026-05-13T10:20:00.000Z' }) // wake/restart re-trigger
+
+    // The intention was claimed BEFORE dispatch, so the second tick finds it
+    // resolved and does not push again. dispatch ran exactly once (first tick).
+    expect(s.dispatch).toHaveBeenCalledOnce()
+  })
+
+  it('marks the intention resolved even when dispatch throws (at-most-once)', async () => {
+    const s = setupDeps({
+      defaultChatId: 'chat-1',
+      inFlight: false,
+      agendaMd: '- [ ] due:2026-05-13 ping me about the gym',
+    })
+    cleanup.push(s.stateDir)
+    s.dispatch.mockImplementationOnce(throwingDispatch)
+    const { pushTick } = buildTickBodies(s.deps)
+
+    await pushTick({ nowIso: '2026-05-13T10:00:00.000Z' })
+
+    const content = readFileSync(agendaPath(s.stateDir, 'chat-1'), 'utf8')
+    expect(content).toContain('- [x] done:2026-05-13 ping me about the gym')
+    expect(content).not.toContain('- [ ] due:2026-05-13 ping me about the gym')
+  })
+
+  it('preserves an intention the agent appends to agenda.md during dispatch', async () => {
+    const s = setupDeps({
+      defaultChatId: 'chat-1',
+      inFlight: false,
+      agendaMd: '- [ ] due:2026-05-13 ping me about the gym',
+    })
+    cleanup.push(s.stateDir)
+    const file = agendaPath(s.stateDir, 'chat-1')
+    // The agent edits agenda.md mid-dispatch (adds a fresh intention). Because
+    // the fired item is already marked before dispatch and we never write again
+    // after, the agent's addition must survive.
+    s.dispatch.mockImplementationOnce(() => ({
+      async *[Symbol.asyncIterator]() {
+        writeFileSync(file, readFileSync(file, 'utf8') + '\n- [ ] due:2026-06-01 follow up later')
+      },
+    }))
+    const { pushTick } = buildTickBodies(s.deps)
+
+    await pushTick({ nowIso: '2026-05-13T10:00:00.000Z' })
+
+    const content = readFileSync(file, 'utf8')
+    expect(content).toContain('- [x] done:2026-05-13 ping me about the gym')
+    expect(content).toContain('- [ ] due:2026-06-01 follow up later')
+  })
+
+  it('does not touch agenda.md on the in-flight early-return path', async () => {
+    const original = '- [ ] due:2026-05-13 ping me about the gym'
+    const s = setupDeps({ defaultChatId: 'chat-1', inFlight: true, agendaMd: original })
+    cleanup.push(s.stateDir)
+    const { pushTick } = buildTickBodies(s.deps)
+
+    await pushTick({ nowIso: '2026-05-13T10:00:00.000Z' })
+
+    expect(readFileSync(agendaPath(s.stateDir, 'chat-1'), 'utf8')).toBe(original)
   })
 })
 

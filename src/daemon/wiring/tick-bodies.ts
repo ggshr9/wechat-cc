@@ -128,19 +128,24 @@ export function buildTickBodies(deps: TickDeps): TickBodies {
       tierProfile,
       permissionMode: deps.permissionMode,
     })
+    // Claim the item BEFORE dispatch — mark it resolved up front so a push that
+    // is interrupted (machine sleeps mid-turn; daemon restart / lock-steal on
+    // wake) cannot re-fire on the next tick. At-most-once: if the dispatch then
+    // fails the nudge is simply skipped rather than retried — the deliberate
+    // trade-off for proactive messages, where a duplicate is the reported pain
+    // and a missed nudge is low-stakes (the agent can re-author it). The agent
+    // may still edit agenda.md DURING dispatch (it runs after this write, so
+    // its additions layer on top and are not clobbered) — which is why we no
+    // longer re-read + write after dispatch.
+    // See docs/superpowers/specs/2026-06-25-companion-push-at-most-once-design.md
+    const updated = markResolved(agendaMd, item, today)
+    if (updated !== agendaMd) agendaFs.write('agenda.md', updated)
     const tickText = buildPushTickText({ nowIso, defaultChatId: chatId, intention: item.body })
     try {
       for await (const _ev of handle.dispatch(tickText)) { /* drain */ }
     } catch (err) {
       deps.log('SCHED', `companion tick dispatch failed: ${errMsg(err)}`)
-      return // dispatch failed — leave pending, retry next tick
     }
-    // Resolve so the item fires at most once. Re-read first: the agent may have
-    // edited agenda.md during dispatch (added new intentions) — markResolved
-    // matches the original line and preserves any additions.
-    const freshMd = agendaFs.read('agenda.md') ?? agendaMd
-    const updated = markResolved(freshMd, item, today)
-    if (updated !== freshMd) agendaFs.write('agenda.md', updated)
   }
 
   async function introspectTick(_opts?: { nowIso?: string }): Promise<void> {
