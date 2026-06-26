@@ -17,7 +17,7 @@
 import { randomBytes } from 'node:crypto'
 import { createA2ARegistry } from '../core/a2a-registry'
 import { createA2AClient } from '../core/a2a-client'
-import { decodeInvite, pairUrl } from './a2a-pairing'
+import { decodeInvite, pairUrl } from '../lib/a2a-pairing'
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/
 const MIN_TOKEN = 16

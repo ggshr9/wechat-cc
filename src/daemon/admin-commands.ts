@@ -20,7 +20,7 @@ import type { SessionManager } from '../core/session-manager'
 import type { SessionStore } from '../core/session-store'
 import type { SessionStateStore, ExpiredBot } from './session-state'
 import { loadHearthApi, type HearthApi, type HearthLoadResult } from './hearth-adapter'
-import type { SynthesizeResult } from '../cli/memory-synthesis'
+import type { SynthesizeResult } from '../lib/memory-synthesis'
 
 export interface AdminCommandsDeps {
   stateDir: string

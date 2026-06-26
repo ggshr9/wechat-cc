@@ -18,7 +18,7 @@ import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Db } from '../lib/db'
-import { backfillFromClaudeJsonl, backfillFromCodexJsonl } from '../cli/dialogue'
+import { backfillFromClaudeJsonl, backfillFromCodexJsonl } from '../lib/dialogue'
 import { loadCompanionConfig } from './companion/config'
 
 export const LOCAL_CLAUDE_CHAT = 'local:claude'

@@ -127,7 +127,7 @@ export function buildPipelineDeps(opts: PipelineDepsOpts, refs: PipelineDepsRefs
     setBotName,
     botNameFallback: (cid) => botNameFromModeFallback(boot.coordinator.getMode(cid)),
     synthesizeMemory: async (adminChatId) => {
-      const { synthesizeOverview } = await import('../../cli/memory-synthesis')
+      const { synthesizeOverview } = await import('../../lib/memory-synthesis')
       const { makeLifeStoresReader } = await import('../life-stores')
       // Follow the admin conversation's provider (decided design); fall back
       // to the registry's cheapest eval when the mode isn't solo / unknown.
@@ -143,7 +143,7 @@ export function buildPipelineDeps(opts: PipelineDepsOpts, refs: PipelineDepsRefs
     // understands about them ("看记忆" / "你对我的理解" from WeChat).
     readOverview: async (adminChatId) => {
       const { readFile } = await import('node:fs/promises')
-      const { OVERVIEW_FILENAME } = await import('../../cli/memory-synthesis')
+      const { OVERVIEW_FILENAME } = await import('../../lib/memory-synthesis')
       try { return await readFile(join(stateDir, 'memory', adminChatId, OVERVIEW_FILENAME), 'utf8') }
       catch { return null }
     },

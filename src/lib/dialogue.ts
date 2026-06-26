@@ -1,5 +1,8 @@
 /**
- * dialogue.ts — backfill CLI helpers.
+ * dialogue.ts — conversation-history backfill + query over the messages/threads
+ * tables. Pure db logic (no CLI/argv/stdout), so it lives in lib/ and both the
+ * CLI and the daemon's auto-importer (daemon/local-import.ts) can use it without
+ * a daemon→cli layer violation.
  *
  * Imports conversation history from agent session JSONLs into the `messages`
  * SQLite table. Two sources are supported:
@@ -25,10 +28,10 @@
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { basename as pathBasename, join } from 'node:path'
-import type { Db } from '../lib/db'
-import { makeMessagesStore, type MessageRecord } from '../lib/messages-store'
-import { makeThreadsStore, type ThreadRecord, type Facet } from '../lib/threads-store'
-import { isoFromMs, isValidIso } from '../lib/iso-time'
+import type { Db } from './db'
+import { makeMessagesStore, type MessageRecord } from './messages-store'
+import { makeThreadsStore, type ThreadRecord, type Facet } from './threads-store'
+import { isoFromMs, isValidIso } from './iso-time'
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -166,7 +169,7 @@ export async function backfillFromCodexJsonl(
   dryRun = false,
   sinceMs?: number,
 ): Promise<{ scanned: number; inserted: number }> {
-  const { readCodexJsonlAsClaudeTurns } = await import('../lib/codex-jsonl')
+  const { readCodexJsonlAsClaudeTurns } = await import('./codex-jsonl')
   const store = makeMessagesStore(db)
   let scanned = 0
   let inserted = 0
@@ -326,7 +329,7 @@ export async function backfillKnownCodexSessions(
   chatId: string,
   dryRun = false,
 ): Promise<{ knownSessions: number; filesFound: number; scanned: number; inserted: number }> {
-  const { readCodexJsonlAsClaudeTurns, findCodexRollout } = await import('../lib/codex-jsonl')
+  const { readCodexJsonlAsClaudeTurns, findCodexRollout } = await import('./codex-jsonl')
   const store = makeMessagesStore(db)
   let filesFound = 0
   let scanned = 0
@@ -506,7 +509,7 @@ export async function dialogueThreadDetail(db: Db, id: string): Promise<ThreadDe
 // salt and compares constant-time via timingSafeEqual.
 
 import { scryptSync, randomBytes, timingSafeEqual } from 'node:crypto'
-import { loadAgentConfig, saveAgentConfig } from '../lib/agent-config'
+import { loadAgentConfig, saveAgentConfig } from './agent-config'
 
 const SCRYPT_KEYLEN = 32
 

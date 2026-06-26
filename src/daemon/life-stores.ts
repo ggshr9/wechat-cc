@@ -1,13 +1,13 @@
 /**
  * Bridges the daemon-owned observations / milestones stores to the
  * `LifeStoresReader` that `synthesizeOverview` consumes. Lives in the daemon
- * layer on purpose: it keeps `src/cli/memory-synthesis.ts` free of any
+ * layer on purpose: it keeps `src/lib/memory-synthesis.ts` free of any
  * `src/daemon/**` import, honouring the cli-must-not-depend-on-daemon boundary
  * (the dependency now points daemon → cli, which is allowed).
  */
 import { join } from 'node:path'
 import type { Db } from '../lib/db'
-import type { LifeStoresReader } from '../cli/memory-synthesis'
+import type { LifeStoresReader } from '../lib/memory-synthesis'
 import { makeObservationsStore } from './observations/store'
 import { makeMilestonesStore } from './milestones/store'
 

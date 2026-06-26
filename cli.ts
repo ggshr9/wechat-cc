@@ -872,7 +872,7 @@ const memoryListCmd = defineCommand({
   meta: { name: 'list', description: 'List Companion v2 memory files (per user)' },
   args: { json: { type: 'boolean', description: 'JSON envelope' } },
   async run({ args }) {
-    const { listAllMemory } = await import('./src/cli/memory.ts')
+    const { listAllMemory } = await import('./src/lib/memory.ts')
     const users = listAllMemory(STATE_DIR)
     if (args.json) console.log(JSON.stringify(MemoryListOutput.parse(users), null, 2))
     else {
@@ -893,7 +893,7 @@ const memoryReadCmd = defineCommand({
     json: { type: 'boolean', description: 'JSON envelope' },
   },
   async run({ args }) {
-    const { readMemoryFile } = await import('./src/cli/memory.ts')
+    const { readMemoryFile } = await import('./src/lib/memory.ts')
     try {
       const content = readMemoryFile(STATE_DIR, args.userId, args.path)
       if (args.json) console.log(JSON.stringify(MemoryReadOutput.parse({ ok: true, userId: args.userId, path: args.path, content }), null, 2))
@@ -923,7 +923,7 @@ const memoryWriteCmd = defineCommand({
     json: { type: 'boolean', description: 'JSON envelope' },
   },
   async run({ args }) {
-    const { writeMemoryFile } = await import('./src/cli/memory.ts')
+    const { writeMemoryFile } = await import('./src/lib/memory.ts')
     try {
       // Body comes in via base64 to dodge shell-quoting hell on multi-line
       // markdown content (Tauri sidecar IPC passes args as a list, but
@@ -1034,7 +1034,7 @@ const memorySynthesizeCmd = defineCommand({
       return text
     }
 
-    const { synthesizeOverview } = await import('./src/cli/memory-synthesis')
+    const { synthesizeOverview } = await import('./src/lib/memory-synthesis')
     const { makeLifeStoresReader } = await import('./src/daemon/life-stores')
     let result
     try {
@@ -1063,7 +1063,7 @@ const memoryProjectsCmd = defineCommand({
   },
   args: { json: { type: 'boolean', description: 'JSON envelope' } },
   async run({ args }) {
-    const { summarizeProjectMemories } = await import('./src/cli/memory-synthesis')
+    const { summarizeProjectMemories } = await import('./src/lib/memory-synthesis')
     const projects = summarizeProjectMemories()
     if (args.json) { console.log(JSON.stringify({ ok: true, projects }, null, 2)); return }
     if (projects.length === 0) { console.log('(no local project memory found under ~/.claude/projects)'); return }
@@ -1101,7 +1101,7 @@ const memoryStatusCmd = defineCommand({
       }
     }
 
-    const { OVERVIEW_FILENAME, summarizeProjectMemories } = await import('./src/cli/memory-synthesis')
+    const { OVERVIEW_FILENAME, summarizeProjectMemories } = await import('./src/lib/memory-synthesis')
     const overviewPath = join(STATE_DIR, 'memory', chatId, OVERVIEW_FILENAME)
     const stat = existsSync(overviewPath) ? statSync(overviewPath) : null
     const ageDays = stat ? Math.floor((Date.now() - stat.mtimeMs) / 86_400_000) : null
@@ -2136,7 +2136,7 @@ const dialogueTimelineCmd = defineCommand({
   async run({ args }) {
     const limitNum = args.limit ? Number.parseInt(args.limit, 10) : 100
     const limit = Number.isFinite(limitNum) && limitNum > 0 ? limitNum : 100
-    const { dialogueTimeline } = await import('./src/cli/dialogue')
+    const { dialogueTimeline } = await import('./src/lib/dialogue')
     const { openWechatDb } = await import('./src/lib/db')
     const db = openWechatDb(STATE_DIR)
     const result = await dialogueTimeline(db, args['chat-id'], {
@@ -2156,7 +2156,7 @@ const dialogueThreadsCmd = defineCommand({
     json: { type: 'boolean', default: false },
   },
   async run({ args }) {
-    const { dialogueThreads } = await import('./src/cli/dialogue')
+    const { dialogueThreads } = await import('./src/lib/dialogue')
     const { openWechatDb } = await import('./src/lib/db')
     const db = openWechatDb(STATE_DIR)
     const facetArg = args.facet as 'task' | 'knowledge' | 'life' | undefined
@@ -2179,7 +2179,7 @@ const dialogueSearchCmd = defineCommand({
   async run({ args }) {
     const limitNum = args.limit ? Number.parseInt(args.limit, 10) : 50
     const limit = Number.isFinite(limitNum) && limitNum > 0 ? limitNum : 50
-    const { dialogueSearch } = await import('./src/cli/dialogue')
+    const { dialogueSearch } = await import('./src/lib/dialogue')
     const { openWechatDb } = await import('./src/lib/db')
     const db = openWechatDb(STATE_DIR)
     const result = await dialogueSearch(db, args['chat-id'], args.query, limit)
@@ -2194,7 +2194,7 @@ const dialogueThreadDetailCmd = defineCommand({
     json: { type: 'boolean', default: false },
   },
   async run({ args }) {
-    const { dialogueThreadDetail } = await import('./src/cli/dialogue')
+    const { dialogueThreadDetail } = await import('./src/lib/dialogue')
     const { openWechatDb } = await import('./src/lib/db')
     const db = openWechatDb(STATE_DIR)
     const result = await dialogueThreadDetail(db, args.id)
@@ -2241,7 +2241,7 @@ const dialogueBackfillCmd = defineCommand({
     const { homedir } = await import('node:os')
     const home = homedir()
 
-    const { backfillKnownClaudeSessions, backfillKnownCodexSessions } = await import('./src/cli/dialogue')
+    const { backfillKnownClaudeSessions, backfillKnownCodexSessions } = await import('./src/lib/dialogue')
     const { openWechatDb } = await import('./src/lib/db')
     const db = openWechatDb(STATE_DIR)
 
@@ -2308,7 +2308,7 @@ const dialogueLockSetCmd = defineCommand({
     json: { type: 'boolean', default: false },
   },
   async run({ args }) {
-    const { dialogueLockSet } = await import('./src/cli/dialogue')
+    const { dialogueLockSet } = await import('./src/lib/dialogue')
     dialogueLockSet(STATE_DIR, args.passphrase)
     console.log(JSON.stringify({ ok: true }))
   },
@@ -2328,7 +2328,7 @@ const dialogueUnlockCmd = defineCommand({
     json: { type: 'boolean', default: false },
   },
   async run({ args }) {
-    const { dialogueUnlock } = await import('./src/cli/dialogue')
+    const { dialogueUnlock } = await import('./src/lib/dialogue')
     const result = dialogueUnlock(STATE_DIR, args.passphrase)
     console.log(JSON.stringify(result))
   },
@@ -2412,7 +2412,7 @@ const handInviteCmd = defineCommand({
     json: { type: 'boolean', description: 'JSON envelope' },
   },
   async run({ args }) {
-    const { mintInvite, clearInvite, INVITE_TTL_MS } = await import('./src/cli/a2a-pairing.ts')
+    const { mintInvite, clearInvite, INVITE_TTL_MS } = await import('./src/lib/a2a-pairing.ts')
     if (args.cancel) {
       clearInvite(STATE_DIR)
       if (args.json) { console.log(JSON.stringify({ ok: true, cancelled: true })); return }

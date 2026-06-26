@@ -2,16 +2,16 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { openTestDb } from '../lib/db'
+import { openTestDb } from './db'
 import {
   backfillFromClaudeJsonl, claudeTurnToMessages, backfillFromCodexJsonl,
   backfillKnownClaudeSessions, backfillKnownCodexSessions,
   dialogueTimeline, dialogueThreads, dialogueSearch, dialogueThreadDetail,
   dialogueLockSet, dialogueUnlock,
 } from './dialogue'
-import { loadAgentConfig, saveAgentConfig } from '../lib/agent-config'
-import { makeMessagesStore } from '../lib/messages-store'
-import { makeThreadsStore } from '../lib/threads-store'
+import { loadAgentConfig, saveAgentConfig } from './agent-config'
+import { makeMessagesStore } from './messages-store'
+import { makeThreadsStore } from './threads-store'
 
 describe('dialogue backfill', () => {
   it('claudeTurnToMessages maps user/assistant turns to in/out records', () => {

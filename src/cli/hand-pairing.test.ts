@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createA2ARegistry } from '../core/a2a-registry'
 import { createA2AServer } from '../core/a2a-server'
-import { mintInvite, verifyAndConsumeInvite } from './a2a-pairing'
+import { mintInvite, verifyAndConsumeInvite } from '../lib/a2a-pairing'
 import { acceptBrain, addHand, joinHand, listPairings, pingHands } from './hand-pairing'
 
 let stateDir: string
