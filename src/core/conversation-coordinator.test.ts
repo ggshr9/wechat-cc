@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createConversationCoordinator } from './conversation-coordinator'
+import { createConversationCoordinator, authFailNotice } from './conversation-coordinator'
 import { createProviderRegistry } from './provider-registry'
 import * as capabilityMatrix from './capability-matrix'
 import { makeFakeSession } from './test-helpers'
@@ -9,6 +9,18 @@ import { formatInbound, type InboundMsg } from './prompt-format'
 import type { AcquireRequest } from './session-manager'
 import { TIER_PROFILES, type TierProfile } from './user-tier'
 import type { Access } from '../lib/access'
+
+describe('authFailNotice', () => {
+  it('returns the provider-specific hint from ProviderCapabilities (incl. cursor)', () => {
+    expect(authFailNotice('claude')).toContain('claude login')
+    expect(authFailNotice('codex')).toContain('codex login')
+    // cursor uses an API key, not a login command — the old ternary wrongly
+    // fell through to the Claude string. Now sourced from capabilities.
+    const cur = authFailNotice('cursor')
+    expect(cur).toContain('Cursor')
+    expect(cur).not.toContain('claude login')
+  })
+})
 
 /**
  * Default access fixture used by most coordinator tests: every chatId

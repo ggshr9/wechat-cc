@@ -14,6 +14,7 @@ export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
   supportsDelegation: true,
   supportsResume: true,
   defaultPeer: 'codex',
+  authFailHint: '⚠ Claude 登录已过期，请在电脑上跑 `claude login` 后再发消息。',
 }
 
 /**

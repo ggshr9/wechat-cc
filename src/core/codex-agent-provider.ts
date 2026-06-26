@@ -16,6 +16,7 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = {
   supportsDelegation: true,
   supportsResume: true,
   defaultPeer: 'claude',
+  authFailHint: '⚠ Codex 登录已过期，请在电脑上跑 `codex login` 后再发消息。',
 }
 
 export interface CodexTierSdkOpts {

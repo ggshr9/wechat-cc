@@ -171,6 +171,13 @@ export interface ProviderCapabilities {
    */
   defaultPeer?: ProviderId
   /**
+   * User-facing notice shown (throttled) when this provider's credentials go
+   * stale mid-turn — the login/credential fix differs per provider (claude/codex
+   * `login`, cursor an API key), so the copy lives with the provider rather than
+   * in a coordinator ternary. Falls back to a generic message when omitted.
+   */
+  authFailHint?: string
+  /**
    * SDK supports per-tool callback (Claude's `canUseTool`). Decides:
    *   - whether `askUser='per-tool'` is realisable in strict mode
    *   - whether `runtime.buildCanUseTool` gets called at spawn

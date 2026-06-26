@@ -21,7 +21,7 @@ import type { ProviderRegistry } from './provider-registry'
 import type { Mode, ProviderId } from './conversation'
 import type { InboundMsg } from './prompt-format'
 import { evaluateRound as evaluateModeratorRound, type ModeratorDecision, type ChatroomEntry } from './chatroom-moderator'
-import { assertSupported, UnsupportedCombinationError, type PermissionMode } from './capability-matrix'
+import { assertSupported, capabilitiesFor, UnsupportedCombinationError, type PermissionMode } from './capability-matrix'
 import { collectTurn, TURN_TIMEOUT_CODE, type TurnSummary } from './agent-provider'
 import { resolveEffectiveTier, TIER_PROFILES } from './user-tier'
 import type { Access } from '../lib/access'
@@ -153,9 +153,9 @@ export interface ConversationCoordinatorDeps {
  *  Per-provider phrasing: the user already authenticated once; the
  *  session lapsed and they need to re-run the provider's login command
  *  on the same machine. */
-function authFailNotice(providerId: ProviderId): string {
-  if (providerId === 'codex') return '⚠ Codex 登录已过期，请在电脑上跑 `codex login` 后再发消息。'
-  return '⚠ Claude 登录已过期，请在电脑上跑 `claude login` 后再发消息。'
+export function authFailNotice(providerId: ProviderId): string {
+  return capabilitiesFor(providerId).authFailHint
+    ?? `⚠ ${providerId} 登录已过期，请在电脑上重新登录后再发消息。`
 }
 
 export interface ConversationCoordinator {

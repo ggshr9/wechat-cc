@@ -30,6 +30,7 @@ export const CURSOR_CAPABILITIES: ProviderCapabilities = {
   supportsDelegation: false,
   supportsResume: true,
   defaultPeer: 'claude',
+  authFailHint: '⚠ Cursor 凭证无效，请检查电脑上的 CURSOR_API_KEY 后再发消息。',
 }
 
 export interface CursorTierSdkOpts {
