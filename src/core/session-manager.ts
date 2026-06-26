@@ -39,6 +39,15 @@ export interface SessionManagerOptions {
    * acquire's tierProfile. Paired with `invalidateSessionToken` at release.
    */
   mintSessionToken?: (tier: UserTier, sessionKey: string) => string
+  /**
+   * Assemble the per-session system prompt for (providerId, tierProfile),
+   * called ONCE per real spawn (cache miss) — the daemon owns prompt content
+   * (provider/peer/companion/delegate config + tier-gated sections), the
+   * provider just injects the returned string via its transport. Mirrors the
+   * `mcpEnv` seam. Omitted in tests/embeddings → `appendInstructions` is left
+   * off the SpawnContext entirely.
+   */
+  buildInstructions?: (providerId: ProviderId, tierProfile: TierProfile) => string
 }
 
 /**
@@ -187,6 +196,11 @@ export class SessionManager {
     // Compute the per-spawn MCP env overlay ONCE here (the daemon owns the
     // tier→env policy); providers merge it blindly into their MCP children.
     const mcpEnv = sessionAuthEnv(tier, sessionToken)
+    // Assemble the per-session system prompt the same place + same way as
+    // mcpEnv: daemon-owned, computed once per spawn, forwarded for the provider
+    // to inject. Conditionally spread so non-wired callers (tests/embeddings)
+    // leave the field off entirely.
+    const appendInstructions = this.opts.buildInstructions?.(req.providerId, req.tierProfile)
     let session: AgentSession
     try {
       session = await provider.spawn(project, {
@@ -197,6 +211,7 @@ export class SessionManager {
         // per-session canUseTool closure (see bootstrap/index.ts).
         chatId: req.chatId,
         mcpEnv,
+        ...(appendInstructions !== undefined ? { appendInstructions } : {}),
       })
     } catch (err) {
       // spawn failed → the session is never cached, so release() never runs

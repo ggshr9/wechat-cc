@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildSystemPrompt } from './prompt-builder'
+import { buildSystemPrompt, daemonSelfHealSection } from './prompt-builder'
 
 describe('buildSystemPrompt', () => {
   function defaults() {
@@ -49,6 +49,31 @@ describe('buildSystemPrompt', () => {
                      'companion_status', 'companion_enable', 'companion_disable', 'companion_snooze']) {
       expect(p, `missing tool: ${t}`).toContain(t)
     }
+  })
+
+  it('omits the daemon self-heal section by default (non-admin / flag absent)', () => {
+    const p = buildSystemPrompt(defaults())
+    expect(p).not.toContain('自我诊断')
+    expect(p).not.toContain('diagnostic_health')
+    expect(p).not.toContain('daemon_restart')
+  })
+
+  it('includes the daemon self-heal section when daemonOpsAvailable=true', () => {
+    const p = buildSystemPrompt({ ...defaults(), daemonOpsAvailable: true })
+    expect(p).toContain('自我诊断')
+    expect(p).toContain('diagnostic_health')
+    expect(p).toContain('diagnostic_turns')
+    expect(p).toContain('session_release')
+    expect(p).toContain('model_set')
+    expect(p).toContain('daemon_restart')
+  })
+
+  it('daemonSelfHealSection mentions when-to-use cues, not just tool names', () => {
+    const s = daemonSelfHealSection()
+    expect(s).toContain('自我诊断')
+    // "when to use" framing — a runtime-symptom cue, so the agent connects a
+    // vague complaint to a diagnosis rather than only apologising.
+    expect(s).toMatch(/卡住|不回|变慢|没反应/)
   })
 
   it('mentions delegate_codex when this is the claude session (delegateAvailable=true)', () => {

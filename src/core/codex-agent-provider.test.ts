@@ -271,7 +271,7 @@ describe('Codex agent provider', () => {
     expect(events).toEqual([])
   })
 
-  it('preserves first-dispatch instruction injection (appendInstructions)', async () => {
+  it('prepends spawnOpts.appendInstructions on the first dispatch only', async () => {
     const fakeCodex = makeFakeCodex()
     // Push two turns: one for the first dispatch, one for the second
     fakeCodex.fake.thread.pushTurn([
@@ -282,8 +282,10 @@ describe('Codex agent provider', () => {
       { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } },
     ])
 
-    const { provider: p } = provider({ appendInstructions: 'be terse' }, fakeCodex)
-    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
+    // Instructions now arrive per-spawn via SpawnContext (the daemon assembles
+    // them once; the provider just injects), NOT via construction opts.
+    const { provider: p } = provider({}, fakeCodex)
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test', appendInstructions: 'be terse' })
 
     // First dispatch — should inject instructions
     await drain(session.dispatch('hi'))
@@ -298,6 +300,18 @@ describe('Codex agent provider', () => {
     // Second call should NOT contain instructions
     expect(calls[1]!.input).not.toContain('be terse')
     expect(calls[1]!.input).toBe('hello again')
+  })
+
+  it('does not prefix anything when spawnOpts.appendInstructions is absent', async () => {
+    const fakeCodex = makeFakeCodex()
+    fakeCodex.fake.thread.pushTurn([
+      { type: 'thread.started', thread_id: 't1' },
+      { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } },
+    ])
+    const { provider: p } = provider({}, fakeCodex)
+    const session = await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
+    await drain(session.dispatch('hi'))
+    expect(fakeCodex.fake.thread.runStreamedCalls[0]!.input).toBe('hi')
   })
 
   it('result event has incremented numTurns per dispatch', async () => {

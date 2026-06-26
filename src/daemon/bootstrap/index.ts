@@ -224,7 +224,13 @@ export interface Bootstrap {
   coordinator: ConversationCoordinator
   resolve: (chatId: string) => { alias: string; path: string } | null
   formatInbound: typeof formatInbound
-  sdkOptionsForProject: (alias: string, path: string, tierProfile: TierProfile, chatId: string, mcpEnv?: Record<string, string>) => Options
+  sdkOptionsForProject: (alias: string, path: string, tierProfile: TierProfile, chatId: string, mcpEnv?: Record<string, string>, appendInstructions?: string) => Options
+  /**
+   * The single provider-agnostic system-prompt assembler. SessionManager calls
+   * it once per spawn and forwards the result via SpawnContext.appendInstructions;
+   * each provider injects it through its own transport. Exposed for tests.
+   */
+  buildInstructions: (providerId: ProviderId, tierProfile: TierProfile) => string
   /** Daemon-default provider id — what new chats get until user runs `/cc` or `/codex`. */
   defaultProviderId: ProviderId
   /** Backward-compat alias for defaultProviderId. Pre-P2 callers expected this name. */
@@ -443,16 +449,12 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
     return c.provider === 'claude' && c.model ? c.model : 'claude-opus-4-8'
   }
 
-  const sdkOptionsForProject = (_alias: string, path: string, tierProfile: TierProfile, chatId: string, mcpEnv?: Record<string, string>): Options => {
-    const cstatus = deps.ilink.companion.status()
-    const systemPrompt = buildSystemPrompt({
-      providerId: 'claude',
-      // Claude session's delegate-mcp child exposes delegate_codex.
-      peerProviderId: 'codex',
-      companionEnabled: cstatus.enabled,
-      // wechat + delegate stdio MCP both loaded for regular sessions.
-      delegateAvailable: !!delegateStdioForClaude,
-    })
+  const sdkOptionsForProject = (_alias: string, path: string, tierProfile: TierProfile, chatId: string, mcpEnv?: Record<string, string>, appendInstructions?: string): Options => {
+    // The per-session system prompt is assembled by the daemon's
+    // `buildInstructions` thunk (see SessionManager wiring below) and arrives
+    // here via SpawnContext — this builder no longer calls buildSystemPrompt,
+    // so claude/codex share one provider-agnostic source.
+    const systemPrompt = appendInstructions ?? ''
     // Per-session internal-api auth: merge the daemon-computed env overlay
     // (WECHAT_SESSION_TOKEN — the bearer the MCP children send — plus the
     // non-secret WECHAT_SESSION_TIER the wechat child gates admin tools on)
@@ -632,16 +634,10 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
         // v0.5.7 — when daemon runs --dangerously, bypass MCP approval (else codex 0.128
         // cancels every mcp__wechat__reply with "user cancelled MCP tool call").
         dangerouslyBypassApprovalsAndSandbox: permissionMode === 'dangerously',
-        // RFC 03 P5 review #4: Codex SDK has no system prompt slot, so we
-        // inject the channel rules into the first user message of each
-        // session. Without this, Codex doesn't know to use `reply` tool
-        // and falls into the FALLBACK_REPLY anomaly path on every turn.
-        appendInstructions: buildSystemPrompt({
-          providerId: 'codex',
-          peerProviderId: 'claude',
-          companionEnabled: deps.ilink.companion.status().enabled,
-          delegateAvailable: !!delegateStdioForCodex,
-        }),
+        // Codex SDK has no system-prompt slot; the per-spawn instructions are
+        // injected into the first user message by the provider from
+        // SpawnContext.appendInstructions (assembled by buildInstructions
+        // below), so nothing is baked at construction here.
         mcpServers: {
           ...(wechatStdioForCodex ? { wechat: wechatStdioForCodex } : {}),
           ...(delegateStdioForCodex ? { delegate: delegateStdioForCodex } : {}),
@@ -745,6 +741,25 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
   // would silently slip past and only throw at first use in production.
   assertMatrixComplete(registry.list())
 
+  // The single, provider-agnostic source of every session's system prompt.
+  // SessionManager calls this once per spawn (like mcpEnv) and forwards the
+  // result via SpawnContext; each provider injects it through its own
+  // transport. peerProviderId / delegateAvailable are provider-specific;
+  // daemonOpsAvailable mirrors the admin predicate the wechat MCP server gates
+  // its daemon-control tools on, so the self-heal section appears iff those
+  // tools are actually registered for this spawn.
+  const buildInstructions = (providerId: ProviderId, tierProfile: TierProfile): string =>
+    buildSystemPrompt({
+      providerId,
+      peerProviderId: providerId === 'codex' ? 'claude' : 'codex',
+      companionEnabled: deps.ilink.companion.status().enabled,
+      delegateAvailable:
+        providerId === 'claude' ? !!delegateStdioForClaude
+        : providerId === 'codex' ? !!delegateStdioForCodex
+        : false,
+      daemonOpsAvailable: tierProfile.allow.has('daemon_introspect'),
+    })
+
   const sessionManager = new SessionManager({
     maxConcurrent: 6,
     idleEvictMs: 30 * 60_000,
@@ -755,6 +770,7 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
     // every release/eviction. Both keyed by provider/alias/chatId so they pair.
     mintSessionToken: deps.mintSessionToken,
     invalidateSessionToken: deps.invalidateSession,
+    buildInstructions,
   })
 
   // Task 14 — when admins / trusted / allowFrom set membership changes in
@@ -1056,6 +1072,7 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
     resolve,
     formatInbound,
     sdkOptionsForProject,
+    buildInstructions,
     defaultProviderId,
     agentProviderKind: defaultProviderId,
     /**

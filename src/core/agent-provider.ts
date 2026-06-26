@@ -111,6 +111,17 @@ export interface SpawnContext {
    *  wire the registry (nothing to inject). See
    *  docs/superpowers/specs/2026-06-21-internal-api-tier-authz-design.md. */
   mcpEnv?: Record<string, string>
+  /**
+   * The per-session system prompt, assembled ONCE by the daemon
+   * (session-manager, via an injected `buildInstructions` thunk) from this
+   * spawn's provider + resolved tier — the single provider-agnostic source
+   * (`buildSystemPrompt`). Each provider injects it through its own transport
+   * (claude → SDK `systemPrompt.append`; codex → first-message prepend; cursor
+   * → its slot once wired) and stays oblivious to the content, exactly like
+   * `mcpEnv`. Absent in tests/embeddings that don't wire the thunk — providers
+   * then fall back to whatever prompt their construction opts carried (or none).
+   */
+  appendInstructions?: string
 }
 
 /**

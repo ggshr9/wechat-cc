@@ -91,6 +91,23 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => {
 import * as sdk from '@anthropic-ai/claude-agent-sdk'
 
 describe('claude-agent-provider', () => {
+  it('forwards spawnOpts.appendInstructions to sdkOptionsForProject (unified prompt seam)', async () => {
+    const seen: unknown[] = []
+    const provider = createClaudeAgentProvider({
+      sdkOptionsForProject: (...args: unknown[]) => { seen.push(args); return {} },
+    })
+    await provider.spawn({ alias: 'foo', path: '/tmp' }, {
+      tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test',
+      mcpEnv: { WECHAT_SESSION_TIER: 'admin' },
+      appendInstructions: 'SELF-HEAL-PROMPT',
+    })
+    // (alias, path, tierProfile, chatId, mcpEnv, appendInstructions)
+    expect(seen[0]).toEqual([
+      'foo', '/tmp', TIER_PROFILES.admin, '_test',
+      { WECHAT_SESSION_TIER: 'admin' }, 'SELF-HEAL-PROMPT',
+    ])
+  })
+
   it('yields init then text then result for a simple turn', async () => {
     const provider = createClaudeAgentProvider({ sdkOptionsForProject: () => ({}) })
     const session = await provider.spawn({ alias: 'foo', path: '/tmp' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })

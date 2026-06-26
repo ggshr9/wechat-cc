@@ -447,7 +447,7 @@ describe('bootstrap', () => {
     })
   })
 
-  it('system prompt is the prompt-builder output (mentions delegate_codex for claude sessions)', async () => {
+  it('buildInstructions is the prompt-builder output (mentions delegate_codex for claude sessions)', async () => {
     const b = await buildBootstrap({
       db: openTestDb(),
       stateDir: '/tmp/state',
@@ -457,16 +457,26 @@ describe('bootstrap', () => {
       log: () => {},
       internalApi: { baseUrl: 'http://127.0.0.1:0', tokenFilePath: '/tmp/token' },
     })
-    const opts = b.sdkOptionsForProject('P', '/p', TIER_PROFILES.admin, '_test')
+    // Prompt assembly now lives in the single provider-agnostic buildInstructions
+    // thunk (SessionManager calls it per spawn). The big things the v0.x prompt
+    // missed — verify they're now in.
+    const prompt = b.buildInstructions('claude', TIER_PROFILES.admin)
+    expect(prompt).toContain('delegate_codex')
+    expect(prompt).toContain('share_page')
+    expect(prompt).toContain('broadcast')
+    expect(prompt).toContain('chatroom_round')
+    // Admin tier → the self-heal section is present; the codex peer gets a
+    // claude-peer prompt without the delegate_codex tool name.
+    expect(prompt).toContain('自我诊断')
+    expect(b.buildInstructions('codex', TIER_PROFILES.admin)).not.toContain('delegate_codex')
+
+    // sdkOptionsForProject just forwards whatever appendInstructions it's given
+    // into the SDK preset+append slot — no assembly of its own.
+    const opts = b.sdkOptionsForProject('P', '/p', TIER_PROFILES.admin, '_test', undefined, 'SEAM-PROMPT')
     const sp = opts.systemPrompt as { type: 'preset'; preset: string; append?: string } | string
     if (typeof sp === 'string') throw new Error('expected preset+append form')
     expect(sp.type).toBe('preset')
-    expect(sp.append).toBeDefined()
-    // The big things the v0.x prompt missed — verify they're now in.
-    expect(sp.append).toContain('delegate_codex')
-    expect(sp.append).toContain('share_page')
-    expect(sp.append).toContain('broadcast')
-    expect(sp.append).toContain('chatroom_round')
+    expect(sp.append).toBe('SEAM-PROMPT')
   })
 
   // ── Per-session canUseTool (concurrent-dispatch tier hazard) ─────────

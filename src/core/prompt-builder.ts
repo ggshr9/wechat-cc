@@ -38,6 +38,15 @@ export interface BuildSystemPromptArgs {
   companionEnabled: boolean
   /** When true, the wechat-mcp delegate tool is loaded (RFC 03 P4+). Default true; set false for delegate / one-shot sessions. */
   delegateAvailable: boolean
+  /**
+   * When true, this session is admin-tier and the wechat-mcp daemon-control
+   * tools (diagnostic_* / model_* / session_release / daemon_restart) are
+   * registered. Adds the self-heal capability section so the agent knows it
+   * can diagnose/heal and when. Must track tool registration exactly — the
+   * caller passes `tierProfile.allow.has('daemon_introspect')` (the admin
+   * predicate the wechat MCP server gates those tools on). Default false.
+   */
+  daemonOpsAvailable?: boolean
 }
 
 /**
@@ -53,6 +62,7 @@ export function buildSystemPrompt(args: BuildSystemPromptArgs): string {
     toolsSection(),
     delegateAvailable ? delegateSection(peerProviderId) : '',
     a2aSection(),
+    args.daemonOpsAvailable ? daemonSelfHealSection() : '',
     memorySection(),
     multiModeAwarenessSection(),
     companionEnabled ? companionSection() : '',
@@ -125,6 +135,25 @@ function a2aSection(): string {
 - 来自外部 A2A agent 的消息会在 chat 里以 \`[A2A:<agent_id>] <text>\` 形式出现（不是用户写的，是外部 agent push 进来的通知）。
 - 操作者可能让你"回 deploy-bot 一句 retry"/"告诉那个 agent yes" 之类——调 \`a2a_send(agent_id, text)\` 把消息发回去。\`agent_id\` 就是 \`[A2A:<id>]\` 前缀里的那个 id，**逐字保留 dash、下划线**，不要自己加 prefix 或换大小写。
 - \`a2a_send\` 返回 \`{ ok, http_status?, error?, registered? }\`。\`unknown_agent\` → 名单错了（registered 字段列了已注册的，用那个 ID 重试）；\`agent_paused\` → 操作者主动暂停了那个 agent，**不要再调**、平常回复用户即可。`
+}
+
+/**
+ * Self-diagnosis / self-heal capability (admin-tier only). The daemon-control
+ * MCP tools are already registered for admin sessions; this tells the agent
+ * they exist and WHEN to reach for them, so a vague runtime complaint ("不回了")
+ * triggers a diagnosis rather than just an apology. Not a keyword rule — the
+ * agent still decides. Exported so the codex provider can prepend it per-spawn
+ * (codex has no system-prompt slot; see codex-agent-provider first-dispatch
+ * injection). Kept tight — every section rides on every turn.
+ */
+export function daemonSelfHealSection(): string {
+  return `## 自我诊断 / 自愈（管理员）
+
+你能检查并修复自己所在的 daemon。当主人反映「卡住 / 不回 / 变慢 / 这个对话没反应」这类**运行异常**（不是内容问题）时，主动排查而不是只道歉：
+- 先查：\`diagnostic_health\`（心跳 / 活跃会话数）、\`diagnostic_turns\`（最近回合结局 completed/timeout/auth_failed/error）、\`diagnostic_sessions\`。
+- 再据情况：某回合 timeout/卡死 → \`session_release\`；模型固定错了 / 一直 404 → \`model_set\`；整体像卡死且前面都没用 → \`daemon_restart\`。
+- 修完用各自的读回（release 的 sessions、model_set 的 model、restart 的 ok）核对，再用自然语言把「查到什么、做了什么、好没好」简短汇报给主人。
+- 这些是高权限操作，会先要你确认（relay）；不确定就只诊断、把结果告诉主人。`
 }
 
 function memorySection(): string {

@@ -122,16 +122,6 @@ export interface CodexAgentProviderOptions {
    */
   mcpServers?: Record<string, CodexMcpStdioServer>
   /**
-   * Optional system-prompt-equivalent content prepended to the FIRST
-   * dispatch of each spawned thread (RFC 03 P5 review #4). Codex SDK
-   * doesn't expose a true system prompt slot, so we put the wechat-channel
-   * rules in the conversation history's first user message; subsequent
-   * turns rely on Codex's own context retention.
-   *
-   * Costs ~ N tokens once per thread. Skipped when undefined / empty.
-   */
-  appendInstructions?: string
-  /**
    * v0.5.7 — when true, sets the codex CLI's
    * `dangerously_bypass_approvals_and_sandbox=true` config (equivalent to the
    * `--dangerously-bypass-approvals-and-sandbox` CLI flag). Without this,
@@ -247,10 +237,12 @@ export function createCodexAgentProvider(opts: CodexAgentProviderOptions = {}): 
       let turnCount = 0
       let activeAborter: AbortController | null = null
       let closed = false
-      // RFC 03 P5 review #4: prepend appendInstructions exactly once per
-      // session (on the first dispatch). Codex remembers it via SDK
-      // conversation history; subsequent turns are unprefixed.
-      let instructionsInjected = !opts.appendInstructions
+      // RFC 03 P5 review #4: prepend the per-spawn system prompt exactly once
+      // per session (on the first dispatch). Codex SDK has no system-prompt
+      // slot, so the daemon-assembled instructions (SpawnContext) ride the
+      // first user message; subsequent turns rely on Codex's own history.
+      const appendInstructions = spawnOpts.appendInstructions
+      let instructionsInjected = !appendInstructions
 
       return {
         dispatch(text: string): AsyncIterable<AgentEvent> {
@@ -267,8 +259,8 @@ export function createCodexAgentProvider(opts: CodexAgentProviderOptions = {}): 
               // user message instead. Subsequent turns rely on Codex's own
               // history retention.
               let dispatchedText = text
-              if (!instructionsInjected && opts.appendInstructions) {
-                dispatchedText = `${opts.appendInstructions}\n\n---\n\n${text}`
+              if (!instructionsInjected && appendInstructions) {
+                dispatchedText = `${appendInstructions}\n\n---\n\n${text}`
                 instructionsInjected = true
               }
 
