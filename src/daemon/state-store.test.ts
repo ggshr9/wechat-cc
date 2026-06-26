@@ -18,6 +18,17 @@ describe('state-store', () => {
     expect(s.all()).toEqual({})
   })
 
+  it('writes through synchronously when debounceMs is 0 (no loss on kill -9)', () => {
+    const p = freshPath()
+    const s = makeStateStore(p, { debounceMs: 0 })
+    s.set('chat1', 'tok-critical')
+    // No flush(), no timer advance — the value must already be on disk, since a
+    // SIGKILL right after set() would otherwise drop a debounced write.
+    expect(JSON.parse(readFileSync(p, 'utf8'))).toEqual({ chat1: 'tok-critical' })
+    s.delete('chat1')
+    expect(JSON.parse(readFileSync(p, 'utf8'))).toEqual({})
+  })
+
   it('loads existing JSON file on construction', () => {
     const p = freshPath()
     writeFileSync(p, JSON.stringify({ chat1: 'tokA', chat2: 'tokB' }))

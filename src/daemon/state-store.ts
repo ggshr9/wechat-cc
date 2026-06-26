@@ -30,7 +30,7 @@ export function makeStateStore(filePath: string, opts: StateStoreOptions): State
     }
   }
 
-  async function writeNow(): Promise<void> {
+  function writeNowSync(): void {
     if (!dirty) return
     const dir = dirname(filePath)
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
@@ -40,8 +40,19 @@ export function makeStateStore(filePath: string, opts: StateStoreOptions): State
     dirty = false
   }
 
+  async function writeNow(): Promise<void> { writeNowSync() }
+
   function markDirty(): void {
     dirty = true
+    // debounceMs <= 0 ⇒ write-through (synchronous): critical, low-frequency
+    // state (context tokens, account routing) that must survive a SIGKILL the
+    // debounce window would otherwise drop. `set` already no-ops unchanged
+    // values, so this stays cheap.
+    if (opts.debounceMs <= 0) {
+      if (timer) { clearTimeout(timer); timer = null }
+      writeNowSync()
+      return
+    }
     if (timer) clearTimeout(timer)
     timer = setTimeout(() => {
       timer = null

@@ -76,8 +76,12 @@ export function makeIlinkContext(opts: {
   const { stateDir, accounts, db, conversationStore } = opts
   mkdirSync(stateDir, { recursive: true })
 
-  const ctxStore = makeStateStore(join(stateDir, 'context_tokens.json'), { debounceMs: 500 })
-  const acctStore = makeStateStore(join(stateDir, 'user_account_ids.json'), { debounceMs: 500 })
+  // Write-through (debounceMs:0): both hold critical, low-frequency state that
+  // must survive a hard kill. A missing context token blocks replies until the
+  // user re-sends; account routing is needed to deliver at all. `set` no-ops
+  // unchanged values, so write-through costs a disk write only on real change.
+  const ctxStore = makeStateStore(join(stateDir, 'context_tokens.json'), { debounceMs: 0 })
+  const acctStore = makeStateStore(join(stateDir, 'user_account_ids.json'), { debounceMs: 0 })
   const sessionState = makeSessionStateStore(db, { migrateFromFile: join(stateDir, 'session-state.json') })
 
   const pending = new PendingPermissions()
