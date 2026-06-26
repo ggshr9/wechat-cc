@@ -253,6 +253,18 @@ function makeFakeSdk(agent: ReturnType<typeof makeFakeAgent>) {
 }
 
 describe('createCursorAgentProvider', () => {
+  it('per-spawn spawnOpts.model overrides the construction-time model (/model hot-reload)', async () => {
+    const agent = makeFakeAgent([{ type: 'status', status: 'FINISHED' }])
+    const sdk = makeFakeSdk(agent)
+    const provider = createCursorAgentProvider({ sdk, apiKey: 'k', model: 'composer-2' })
+    await provider.spawn(
+      { alias: 'P', path: '/tmp/proj' },
+      { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: 'c', model: 'composer-3' },
+    )
+    const createArgs = sdk.Agent.create.mock.calls[0]![0] as Record<string, unknown>
+    expect(createArgs.model).toEqual({ id: 'composer-3' })
+  })
+
   it('spawn calls Agent.create with apiKey + model + mcpServers + dangerously sandbox-off', async () => {
     const agent = makeFakeAgent([{ type: 'status', status: 'FINISHED' }])
     const sdk = makeFakeSdk(agent)

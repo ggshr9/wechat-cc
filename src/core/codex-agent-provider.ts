@@ -220,12 +220,16 @@ export function createCodexAgentProvider(opts: CodexAgentProviderOptions = {}): 
       // Sandbox + approval policy come from the tier — no hardcoded fallback.
       // admin → danger-full-access + never (matches old --dangerously behaviour),
       // trusted → workspace-write + never, guest → read-only + untrusted.
+      // Per-spawn model (daemon's /model pin, read fresh by session-manager)
+      // wins over the construction-time default — so a model switch applies on
+      // the next session without a daemon restart.
+      const model = spawnOpts.model ?? opts.model
       const threadOptions = {
         workingDirectory: project.path,
         skipGitRepoCheck: true,
         sandboxMode: tierOpts.sandboxMode,
         approvalPolicy: tierOpts.approvalPolicy,
-        ...(opts.model ? { model: opts.model } : {}),
+        ...(model ? { model } : {}),
       } as const
 
       const thread: Thread = spawnOpts.resumeSessionId

@@ -123,6 +123,15 @@ export interface SpawnContext {
    * then fall back to whatever prompt their construction opts carried (or none).
    */
   appendInstructions?: string
+  /**
+   * The pinned model id for this spawn, read per-spawn by the daemon
+   * (session-manager via `currentModelFor`) from agent-config — so an operator's
+   * `/model` switch takes effect on the NEXT session without a daemon restart.
+   * Undefined ⇒ the provider falls back to its construction-time model (or SDK
+   * default). Mirrors the `mcpEnv` / `appendInstructions` seam: the provider
+   * just injects it. (Claude has an equivalent per-spawn reader of its own.)
+   */
+  model?: string
 }
 
 /**

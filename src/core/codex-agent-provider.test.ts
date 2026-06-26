@@ -175,6 +175,18 @@ describe('Codex agent provider', () => {
     expect(o.model).toBe('gpt-5-codex')
   })
 
+  it('per-spawn spawnOpts.model overrides the construction-time model (/model hot-reload)', async () => {
+    const { provider: p, fake } = provider({ model: 'gpt-5-codex' })
+    await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test', model: 'gpt-5.3-codex' })
+    expect(fake.startThreadCalls[0]!.model).toBe('gpt-5.3-codex')
+  })
+
+  it('falls back to the construction-time model when spawnOpts.model is absent', async () => {
+    const { provider: p, fake } = provider({ model: 'gpt-5-codex' })
+    await p.spawn({ alias: 'a', path: '/p' }, { tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })
+    expect(fake.startThreadCalls[0]!.model).toBe('gpt-5-codex')
+  })
+
   it('routes resumeSessionId to resumeThread, NOT startThread', async () => {
     const { provider: p, fake } = provider()
     await p.spawn({ alias: 'compass', path: '/repo' }, { resumeSessionId: 'thread-xyz', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict', chatId: '_test' })

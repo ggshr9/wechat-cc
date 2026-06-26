@@ -446,17 +446,27 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
   // snapshot used for codex/cursor construction + startup logging.
   const configuredAgent = loadAgentConfig(deps.stateDir)
 
-  // P4 fix: the Claude model is re-read per spawn via an mtime-cached reader
-  // (one stat, parse only on change) instead of being captured once. An
-  // operator's `/model` switch rewrites agent-config.json, so the next
-  // session spawned in each chat picks up the new model with NO daemon
-  // restart. (An in-flight session keeps its model until released.) Codex
-  // and Cursor still take their model at provider-construction time below,
-  // so those changes remain restart-gated — out of scope for this fix.
+  // The model is re-read per spawn via an mtime-cached reader (one stat, parse
+  // only on change) instead of being captured once. An operator's `/model`
+  // switch rewrites agent-config.json, so the next session spawned in each chat
+  // picks up the new model with NO daemon restart (an in-flight session keeps
+  // its model until released). Claude reads `currentClaudeModel()` in its
+  // Options builder; codex/cursor read `currentModelFor()` per spawn via
+  // SpawnContext.model (session-manager forwards it) — all three hot-reload.
   const readAgentConfig = makeMtimeCachedConfigReader(deps.stateDir)
   const currentClaudeModel = (): string => {
     const c = readAgentConfig()
     return c.provider === 'claude' && c.model ? c.model : 'claude-opus-4-8'
+  }
+  // Per-spawn pinned model for codex/cursor (claude has currentClaudeModel
+  // above). Mirrors that rule: the pin only applies when the configured
+  // provider matches the spawning provider; otherwise undefined → the provider
+  // keeps its construction default. Read via the mtime-cached reader so a
+  // `/model` switch lands on the next session with NO daemon restart.
+  const currentModelFor = (providerId: ProviderId): string | undefined => {
+    const c = readAgentConfig()
+    if (c.provider !== providerId) return undefined
+    return providerId === 'cursor' ? c.cursorModel : c.model
   }
 
   const sdkOptionsForProject = (_alias: string, path: string, tierProfile: TierProfile, chatId: string, mcpEnv?: Record<string, string>, appendInstructions?: string): Options => {
@@ -781,6 +791,7 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
     mintSessionToken: deps.mintSessionToken,
     invalidateSessionToken: deps.invalidateSession,
     buildInstructions,
+    currentModelFor,
   })
 
   // Task 14 — when admins / trusted / allowFrom set membership changes in

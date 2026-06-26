@@ -48,6 +48,13 @@ export interface SessionManagerOptions {
    * off the SpawnContext entirely.
    */
   buildInstructions?: (providerId: ProviderId, tierProfile: TierProfile) => string
+  /**
+   * The pinned model id for a (provider) spawn, read per-spawn so a `/model`
+   * switch applies without a daemon restart. Returns undefined when no pin
+   * applies to this provider (provider falls back to its construction default).
+   * Same place + posture as `buildInstructions`.
+   */
+  currentModelFor?: (providerId: ProviderId) => string | undefined
 }
 
 /**
@@ -201,6 +208,7 @@ export class SessionManager {
     // to inject. Conditionally spread so non-wired callers (tests/embeddings)
     // leave the field off entirely.
     const appendInstructions = this.opts.buildInstructions?.(req.providerId, req.tierProfile)
+    const model = this.opts.currentModelFor?.(req.providerId)
     let session: AgentSession
     try {
       session = await provider.spawn(project, {
@@ -212,6 +220,7 @@ export class SessionManager {
         chatId: req.chatId,
         mcpEnv,
         ...(appendInstructions !== undefined ? { appendInstructions } : {}),
+        ...(model !== undefined ? { model } : {}),
       })
     } catch (err) {
       // spawn failed → the session is never cached, so release() never runs

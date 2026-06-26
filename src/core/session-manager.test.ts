@@ -163,6 +163,41 @@ describe('SessionManager', () => {
     await mgr.shutdown()
   })
 
+  it('forwards currentModelFor(providerId) as spawnOpts.model (per-spawn model hot-reload)', async () => {
+    let seen: string | undefined
+    const spawn = vi.fn(async (_p: unknown, ctx: { model?: string }) => {
+      seen = ctx.model
+      return makeFakeSession({ events: [{ kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 }] })
+    })
+    const mgr = new SessionManager({
+      maxConcurrent: 4,
+      idleEvictMs: 60_000,
+      registry: registryWithProvider({ spawn } as unknown as AgentProvider),
+      // Daemon owns the pinned-model rule; session-manager reads it per spawn.
+      currentModelFor: (providerId) => providerId === 'claude' ? 'claude-opus-4-8' : undefined,
+    })
+    await mgr.acquire({ alias: 'a', path: '/p', providerId: 'claude', chatId: 'c', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
+    expect(seen).toBe('claude-opus-4-8')
+    await mgr.shutdown()
+  })
+
+  it('omits model when currentModelFor returns undefined', async () => {
+    let hadKey = true
+    const spawn = vi.fn(async (_p: unknown, ctx: object) => {
+      hadKey = 'model' in ctx
+      return makeFakeSession({ events: [{ kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 }] })
+    })
+    const mgr = new SessionManager({
+      maxConcurrent: 4,
+      idleEvictMs: 60_000,
+      registry: registryWithProvider({ spawn } as unknown as AgentProvider),
+      currentModelFor: () => undefined,
+    })
+    await mgr.acquire({ alias: 'a', path: '/p', providerId: 'claude', chatId: 'c', tierProfile: TIER_PROFILES.admin, permissionMode: 'strict' })
+    expect(hadKey).toBe(false)
+    await mgr.shutdown()
+  })
+
   it('omits appendInstructions entirely when no buildInstructions thunk is wired', async () => {
     let hadKey = true
     const spawn = vi.fn(async (_p: unknown, ctx: object) => {

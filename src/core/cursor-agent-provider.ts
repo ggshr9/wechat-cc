@@ -254,9 +254,12 @@ export function createCursorAgentProvider(opts: CursorAgentProviderOptions): Age
       const mcpWithEnv = opts.mcpServers
         ? mergeEnvIntoMcpServers(opts.mcpServers, sessionEnv)
         : undefined
+      // Per-spawn model (daemon's /model pin) wins over the construction-time
+      // default → a model switch applies on the next session, no restart.
+      const model = spawnOpts.model ?? opts.model
       const createOptions: Record<string, unknown> = {
         apiKey: opts.apiKey,
-        ...(opts.model ? { model: { id: opts.model } } : {}),
+        ...(model ? { model: { id: model } } : {}),
         ...(mcpWithEnv ? { mcpServers: mcpWithEnv } : {}),
         local: {
           cwd: project.path,
