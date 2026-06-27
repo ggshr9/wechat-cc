@@ -21,7 +21,7 @@ import type { ProviderRegistry } from './provider-registry'
 import type { Mode, ProviderId } from './conversation'
 import type { InboundMsg } from './prompt-format'
 import { evaluateRound as evaluateModeratorRound, type ModeratorDecision, type ChatroomEntry } from './chatroom-moderator'
-import { type Opening } from './chatroom-conductor'
+import { buildRebuttalPrompt, buildVerdictPrompt, buildConvergencePrompt, parseConvergence, type Opening } from './chatroom-conductor'
 import { assertSupported, capabilitiesFor, UnsupportedCombinationError, type PermissionMode } from './capability-matrix'
 import { collectTurn, TURN_TIMEOUT_CODE, type TurnSummary } from './agent-provider'
 import { resolveEffectiveTier, TIER_PROFILES, type TierProfile } from './user-tier'
@@ -533,251 +533,52 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     const tier = resolveEffectiveTier(msg.chatId, deps.loadAccess(), deps.permissionMode)
     const tierProfile = TIER_PROFILES[tier]
 
-    // v0.5.9 — chatroom is a persistent session. Pull existing history
-    // (from prior user msgs in this chatroom), append the new user msg,
-    // and let the moderator see the whole sequence.
-    //
-    // PR C1 — shallow-copy the stored array before mutating so each
-    // dispatch operates on its own snapshot. The preempt step above
-    // additionally serialises overlapping dispatches per chat, so the
-    // snapshot we read here is the latest persisted history.
-    const history: ChatroomEntry[] = [...(chatroomHistories.get(msg.chatId) ?? [])]
-    history.push({ role: 'user', text: deps.format(msg) })
-
-    deps.log('COORDINATOR', `chatroom chat=${msg.chatId} → start participants=${participants.join(',')} max=${chatroomMaxRounds} history=${history.length} tier=${tier}`)
-
     try {
-    for (let round = 1; round <= chatroomMaxRounds; round++) {
-      if (aborter.signal.aborted) {
-        deps.log('COORDINATOR_CHATROOM', `chat=${msg.chatId} aborted at round ${round}`)
-        await deps.sendAssistantText?.(msg.chatId, '⏸ chatroom 已收到 /stop，提前终止本轮（已派出的 turn 无法撤回）。')
-        break
+      // ── Beat ①: parallel opening — every panel agent answers the raw question.
+      const question = deps.format(msg)
+      const history: ChatroomEntry[] = [...(chatroomHistories.get(msg.chatId) ?? [])]
+      history.push({ role: 'user', text: question })
+
+      const openings = await runBeat(msg, proj, tierProfile, participants, () => question)
+      if (openings.length === 0) {
+        await deps.sendAssistantText?.(msg.chatId, '⚠️ 两个 AI 这轮都没能回应，请稍后重发一次。')
+        return
       }
+      for (const o of openings) history.push({ role: 'speaker', speaker: o.speaker, text: o.text })
 
-      // Moderator picks who speaks next + crafts their prompt.
-      // Without a haikuEval dep we always hit the fallback (forced
-      // alternation, generic prompt) — keeps the loop functional but
-      // loses the targeted-prompt benefit. Bootstrap wires the real one.
-      const haikuEval = deps.haikuEval ?? (async () => {
-        throw new Error('haikuEval not wired')
-      })
-      let decision: ModeratorDecision
-      try {
-        decision = await evaluateModeratorRound(
-          {
-            history,
-            round,
-            maxRounds: chatroomMaxRounds,
-            participants,
-          },
-          { haikuEval, log: deps.log },
-        )
-      } catch (err) {
-        // evaluateRound has its own fallbacks; if even those throw we
-        // bail to user-facing error rather than silently hanging.
-        const reason = err instanceof Error ? err.message : String(err)
-        deps.log('COORDINATOR_CHATROOM', `moderator threw: ${reason}; ending chatroom`)
-        await deps.sendAssistantText?.(msg.chatId, `[chatroom] 主持人调用失败：${reason}`)
-        break
-      }
+      let rebuttals: Opening[] = []
+      if (openings.length >= 2) {
+        // ── Beat ②: parallel cross-talk — each engages the others' openings.
+        rebuttals = await runBeat(msg, proj, tierProfile, openings.map(o => o.speaker),
+          (p) => buildRebuttalPrompt(question, openings, p))
+        for (const r of rebuttals) history.push({ role: 'speaker', speaker: r.speaker, text: r.text })
 
-      if (decision.action === 'end') {
-        deps.log('COORDINATOR_CHATROOM', `chat=${msg.chatId} round=${round} moderator end (${decision.reasoning ?? '—'})`)
-        break
-      }
-
-      const { speaker, prompt } = decision
-      const isFinalRound = round === chatroomMaxRounds
-      deps.log('COORDINATOR_CHATROOM', `round=${round} speaker=${speaker} final=${isFinalRound} (mod: ${decision.reasoning ?? '—'})`)
-
-      // Belt-and-suspenders coda. The moderator's instructions already tell
-      // it to append "use plain text, don't call reply tool" to every
-      // generated prompt, but we re-append unconditionally here so even a
-      // moderator that forgets (or a fallback decision that didn't run
-      // through MODERATOR_INSTRUCTIONS) still pins the speaker to plain
-      // text. Mixing reply-tool turns with plain-text turns produced the
-      // visual inconsistency users flagged on 2026-05-06.
-      const promptWithCoda = prompt.includes('不要调 reply 工具')
-        ? prompt
-        : `${prompt}\n\n[chatroom 模式]：请用纯文本回复，不要调 reply 工具。daemon 会自动加 [Display] 前缀转发给用户。`
-
-      // Re-inject the structural metadata moderator paraphrase tends to
-      // strip. Solo / parallel dispatch format(msg) directly so the
-      // <wechat chat_id="..."> envelope reaches the speaker, but chatroom
-      // funnels through haiku-4-5 which keeps the conversational meaning
-      // and drops the identifiers + attachment markers (2026-05-08 audit).
-      //
-      // Two pieces always matter to the speaker in chatroom mode:
-      //   1. chat_id — needed to namespace memory_*, set_user_name, etc.
-      //      The speaker session is per-(provider, alias) and may serve
-      //      multiple chats, so it can't infer this from session state.
-      //   2. attachment markers — the speaker has Read/Bash but no path
-      //      to open without an explicit `[image:/abs/path]` line.
-      //
-      // Dedup against whatever the moderator did happen to keep so we
-      // never double-print the same marker.
-      const contextLines: string[] = []
-      const chatHeader = `[chat_id:${msg.chatId}]`
-      if (!promptWithCoda.includes(chatHeader)) contextLines.push(chatHeader)
-      const attachmentMarkers = (msg.attachments ?? [])
-        .map(a => `[${a.kind}:${a.path}]`)
-        .filter(m => !promptWithCoda.includes(m))
-      if (attachmentMarkers.length > 0) {
-        contextLines.push('附件（用户消息中带的，可用 Read/Bash 打开）：')
-        contextLines.push(...attachmentMarkers)
-      }
-      const dispatchedPrompt = contextLines.length > 0
-        ? `${promptWithCoda}\n\n${contextLines.join('\n')}`
-        : promptWithCoda
-
-      // Per speaker-turn observability: one TurnRecord per round, emitted in
-      // the finally so every exit path (break/continue/normal) records exactly
-      // once. suppressRecord skips the user-initiated /stop abort — that's a
-      // clean cancel, not a turn-health signal worth logging as an outcome.
-      const turnStartedAt = nowMs()
-      let roundOutcome: TurnRecord['outcome'] = 'error'
-      let roundSummary: TurnSummary | undefined
-      let roundError: string | undefined
-      let suppressRecord = false
-      try {
-        let result: TurnSummary
-        try {
-          const handle = await deps.manager.acquire({
-            alias: proj.alias,
-            path: proj.path,
-            providerId: speaker,
-            chatId: msg.chatId,
-            tierProfile,
-            permissionMode: deps.permissionMode,
-          })
-          // PR C2 — propagate the chatroom aborter into the speaker turn so
-          // /stop (and "new dispatch preempts prior") interrupt mid-stream
-          // rather than waiting for the current speaker turn to drain.
-          // Best effort — providers without cancel() still get aborted at
-          // the next round-entry check at the top of the loop.
-          const onAbort = () => { void handle.cancel?.() }
-          aborter.signal.addEventListener('abort', onAbort, { once: true })
-          // WHATWG: addEventListener on an already-aborted signal does NOT
-          // retroactively fire the handler. If abort landed between the
-          // `await acquire` above and this line, we'd skip the mid-stream
-          // cancel and the speaker turn would run to natural completion.
-          // Fire onAbort manually in that case.
-          if (aborter.signal.aborted) onAbort()
-          try {
-            result = await collectTurn(handle.dispatch(dispatchedPrompt), { timeoutMs: deps.turnTimeoutMs })
-          } finally {
-            aborter.signal.removeEventListener('abort', onAbort)
+        // ── Beat ②b (optional, capped at 1): only if still materially split.
+        if (deps.haikuEval && rebuttals.length >= 2) {
+          let conv = { converged: true } as { converged: boolean; disagreement?: string }
+          try { conv = parseConvergence(await deps.haikuEval(buildConvergencePrompt(question, openings, rebuttals))) }
+          catch { /* parseConvergence never throws; haikuEval might — treat as converged */ }
+          if (!conv.converged && conv.disagreement) {
+            const extra = await runBeat(msg, proj, tierProfile, openings.map(o => o.speaker),
+              (p) => buildRebuttalPrompt(`${question}\n（聚焦这个分歧：${conv.disagreement}）`, [...openings, ...rebuttals], p))
+            for (const e of extra) history.push({ role: 'speaker', speaker: e.speaker, text: e.text })
+            rebuttals = [...rebuttals, ...extra]
           }
-        } catch (err) {
-          // If we cancelled this turn ourselves, that's a clean exit — the
-          // user already saw the abort notice and any "[Display] (error)"
-          // we'd send would be noise.
-          if (aborter.signal.aborted) {
-            deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} aborted mid-stream — suppressing error reply`)
-            suppressRecord = true
-            break
-          }
-          const reason = err instanceof Error ? err.message : String(err)
-          deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} threw: ${reason}`)
-          roundError = reason
-          const dn = deps.registry.get(speaker)?.opts.displayName ?? speaker
-          await deps.sendAssistantText?.(msg.chatId, `[${dn}] (chatroom error: ${reason})`)
-          break
-        }
-        roundSummary = result
-
-        // Auth-fail self-heal — same shape as solo/parallel. Releasing the
-        // speaker's session means a follow-up /chat dispatch starts from a
-        // fresh subprocess. Ending the loop here is the safe call: the user
-        // already got the neutral notice from handleAuthFailed and the
-        // moderator's next pick is unreliable while credentials are stale.
-        if (result.errorCode === 'auth_failed') {
-          roundOutcome = 'auth_failed'
-          await handleAuthFailed(msg.chatId, proj.alias, speaker, result)
-          break
-        }
-
-        // Watchdog fired: the speaker stalled silently. Release its session and
-        // end the loop — the moderator's next pick is unreliable while a speaker
-        // is wedged, same call we make on auth_failed.
-        if (result.errorCode === TURN_TIMEOUT_CODE) {
-          roundOutcome = 'timeout'
-          await handleTurnTimeout(msg.chatId, proj.alias, speaker, result)
-          break
-        }
-
-        // If the speaker called the reply tool despite chatroom mode, the
-        // text already went out via internal-api with the [Display] prefix.
-        // Skip our own forwarding (would double-send) but still record
-        // their output in history so the next moderator round sees it.
-        if (result.replyToolCalled) {
-          roundOutcome = 'completed'
-          deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} replyToolCalled — skipping our forward`)
-          history.push({ role: 'speaker', speaker, text: result.assistantText.join('\n').trim() || '(reply tool used)' })
-          continue
-        }
-
-        const allText = result.assistantText.join('\n').trim()
-        if (allText.length === 0) {
-          // A clean turn that produced nothing — completed, just empty
-          // (textChunks=0 in the record carries that).
-          roundOutcome = 'completed'
-          deps.log('COORDINATOR_CHATROOM', `speaker=${speaker} round=${round} produced no assistant text — ending`)
-          break
-        }
-        roundOutcome = 'completed'
-        const dn = deps.registry.get(speaker)?.opts.displayName ?? speaker
-        // Final-round visual marker: leading 🎯 if the speaker didn't add
-        // it themselves (the moderator's prompt asks them to). Single emoji
-        // signals "this turn is the synthesis / takeaway" without the heavy
-        // "[· 终局]" framing the user found dramatic.
-        const renderedText = isFinalRound && !allText.startsWith('🎯')
-          ? `🎯 ${allText}`
-          : allText
-        // If abort landed mid-stream and the provider's cancel() didn't actually
-        // interrupt it (providers without a real interrupt run to completion),
-        // the turn completed anyway — but the user already aborted it, so DON'T
-        // forward the now-stale reply. Still push to history: a preempting
-        // dispatch's moderator must see this partial progress (PR C2), and the
-        // round-entry abort check owns the user-facing /stop notice.
-        if (!aborter.signal.aborted) {
-          await deps.sendAssistantText?.(msg.chatId, `[${dn}] ${renderedText}`)
-        }
-        history.push({ role: 'speaker', speaker, text: allText })
-      } finally {
-        if (!suppressRecord) {
-          const turnEndedAt = nowMs()
-          deps.recordTurn?.({
-            chatId: msg.chatId,
-            provider: speaker,
-            alias: proj.alias,
-            mode: 'chatroom',
-            startedAt: turnStartedAt,
-            endedAt: turnEndedAt,
-            durationMs: turnEndedAt - turnStartedAt,
-            outcome: roundOutcome,
-            replyToolCalled: roundSummary?.replyToolCalled ?? false,
-            textChunks: roundSummary?.assistantText.length ?? 0,
-            error: roundSummary?.error ?? roundError,
-          })
         }
       }
-    }
 
-    // PR C1 — if the loop ended before any speaker turn responded to this
-    // dispatch's user msg (early abort, auth_failed at round 1, speaker
-    // threw, etc.), drop the orphaned user entry so the next dispatch
-    // doesn't show the moderator a history that ends in two consecutive
-    // user entries.
-    const last = history[history.length - 1]
-    if (last && last.role === 'user') {
-      history.pop()
-      deps.log('COORDINATOR_CHATROOM', `chat=${msg.chatId} → dropped orphan user entry (no speaker turn produced)`)
-    }
+      // ── Beat ③: verdict — a judged synthesis. Plain text (no parse). Always emitted.
+      if (deps.haikuEval) {
+        let verdict = ''
+        try { verdict = (await deps.haikuEval(buildVerdictPrompt(question, openings, rebuttals))).trim() }
+        catch (e) { deps.log('COORDINATOR_CHATROOM', `verdict failed: ${e instanceof Error ? e.message : e}`) }
+        if (verdict) {
+          await deps.sendAssistantText?.(msg.chatId, verdict.startsWith('🎯') ? verdict : `🎯 ${verdict}`)
+          history.push({ role: 'speaker', speaker: openings[0]!.speaker, text: verdict })
+        }
+      }
 
-    // Persist the (possibly extended) chatroom history back to the map.
-    chatroomHistories.set(msg.chatId, history)
-    deps.log('COORDINATOR', `chatroom chat=${msg.chatId} → done; history=${history.length}`)
+      chatroomHistories.set(msg.chatId, history)
     } finally {
       if (inFlightAborters.get(msg.chatId) === aborter) {
         inFlightAborters.delete(msg.chatId)
@@ -930,6 +731,16 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
         textChunks: summary?.assistantText.length ?? 0,
         error: summary?.error ?? err,
       })
+      // Self-heal parity with dispatchParallel: release wedged/stale sessions
+      // and notify the user, per-provider, so beats continue for healthy agents.
+      if (outcome === 'timeout' && summary) {
+        await handleTurnTimeout(msg.chatId, proj.alias, providerId, summary)
+        return null
+      }
+      if (outcome === 'auth_failed' && summary) {
+        await handleAuthFailed(msg.chatId, proj.alias, providerId, summary)
+        return null
+      }
       const text = (summary?.assistantText ?? []).join('\n').trim()
       if (!text) return null
       const dn = deps.registry.get(providerId)?.opts.displayName ?? providerId
