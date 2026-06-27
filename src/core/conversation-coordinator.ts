@@ -20,7 +20,6 @@ import type { ConversationStore } from './conversation-store'
 import type { ProviderRegistry } from './provider-registry'
 import type { Mode, ProviderId } from './conversation'
 import type { InboundMsg } from './prompt-format'
-import { type ChatroomEntry } from './chatroom-moderator'
 import { buildRebuttalPrompt, buildVerdictPrompt, buildConvergencePrompt, parseConvergence, type Opening } from './chatroom-conductor'
 import { assertSupported, capabilitiesFor, UnsupportedCombinationError, type PermissionMode } from './capability-matrix'
 import { collectTurn, TURN_TIMEOUT_CODE, type TurnSummary } from './agent-provider'
@@ -300,23 +299,14 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     }
     await deps.sendAssistantText?.(chatId, '⏱ 处理超时了，刚才那条没能回复，请稍后重发一次。')
   }
-  // v0.5.9 — chatroom is now a persistent session per chatId. History
-  // accumulates across user messages until the user switches mode away
-  // from chatroom (then we delete the entry). Lets the moderator see the
-  // full prior discussion when picking the next speaker / decision.
-  // In-memory only (Q4: not persisted across daemon restart — speakers'
-  // SDK sessions still continue, the moderator just observes a fresh
-  // chatroom from its perspective; minor inconsistency, low cost).
-  const chatroomHistories = new Map<string, ChatroomEntry[]>()
   // RFC 03 review #11 — per-chat AbortController for in-flight chatroom
   // loops. dispatchChatroom registers; coordinator.cancel() signals; /stop
   // in mode-commands triggers cancel before flipping mode.
   const inFlightAborters = new Map<string, AbortController>()
   // PR C2 — per-chat promise that resolves when the active dispatchChatroom
-  // call has finished its finally block (history persisted, aborter slot
-  // cleared). A NEW chatroom dispatch in the same chat awaits this so the
-  // "latest user msg wins" preempt path doesn't race the prior loop's
-  // history.set with its own snapshot read.
+  // call has finished its finally block (aborter slot cleared). A NEW
+  // chatroom dispatch in the same chat awaits this so the "latest user msg
+  // wins" preempt path doesn't race the prior loop's cleanup.
   const inFlightDispatchPromises = new Map<string, Promise<void>>()
 
   function validateMode(mode: Mode): void {
@@ -476,13 +466,6 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     // re-read after each await so each new wave gets preempted by the
     // next arrival, all the way until the slot is empty (in single-
     // threaded-JS sense — guaranteed by the synchronous map set below).
-    // Loop is required for ≥3 rapid dispatches: when B and C both arrive
-    // while A is in flight, both read A as their prior and both await A.
-    // After A finishes, both wake; if only the FIRST checks-and-claims
-    // the slot, the SECOND would silently overwrite without aborting. We
-    // re-read after each await so each new wave gets preempted by the
-    // next arrival, all the way until the slot is empty (in single-
-    // threaded-JS sense — guaranteed by the synchronous map set below).
     while (true) {
       const priorAborter = inFlightAborters.get(msg.chatId)
       const priorPromise = inFlightDispatchPromises.get(msg.chatId)
@@ -514,22 +497,22 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
     try {
       // ── Beat ①: parallel opening — every panel agent answers the raw question.
       const question = deps.format(msg)
-      const history: ChatroomEntry[] = [...(chatroomHistories.get(msg.chatId) ?? [])]
-      history.push({ role: 'user', text: question })
 
       const openings = await runBeat(msg, proj, tierProfile, participants, () => question)
       if (openings.length === 0) {
-        await deps.sendAssistantText?.(msg.chatId, '⚠️ 两个 AI 这轮都没能回应，请稍后重发一次。')
+        await deps.sendAssistantText?.(msg.chatId, '⚠️ 这轮没有 AI 成功回应，请稍后重发一次。')
         return
       }
-      for (const o of openings) history.push({ role: 'speaker', speaker: o.speaker, text: o.text })
+
+      if (aborter.signal.aborted) { deps.log('COORDINATOR_CHATROOM', `chat=${msg.chatId} aborted mid-debate`); return }
 
       let rebuttals: Opening[] = []
       if (openings.length >= 2) {
         // ── Beat ②: parallel cross-talk — each engages the others' openings.
         rebuttals = await runBeat(msg, proj, tierProfile, openings.map(o => o.speaker),
           (p) => buildRebuttalPrompt(question, openings, p))
-        for (const r of rebuttals) history.push({ role: 'speaker', speaker: r.speaker, text: r.text })
+
+        if (aborter.signal.aborted) { deps.log('COORDINATOR_CHATROOM', `chat=${msg.chatId} aborted mid-debate`); return }
 
         // ── Beat ②b (optional, capped at 1): only if still materially split.
         if (deps.haikuEval && rebuttals.length >= 2) {
@@ -539,11 +522,12 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
           if (!conv.converged && conv.disagreement) {
             const extra = await runBeat(msg, proj, tierProfile, openings.map(o => o.speaker),
               (p) => buildRebuttalPrompt(`${question}\n（聚焦这个分歧：${conv.disagreement}）`, [...openings, ...rebuttals], p))
-            for (const e of extra) history.push({ role: 'speaker', speaker: e.speaker, text: e.text })
             rebuttals = [...rebuttals, ...extra]
           }
         }
       }
+
+      if (aborter.signal.aborted) { deps.log('COORDINATOR_CHATROOM', `chat=${msg.chatId} aborted mid-debate`); return }
 
       // ── Beat ③: verdict — a judged synthesis. Plain text (no parse). Always emitted.
       if (deps.haikuEval) {
@@ -552,11 +536,8 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
         catch (e) { deps.log('COORDINATOR_CHATROOM', `verdict failed: ${e instanceof Error ? e.message : e}`) }
         if (verdict) {
           await deps.sendAssistantText?.(msg.chatId, verdict.startsWith('🎯') ? verdict : `🎯 ${verdict}`)
-          history.push({ role: 'speaker', speaker: openings[0]!.speaker, text: verdict })
         }
       }
-
-      chatroomHistories.set(msg.chatId, history)
     } finally {
       if (inFlightAborters.get(msg.chatId) === aborter) {
         inFlightAborters.delete(msg.chatId)
@@ -734,15 +715,6 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
       validateMode(mode)
       const oldMode = getMode(chatId)
       deps.conversationStore.set(chatId, mode)
-      // v0.5.9 — clear chatroom history when leaving chatroom mode.
-      // Switching back later starts a fresh chatroom session, matching
-      // the "left the room, came back" mental model. Cross-chat session
-      // release is left to LRU / idle eviction because the
-      // (alias, providerId) key is shared across chats; per-chat release
-      // would interfere.
-      if (oldMode.kind === 'chatroom' && mode.kind !== 'chatroom') {
-        chatroomHistories.delete(chatId)
-      }
     },
     cancel(chatId) {
       const ac = inFlightAborters.get(chatId)

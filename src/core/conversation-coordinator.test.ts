@@ -1461,9 +1461,9 @@ describe('ConversationCoordinator', () => {
     // ── cancel / preemption ───────────────────────────────────────────────
 
     it('cancel(chatId) returns true while in-flight; subsequent dispatch preempts cleanly', async () => {
-      // cancel() signals the aborter (returns true). The new flow does not
-      // check aborter.signal mid-beat, so the current dispatch runs to
-      // completion. After completion the aborter is cleared (returns false).
+      // cancel() signals the aborter (returns true). The aborter is registered
+      // synchronously before the first await. After the dispatch completes
+      // (or aborts at a beat boundary) the aborter slot is cleared (returns false).
       const { c } = setupChatroom()
       expect(c.cancel('chat-1')).toBe(false)
       const p = c.dispatch(inbound('chat-1', 'first'))
@@ -1471,6 +1471,20 @@ describe('ConversationCoordinator', () => {
       expect(c.cancel('chat-1')).toBe(true)
       await p
       expect(c.cancel('chat-1')).toBe(false)
+    })
+
+    it('cancel before beat ② causes subsequent beats to be skipped', async () => {
+      // cancel() sets abort signal before beat ① completes. Once beat ① finishes,
+      // the first beat-boundary abort check fires and returns early — beats ②,
+      // ②b, and ③ must NOT run. haikuEval (used only in ②b and ③) must not be called.
+      const { c, haikuEval } = setupChatroom()
+      const p = c.dispatch(inbound('chat-1', 'debate'))
+      // aborter is registered synchronously before the first await (beat ①)
+      expect(c.cancel('chat-1')).toBe(true)
+      await p
+      // haikuEval is only invoked in beats ②b (convergence) and ③ (verdict).
+      // If neither ran, abort-at-boundary is working correctly.
+      expect(haikuEval).not.toHaveBeenCalled()
     })
 
     it('falls back to solo+default when chatroom resolves to a single participant', async () => {
@@ -1513,7 +1527,7 @@ describe('ConversationCoordinator', () => {
 
     it('all speakers failing sends retry notice (opening beat returns empty)', async () => {
       // When every acquire() throws in beat 1, openings.length === 0 and
-      // the coordinator sends "⚠️ 两个 AI 这轮都没能回应，请稍后重发一次。"
+      // the coordinator sends "⚠️ 这轮没有 AI 成功回应，请稍后重发一次。"
       // instead of silently returning. haikuEval is not called.
       const store = makeMockStore()
       store.set('chat-1', { kind: 'chatroom' })
@@ -1537,7 +1551,7 @@ describe('ConversationCoordinator', () => {
         haikuEval,
       })
       await c.dispatch(inbound('chat-1', 'hi'))
-      expect(sendAssistantText).toHaveBeenCalledWith('chat-1', expect.stringContaining('两个 AI'))
+      expect(sendAssistantText).toHaveBeenCalledWith('chat-1', expect.stringContaining('这轮没有 AI 成功回应'))
       expect(haikuEval).not.toHaveBeenCalled()
     })
 
@@ -1661,13 +1675,11 @@ describe('ConversationCoordinator', () => {
       expect(preemptLogs.length).toBeGreaterThanOrEqual(2)
     })
 
-    it('pops the trailing user entry when no speaker turn was produced (acquire throws on beat 1)', async () => {
-      // When dispatch 1 breaks out of beat 1 before any speaker turn pushes
-      // to history (one acquire throws), the saved history must not keep the
-      // orphan user entry — the next dispatch's prompts should not see it.
-      // In the three-beat flow, history is stored (not used in prompts), so
-      // the real guard is: the convergence/verdict prompts only contain the
-      // CURRENT question, not the prior failed question.
+    it('verdict/convergence prompts for dispatch 2 do not contain a prior failed question', async () => {
+      // When dispatch 1 has one acquire throw (only one provider responds),
+      // dispatch 2 (a clean follow-up) must see only its own question in
+      // convergence/verdict prompts — the prompts are built from the current
+      // runBeat outputs and question only, never from persisted cross-dispatch history.
       const store = makeMockStore()
       store.set('chat-1', { kind: 'chatroom' })
       const registry = createProviderRegistry()
