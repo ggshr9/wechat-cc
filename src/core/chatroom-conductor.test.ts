@@ -1,11 +1,25 @@
 import { describe, it, expect } from 'vitest'
-import { buildRebuttalPrompt, buildVerdictPrompt, parseConvergence } from './chatroom-conductor'
+import { buildOpeningPrompt, buildRebuttalPrompt, buildVerdictPrompt, parseConvergence } from './chatroom-conductor'
 
 describe('chatroom-conductor', () => {
   const openings = [
     { speaker: 'claude' as const, text: '用 A 方案' },
     { speaker: 'codex' as const, text: '用 B 方案' },
   ]
+
+  it('opening prompt frames the agent as a chatroom participant naming the peers (not solo)', () => {
+    const p = buildOpeningPrompt('选 A 还是 B?', ['claude', 'codex'], 'claude')
+    expect(p).toContain('codex')          // names the peer it's sitting with
+    expect(p).toContain('选 A 还是 B?')    // the user's message
+    expect(p).toMatch(/圆桌|chatroom|讨论/) // chatroom framing, not a solo turn
+    expect(p).toContain('不是 solo')       // explicit: you are NOT alone
+  })
+
+  it('opening prompt names ALL other peers for an N>2 panel', () => {
+    const p = buildOpeningPrompt('q', ['claude', 'codex', 'gemini'], 'claude')
+    expect(p).toContain('codex')
+    expect(p).toContain('gemini')
+  })
 
   it('rebuttal prompt gives self the OTHERS full openings and asks for pointed engagement', () => {
     const p = buildRebuttalPrompt('选 A 还是 B?', openings, 'claude')

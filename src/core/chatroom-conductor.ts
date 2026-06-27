@@ -20,6 +20,24 @@ function othersBlock(openings: Opening[], self: ProviderId): string {
     .join('\n\n')
 }
 
+/**
+ * Beat ① — the OPENING. Frame the agent as one voice in a multi-AI roundtable
+ * alongside its named peers, so it does NOT answer as if it's a solo chat (the
+ * raw question alone made Claude say "现在是 solo 模式" and made Codex fabricate
+ * the other side). It states the peers, the user's message, and that a
+ * cross-talk round follows — so the agent stakes a position meant to be debated.
+ */
+export function buildOpeningPrompt(question: string, participants: ProviderId[], self: ProviderId): string {
+  const peers = participants.filter(p => p !== self).join('、')
+  return [
+    `你正在一个多 AI 圆桌讨论（chatroom）里，同台的还有：${peers}。这不是 solo 对话——你和他们一起回应同一个用户。`,
+    `用户的消息：${question}`,
+    '',
+    `先给出你的开场立场/回答。稍后你会看到 ${peers} 的回答，然后你们互相讨论、挑毛病——所以现在把观点说清楚、有立场、能被反驳。直接答，别说"我没有对手"之类的话。简短、中文、没废话。`,
+    NO_REPLY_TOOL,
+  ].join('\n')
+}
+
 /** Beat ② — each agent sees the OTHERS' openings and is told to engage pointedly. */
 export function buildRebuttalPrompt(question: string, openings: Opening[], self: ProviderId): string {
   return [

@@ -20,7 +20,7 @@ import type { ConversationStore } from './conversation-store'
 import type { ProviderRegistry } from './provider-registry'
 import type { Mode, ProviderId } from './conversation'
 import type { InboundMsg } from './prompt-format'
-import { buildRebuttalPrompt, buildVerdictPrompt, buildConvergencePrompt, parseConvergence, type Opening } from './chatroom-conductor'
+import { buildOpeningPrompt, buildRebuttalPrompt, buildVerdictPrompt, buildConvergencePrompt, parseConvergence, type Opening } from './chatroom-conductor'
 import { assertSupported, capabilitiesFor, UnsupportedCombinationError, type PermissionMode } from './capability-matrix'
 import { collectTurn, TURN_TIMEOUT_CODE, type TurnSummary } from './agent-provider'
 import { resolveEffectiveTier, TIER_PROFILES, type TierProfile } from './user-tier'
@@ -498,7 +498,7 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
       // ── Beat ①: parallel opening — every panel agent answers the raw question.
       const question = deps.format(msg)
 
-      const openings = await runBeat(msg, proj, tierProfile, participants, () => question)
+      const openings = await runBeat(msg, proj, tierProfile, participants, (p) => buildOpeningPrompt(question, participants, p))
       if (openings.length === 0) {
         await deps.sendAssistantText?.(msg.chatId, '⚠️ 这轮没有 AI 成功回应，请稍后重发一次。')
         return
