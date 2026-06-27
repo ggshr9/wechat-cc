@@ -640,9 +640,14 @@ export async function buildBootstrap(deps: BootstrapDeps): Promise<Bootstrap> {
       'codex',
       createCodexAgentProvider({
         codexPathOverride: codexBinary,
-        ...(process.env.CODEX_MODEL || configuredAgent.model
-          ? { model: process.env.CODEX_MODEL ?? configuredAgent.model }
-          : {}),
+        // Construction-time model default ONLY from CODEX_MODEL. Do NOT fall back
+        // to configuredAgent.model — that is the CONFIGURED provider's model, so
+        // on a claude-default install it's a claude id (e.g. claude-opus-4-8),
+        // which codex rejects ("model not supported") → every codex turn exits 1
+        // (breaks /codex, /both, /chat). When the configured provider IS codex,
+        // the pinned model is supplied per-spawn via currentModelFor('codex')
+        // (SpawnContext.model); otherwise codex uses its own SDK default.
+        ...(process.env.CODEX_MODEL ? { model: process.env.CODEX_MODEL } : {}),
         // Task 6: sandboxMode + approvalPolicy moved out of CodexAgentProviderOptions —
         // they're now derived per-spawn from spawnOpts.tierProfile inside the provider.
         // admin tier maps to danger-full-access + never (matches the old --dangerously
