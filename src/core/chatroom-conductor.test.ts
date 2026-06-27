@@ -25,7 +25,13 @@ describe('chatroom-conductor', () => {
     const p = buildRebuttalPrompt('选 A 还是 B?', openings, 'claude')
     expect(p).toContain('用 B 方案')        // sees the other's actual text
     expect(p).not.toContain('用 A 方案')     // not fed its own opening back
-    expect(p).toMatch(/反驳|哪里错|漏|不同意/) // told to engage, not just restate
+    expect(p).toMatch(/错了|反例|证据|角度/) // told to engage substantively, not just restate
+  })
+
+  it('rebuttal prompt forbids homogeneous/redundant cross-talk (only NEW substance)', () => {
+    const p = buildRebuttalPrompt('选 A 还是 B?', openings, 'claude')
+    expect(p).toMatch(/新东西|别重复|新内容/) // must add new substance, not echo
+    expect(p).toMatch(/附和|凑字数/)          // explicitly bans padding / agreeable filler
   })
 
   it('verdict prompt asks for a stance + consensus/disagreement/recommendation, not a transcript', () => {
