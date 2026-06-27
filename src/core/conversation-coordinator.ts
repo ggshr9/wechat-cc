@@ -21,9 +21,10 @@ import type { ProviderRegistry } from './provider-registry'
 import type { Mode, ProviderId } from './conversation'
 import type { InboundMsg } from './prompt-format'
 import { evaluateRound as evaluateModeratorRound, type ModeratorDecision, type ChatroomEntry } from './chatroom-moderator'
+import { type Opening } from './chatroom-conductor'
 import { assertSupported, capabilitiesFor, UnsupportedCombinationError, type PermissionMode } from './capability-matrix'
 import { collectTurn, TURN_TIMEOUT_CODE, type TurnSummary } from './agent-provider'
-import { resolveEffectiveTier, TIER_PROFILES } from './user-tier'
+import { resolveEffectiveTier, TIER_PROFILES, type TierProfile } from './user-tier'
 import type { Access } from '../lib/access'
 
 /**
@@ -888,6 +889,54 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
         await deps.sendAssistantText?.(msg.chatId, `[${dn}] ${t}`)
       }
     }
+  }
+
+  // One debate beat: run `participants` concurrently, each with its own prompt.
+  // Emit each agent's text the moment that agent finishes (live feel, not
+  // wait-for-slowest), record one chatroom TurnRecord per agent, and return the
+  // {speaker,text} of agents that produced non-empty output (others dropped —
+  // graceful degradation). Shares the fan-out shape with dispatchParallel.
+  async function runBeat(
+    msg: InboundMsg,
+    proj: { alias: string; path: string },
+    tierProfile: TierProfile,
+    participants: ProviderId[],
+    promptFor: (p: ProviderId) => string,
+  ): Promise<Opening[]> {
+    const results = await Promise.all(participants.map(async (providerId): Promise<Opening | null> => {
+      const startedAt = nowMs()
+      let summary: Awaited<ReturnType<typeof collectTurn>> | undefined
+      let err: string | undefined
+      try {
+        const handle = await deps.manager.acquire({
+          alias: proj.alias, path: proj.path, providerId,
+          chatId: msg.chatId, tierProfile, permissionMode: deps.permissionMode,
+        })
+        summary = await collectTurn(handle.dispatch(promptFor(providerId)), { timeoutMs: deps.turnTimeoutMs })
+      } catch (e) {
+        err = e instanceof Error ? e.message : String(e)
+      }
+      const endedAt = nowMs()
+      const outcome: TurnRecord['outcome'] =
+        err ? 'error'
+        : summary?.errorCode === TURN_TIMEOUT_CODE ? 'timeout'
+        : summary?.errorCode === 'auth_failed' ? 'auth_failed'
+        : summary?.error ? 'error'
+        : 'completed'
+      deps.recordTurn?.({
+        chatId: msg.chatId, provider: providerId, alias: proj.alias, mode: 'chatroom',
+        startedAt, endedAt, durationMs: endedAt - startedAt, outcome,
+        replyToolCalled: summary?.replyToolCalled ?? false,
+        textChunks: summary?.assistantText.length ?? 0,
+        error: summary?.error ?? err,
+      })
+      const text = (summary?.assistantText ?? []).join('\n').trim()
+      if (!text) return null
+      const dn = deps.registry.get(providerId)?.opts.displayName ?? providerId
+      await deps.sendAssistantText?.(msg.chatId, `[${dn}] ${text}`)
+      return { speaker: providerId, text }
+    }))
+    return results.filter((r): r is Opening => r !== null)
   }
 
   return {
