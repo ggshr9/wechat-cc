@@ -109,15 +109,16 @@ export function parseUpdates(
         if (text !== '' || type !== 'unknown') {
           quote = { type, text }
         }
-        continue
       }
 
       if (item.type === 1) {
-        if (msgType === 'unknown') msgType = 'text'
-        if (item.text_item?.text) {
-          textParts.push(item.text_item.text)
+        const text = item.text_item?.text
+        if (text) {
+          if (msgType === 'unknown') msgType = 'text'
+          textParts.push(text)
         }
       } else if (item.type === 2) {
+        if (!item.image_item?.media && !item.image_item?.aeskey) continue
         if (msgType === 'unknown') msgType = 'image'
         // Image item — emit opaque CDN reference; caller downloads via media.ts
         const media = item.image_item?.media
@@ -127,19 +128,20 @@ export function parseUpdates(
           caption: JSON.stringify(media ?? {}),
         })
       } else if (item.type === 3) {
-        if (msgType === 'unknown') msgType = 'voice'
         // Voice item
         if (item.voice_item?.text) {
+          if (msgType === 'unknown') msgType = 'voice'
           textParts.push(`[语音] ${item.voice_item.text}`)
-        } else {
-          const media = item.voice_item?.media
+        } else if (item.voice_item?.media) {
+          if (msgType === 'unknown') msgType = 'voice'
           attachments.push({
             kind: 'voice',
             path: '<pending-cdn-ref>',
-            caption: JSON.stringify(media ?? {}),
+            caption: JSON.stringify(item.voice_item.media),
           })
         }
       } else if (item.type === 4) {
+        if (!item.file_item?.media && !item.file_item?.file_name) continue
         if (msgType === 'unknown') msgType = 'file'
         // File item
         const media = item.file_item?.media
@@ -150,6 +152,7 @@ export function parseUpdates(
           caption: JSON.stringify({ media: media ?? {}, file_name: fileName }),
         })
       } else if (item.type === 5) {
+        if (!item.video_item?.media) continue
         if (msgType === 'unknown') msgType = 'video'
         // Video item
         const media = item.video_item?.media

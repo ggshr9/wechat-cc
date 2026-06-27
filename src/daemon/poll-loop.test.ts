@@ -98,6 +98,48 @@ describe('parseUpdates', () => {
     expect(msg!.text).toBe('this')
   })
 
+  it('keeps current text when ref_msg and text_item are on the same item', () => {
+    const raw: RawUpdate[] = [{
+      from_user_id: 'u',
+      create_time_ms: 1000,
+      message_type: 1,
+      message_state: 2,
+      item_list: [{
+        type: 1,
+        msg_id: 'cur-1',
+        ref_msg: {
+          title: '上一条…',
+          message_item: { type: 1, text_item: { text: '上一条完整内容' } },
+        },
+        text_item: { text: '这次回复正文' },
+      }],
+    }]
+    const [msg] = parseUpdates(raw, { accountId: 'A', resolveUserName: () => undefined })
+    expect(msg!.quote).toEqual({ type: 'text', text: '上一条完整内容' })
+    expect(msg!.msgType).toBe('text')
+    expect(msg!.text).toBe('这次回复正文')
+  })
+
+  it('does not mark a quote-only ref item as current text', () => {
+    const raw: RawUpdate[] = [{
+      from_user_id: 'u',
+      create_time_ms: 1000,
+      message_type: 1,
+      message_state: 2,
+      item_list: [{
+        type: 1,
+        ref_msg: {
+          title: '上一条…',
+          message_item: { type: 1, text_item: { text: '上一条完整内容' } },
+        },
+      }],
+    }]
+    const [msg] = parseUpdates(raw, { accountId: 'A', resolveUserName: () => undefined })
+    expect(msg!.quote).toEqual({ type: 'text', text: '上一条完整内容' })
+    expect(msg!.msgType).toBe('unknown')
+    expect(msg!.text).toBe('(non-text message)')
+  })
+
   it('prefers unsupported_item.text over title, labels non-text quote types', () => {
     const raw: RawUpdate[] = [{
       from_user_id: 'u',
