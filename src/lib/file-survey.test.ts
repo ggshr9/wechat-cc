@@ -60,6 +60,16 @@ describe('surveyFiles', () => {
     const childEntries = r.folders.filter(f => f.path === child)
     expect(childEntries.length).toBe(1)
   })
+
+  it('keeps fileCount accurate but bounds the recency sample by maxFilesPerFolder', () => {
+    const big = join(root, 'big')
+    mkdirSync(big, { recursive: true })
+    for (let i = 0; i < 20; i++) writeFileSync(join(big, `f${i}.txt`), 'x')
+    const r = surveyFiles({ roots: [big], limits: { maxFilesPerFolder: 5, samplePerFolder: 3 } })
+    const f = r.folders.find(x => x.path === big)!
+    expect(f.fileCount).toBe(20)        // all files counted
+    expect(f.sample.length).toBe(3)     // sample still capped at samplePerFolder
+  })
 })
 
 describe('formatFileSurvey', () => {

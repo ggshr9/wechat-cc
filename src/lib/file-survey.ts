@@ -28,6 +28,10 @@ export interface SurveyLimits {
   maxFolders: number
   samplePerFolder: number
   totalBytes: number
+  /** Cap statSync calls per folder — a pathological folder (50k files) would
+   * otherwise stat every file just to pick the most recent few. fileCount stays
+   * accurate; only the recency sample is drawn from the first this-many files. */
+  maxFilesPerFolder: number
 }
 
 export const DEFAULT_SURVEY_LIMITS: SurveyLimits = {
@@ -35,6 +39,7 @@ export const DEFAULT_SURVEY_LIMITS: SurveyLimits = {
   maxFolders: 200,
   samplePerFolder: 8,
   totalBytes: 12_000,
+  maxFilesPerFolder: 2_000,
 }
 
 export interface SurveyResult {
@@ -61,6 +66,7 @@ export function surveyFiles(opts: { roots: string[]; limits?: Partial<SurveyLimi
       try { entries = readdirSync(dir, { withFileTypes: true }) } catch { continue }
       const files: Array<{ name: string; mtimeMs: number }> = []
       const subdirs: string[] = []
+      let fileCount = 0
       for (const e of entries) {
         if (e.name.startsWith('.')) continue
         if (e.isDirectory()) {
@@ -68,15 +74,20 @@ export function surveyFiles(opts: { roots: string[]; limits?: Partial<SurveyLimi
           subdirs.push(e.name)
           if (depth + 1 <= limits.maxDepth) queue.push([join(dir, e.name), depth + 1])
         } else if (e.isFile()) {
-          let mtimeMs = 0
-          try { mtimeMs = statSync(join(dir, e.name)).mtimeMs } catch { /* unstatable */ }
-          files.push({ name: e.name, mtimeMs })
+          fileCount++
+          // Bound statSync: only the first maxFilesPerFolder files feed the
+          // recency sample; fileCount above still counts them all.
+          if (files.length < limits.maxFilesPerFolder) {
+            let mtimeMs = 0
+            try { mtimeMs = statSync(join(dir, e.name)).mtimeMs } catch { /* unstatable */ }
+            files.push({ name: e.name, mtimeMs })
+          }
         }
       }
       files.sort((a, b) => b.mtimeMs - a.mtimeMs)
       folders.push({
         path: dir,
-        fileCount: files.length,
+        fileCount,
         subdirs: subdirs.sort(),
         sample: files.slice(0, limits.samplePerFolder).map(f => f.name),
       })
