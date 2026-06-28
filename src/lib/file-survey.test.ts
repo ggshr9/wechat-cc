@@ -51,6 +51,15 @@ describe('surveyFiles', () => {
     const r = surveyFiles({ roots: [join(root, 'nope'), root] })
     expect(r.folders.length).toBeGreaterThan(0)
   })
+
+  // Fix 2: overlapping roots must not cause a descendant folder to be walked twice
+  it('each folder appears at most once when roots overlap (child is also a root)', () => {
+    const child = join(root, '工作')
+    // root contains '工作/' as a subdir; pass both as roots
+    const r = surveyFiles({ roots: [root, child] })
+    const childEntries = r.folders.filter(f => f.path === child)
+    expect(childEntries.length).toBe(1)
+  })
 })
 
 describe('formatFileSurvey', () => {

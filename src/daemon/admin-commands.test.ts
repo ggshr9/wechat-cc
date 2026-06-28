@@ -359,6 +359,28 @@ describe('admin-commands', () => {
       expect(sentBody(1)).toContain('没找到可整理的记忆')
     })
 
+    // Fix 4a: success message includes file-survey folder count when > 0
+    it('includes file folder count in the synthesis summary when survey was folded in', async () => {
+      const synthesizeMemory = vi.fn().mockResolvedValue({
+        projectsFound: 1, projectNames: ['alpha'], filesScanned: 2,
+        foldersScanned: 12,
+        written: { path: '_overview.md', bytesWritten: 500 },
+      })
+      const cmds = make({ synthesizeMemory: synthesizeMemory as unknown as AdminCommandsDeps['synthesizeMemory'] })
+      await cmds.handle(msg('整理记忆'))
+      await flush()
+      expect(sentBody(1)).toContain('本机文件 12 个文件夹')
+    })
+
+    // Fix 4b: empty-state message also mentions the file side
+    it('empty-state message mentions the file side alongside projects and life', async () => {
+      const synthesizeMemory = vi.fn().mockResolvedValue({ projectsFound: 0, projectNames: [], filesScanned: 0 })
+      const cmds = make({ synthesizeMemory: synthesizeMemory as unknown as AdminCommandsDeps['synthesizeMemory'] })
+      await cmds.handle(msg('整理记忆'))
+      await flush()
+      expect(sentBody(1)).toContain('本机文件')
+    })
+
     it('matches natural-language phrasings and slash aliases', async () => {
       const synthesizeMemory = vi.fn().mockResolvedValue({ projectsFound: 0, projectNames: [], filesScanned: 0 })
       const cmds = make({ synthesizeMemory: synthesizeMemory as unknown as AdminCommandsDeps['synthesizeMemory'] })

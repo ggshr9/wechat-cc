@@ -173,8 +173,10 @@ function parseLocationRoots(stateDir: string, adminChatId: string): string[] {
   try {
     const text = readFileSync(join(stateDir, 'memory', adminChatId, 'locations.md'), 'utf8')
     const out = new Set<string>()
-    for (const m of text.matchAll(/\/[^\s,)）]+/g)) {
-      const raw = m[0]
+    for (const line of text.split('\n')) {
+      const m = line.match(/(?:→|->|:)\s*(\/.+?)\s*$/)   // path = tail after delimiter; may contain spaces
+      const raw = m?.[1]
+      if (!raw) continue
       out.add(/\.[^/]+$/.test(raw) ? dirname(raw) : raw.replace(/\/+$/, ''))
     }
     return [...out]
@@ -213,7 +215,9 @@ export function formatSynthesisPrompt(projects: ProjectMemory[], life?: LifeCont
     hasSurvey
       ? 'C) 文件侧 —— 他电脑常用目录里的文件夹结构与文件名概览(只有结构,没有内容)。'
       : '(本次没有文件侧数据。)',
-    '请综合成一份「总体记忆」——让你整体「懂这个人」的精炼画像。工作、生活、电脑里在忙的东西不要分开看,他是一个完整的人。',
+    hasSurvey
+      ? '请综合成一份「总体记忆」——让你整体「懂这个人」的精炼画像。工作、生活、电脑里在忙的东西不要分开看,他是一个完整的人。'
+      : '请综合成一份「总体记忆」——让你整体「懂这个人」的精炼画像。工作和生活不要分开看,他是一个完整的人。',
     '',
     '要求:',
     '1. 用中文输出一份 markdown,直接作为记忆内容,不要寒暄、不要解释你在做什么。',

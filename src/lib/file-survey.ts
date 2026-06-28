@@ -47,6 +47,7 @@ export function surveyFiles(opts: { roots: string[]; limits?: Partial<SurveyLimi
   const limits = { ...DEFAULT_SURVEY_LIMITS, ...(opts.limits ?? {}) }
   const roots = [...new Set(opts.roots)]
   const folders: FolderSummary[] = []
+  const seen = new Set<string>()
   let truncated = false
 
   outer: for (const root of roots) {
@@ -54,6 +55,8 @@ export function surveyFiles(opts: { roots: string[]; limits?: Partial<SurveyLimi
     while (queue.length) {
       if (folders.length >= limits.maxFolders) { truncated = true; break outer }
       const [dir, depth] = queue.shift()!
+      if (seen.has(dir)) continue
+      seen.add(dir)
       let entries: Dirent[]
       try { entries = readdirSync(dir, { withFileTypes: true }) } catch { continue }
       const files: Array<{ name: string; mtimeMs: number }> = []

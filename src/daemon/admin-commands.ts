@@ -508,9 +508,10 @@ async function runSynthesize(deps: AdminCommandsDeps, adminChatId: string): Prom
       if (r.milestonesFound > 0) life.push(`${r.milestonesFound} 个里程碑`)
       if (r.memoryNotesFound > 0) life.push(`${r.memoryNotesFound} 篇记忆笔记`)
       if (life.length) parts.push(`生活侧 ${life.join('、')}`)
+      if (r.foldersScanned > 0) parts.push(`本机文件 ${r.foldersScanned} 个文件夹`)
       if (parts.length) lines.push(`综合了：${parts.join('；')}`)
     } else {
-      lines = ['没找到可整理的记忆（本机项目记忆 + 微信生活观察都还是空的）。']
+      lines = ['没找到可整理的记忆（本机项目记忆 + 微信生活观察 + 本机文件 都还是空的）。']
     }
     await deps.sendMessage(adminChatId, lines.join('\n'))
     deps.log('ADMIN_CMD', `synthesize chat=${adminChatId} projects=${r.projectsFound} written=${!!r.written}`)

@@ -260,4 +260,34 @@ describe('file survey in synthesis', () => {
     expect(survey.folders.some(f => f.sample.includes('报告.docx'))).toBe(true)
     rmSync(dir, { recursive: true, force: true }); rmSync(fileRoot, { recursive: true, force: true })
   })
+
+  // Fix 1: paths with spaces in locations.md must not be truncated at the space
+  it('gatherFileSurvey includes dirs when the mapped path contains a space', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wcc-loc-sp-'))
+    const outerRoot = mkdtempSync(join(tmpdir(), 'wcc-loc-sp-files-'))
+    const spacedDir = join(outerRoot, 'My Files')
+    mkdirSync(spacedDir)
+    writeFileSync(join(spacedDir, '报告.docx'), 'x')
+    mkdirSync(join(dir, 'memory', 'admin@im.wechat'), { recursive: true })
+    writeFileSync(
+      join(dir, 'memory', 'admin@im.wechat', 'locations.md'),
+      `- 工作报告 → ${join(spacedDir, '报告.docx')}\n`,
+    )
+    const survey = gatherFileSurvey({ stateDir: dir, adminChatId: 'admin@im.wechat' })
+    // spacedDir (dirname of the file with a space in its path) must be surveyed
+    expect(survey.folders.some(f => f.sample.includes('报告.docx'))).toBe(true)
+    rmSync(dir, { recursive: true, force: true }); rmSync(outerRoot, { recursive: true, force: true })
+  })
+
+  // Fix 3: survey intro line is conditional on hasSurvey
+  it('formatSynthesisPrompt uses survey-aware intro line (电脑里在忙的东西 only when survey present)', () => {
+    const filledSurvey = { folders: [{ path: '/x', fileCount: 1, subdirs: [], sample: [] }], truncated: false }
+    const withSurvey = formatSynthesisPrompt([], null, filledSurvey)
+    expect(withSurvey).toContain('电脑里在忙的东西')
+
+    const emptySurvey = { folders: [], truncated: false }
+    const withoutSurvey = formatSynthesisPrompt([], null, emptySurvey)
+    expect(withoutSurvey).not.toContain('电脑里在忙的东西')
+    expect(withoutSurvey).toContain('工作和生活不要分开看')
+  })
 })
