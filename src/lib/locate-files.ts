@@ -48,7 +48,7 @@ export interface LocateResult {
   truncated: boolean
 }
 
-const SKIP_DIRS = new Set(['node_modules', '.git', 'Library', '.Trash', '.cache'])
+export const SKIP_DIRS = new Set(['node_modules', '.git', 'Library', '.Trash', '.cache'])
 
 function meta(path: string, name: string, dir: string, isDir: boolean, score: number): Candidate {
   let bytes = 0

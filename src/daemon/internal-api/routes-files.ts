@@ -5,15 +5,9 @@
  * followed by the default life dirs. Returns metadata only — never file bodies.
  * Admin-tier per route-tiers.ts.
  */
-import { homedir } from 'node:os'
-import { join } from 'node:path'
 import { type RouteTable } from './types'
 import { locateFiles } from '../../lib/locate-files'
-
-/** The zero-config default search roots. Single source of truth. */
-export function defaultLifeDirs(home: string = homedir()): string[] {
-  return [join(home, 'Desktop'), join(home, 'Documents'), join(home, 'Downloads')]
-}
+import { defaultLifeDirs } from '../../lib/file-survey'
 
 export function fileRoutes(): RouteTable {
   return {

@@ -3,7 +3,8 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileRoutes, defaultLifeDirs } from './routes-files'
+import { fileRoutes } from './routes-files'
+import { defaultLifeDirs } from '../../lib/file-survey'
 import { minTierFor } from './route-tiers'
 
 let dir: string
