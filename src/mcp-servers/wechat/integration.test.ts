@@ -628,6 +628,18 @@ describe('wechat-mcp stdio integration', () => {
     expect(status2Body.api_key).toBeUndefined()
   })
 
+  it('registers locate_file ONLY for an admin session', async () => {
+    const admin = await bootChain({ admin: true })
+    const adminNames = (await admin.client.listTools()).tools.map(t => t.name)
+    expect(adminNames).toContain('locate_file')
+    await admin.client.close()
+    if (api) { await api.stop(); api = null }
+
+    const nonAdmin = await bootChain() // no admin flag → trusted
+    const nonAdminNames = (await nonAdmin.client.listTools()).tools.map(t => t.name)
+    expect(nonAdminNames).not.toContain('locate_file')
+  })
+
   it('ping tool returns isError=true when internal-api is unreachable', async () => {
     // Don't start internal-api — point the child at a port that nothing
     // is listening on. The child should still come up (no precondition

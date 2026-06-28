@@ -27,6 +27,7 @@ import { registerMessagingTools } from './tools-messaging'
 import { registerCompanionTools } from './tools-companion'
 import { registerA2ASendTool } from './tools-a2a'
 import { registerDaemonTools } from './tools-daemon'
+import { registerFileTools } from './tools-files'
 
 const baseUrl = process.env.WECHAT_INTERNAL_API
 const tokenFilePath = process.env.WECHAT_INTERNAL_TOKEN_FILE
@@ -101,6 +102,7 @@ registerA2ASendTool(server, client)
 // provider-agnostic gate; non-admin sessions never see these tools).
 if (SESSION_IS_ADMIN) {
   registerDaemonTools(server, client)
+  registerFileTools(server, client)
 }
 
 const transport = new StdioServerTransport()
