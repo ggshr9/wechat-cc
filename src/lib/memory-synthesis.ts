@@ -23,7 +23,7 @@
  */
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 /**
  * Injected accessor for the daemon-owned "life" stores. Declared here (the
  * consumer) as a plain interface so this CLI module needs no `src/daemon`
@@ -36,6 +36,7 @@ export interface LifeStoresReader {
   listMilestones(adminChatId: string): Promise<string[]>
 }
 import { writeMemoryFile } from './memory'
+import { surveyFiles, formatFileSurvey, defaultLifeDirs, type SurveyResult } from './file-survey'
 
 /** Default root for Claude Code's per-project memory dirs. */
 export function defaultClaudeProjectsRoot(): string {
@@ -164,27 +165,63 @@ function truncate(s: string, cap: number): string {
 }
 
 /**
+ * Parse absolute directories from the admin's locations.md (sub-project 1's
+ * learned file locations). File-ish paths (basename has an extension) collapse
+ * to their parent dir; dir paths are used as-is. Best-effort: missing file → [].
+ */
+function parseLocationRoots(stateDir: string, adminChatId: string): string[] {
+  try {
+    const text = readFileSync(join(stateDir, 'memory', adminChatId, 'locations.md'), 'utf8')
+    const out = new Set<string>()
+    for (const m of text.matchAll(/\/[^\s,)）]+/g)) {
+      const raw = m[0]
+      out.add(/\.[^/]+$/.test(raw) ? dirname(raw) : raw.replace(/\/+$/, ''))
+    }
+    return [...out]
+  } catch { return [] }
+}
+
+/**
+ * Gather the file-side survey for the overview. Roots default to the life dirs
+ * plus locations.md dirs; callers (tests) may override via `roots`. Best-effort:
+ * any failure → empty survey (mirrors gatherLifeContext).
+ */
+export function gatherFileSurvey(opts: { stateDir: string; adminChatId: string; roots?: string[] }): SurveyResult {
+  try {
+    const roots = opts.roots ?? [...parseLocationRoots(opts.stateDir, opts.adminChatId), ...defaultLifeDirs()]
+    return surveyFiles({ roots })
+  } catch { return { folders: [], truncated: false } }
+}
+
+/**
  * Build the synthesis prompt. The model produces a single Chinese markdown
  * document = the admin's "overview memory" spanning WORK (project memory) AND
  * LIFE (companion observations/milestones/notes) as one whole person. Embedded
  * content is capped to keep the prompt bounded.
  */
-export function formatSynthesisPrompt(projects: ProjectMemory[], life?: LifeContext | null): string {
+export function formatSynthesisPrompt(projects: ProjectMemory[], life?: LifeContext | null, survey?: SurveyResult | null): string {
   const hasLife = !lifeIsEmpty(life ?? null)
+  const hasSurvey = !!survey && survey.folders.length > 0
   const header = [
-    '你是这台电脑主人(下称「管理员」)的个人助理。下面是关于管理员的记忆,分两类:',
+    hasSurvey
+      ? '你是这台电脑主人(下称「管理员」)的个人助理。下面是关于管理员的记忆,分三类:'
+      : '你是这台电脑主人(下称「管理员」)的个人助理。下面是关于管理员的记忆,分两类:',
     'A) 工作侧 —— 他在本机各项目里积累的记忆/笔记;',
     hasLife
       ? 'B) 生活侧 —— 你(bot)在微信里观察到的他这个人、在意的人和事、偏好、近况。'
       : '(本次没有生活侧数据。)',
-    '请综合成一份「总体记忆」——让你整体「懂这个人」的精炼画像。工作和生活不要分开看,他是一个完整的人。',
+    hasSurvey
+      ? 'C) 文件侧 —— 他电脑常用目录里的文件夹结构与文件名概览(只有结构,没有内容)。'
+      : '(本次没有文件侧数据。)',
+    '请综合成一份「总体记忆」——让你整体「懂这个人」的精炼画像。工作、生活、电脑里在忙的东西不要分开看,他是一个完整的人。',
     '',
     '要求:',
     '1. 用中文输出一份 markdown,直接作为记忆内容,不要寒暄、不要解释你在做什么。',
     '2. 开头「整体理解」:这个人是谁、在做什么、在意什么、偏好 —— 工作和生活揉在一起写。',
     '3. 一节「## 项目地图」,每个工作项目一行: `- 项目名 — 一句话概述`(项目名用易读的名字)。',
     hasLife ? '4. 一节「## 生活与关系」:他在意的人/事、近况、性格偏好(只写生活侧有依据的)。' : '4. (无生活侧,跳过生活与关系一节。)',
-    '5. 简洁,总长 ~600 字内。只写有依据的,别编造。',
+    hasSurvey ? '5. 把文件侧也算进「他在做什么」——从文件夹和文件名推断他最近在忙什么,提炼信号,别逐个罗列文件。' : '5. (无文件侧,忽略。)',
+    '6. 简洁,总长 ~600 字内。只写有依据的,别编造。',
     '',
     `工作侧:共 ${projects.length} 个项目`,
     '',
@@ -226,7 +263,13 @@ export function formatSynthesisPrompt(projects: ProjectMemory[], life?: LifeCont
     lifeBlock = truncate(parts.join('\n'), TOTAL_CAP)
   }
 
-  return `${header}${blocks.join('\n')}${lifeBlock}\n`
+  let surveyBlock = ''
+  if (hasSurvey && survey) {
+    const rendered = formatFileSurvey(survey)
+    if (rendered) surveyBlock = truncate(`\n\n========== 文件侧(本机文件概览) ==========\n${rendered}`, TOTAL_CAP)
+  }
+
+  return `${header}${blocks.join('\n')}${lifeBlock}${surveyBlock}\n`
 }
 
 /** Read-only metadata view of one project's memory, for the desktop viewer. */
@@ -317,6 +360,10 @@ export interface SynthesizeDeps {
    * unit tests omit it.
    */
   lifeStores?: LifeStoresReader
+  /** When true, gather + fold the file-side survey into the overview. */
+  includeFileSurvey?: boolean
+  /** Override survey roots (tests). Defaults to life dirs + locations.md dirs. */
+  surveyRoots?: string[]
 }
 
 export interface SynthesizeResult {
@@ -332,6 +379,8 @@ export interface SynthesizeResult {
   overview?: string
   /** Write result (omitted on dryRun). */
   written?: { path: string; bytesWritten: number }
+  /** Folders included in the file-side survey (0 when not surveyed). */
+  foldersScanned: number
 }
 
 /**
@@ -344,7 +393,10 @@ export async function synthesizeOverview(deps: SynthesizeDeps): Promise<Synthesi
   const projects = discoverProjectMemory(projectsRoot)
   const filesScanned = projects.reduce((n, p) => n + (p.index ? 1 : 0) + p.files.length, 0)
   const life = deps.lifeStores ? await gatherLifeContext({ stores: deps.lifeStores, stateDir: deps.stateDir, adminChatId: deps.adminChatId }) : null
-  const prompt = formatSynthesisPrompt(projects, life)
+  const survey = deps.includeFileSurvey
+    ? gatherFileSurvey({ stateDir: deps.stateDir, adminChatId: deps.adminChatId, roots: deps.surveyRoots })
+    : null
+  const prompt = formatSynthesisPrompt(projects, life, survey)
   const base: SynthesizeResult = {
     projectsFound: projects.length,
     projectNames: projects.map(p => p.displayName),
@@ -353,9 +405,10 @@ export async function synthesizeOverview(deps: SynthesizeDeps): Promise<Synthesi
     observationsFound: life?.observations.length ?? 0,
     milestonesFound: life?.milestones.length ?? 0,
     memoryNotesFound: life?.memoryNotes.length ?? 0,
+    foldersScanned: survey?.folders.length ?? 0,
   }
-  // Nothing to synthesize only when BOTH sides are empty.
-  if (deps.dryRun || (projects.length === 0 && lifeIsEmpty(life))) return base
+  // Nothing to synthesize only when ALL three sides are empty.
+  if (deps.dryRun || (projects.length === 0 && lifeIsEmpty(life) && (!survey || survey.folders.length === 0))) return base
 
   const raw = await deps.sdkEval(prompt)
   const overview = raw.trim()

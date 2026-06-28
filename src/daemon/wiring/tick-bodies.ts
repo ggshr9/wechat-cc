@@ -233,7 +233,7 @@ export function buildTickBodies(deps: TickDeps): TickBodies {
     // No-op unless companion.import_local_history is on.
     if (loadCompanionConfig(deps.stateDir).import_local_history) {
       try {
-        await synthesizeOverview({ stateDir: deps.stateDir, adminChatId: chatId, sdkEval, lifeStores: makeLifeStoresReader(deps.db, deps.stateDir) })
+        await synthesizeOverview({ stateDir: deps.stateDir, adminChatId: chatId, sdkEval, lifeStores: makeLifeStoresReader(deps.db, deps.stateDir), includeFileSurvey: true })
         deps.log('SYNTHESIZE', `overview refreshed for ${chatId} (24h auto)`)
       } catch (err) {
         deps.log('SYNTHESIZE', `auto refresh failed: ${err instanceof Error ? err.message : err}`)

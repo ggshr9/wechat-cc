@@ -10,6 +10,7 @@ import { writeMemoryFile } from './memory'
 import {
   discoverProjectMemory,
   formatSynthesisPrompt,
+  gatherFileSurvey,
   gatherLifeContext,
   projectDisplayName,
   summarizeProjectMemories,
@@ -215,5 +216,48 @@ describe('synthesizeOverview', () => {
     expect(res.observationsFound).toBe(1)
     expect(called).toBe(true)
     expect(res.written).toBeDefined()
+  })
+})
+
+describe('file survey in synthesis', () => {
+  it('formatSynthesisPrompt includes the 文件侧 block when survey non-empty, omits when empty', () => {
+    const survey = { folders: [{ path: '/home/me/工作', fileCount: 3, subdirs: [], sample: ['Q3预算.xlsx'] }], truncated: false }
+    const withSurvey = formatSynthesisPrompt([], null, survey)
+    expect(withSurvey).toContain('文件侧')
+    expect(withSurvey).toContain('Q3预算.xlsx')
+    const without = formatSynthesisPrompt([], null, { folders: [], truncated: false })
+    expect(without).not.toContain('文件侧(本机文件概览)')
+  })
+
+  it('synthesizeOverview synthesizes from a survey alone (no projects/life)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wcc-syn-survey-'))
+    const fileRoot = mkdtempSync(join(tmpdir(), 'wcc-syn-files-'))
+    mkdirSync(join(fileRoot, '工作'), { recursive: true })
+    writeFileSync(join(fileRoot, '工作', 'Q3预算.xlsx'), 'x')
+    let prompt = ''
+    const res = await synthesizeOverview({
+      stateDir: dir,
+      adminChatId: 'admin@im.wechat',
+      projectsRoot: join(dir, 'no-projects'),
+      includeFileSurvey: true,
+      surveyRoots: [fileRoot],
+      sdkEval: async (p) => { prompt = p; return '整理结果' },
+    })
+    expect(res.foldersScanned).toBeGreaterThan(0)
+    expect(prompt).toContain('Q3预算.xlsx')
+    expect(res.overview).toBe('整理结果')
+    rmSync(dir, { recursive: true, force: true }); rmSync(fileRoot, { recursive: true, force: true })
+  })
+
+  it('gatherFileSurvey includes dirs parsed from locations.md', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wcc-loc-'))
+    const fileRoot = mkdtempSync(join(tmpdir(), 'wcc-loc-files-'))
+    writeFileSync(join(fileRoot, '报告.docx'), 'x')
+    mkdirSync(join(dir, 'memory', 'admin@im.wechat'), { recursive: true })
+    writeFileSync(join(dir, 'memory', 'admin@im.wechat', 'locations.md'), `- 报告 → ${join(fileRoot, '报告.docx')}\n`)
+    const survey = gatherFileSurvey({ stateDir: dir, adminChatId: 'admin@im.wechat' })
+    // fileRoot (dirname of the mapped file) is surveyed → its file appears
+    expect(survey.folders.some(f => f.sample.includes('报告.docx'))).toBe(true)
+    rmSync(dir, { recursive: true, force: true }); rmSync(fileRoot, { recursive: true, force: true })
   })
 })

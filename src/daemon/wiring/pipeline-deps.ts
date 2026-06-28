@@ -145,7 +145,7 @@ export function buildPipelineDeps(opts: PipelineDepsOpts, refs: PipelineDepsRefs
       if (!cheapEval) throw new Error('no LLM provider available for synthesis')
       // Bridge the daemon db → life stores so the overview also folds in the
       // life-side memory (kept on the daemon side of the cli/daemon boundary).
-      return synthesizeOverview({ stateDir, adminChatId, sdkEval: (p) => cheapEval(p), lifeStores: makeLifeStoresReader(db, stateDir) })
+      return synthesizeOverview({ stateDir, adminChatId, sdkEval: (p) => cheapEval(p), lifeStores: makeLifeStoresReader(db, stateDir), includeFileSurvey: true })
     },
     // Read back the synthesized overview so the admin can see what the bot
     // understands about them ("看记忆" / "你对我的理解" from WeChat).
