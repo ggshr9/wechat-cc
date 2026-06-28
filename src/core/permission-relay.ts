@@ -1,6 +1,7 @@
 import type { CanUseTool, PermissionResult } from '@anthropic-ai/claude-agent-sdk'
 import type { Mode, ProviderId } from './conversation'
 import { lookup, type Capability, type PermissionMode } from './capability-matrix'
+import { isReplyToolName } from './agent-provider'
 import { classifyToolUse, TIER_PROFILES, type TierProfile, type ToolKind, type UserTier } from './user-tier'
 
 /**
@@ -67,6 +68,19 @@ const DEFAULT_TIMEOUT_MS = 10 * 60_000
 
 export function makeCanUseTool(deps: PermissionRelayDeps): CanUseTool {
   return async (toolName, input, opts) => {
+    // Chatroom beats: the coordinator captures each agent's plain text and
+    // re-emits it prefixed ([Claude]/[Codex]). A direct reply-tool call would
+    // (a) send an UN-prefixed message straight to the chat and (b) lose its
+    // real argument to the verdict transcript (collectTurn records only
+    // replyToolCalled, not the text). So deny reply outright during a debate
+    // beat — force plain text. See conversation-coordinator.runBeat.
+    if (deps.mode() === 'chatroom' && isReplyToolName(toolName)) {
+      deps.log('PERMISSION', `deny-chatroom-reply: tool=${toolName}`)
+      return {
+        behavior: 'deny',
+        message: 'reply tool is disabled in chatroom mode — respond with plain text, the host will relay it',
+      } satisfies PermissionResult
+    }
     const tier = deps.resolveTier()
     const tp = TIER_PROFILES[tier]
     const kind = classifyToolUse(toolName, input as Record<string, unknown>)

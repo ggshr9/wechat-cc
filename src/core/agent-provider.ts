@@ -274,6 +274,18 @@ export function isReplyToolCall(ev: AgentEvent): boolean {
 }
 
 /**
+ * Same wechat reply-tool check but against a raw SDK tool name
+ * (`mcp__wechat__reply`) — used by the permission relay to DENY the reply
+ * tool during chatroom beats (the coordinator forwards each agent's plain
+ * text prefixed; a direct reply-tool call would escape that framing). Matches
+ * the `mcp__<server>__<tool>` shape only.
+ */
+export function isReplyToolName(name: string): boolean {
+  const parts = name.split('__') // mcp__<server>__<tool>
+  return parts[0] === 'mcp' && parts[1] === 'wechat' && REPLY_TOOLS.has(parts.slice(2).join('__'))
+}
+
+/**
  * One-turn aggregation: drain an event stream and return the summary the
  * coordinator needs. Mirrors the shape consumers used to get from the old
  * dispatch return value, plus optional `result` / `error` for diagnostics.

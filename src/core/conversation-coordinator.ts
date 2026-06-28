@@ -719,6 +719,15 @@ export function createConversationCoordinator(deps: ConversationCoordinatorDeps)
         await handleAuthFailed(msg.chatId, proj.alias, providerId, summary)
         return null
       }
+      // Defense-in-depth: canUseTool already denies the reply tool in
+      // chatroom mode, but if an agent still gets one through, its plain
+      // `assistantText` is meta-chatter ("（本轮结束）"), not its real
+      // argument — forwarding it leaks garbage AND poisons the verdict
+      // transcript. Drop the turn instead. (Mirrors dispatchParallel.)
+      if (summary?.replyToolCalled) {
+        deps.log('COORDINATOR_CHATROOM', `chat=${msg.chatId} provider=${providerId} used reply tool in a beat — dropped`)
+        return null
+      }
       const text = (summary?.assistantText ?? []).join('\n').trim()
       if (!text) return null
       const dn = deps.registry.get(providerId)?.opts.displayName ?? providerId

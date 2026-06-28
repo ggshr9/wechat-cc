@@ -29,6 +29,36 @@ describe('makeCanUseTool', () => {
     expect(ask).toHaveBeenCalledWith('admin-chat', expect.stringContaining('Bash'), expect.any(String), expect.any(Number))
   })
 
+  it('denies the wechat reply tool in chatroom mode (force plain text) without prompting', async () => {
+    const ask = vi.fn()
+    const fn = makeCanUseTool({
+      askUser: ask,
+      resolveTier: () => 'admin',
+      adminChatId: () => 'admin-chat',
+      initiatingChatId: () => 'admin-chat',
+      log: () => {},
+      ...baseMode,
+      mode: () => 'chatroom' as const,
+    })
+    const res = await fn('mcp__wechat__reply', { text: 'hi' }, { signal: new AbortController().signal, toolUseID: 't1' } as any)
+    expect(res.behavior).toBe('deny')
+    if (res.behavior === 'deny') expect(res.message).toMatch(/plain text/i)
+    expect(ask).not.toHaveBeenCalled() // no relay prompt — denied outright
+  })
+
+  it('allows the wechat reply tool in solo mode (only chatroom blocks it)', async () => {
+    const fn = makeCanUseTool({
+      askUser: async () => 'deny',
+      resolveTier: () => 'admin',
+      adminChatId: () => 'admin-chat',
+      initiatingChatId: () => 'admin-chat',
+      log: () => {},
+      ...baseMode, // mode: 'solo'
+    })
+    const res = await fn('mcp__wechat__reply', { text: 'hi' }, { signal: new AbortController().signal, toolUseID: 't1' } as any)
+    expect(res.behavior).toBe('allow')
+  })
+
   it('returns deny when admin user replies deny', async () => {
     const fn = makeCanUseTool({
       askUser: async () => 'deny',

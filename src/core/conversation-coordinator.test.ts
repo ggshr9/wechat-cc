@@ -1209,6 +1209,7 @@ describe('ConversationCoordinator', () => {
       release?: () => Promise<void>
       turnTimeoutMs?: number
       verdictEval?: (prompt: string) => Promise<string>
+      claudeRepliesViaTool?: boolean
     } = {}) {
       const store = makeMockStore()
       store.set('chat-1', { kind: 'chatroom' })
@@ -1221,11 +1222,20 @@ describe('ConversationCoordinator', () => {
           ? (opts.claudeReply !== undefined ? opts.claudeReply : 'claude-reply')
           : (opts.codexReply !== undefined ? opts.codexReply : 'codex-reply')
         if (reply === null) throw new Error(`${providerId} session failed`)
+        const viaReplyTool = providerId === 'claude' && opts.claudeRepliesViaTool
         return {
           alias: 'a', path: '/p', providerId, lastUsedAt: 0,
           dispatch: (_text: string): AsyncIterable<AgentEvent> => ({
             async *[Symbol.asyncIterator]() {
-              yield { kind: 'text', text: reply } as AgentEvent
+              if (viaReplyTool) {
+                // Simulate an agent that ignored the no-reply-tool rule: it
+                // calls the reply tool (content escapes the beat) and emits
+                // only meta-chatter as assistant text.
+                yield { kind: 'tool_call', server: 'wechat', tool: 'reply' } as AgentEvent
+                yield { kind: 'text', text: '（本轮结束）' } as AgentEvent
+              } else {
+                yield { kind: 'text', text: reply } as AgentEvent
+              }
               yield { kind: 'result', sessionId: '_', numTurns: 1, durationMs: 0 } as AgentEvent
             },
           }),
@@ -1287,6 +1297,25 @@ describe('ConversationCoordinator', () => {
       expect(sent.some(s => s === '🎯 verdict')).toBe(false)
       // haikuEval may still run for convergence, but never for the verdict.
       void haikuEval
+    })
+
+    it('/chat drops a beat turn that used the reply tool — no meta-leak, not in transcript', async () => {
+      // claude calls the reply tool every beat (content escapes via the tool);
+      // its only assistantText is meta "（本轮结束）". runBeat must drop it:
+      // no "[Claude] …" message, and the verdict transcript must not contain it.
+      let verdictPrompt = ''
+      const verdictEval = vi.fn(async (p: string) => { verdictPrompt = p; return '🎯 verdict' })
+      const { c, sent } = setupChatroom({ claudeRepliesViaTool: true, verdictEval })
+      await c.dispatch(inbound('chat-1', '选 A 还是 B?'))
+      // No claude-prefixed message leaked (it would carry the meta text).
+      expect(sent.some(s => s.startsWith('[Claude]'))).toBe(false)
+      expect(sent.some(s => s.includes('本轮结束'))).toBe(false)
+      // codex still participates normally.
+      expect(sent.some(s => s.startsWith('[Codex]'))).toBe(true)
+      // The verdict transcript must not include claude's dropped meta text.
+      expect(verdictPrompt).not.toContain('本轮结束')
+      // Verdict still emitted.
+      expect(sent.some(s => s.startsWith('🎯'))).toBe(true)
     })
 
     it('/chat verdict is still produced when one agent fails every beat (graceful degrade)', async () => {

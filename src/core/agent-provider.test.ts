@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   collectTurn,
   isReplyToolCall,
+  isReplyToolName,
   type AgentEvent,
 } from './agent-provider'
 
@@ -44,6 +45,21 @@ describe('isReplyToolCall', () => {
   })
   it('rejects non-wechat servers', () => {
     expect(isReplyToolCall({ kind: 'tool_call', server: 'other', tool: 'reply' })).toBe(false)
+  })
+
+  describe('isReplyToolName (raw SDK tool name)', () => {
+    it('matches mcp__wechat__<replyTool> names', () => {
+      expect(isReplyToolName('mcp__wechat__reply')).toBe(true)
+      expect(isReplyToolName('mcp__wechat__reply_voice')).toBe(true)
+      expect(isReplyToolName('mcp__wechat__send_file')).toBe(true)
+      expect(isReplyToolName('mcp__wechat__broadcast')).toBe(true)
+    })
+    it('rejects other servers, non-reply wechat tools, and built-ins', () => {
+      expect(isReplyToolName('mcp__other__reply')).toBe(false)
+      expect(isReplyToolName('mcp__wechat__memory_read')).toBe(false)
+      expect(isReplyToolName('Read')).toBe(false)
+      expect(isReplyToolName('Bash')).toBe(false)
+    })
   })
   it('rejects non-reply tools on wechat server', () => {
     expect(isReplyToolCall({ kind: 'tool_call', server: 'wechat', tool: 'memory_read' })).toBe(false)
