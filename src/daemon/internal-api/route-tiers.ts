@@ -61,6 +61,8 @@ export const ROUTE_MIN_TIER: Record<string, UserTier> = {
   'POST /v1/sessions/release': 'admin',
   'POST /v1/model': 'admin',
   'POST /v1/daemon/restart': 'admin',
+  // admin — on-demand file locate over the owner's computer (file_locate)
+  'GET /v1/locate': 'admin',
 }
 
 export function minTierFor(routeKey: string): UserTier {
