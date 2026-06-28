@@ -100,7 +100,9 @@ export function formatFileSurvey(
   let body = lines.join('\n')
   let truncated = survey.truncated
   if (Buffer.byteLength(body, 'utf8') > totalBytes) {
-    body = Buffer.from(body, 'utf8').subarray(0, totalBytes).toString('utf8')
+    // Slicing at a byte boundary can cut a multibyte char in half; decoding
+    // then yields a trailing U+FFFD. Strip it so the survey reads cleanly.
+    body = Buffer.from(body, 'utf8').subarray(0, totalBytes).toString('utf8').replace(/�+$/, '')
     truncated = true
   }
   if (truncated) body += '\n…(截断)'

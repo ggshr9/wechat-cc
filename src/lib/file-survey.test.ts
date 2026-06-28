@@ -78,6 +78,14 @@ describe('formatFileSurvey', () => {
     expect(out.length).toBeLessThanOrEqual(80 + 8) // body cap + short marker
     expect(out).toContain('截断')
   })
+  it('does not leave a split multibyte char (U+FFFD) at the byte-cap boundary', () => {
+    // All-Chinese sample names guarantee the byte cap lands mid-character for some cap value.
+    const folders = [{ path: '/x/项目', fileCount: 3, subdirs: [], sample: ['预算报告表格文档.xlsx', '会议纪要记录.docx'] }]
+    for (let cap = 10; cap <= 40; cap++) {
+      const out = formatFileSurvey({ folders, truncated: false }, cap)
+      expect(out).not.toContain('�')
+    }
+  })
 })
 
 describe('defaultLifeDirs', () => {
